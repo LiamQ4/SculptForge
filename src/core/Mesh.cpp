@@ -244,8 +244,15 @@ Mesh weldImported(const Mesh& m, const std::vector<SculptLayer>& layers) {
     unique.reserve(m.positions.size());
     std::vector<uint32_t> remap(m.positions.size());
     std::vector<uint32_t> kept;
+    // Quantise relative to the box corner and clamp, so far-off, infinite or NaN coordinates from a malformed file
+    // never overflow the int conversion.
+    const glm::vec3 origin = box.valid() ? box.min : glm::vec3(0.0f);
+    auto quantise = [&](float v) {
+        return std::isfinite(v) ? int(std::clamp(std::round(v / tol), -2.0e9f, 2.0e9f)) : 0;
+    };
     for (uint32_t v = 0; v < m.positions.size(); ++v) {
-        glm::ivec3 key(glm::round(m.positions[v] / tol));
+        const glm::vec3 d = m.positions[v] - origin;
+        const glm::ivec3 key(quantise(d.x), quantise(d.y), quantise(d.z));
         auto [it, inserted] = unique.try_emplace(key, uint32_t(kept.size()));
         if (inserted) kept.push_back(v);
         remap[v] = it->second;
@@ -312,7 +319,12 @@ void transferVertexAttributes(const Mesh& src, Mesh& dst) {
     const float longest = std::max({ext.x, ext.y, ext.z, 1e-12f});
     const float cell = std::max(longest / std::max(1.0f, std::cbrt(float(src.positions.size()))), longest * 1e-4f);
     constexpr int kOffset = 1 << 20;
-    auto cellOf = [&](const glm::vec3& p) { return glm::ivec3(glm::floor((p - box.min) / cell)); };
+    // Clamped so NaN, infinite or huge coordinates from a malformed file never overflow the int cast.
+    auto cellOf = [&](const glm::vec3& p) {
+        const glm::vec3 f = glm::floor((p - box.min) / cell);
+        auto axis = [](float v) { return std::isfinite(v) ? int(std::clamp(v, -float(kOffset), float(kOffset))) : 0; };
+        return glm::ivec3(axis(f.x), axis(f.y), axis(f.z));
+    };
     auto key = [](const glm::ivec3& c) {
         return (uint64_t(uint32_t(c.x + kOffset) & 0x1fffffu) << 42) | (uint64_t(uint32_t(c.y + kOffset) & 0x1fffffu) << 21) |
                uint64_t(uint32_t(c.z + kOffset) & 0x1fffffu);

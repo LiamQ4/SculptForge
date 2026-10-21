@@ -212,6 +212,21 @@ bool loadPly(const std::string& path, Mesh& mesh, SplatCloud& splats, PlyContent
     const bool rgbIsByte = rgb[0] >= 0 && typeSize(vertex->props[size_t(rgb[0])].type) == 1;
 
     Body body{file.data() + bodyStart, file.size() - bodyStart, 0, format == "ascii", format == "binary_big_endian"};
+    // A malformed header can claim billions of rows: check the counts against the bytes actually present before
+    // allocating anything (every binary row needs its fixed-size fields; every ASCII value at least two characters).
+    {
+        size_t needed = 0;
+        for (const auto& e : elements) {
+            size_t rowBytes = 0;
+            for (const auto& prop : e.props) rowBytes += body.ascii ? 2 : typeSize(prop.list ? prop.countType : prop.type);
+            rowBytes = std::max<size_t>(rowBytes, 1);
+            if (e.count > (body.size - std::min(needed, body.size)) / rowBytes) {
+                error = "The PLY header describes more data than the file contains";
+                return false;
+            }
+            needed += e.count * rowBytes;
+        }
+    }
     Mesh m;
     SplatCloud cloud;
     std::vector<double> row;
@@ -233,15 +248,21 @@ bool loadPly(const std::string& path, Mesh& mesh, SplatCloud& splats, PlyContent
                     row[p] = body.read(prop.type);
                     continue;
                 }
-                const size_t n = size_t(body.read(prop.countType));
-                if (!body.ok || n > 1'000'000) {
+                const double count = body.read(prop.countType);
+                if (!body.ok || !(count >= 0.0 && count <= 1'000'000.0)) {
                     error = "Corrupt PLY list";
                     return false;
                 }
+                const size_t n = size_t(count);
                 const bool wanted = isFace && (prop.name == "vertex_indices" || prop.name == "vertex_index");
                 for (size_t k = 0; k < n; ++k) {
                     const double v = body.read(prop.type);
-                    if (wanted) poly.push_back(uint32_t(v));
+                    if (!wanted) continue;
+                    if (!(v >= 0.0 && v < 4294967295.0)) {
+                        error = "PLY face index out of range";
+                        return false;
+                    }
+                    poly.push_back(uint32_t(v));
                 }
             }
             if (!body.ok) {
