@@ -58,7 +58,7 @@ public:
     void queueFile(FileAction action, std::string path);
 
 private:
-    enum class Drag { None, Stroke, Orbit, Pan, Zoom };
+    enum class Drag { None, Stroke, Orbit, Pan, Zoom, MaskCanvas };
 
     void handleEvent(const SDL_Event& e);
     void onMouseDown(float x, float y, Uint8 button);
@@ -229,6 +229,20 @@ private:
     const Mesh* lastDisplayed_ = nullptr;
     std::mutex pendingMutex_;
     std::vector<PendingFile> pendingFiles_;
+
+    // Masking (PanelMasking.cpp): Ctrl strokes paint mask, Ctrl+Alt erases;
+    // Ctrl+click on the background inverts it, Ctrl+drag there clears it.
+    void drawMaskingSection();
+    void beginMaskStroke(float x, float y);
+    void maskCanvasMove(float x, float y);
+    void maskCanvasRelease();
+    bool strokeMask_ = false; // the current stroke edits the mask
+    float maskStrength_ = 1.0f;
+    int maskIterations_ = 1;
+    float cavityThreshold_ = 0.02f;
+    int maskGroup_ = 0;
+    float maskCanvasX_ = 0.0f, maskCanvasY_ = 0.0f;
+    bool maskCanvasMoved_ = false;
 };
 
 } // namespace sf

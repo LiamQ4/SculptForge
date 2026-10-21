@@ -97,6 +97,12 @@ private:
     std::vector<float> weights_;
     std::vector<GrabEntry> grab_;
     std::vector<uint32_t> grabVerts_;
+
+public:
+    // Mask brush (Ctrl in the app; defined in Masking.cpp): raises the mask
+    // under the brush towards 1, or lowers it towards 0 when p.invert is set.
+    // Ignores the existing mask (it edits it) but skips hidden vertices.
+    void dabMask(Mesh& mesh, const BVH& bvh, const DabParams& p, Symmetry sym);
 };
 
 } // namespace sf

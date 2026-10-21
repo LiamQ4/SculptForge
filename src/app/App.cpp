@@ -460,8 +460,15 @@ void App::onMouseDown(float x, float y, Uint8 button) {
     doc_.syncBvh();
     if (button == SDL_BUTTON_LEFT) {
         RayHit hit;
+        const bool maskMod = ctrlDown(mod) && !(mod & SDL_KMOD_SHIFT);
         if (previewLod_ < 0 && pick(x, y, hit)) {
-            beginStroke(x, y, hit);
+            if (maskMod) beginMaskStroke(x, y);
+            else beginStroke(x, y, hit);
+        } else if (maskMod && !(mod & SDL_KMOD_ALT) && previewLod_ < 0) {
+            drag_ = Drag::MaskCanvas; // click inverts, drag clears (or zooms without a mask)
+            maskCanvasX_ = x;
+            maskCanvasY_ = y;
+            maskCanvasMoved_ = false;
         } else {
             // Dragging on empty space navigates (ZBrush style).
             drag_ = (mod & SDL_KMOD_ALT) ? Drag::Pan : ctrlDown(mod) ? Drag::Zoom : Drag::Orbit;
@@ -484,12 +491,14 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     case Drag::Orbit: camera_.orbit(dx, dy); break;
     case Drag::Pan: camera_.pan(dx, dy, float(h)); break;
     case Drag::Zoom: camera_.zoom(-dy * 0.05f); break;
+    case Drag::MaskCanvas: maskCanvasMove(x, y); break;
     case Drag::None: break;
     }
 }
 
 void App::onMouseUp() {
     if (drag_ == Drag::Stroke) endStroke();
+    if (drag_ == Drag::MaskCanvas) maskCanvasRelease();
     drag_ = Drag::None;
 }
 
@@ -564,7 +573,7 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
 }
 
 void App::strokeTo(float x, float y) {
-    const BrushRecipe* recipe = strokeBrush_ == BrushType::Smooth ? nullptr : activeRecipe();
+    const BrushRecipe* recipe = strokeBrush_ == BrushType::Smooth || strokeMask_ ? nullptr : activeRecipe();
     if (strokeBrush_ == BrushType::Move && !recipe) {
         int w = 0, h = 0;
         SDL_GetWindowSize(window_, &w, &h);
@@ -596,7 +605,7 @@ void App::strokeTo(float x, float y) {
 }
 
 void App::dabAt(float x, float y) {
-    const BrushRecipe* recipe = strokeBrush_ == BrushType::Smooth ? nullptr : activeRecipe();
+    const BrushRecipe* recipe = strokeBrush_ == BrushType::Smooth || strokeMask_ ? nullptr : activeRecipe();
     if (recipe && recipe->jitter > 0.0f) {
         // Deterministic per-stroke scatter (xorshift).
         auto rnd = [this] {
@@ -623,6 +632,11 @@ void App::dabAt(float x, float y) {
     p.pressure = pressureStrength_ ? pressure : 1.0f;
     p.invert = strokeInvert_;
     p.frontFacesOnly = frontFacesOnly_;
+    if (strokeMask_) {
+        p.strength = maskStrength_;
+        doc_.sculptor.dabMask(doc_.mesh, doc_.bvh, p, symmetry_);
+        return;
+    }
     if (recipe) {
         p.strokeDelta = haveLastDab_ ? hit.position - lastDabHit_ : glm::vec3(0.0f);
         lastDabHit_ = hit.position;
@@ -634,6 +648,7 @@ void App::dabAt(float x, float y) {
 }
 
 void App::endStroke() {
+    strokeMask_ = false;
     UndoRecord r = doc_.sculptor.endStroke();
     if (!r.empty()) {
         doc_.undo.push(std::move(r));
@@ -866,7 +881,11 @@ void App::drawUi() {
                 "Smooth            Hold Shift while sculpting\n"
                 "Rotate            Left drag on background / right drag\n"
                 "Pan               Alt + left drag background / middle drag\n"
-                "Zoom              Mouse wheel / Ctrl + left drag background\n"
+                "Zoom              Mouse wheel / Ctrl + middle drag\n"
+                "                  (Ctrl + left drag background when nothing is masked)\n"
+                "Paint mask        Hold Ctrl while stroking (Ctrl+Alt erases)\n"
+                "Invert mask       Ctrl + click background\n"
+                "Clear mask        Ctrl + drag background\n"
                 "Brush size        [ and ]\n"
                 "Brushes           1-8\n"
                 "Symmetry X        X\n"
@@ -1628,6 +1647,8 @@ void App::drawToolPanel() {
     if (penSeen_) ImGui::Text("Pen pressure: %.2f", penPressure_);
     else ImGui::TextDisabled("No pen detected");
 
+    drawMaskingSection();
+
     ImGui::SeparatorText("Mesh");
     if (ImGui::Button("Subdivide (Ctrl+D)", ImVec2(-1, 0))) runCommand("subdivide");
     if (ImGui::Button("Voxel remesh", ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, 0)))
@@ -1704,7 +1725,10 @@ void App::drawBrushCursor() {
     const float r = radiusPx_ * (pressureSize_ && lastInputPen_ ? std::max(penPressure_, 0.05f) : 1.0f);
     const ImVec2 c(mouseX_, mouseY_);
     const bool inverted = invertToggle_ != ((SDL_GetModState() & SDL_KMOD_ALT) != 0);
-    const ImU32 col = activeBrush() == BrushType::Smooth ? IM_COL32(120, 200, 255, 200)
+    const SDL_Keymod mod = SDL_GetModState();
+    const bool masking = drag_ == Drag::Stroke ? strokeMask_ : ctrlDown(mod) && !(mod & SDL_KMOD_SHIFT);
+    const ImU32 col = masking                                ? IM_COL32(230, 230, 230, 200)
+                      : activeBrush() == BrushType::Smooth ? IM_COL32(120, 200, 255, 200)
                       : inverted                         ? IM_COL32(255, 110, 110, 200)
                                                          : IM_COL32(255, 190, 120, 200);
     dl->AddCircle(c, r, col, 64, 1.5f);
