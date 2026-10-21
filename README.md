@@ -25,7 +25,7 @@
 </p>
 
 <p align="center">
-  <a href="https://islandmed.github.io/SculptForge/#demos"><img src="docs/images/sculpt-demo.gif" width="800" alt="Sculpting horns into a detailed lion head with symmetry in SculptForge"></a>
+  <a href="https://islandmed.github.io/SculptForge/#demos"><img src="docs/images/sculpt-demo.gif" width="800" alt="Weathering a detailed lion head with symmetry and turning it to stone in SculptForge"></a>
 </p>
 
 SculptForge is a free, open-source alternative to ZBrush: a focused sculpting app with the brushes, symmetry and

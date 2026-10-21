@@ -295,8 +295,10 @@ void Demo::drawOverlay() {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const ImVec2 size = ImGui::GetIO().DisplaySize;
 
-    // Lower-third captions.
+    // Lower-third captions (SF_DEMO_NO_CAPTIONS=1 records a clean take for posters).
+    static const bool noCaptions = std::getenv("SF_DEMO_NO_CAPTIONS") != nullptr;
     for (const auto& c : captions_) {
+        if (noCaptions) break;
         const float t = clock_ - c.start;
         if (t < 0.0f || t > c.duration) continue;
         const float a = std::min({1.0f, t / 0.35f, (c.duration - t) / 0.35f});
@@ -361,54 +363,40 @@ void Demo::buildShowcase() {
     caption("SculptForge", "The free, open-source alternative to ZBrush", 4.2f);
     // Orbiting turns 0.008 rad per pixel: 240 px glides from profile to a three-quarter front view.
     orbit(240.0f, 0.0f, 4.5f);
-    run([this] { app_.hideUi_ = false; });
-    caption("Sculpt the way you already do", "Move, Clay and custom brushes, with symmetry", 4.0f);
-    run([this, k] {
-        app_.radiusPx_ = 85.0f * k;
-        app_.strength_ = 0.85f;
-    });
-    click("4  Move");
-    // Horns rising out of the mane (mirrored by symmetry).
-    stroke([this, k](float u) {
-        const ImVec2 p = onModel(0.36f, 0.14f);
-        return ImVec2(p.x - 70.0f * k * smooth(u), p.y - 190.0f * k * smooth(u));
-    }, 1.5f);
-    run([this, k] { app_.radiusPx_ = 55.0f * k; });
-    stroke([this, k](float u) {
-        const ImVec2 p = onModel(0.33f, 0.1f);
-        return ImVec2(p.x - 60.0f * k * smooth(u), p.y - 120.0f * k * smooth(u));
-    }, 1.0f);
-    run([this, k] {
-        app_.radiusPx_ = 40.0f * k;
-        app_.strength_ = 0.7f;
-    });
-    click("2  Clay");
-    for (int i = 0; i < 2; ++i)
-        stroke([this](float u) {
-            const ImVec2 a = onModel(0.40f, 0.36f), b = onModel(0.49f, 0.33f);
-            return ImVec2(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u);
-        }, 0.8f);
-    run([this, k] {
-        app_.radiusPx_ = 60.0f * k;
-        app_.strength_ = 0.8f;
-    });
-    click("Dragon Scales");
-    stroke([this](float u) {
-        const ImVec2 a = onModel(0.22f, 0.55f), b = onModel(0.3f, 0.82f);
-        return ImVec2(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u);
-    }, 1.3f);
-    caption("Game-ready in one click", "LOD chains, blend shapes and Send to Unreal", 4.0f);
-    click("Generate LOD chain");
-    click("LOD2");
-    wait(1.2f);
-    click("Sculpt");
     run([this] {
-        app_.renderSettings_.wireframe = false;
+        app_.hideUi_ = false;
+    });
+    caption("Sculpt the way you already do", "Brushes, custom brush recipes and symmetry", 4.0f);
+    auto line = [this](float u0, float v0, float u1, float v1) {
+        return [this, u0, v0, u1, v1](float u) {
+            const ImVec2 a = onModel(u0, v0), b = onModel(u1, v1);
+            return ImVec2(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u);
+        };
+    };
+    // Weather the mane: Edge Wear only chips the ridges, so the forms stay intact.
+    run([this, k] {
+        app_.radiusPx_ = 70.0f * k;
+        app_.strength_ = 0.9f;
+    });
+    click("Edge Wear");
+    stroke(line(0.16f, 0.30f, 0.20f, 0.70f), 1.4f);
+    stroke(line(0.30f, 0.06f, 0.18f, 0.30f), 1.1f);
+    stroke(line(0.30f, 0.62f, 0.40f, 0.86f), 1.1f);
+    // From clay to stone.
+    auto from = std::make_shared<glm::vec3>();
+    steps_.push_back([this, from](float t) {
+        if (t == 0.0f) *from = app_.renderSettings_.baseColor;
+        app_.renderSettings_.baseColor = glm::mix(*from, glm::vec3(0.62f, 0.60f, 0.56f), smooth(t / 1.6f));
+        return t >= 1.6f;
+    });
+    run([this] {
         app_.hideUi_ = true;
         mouse_ = ImVec2(-50.0f, -50.0f);
     });
-    caption("Free and open source", "Windows · macOS · Linux", 4.0f);
-    orbit(785.0f, 0.0f, 6.0f); // a full turn
+    // One continuous swing across the front (the bust has a flat back), with both captions on it.
+    caption("Ready for games and film", "glTF, FBX and USD export with LODs and blend shapes", 4.0f);
+    run([this] { captions_.push_back({"Free and open source", "Windows · macOS · Linux", clock_ + 4.2f, 4.6f}); });
+    orbit(-160.0f, 0.0f, 8.8f);
 }
 
 void Demo::buildSculpt() {

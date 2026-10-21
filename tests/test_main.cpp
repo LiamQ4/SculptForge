@@ -882,8 +882,11 @@ TEST(zip_and_usdz_alignment) {
     std::vector<ZipEntry> entries = {{"a.usda", std::vector<uint8_t>(100, 'a')}, {"textures/b.png", std::vector<uint8_t>(7, 'b')}};
     std::string err;
     CHECK(writeStoredZip(path, entries, 64, err));
-    std::ifstream f(path, std::ios::binary);
-    std::vector<uint8_t> z((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::vector<uint8_t> z;
+    {
+        std::ifstream f(path, std::ios::binary); // closed before remove(): Windows can't delete open files
+        z.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    }
     // Find each entry's data via the local headers and check 64-byte alignment.
     size_t p = 0, aligned = 0;
     while (p + 30 <= z.size() && z[p] == 'P' && z[p + 1] == 'K' && z[p + 2] == 3 && z[p + 3] == 4) {
