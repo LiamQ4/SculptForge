@@ -75,8 +75,9 @@ jobs:
       - name: Python 3.13
         run: |
           curl -LsSf https://astral.sh/uv/0.9.5/install.sh | sh
-          ~/.local/bin/uv python install 3.13
-          echo "PYTHON313=$(~/.local/bin/uv python find 3.13)" >> "$GITHUB_ENV"
+          ~/.local/bin/uv venv --python 3.13 /opt/py313
+          ~/.local/bin/uv pip install --python /opt/py313/bin/python numpy
+          echo "PYTHON313=/opt/py313/bin/python" >> "$GITHUB_ENV"
       - name: Build, test and package with GCC 14
         run: |
           source /opt/rh/gcc-toolset-14/enable

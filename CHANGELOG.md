@@ -15,7 +15,7 @@ First public release.
 - Loop subdivision, voxel remesh (DynaMesh-style), quadric decimation.
 - Sculpt layers (blend shapes) with live weights and playback.
 
-### AI (optional, bring your own)
+### AI (free built in, or bring your own)
 - Brush Lab: describe a brush, get a procedural brush recipe; Anthropic or any OpenAI-compatible endpoint,
   including local models through Ollama / LM Studio.
 - Generate 3D from an image or from text: free via Hugging Face Spaces (Hunyuan3D, TRELLIS.2, Stable Fast 3D),

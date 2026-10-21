@@ -12,7 +12,7 @@
     <p>SculptForge is a free and open-source alternative to ZBrush: a digital sculpting application with familiar brushes,
     symmetry, sculpt layers, voxel remeshing and one-click LOD chains.</p>
     <p>It exports game-ready FBX, glTF and OpenUSD files, can send assets straight into the Unreal Editor,
-    works with Gaussian splats, and offers optional bring-your-own AI tools: describe a brush in words,
+    works with Gaussian splats, and includes free AI tools (or bring your own): describe a brush in words,
     or turn an image or a description into a sculptable 3D model.</p>
   </description>
   <launchable type="desktop-id">org.sculptforge.SculptForge.desktop</launchable>

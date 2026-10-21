@@ -3,6 +3,7 @@
 @font-face { font-family: "Inter"; src: url("fonts/Inter-SemiBold.ttf") format("truetype"); font-weight: 600 700; font-display: swap; }
 
 :root {
+  color-scheme: dark; /* the site is dark by design: tells browsers not to auto-darken it */
   --bg: #0f0f12;
   --bg-alt: #15151a;
   --panel: #1b1b21;
@@ -52,7 +53,8 @@ p { margin: 0 0 1em; }
 .hero-grid { display: grid; grid-template-columns: 1.05fr 1.2fr; gap: 48px; align-items: center; }
 .eyebrow { color: var(--accent-2); font-weight: 600; font-size: 0.85rem; letter-spacing: 0.08em; text-transform: uppercase; }
 .nowrap { white-space: nowrap; }
-.accent { background: linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+/* Solid colour (not gradient-clipped text) so dark-mode extensions and forced colours keep it readable. */
+.accent { color: #ff9a4a; text-shadow: 0 0 28px rgba(242, 140, 60, 0.35); }
 .lede { color: #cfcfd6; font-size: 1.12rem; max-width: 34em; }
 .ctas { display: flex; gap: 12px; margin: 28px 0 22px; flex-wrap: wrap; }
 .btn { display: inline-block; padding: 12px 22px; border-radius: 999px; border: 1px solid var(--border); color: var(--text);
@@ -136,3 +138,8 @@ p { margin: 0 0 1em; }
 .code { background: #0b0b0e; border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; overflow-x: auto;
         font: 0.88rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #e4e4ea; }
 .code code { background: none; padding: 0; }
+
+@media (forced-colors: active) {
+  .accent { color: Highlight; text-shadow: none; }
+  .btn.primary { border: 1px solid ButtonText; }
+}

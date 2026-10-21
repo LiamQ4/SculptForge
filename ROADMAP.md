@@ -10,7 +10,7 @@
 | Very high poly counts | Excellent | Good | Good | Limited | Goal: excellent |
 | ZBrush-style controls | — | Partial (keymap) | Partial | No | **Yes, by default** |
 | Headless / scriptable core | Limited (ZScript) | Python (whole app) | No | No | **Yes (core library + commands)** |
-| AI assistant | Limited | Add-ons only | No | No | **Bring your own AI: brush design today** |
+| AI assistant | Limited | Add-ons only | No | No | **Free built-in AI or bring your own: brushes, image/text to 3D** |
 | Image to 3D | No | Add-ons only | No | No | **Free Hunyuan3D / TRELLIS.2 / SF3D via Hugging Face, paid fal.ai / Meshy, local generators** |
 | Gaussian splats | No | Add-ons only | No | No | **View captures, splat ↔ mesh, PLY / .splat / glTF / USD** |
 | OpenUSD | Export plugin | Yes | No | No | **USDA/USDZ with UsdSkel blend shapes and splat prims** |
@@ -25,7 +25,7 @@ Where SculptForge aims to win:
 2. **First-class Linux** alongside macOS and Windows.
 3. **Familiar to ZBrush users** — controls work the way they expect.
 4. **Scriptable** — every action is a named command callable from UI, scripts or AI.
-5. **Bring your own AI** — opt-in, provider-agnostic, works fully offline with local models.
+5. **Free AI built in, or bring your own:** free models out of the box, provider-agnostic, and fully offline with local models.
 
 Where we deliberately do *not* compete yet: ZRemesher-class automatic
 retopology, a full ZBrush feature list, rendering/animation (use Blender).

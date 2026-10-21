@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The free, open-source alternative to ZBrush.</strong><br>
-  Digital sculpting for Linux, macOS and Windows, with game-ready pipelines and bring-your-own AI.
+  Digital sculpting for Linux, macOS and Windows, with game-ready pipelines and free built-in AI.
 </p>
 
 <p align="center">
@@ -32,9 +32,9 @@ SculptForge is a free, open-source alternative to ZBrush: a focused sculpting ap
 navigation ZBrush artists already know. It costs nothing, has no subscription, runs natively on Linux as well as
 Windows and macOS, and comes with source code you can change. It starts instantly, works offline,
 and fits into game and animation pipelines: sculpt a character, generate its LODs, sculpt blend shapes, and
-send it straight into Unreal Engine. Optional AI tools design brushes from a description and turn images or
-text into sculptable models, using the model *you* choose. That can be a free one, or one running entirely
-on your own machine.
+send it straight into Unreal Engine. **AI comes built in and free**: turn a sketch, concept art or a description
+into a sculptable model, or describe a brush and get it. No account or key is needed. Prefer your own?
+Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 
 ## Coming from ZBrush?
 
@@ -64,13 +64,13 @@ SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models 
 - Unlimited undo, Loop subdivision, **voxel remesh** (DynaMesh-style) and quadric decimation.
 - **Sculpt layers** that work as blend shapes, with live weights and playback.
 
-**Brush Lab: describe a brush, AI builds it**
+**Free built-in AI: Brush Lab (describe a brush, AI builds it)**
 - "Dry cracked mud", "overlapping dragon scales", then "make it sharper". Brushes are recipes (data, never
   code), with every value exposed as a slider. Share them as `.sfbrush` files.
 - Works with Claude (Anthropic API) or any OpenAI-compatible endpoint, including **local models through
   Ollama or LM Studio**.
 
-**Generate 3D from an image or text**
+**Free built-in AI: Generate 3D from an image or text**
 - A sketch, a piece of concept art or a description becomes a full 3D model (limbs, back and all), then gets
   remeshed so you can sculpt it straight away.
 - **Free** through the official Hugging Face demos of Hunyuan3D 2 / 2.1, TRELLIS.2 and Stable Fast 3D; or
@@ -213,7 +213,7 @@ argument `--mcp`. The agent gets every command as a tool and works on one live s
 src/core     Mesh, BVH, brushes & recipes, layers, undo, subdivision, decimation,
              voxel remesh, Gaussian splats, image-to-3D, command registry (no GPU/UI)
 src/io       File formats: OBJ, FBX, glTF/GLB (+ KHR_gaussian_splatting), PLY, .splat, USDA/USDZ
-src/ai       Bring-your-own AI: HTTPS client, brush assistant, image/text-to-3D services, Gradio client
+src/ai       AI services (free built-in and bring-your-own): HTTPS client, brush assistant, image/text-to-3D services, Gradio client
 src/link     Live links to game engines (Unreal Python remote execution)
 src/cli      sculptforge-cli and its MCP server
 src/render   OpenGL 3.3 renderer, splat renderer, offscreen capture

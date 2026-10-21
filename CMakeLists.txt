@@ -68,7 +68,8 @@ endif()
 # --- Bring-your-own-AI (brush assistant). HTTPS via WinHTTP or libcurl. ---
 add_library(sculptforge_ai STATIC src/ai/Http.cpp src/ai/BrushAssistant.cpp src/ai/Generator3D.cpp
   src/ai/ImageTo3DService.cpp src/ai/GradioClient.cpp src/ai/AiCommands.cpp src/link/Socket.cpp src/link/UnrealLink.cpp)
-target_link_libraries(sculptforge_ai PUBLIC sculptforge_core)
+find_package(Threads REQUIRED)
+target_link_libraries(sculptforge_ai PUBLIC sculptforge_core Threads::Threads)
 if(WIN32)
   target_link_libraries(sculptforge_ai PRIVATE winhttp ws2_32)
 else()
