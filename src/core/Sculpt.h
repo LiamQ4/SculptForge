@@ -12,7 +12,18 @@
 
 namespace sf {
 
-enum class BrushType { Standard, Clay, Smooth, Move, Inflate, Crease, Flatten, Pinch, Count };
+struct BrushAlpha;
+
+enum class BrushType {
+    Standard, Clay, Smooth, Move, Inflate, Crease, Flatten, Pinch,
+    DamStandard, // sharp V-crease with the sides pinched toward the stroke
+    ClayBuildup, // square-ish, flat-topped clay
+    SnakeHook,   // pulls the region along the stroke (strokeDelta), tapering
+    Trim,        // Trim Dynamic: a plane cuts away everything above it
+    Layer,       // raises to one fixed height per stroke (overlaps never stack)
+    Nudge,       // slides the surface sideways along the stroke
+    Count
+};
 
 const char* brushName(BrushType type);
 
@@ -24,7 +35,9 @@ struct DabParams {
     float pressure = 1.0f;              // tablet pressure, 0..1
     bool invert = false;
     bool frontFacesOnly = false;
-    glm::vec3 strokeDelta{0.0f}; // world-space movement since the previous dab (recipe brushes)
+    glm::vec3 strokeDelta{0.0f}; // world-space movement since the previous dab (recipe, SnakeHook, Nudge, DamStandard)
+    const BrushAlpha* alpha = nullptr;   // stamp shaping the falloff (null/empty = round)
+    glm::vec3 alphaUp{0.0f, 1.0f, 0.0f}; // world direction of the alpha's top edge (screen up, or rotated)
 };
 
 struct Symmetry {
@@ -73,6 +86,10 @@ public:
     // Mirror sign vectors for the enabled symmetry axes (always starts with (1,1,1)).
     static std::vector<glm::vec3> mirrors(Symmetry sym);
 
+    // Puts every vertex the current stroke moved back where it started (the
+    // stroke stays open). DragRect re-stamps from scratch while dragging.
+    void restoreStroke(Mesh& mesh, BVH& bvh);
+
 private:
     struct GrabEntry {
         uint32_t vertex;
@@ -97,6 +114,14 @@ private:
     std::vector<float> weights_;
     std::vector<GrabEntry> grab_;
     std::vector<uint32_t> grabVerts_;
+
+    // Layer brush: per-stroke height already applied to each vertex.
+    void prepareLayer(const Mesh& mesh, float height);
+    std::vector<uint32_t> layerStamp_;
+    std::vector<float> layerDone_;
+    std::vector<glm::vec3> layerDir_;
+    uint32_t layerEpoch_ = 0, layerSeenStamp_ = 0;
+    float layerHeight_ = 0.0f;
 };
 
 } // namespace sf

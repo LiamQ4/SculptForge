@@ -1,0 +1,443 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// v0.2 brushes (DamStandard, ClayBuildup, SnakeHook, Trim, Layer, Nudge),
+// alphas, stroke helpers (lazy mouse, spray, spacing) and brush_set_alpha.
+#include "TestHarness.h"
+
+#include "core/BrushAlpha.h"
+#include "core/Commands.h"
+#include "core/Primitives.h"
+#include "core/Sculpt.h"
+#include "core/Stroke.h"
+
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+
+using namespace sf;
+
+namespace {
+
+constexpr Symmetry kNoSymmetry{false, false, false};
+
+// 64 x 64 quads over [-1, 1]^2 in XZ, normal +Y; there is a vertex at the origin.
+Document planeDoc() { return makeDoc(makePlane(64, 2.0f)); }
+
+uint32_t nearest(const Mesh& m, const glm::vec3& p) {
+    uint32_t best = 0;
+    for (uint32_t v = 1; v < m.vertexCount(); ++v)
+        if (glm::distance(m.positions[v], p) < glm::distance(m.positions[best], p)) best = v;
+    return best;
+}
+
+DabParams dabAt(glm::vec3 center, float radius = 0.3f, float strength = 0.5f) {
+    DabParams p;
+    p.center = center;
+    p.viewDir = glm::vec3(0, -1, 0);
+    p.radius = radius;
+    p.strength = strength;
+    return p;
+}
+
+// One stroke of `count` identical dabs.
+void stroke(Document& d, BrushType type, const DabParams& p, Symmetry sym = kNoSymmetry, int count = 1) {
+    d.sculptor.beginStroke(d.mesh, brushName(type));
+    for (int i = 0; i < count; ++i) d.sculptor.dab(d.mesh, d.bvh, type, p, sym);
+    d.undo.push(d.sculptor.endStroke());
+}
+
+glm::vec3 moved(const Document& d, const std::vector<glm::vec3>& before, uint32_t v) {
+    return d.mesh.positions[v] - before[v];
+}
+
+} // namespace
+
+TEST(brush_names_cover_new_types) {
+    CHECK(std::string(brushName(BrushType::DamStandard)) == "DamStandard");
+    CHECK(std::string(brushName(BrushType::ClayBuildup)) == "ClayBuildup");
+    CHECK(std::string(brushName(BrushType::SnakeHook)) == "SnakeHook");
+    CHECK(std::string(brushName(BrushType::Trim)) == "Trim");
+    CHECK(std::string(brushName(BrushType::Layer)) == "Layer");
+    CHECK(std::string(brushName(BrushType::Nudge)) == "Nudge");
+    for (int i = 0; i < int(BrushType::Count); ++i) CHECK(std::string(brushName(BrushType(i))) != "?");
+    // Original brushes keep their slots (hotkeys 1-8, saved settings).
+    CHECK(int(BrushType::Standard) == 0 && int(BrushType::Pinch) == 7 && int(BrushType::DamStandard) == 8);
+}
+
+TEST(round_alpha_leaves_existing_brushes_unchanged) {
+    for (BrushType type : {BrushType::Standard, BrushType::Clay, BrushType::Crease, BrushType::Pinch}) {
+        Document a = planeDoc(), b = planeDoc();
+        DabParams p = dabAt(glm::vec3(0.1f, 0.0f, 0.0f));
+        stroke(a, type, p);
+        BrushAlpha round = BrushAlpha::round();
+        p.alpha = &round;
+        p.strokeDelta = glm::vec3(0.02f, 0, 0);
+        p.alphaUp = glm::vec3(0.3f, 0.2f, 0.9f);
+        stroke(b, type, p);
+        CHECK(a.mesh.positions == b.mesh.positions);
+    }
+    // Standard: centre raised by r * 0.06 * strength.
+    Document d = planeDoc();
+    stroke(d, BrushType::Standard, dabAt(glm::vec3(0.0f)));
+    CHECK(std::abs(d.mesh.positions[nearest(d.mesh, glm::vec3(0))].y - 0.3f * 0.06f * 0.5f) < 1e-5f);
+}
+
+TEST(dam_standard_carves_sharp_pinched_groove) {
+    Document d = planeDoc();
+    const auto before = d.mesh.positions;
+    DabParams p = dabAt(glm::vec3(0.0f));
+    p.strokeDelta = glm::vec3(0, 0, 0.05f); // stroke runs along +z
+    stroke(d, BrushType::DamStandard, p);
+    const uint32_t c = nearest(d.mesh, glm::vec3(0)), side = nearest(d.mesh, glm::vec3(0.15f, 0, 0));
+    const uint32_t along = nearest(d.mesh, glm::vec3(0, 0, 0.15f));
+    CHECK(moved(d, before, c).y < -0.005f);                         // carves inward
+    const float sideDepth = -moved(d, before, side).y, centreDepth = -moved(d, before, c).y;
+    CHECK(sideDepth >= 0.0f && sideDepth < 0.2f * centreDepth);     // sharp V (Standard would be ~0.5)
+    CHECK(moved(d, before, side).x < -0.005f);                      // sides pinch toward the line
+    CHECK(std::abs(moved(d, before, along).z) < 1e-5f);             // ...but not along it
+    CHECK(std::abs(moved(d, before, along).x) < 1e-5f);
+
+    Document r = planeDoc();
+    p.invert = true;
+    stroke(r, BrushType::DamStandard, p);
+    CHECK(r.mesh.positions[c].y > 0.005f); // Alt raises a sharp ridge
+}
+
+TEST(clay_buildup_is_square_and_flat_topped) {
+    Document d = planeDoc(), clay = planeDoc();
+    const DabParams p = dabAt(glm::vec3(0.0f));
+    stroke(d, BrushType::ClayBuildup, p);
+    stroke(clay, BrushType::Clay, p);
+    const uint32_t c = nearest(d.mesh, glm::vec3(0)), diag = nearest(d.mesh, glm::vec3(0.2f, 0, 0.2f));
+    const uint32_t mid = nearest(d.mesh, glm::vec3(0.1f, 0, 0));
+    const float hc = d.mesh.positions[c].y;
+    CHECK(hc > 0.005f);
+    CHECK(std::abs(d.mesh.positions[mid].y - hc) < 0.05f * hc); // flat top
+    CHECK(d.mesh.positions[diag].y > 0.6f * hc);                // square: corners filled
+    CHECK(clay.mesh.positions[diag].y < 0.3f * clay.mesh.positions[c].y); // round Clay is not
+    // Builds up over strokes.
+    stroke(d, BrushType::ClayBuildup, p);
+    CHECK(d.mesh.positions[c].y > 1.5f * hc);
+    // Nothing outside the rounded square moves.
+    CHECK(d.mesh.positions[nearest(d.mesh, glm::vec3(0.45f, 0, 0))].y == 0.0f);
+}
+
+TEST(snake_hook_pulls_and_tapers) {
+    Document d = planeDoc();
+    const auto before = d.mesh.positions;
+    DabParams p = dabAt(glm::vec3(0.0f));
+    p.strokeDelta = glm::vec3(0, 0.05f, 0);
+    stroke(d, BrushType::SnakeHook, p);
+    const uint32_t c = nearest(d.mesh, glm::vec3(0)), side = nearest(d.mesh, glm::vec3(0.15f, 0, 0));
+    CHECK(std::abs(moved(d, before, c).y - 0.05f) < 1e-4f); // the tip follows the stroke
+    CHECK(moved(d, before, side).y > 0.0f && moved(d, before, side).y < 0.05f);
+    CHECK(moved(d, before, side).x < 0.0f);                 // sides taper inward
+    CHECK(d.mesh.positions[nearest(d.mesh, glm::vec3(0.5f, 0, 0))] == before[nearest(d.mesh, glm::vec3(0.5f, 0, 0))]);
+
+    // Re-centred on the tip every step (as the app does), it pulls out a horn.
+    Document h = planeDoc();
+    h.sculptor.beginStroke(h.mesh, "SnakeHook");
+    glm::vec3 tip(0.0f);
+    for (int i = 0; i < 40; ++i) {
+        DabParams s = dabAt(tip);
+        s.strokeDelta = glm::vec3(0, 0.025f, 0);
+        h.sculptor.dab(h.mesh, h.bvh, BrushType::SnakeHook, s, kNoSymmetry);
+        tip += s.strokeDelta;
+    }
+    h.undo.push(h.sculptor.endStroke());
+    float top = 0.0f, widthHigh = 0.0f, widthLow = 0.0f;
+    for (const glm::vec3& v : h.mesh.positions) {
+        top = std::max(top, v.y);
+        const float r = std::sqrt(v.x * v.x + v.z * v.z);
+        if (v.y > 0.6f) widthHigh = std::max(widthHigh, r);
+        if (v.y > 0.1f && v.y < 0.3f) widthLow = std::max(widthLow, r);
+    }
+    CHECK(top > 0.8f);
+    CHECK(widthHigh < widthLow); // tapers toward the tip
+    CHECK(widthLow < 0.3f);
+}
+
+TEST(trim_cuts_flat_and_never_raises) {
+    Document d = makeDoc(makeIcosphere(4));
+    const auto before = d.mesh.positions;
+    auto spreadNearAxis = [](const std::vector<glm::vec3>& pos) {
+        float lo = 1e9f, hi = -1e9f;
+        for (const glm::vec3& v : pos)
+            if (v.y > 0 && v.x * v.x + v.z * v.z < 0.15f * 0.15f) {
+                lo = std::min(lo, v.y);
+                hi = std::max(hi, v.y);
+            }
+        return hi - lo;
+    };
+    stroke(d, BrushType::Trim, dabAt(glm::vec3(0, 1, 0), 0.4f, 1.0f), kNoSymmetry, 5);
+    const uint32_t top = nearest(d.mesh, glm::vec3(0, 2, 0));
+    CHECK(d.mesh.positions[top].y < before[top].y - 0.005f); // cut down
+    CHECK(spreadNearAxis(d.mesh.positions) < 0.3f * spreadNearAxis(before)); // to a flat plane
+    bool raised = false;
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) raised |= glm::length(d.mesh.positions[v]) > glm::length(before[v]) + 1e-6f;
+    CHECK(!raised);
+}
+
+TEST(layer_brush_raises_constant_height_without_stacking) {
+    Document d = planeDoc();
+    const DabParams p = dabAt(glm::vec3(0.0f));
+    const float height = 0.3f * 0.08f * 0.5f;
+    stroke(d, BrushType::Layer, p, kNoSymmetry, 10);
+    const uint32_t c = nearest(d.mesh, glm::vec3(0));
+    CHECK(std::abs(d.mesh.positions[c].y - height) < 1e-5f); // ten dabs, one height
+
+    // Overlapping dabs along a line: the result is the max, not the sum.
+    Document l = planeDoc();
+    l.sculptor.beginStroke(l.mesh, "Layer");
+    for (float x = -0.2f; x <= 0.2001f; x += 0.05f)
+        l.sculptor.dab(l.mesh, l.bvh, BrushType::Layer, dabAt(glm::vec3(x, 0, 0)), kNoSymmetry);
+    l.undo.push(l.sculptor.endStroke());
+    float maxY = 0.0f;
+    for (const glm::vec3& v : l.mesh.positions) maxY = std::max(maxY, v.y);
+    CHECK(maxY <= height + 1e-5f && maxY > 0.99f * height);
+
+    // A new stroke adds another layer.
+    stroke(d, BrushType::Layer, p);
+    CHECK(std::abs(d.mesh.positions[c].y - 2.0f * height) < 0.02f * height); // along the (bumped) area normal
+    // Undo restores the stroke exactly.
+    d.undo.undo(d.mesh, d.bvh);
+    CHECK(std::abs(d.mesh.positions[c].y - height) < 1e-5f);
+}
+
+TEST(nudge_slides_along_the_surface) {
+    Document d = planeDoc();
+    const auto before = d.mesh.positions;
+    DabParams p = dabAt(glm::vec3(0.0f));
+    p.strokeDelta = glm::vec3(0.05f, 0.04f, 0.0f); // the normal component is dropped
+    stroke(d, BrushType::Nudge, p);
+    const uint32_t c = nearest(d.mesh, glm::vec3(0));
+    CHECK(moved(d, before, c).x > 0.02f);
+    float maxDy = 0.0f;
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) maxDy = std::max(maxDy, std::abs(moved(d, before, v).y));
+    CHECK(maxDy < 1e-6f);
+    const uint32_t far = nearest(d.mesh, glm::vec3(0.5f, 0, 0));
+    CHECK(d.mesh.positions[far] == before[far]);
+}
+
+TEST(new_brushes_respect_mask_and_symmetry) {
+    const BrushType types[] = {BrushType::DamStandard, BrushType::ClayBuildup, BrushType::SnakeHook,
+                               BrushType::Trim,        BrushType::Layer,       BrushType::Nudge};
+    for (BrushType type : types) {
+        DabParams p = dabAt(glm::vec3(0.5f, 0, 0), 0.3f, 1.0f);
+        p.strokeDelta = glm::vec3(0.03f, 0.03f, 0.03f);
+        if (type == BrushType::Trim) p.invert = true; // fill: a flat plane has nothing to cut
+
+        // Symmetry X: the mirrored dab mirrors the displacement.
+        Document s = planeDoc();
+        const auto before = s.mesh.positions;
+        stroke(s, type, p, Symmetry{true, false, false});
+        const uint32_t right = nearest(s.mesh, glm::vec3(0.55f, 0, 0.05f));
+        const uint32_t left = nearest(s.mesh, glm::vec3(-0.55f, 0, 0.05f));
+        const glm::vec3 dr = moved(s, before, right), dl = moved(s, before, left);
+        CHECK(glm::length(dr) > 1e-4f);
+        CHECK(glm::length(dr - dl * glm::vec3(-1, 1, 1)) < 1e-5f);
+
+        // Mask the left half: the mirrored dab leaves it alone.
+        Document m = planeDoc();
+        m.mesh.ensureMask();
+        for (uint32_t v = 0; v < m.mesh.vertexCount(); ++v) m.mesh.mask[v] = m.mesh.positions[v].x < 0 ? 1.0f : 0.0f;
+        stroke(m, type, p, Symmetry{true, false, false});
+        bool leftMoved = false;
+        for (uint32_t v = 0; v < m.mesh.vertexCount(); ++v)
+            if (before[v].x < 0) leftMoved |= m.mesh.positions[v] != before[v];
+        CHECK(!leftMoved);
+        CHECK(glm::length(moved(m, before, right)) > 1e-4f);
+    }
+}
+
+TEST(alpha_sampling) {
+    const BrushAlpha round = BrushAlpha::round();
+    CHECK(round.empty() && round.name == "Round");
+    CHECK(std::abs(round.sample(0, 0) - 1.0f) < 1e-6f && round.sample(1.0f, 0) == 0.0f);
+    CHECK(std::abs(round.sample(0.5f, 0) - 0.5f) < 1e-6f && round.sample(0, 1.5f) == 0.0f);
+
+    const BrushAlpha square = BrushAlpha::square();
+    CHECK(square.width == 128 && square.values.size() == 128u * 128u);
+    CHECK(square.sample(0.7f, 0.7f) > 0.99f && square.sample(0.0f, 0.0f) > 0.99f);
+    CHECK(square.sample(0.96f, 0.0f) < 0.5f && square.sample(1.2f, 0.0f) == 0.0f);
+
+    const BrushAlpha noise = BrushAlpha::noise(), noise2 = BrushAlpha::noise();
+    CHECK(noise.values == noise2.values); // deterministic
+    float lo = 1.0f, hi = 0.0f;
+    for (float v : noise.values) {
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+    }
+    CHECK(lo >= 0.0f && hi <= 1.0f && hi - lo > 0.5f);
+
+    // Image alphas: luminance x alpha, bilinear, row 0 at the top.
+    Image img;
+    img.width = 2;
+    img.height = 2;
+    img.rgba = {255, 255, 255, 255, 0, 0, 0, 255,   // top: white, black
+                255, 255, 255, 0,   0, 0, 0, 255};  // bottom: transparent white, black
+    const BrushAlpha a = BrushAlpha::fromImage(img, "test");
+    CHECK(a.name == "test" && a.width == 2 && a.height == 2);
+    CHECK(std::abs(a.sample(-0.9f, 0.9f) - 1.0f) < 1e-5f); // top-left
+    CHECK(a.sample(0.9f, 0.9f) < 1e-5f);                  // top-right
+    CHECK(a.sample(-0.9f, -0.9f) < 1e-5f);                // transparent counts as black
+    CHECK(std::abs(a.sample(0.0f, 0.9f) - 0.5f) < 1e-5f); // bilinear between pixel centres
+    const BrushAlpha inv = BrushAlpha::fromImage(img, "inv", true);
+    CHECK(inv.sample(-0.9f, 0.9f) < 1e-5f && std::abs(inv.sample(0.9f, 0.9f) - 1.0f) < 1e-5f);
+    CHECK(BrushAlpha::fromImage(Image{}, "x").empty());
+
+    BrushAlpha out;
+    CHECK(BrushAlpha::builtin("SQUARE", out) && out.name == "Square");
+    CHECK(BrushAlpha::builtin("none", out) && out.empty());
+    CHECK(!BrushAlpha::builtin("star", out));
+}
+
+TEST(alpha_shapes_and_orients_dabs) {
+    // Square alpha fills the corners a round dab leaves untouched.
+    Document round = planeDoc(), sq = planeDoc();
+    stroke(round, BrushType::Standard, dabAt(glm::vec3(0)));
+    BrushAlpha square = BrushAlpha::square();
+    DabParams p = dabAt(glm::vec3(0));
+    p.alpha = &square;
+    stroke(sq, BrushType::Standard, p);
+    const uint32_t c = nearest(sq.mesh, glm::vec3(0)), diag = nearest(sq.mesh, glm::vec3(0.25f, 0, 0.25f));
+    CHECK(sq.mesh.positions[diag].y > 0.9f * sq.mesh.positions[c].y);
+    CHECK(round.mesh.positions[diag].y == 0.0f);
+
+    // Half-white image: only the white side moves; alphaUp sets the orientation.
+    Image img;
+    img.width = 8;
+    img.height = 8;
+    img.rgba.resize(8 * 8 * 4, 255);
+    for (int y = 0; y < 8; ++y)
+        for (int x = 4; x < 8; ++x)
+            for (int k = 0; k < 3; ++k) img.rgba[size_t((y * 8 + x) * 4 + k)] = 0;
+    BrushAlpha half = BrushAlpha::fromImage(img, "half");
+    Document h = planeDoc();
+    p.alpha = &half;
+    p.alphaUp = glm::vec3(0, 0, -1); // seen from above (+Y), image right = +x
+    stroke(h, BrushType::Standard, p);
+    CHECK(h.mesh.positions[nearest(h.mesh, glm::vec3(-0.12f, 0, 0))].y > 0.005f);
+    CHECK(h.mesh.positions[nearest(h.mesh, glm::vec3(0.12f, 0, 0))].y == 0.0f);
+    // Rotated 180 degrees, the other side moves.
+    Document h2 = planeDoc();
+    p.alphaUp = glm::vec3(0, 0, 1);
+    stroke(h2, BrushType::Standard, p);
+    CHECK(h2.mesh.positions[nearest(h2.mesh, glm::vec3(-0.12f, 0, 0))].y == 0.0f);
+    CHECK(h2.mesh.positions[nearest(h2.mesh, glm::vec3(0.12f, 0, 0))].y > 0.005f);
+
+    // Recipe brushes are modulated too.
+    Document r = planeDoc();
+    BrushRecipe recipe;
+    recipe.name = "test";
+    p.alphaUp = glm::vec3(0, 0, -1);
+    r.sculptor.beginStroke(r.mesh, "test");
+    r.sculptor.dabRecipe(r.mesh, r.bvh, recipe, p, kNoSymmetry);
+    r.undo.push(r.sculptor.endStroke());
+    CHECK(r.mesh.positions[nearest(r.mesh, glm::vec3(-0.12f, 0, 0))].y > 0.001f);
+    CHECK(r.mesh.positions[nearest(r.mesh, glm::vec3(0.12f, 0, 0))].y == 0.0f);
+}
+
+TEST(brush_set_alpha_command) {
+    CommandRegistry reg;
+    Document d = planeDoc();
+    CHECK(reg.find("brush_set_alpha") != nullptr);
+    CHECK(d.brushAlpha.empty());
+    CHECK(reg.execute(d, "brush_set_alpha", {{"name", std::string("square")}}).ok);
+    CHECK(d.brushAlpha.name == "Square" && !d.brushAlpha.empty());
+    CHECK(!reg.execute(d, "brush_set_alpha", {{"name", std::string("star")}}).ok);
+    CHECK(d.brushAlpha.name == "Square");
+
+    Image img;
+    img.width = 16;
+    img.height = 8;
+    img.rgba.assign(16 * 8 * 4, 200);
+    const std::string path = tempPath("sf_test_alpha.png");
+    std::string err;
+    CHECK(img.savePng(path, err));
+    CHECK(reg.execute(d, "brush_set_alpha", {{"path", path}}).ok);
+    CHECK(d.brushAlpha.name == "sf_test_alpha" && d.brushAlpha.width == 16 && d.brushAlpha.height == 8);
+    CHECK(!reg.execute(d, "brush_set_alpha", {{"path", tempPath("sf_no_such_alpha.png")}}).ok);
+    CHECK(reg.execute(d, "brush_set_alpha", {}).ok && d.brushAlpha.empty()); // back to round
+    std::filesystem::remove(path);
+}
+
+TEST(restore_stroke_reverts_for_drag_rect) {
+    Document d = planeDoc();
+    const auto before = d.mesh.positions;
+    d.sculptor.beginStroke(d.mesh, "DragRect");
+    d.sculptor.dab(d.mesh, d.bvh, BrushType::Standard, dabAt(glm::vec3(0), 0.2f), kNoSymmetry);
+    d.sculptor.restoreStroke(d.mesh, d.bvh);
+    CHECK(d.mesh.positions == before);
+    // Re-stamp bigger: only the final stamp remains, and undo goes back to the start.
+    d.sculptor.dab(d.mesh, d.bvh, BrushType::Layer, dabAt(glm::vec3(0), 0.4f), kNoSymmetry);
+    d.sculptor.restoreStroke(d.mesh, d.bvh);
+    d.sculptor.dab(d.mesh, d.bvh, BrushType::Layer, dabAt(glm::vec3(0), 0.4f), kNoSymmetry);
+    const uint32_t c = nearest(d.mesh, glm::vec3(0));
+    CHECK(std::abs(d.mesh.positions[c].y - 0.4f * 0.08f * 0.5f) < 1e-5f); // Layer restarts after a restore
+    d.undo.push(d.sculptor.endStroke());
+    d.undo.undo(d.mesh, d.bvh);
+    CHECK(d.mesh.positions == before);
+
+    // With sculpt layers the restore goes through the layer offsets.
+    Document l = planeDoc();
+    l.mesh.addLayer("L");
+    l.sculptor.beginStroke(l.mesh, "DragRect", 0);
+    l.sculptor.dab(l.mesh, l.bvh, BrushType::Standard, dabAt(glm::vec3(0)), kNoSymmetry);
+    CHECK(l.mesh.positions != before);
+    l.sculptor.restoreStroke(l.mesh, l.bvh);
+    l.sculptor.endStroke();
+    bool same = true;
+    for (uint32_t v = 0; v < l.mesh.vertexCount(); ++v) same &= glm::distance(l.mesh.positions[v], before[v]) < 1e-6f;
+    CHECK(same);
+}
+
+TEST(lazy_mouse_smooths_jitter) {
+    LazyMouse lazy;
+    lazy.radius = 20.0f;
+    lazy.reset(glm::vec2(0.0f));
+    CHECK(lazy.follow(glm::vec2(10, 5)) == glm::vec2(0.0f)); // inside the string: no movement
+    // A jittery horizontal line: +-6 px of vertical noise.
+    float inLo = 1e9f, inHi = -1e9f, outLo = 1e9f, outHi = -1e9f;
+    glm::vec2 cursor(0.0f), point(0.0f);
+    for (int i = 0; i < 300; ++i) {
+        cursor = glm::vec2(float(i) * 2.0f, (i % 2 ? 6.0f : -6.0f));
+        point = lazy.follow(cursor);
+        if (i < 100) continue;
+        inLo = std::min(inLo, cursor.y);
+        inHi = std::max(inHi, cursor.y);
+        outLo = std::min(outLo, point.y);
+        outHi = std::max(outHi, point.y);
+    }
+    CHECK(outHi - outLo < 0.25f * (inHi - inLo));
+    CHECK(std::abs(glm::distance(point, cursor) - 20.0f) < 1e-3f); // trails by the radius
+    CHECK(point.x < cursor.x);
+}
+
+TEST(spray_and_spacing_are_deterministic) {
+    Spray a(7), b(7), c(8);
+    bool same = true, differs = false, bounded = true;
+    for (int i = 0; i < 200; ++i) {
+        const SprayDab x = a.next(50.0f, 0.5f), y = b.next(50.0f, 0.5f), z = c.next(50.0f, 0.5f);
+        same &= x.offset == y.offset && x.scale == y.scale && x.strength == y.strength && x.angle == y.angle;
+        differs |= x.offset != z.offset;
+        bounded &= glm::length(x.offset) <= 25.0f + 1e-4f && x.scale >= 0.5f && x.scale <= 1.0f &&
+                   x.strength >= 0.5f && x.strength <= 1.0f;
+    }
+    CHECK(same && differs && bounded);
+    Spray zero(0); // a zero seed still produces numbers
+    CHECK(zero.uniform() > 0.0f);
+
+    StrokeSpacer spacer;
+    std::vector<glm::vec2> pts;
+    spacer.reset(glm::vec2(0.0f));
+    spacer.moveTo(glm::vec2(100, 0), 10.0f, pts);
+    CHECK(pts.size() == 10 && std::abs(pts[0].x - 10.0f) < 1e-4f && std::abs(pts.back().x - 100.0f) < 1e-3f);
+    pts.clear();
+    spacer.moveTo(glm::vec2(105, 0), 10.0f, pts);
+    CHECK(pts.empty());
+    spacer.moveTo(glm::vec2(115, 0), 10.0f, pts);
+    CHECK(pts.size() == 1 && std::abs(pts[0].x - 110.0f) < 1e-3f);
+    CHECK(std::string(strokeTypeName(StrokeType::LazyMouse)) == "LazyMouse");
+}

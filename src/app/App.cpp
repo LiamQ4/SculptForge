@@ -521,7 +521,9 @@ void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
     case SDLK_F: camera_.frame(sceneBounds()); break;
     case SDLK_F1: showHelp_ = !showHelp_; break;
     default:
-        if (key >= SDLK_1 && key < SDLK_1 + int(BrushType::Count)) brush_ = BrushType(key - SDLK_1);
+        // 1-9 pick the first nine brushes, 0 the tenth.
+        if (key >= SDLK_1 && key <= SDLK_9) brush_ = BrushType(key - SDLK_1);
+        else if (key == SDLK_0) brush_ = BrushType(9);
         break;
     }
 }
@@ -560,6 +562,16 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
         grabPlanePoint_ = grabLast_ = hit.position;
         return;
     }
+    lazyMouse_.reset(glm::vec2(x, y));
+    if (strokeBrush_ == BrushType::SnakeHook && !recipe) {
+        grabPlanePoint_ = grabLast_ = hit.position; // the pulled tip (see snakeHookTo)
+        return;
+    }
+    if (strokeType_ == StrokeType::DragRect) {
+        dragAnchor_ = glm::vec2(x, y);
+        dragAnchorHit_ = hit.position;
+        return; // the stamp appears once the drag gives it a size
+    }
     dabAt(x, y);
 }
 
@@ -578,6 +590,19 @@ void App::strokeTo(float x, float y) {
         doc_.sculptor.grab(doc_.mesh, doc_.bvh, p - grabLast_);
         grabLast_ = p;
         return;
+    }
+    if (strokeBrush_ == BrushType::SnakeHook && !recipe) {
+        snakeHookTo(x, y);
+        return;
+    }
+    if (strokeType_ == StrokeType::DragRect) {
+        dragRectTo(x, y);
+        return;
+    }
+    if (strokeType_ == StrokeType::LazyMouse) {
+        const glm::vec2 lazy = lazyMouse_.follow(glm::vec2(x, y));
+        x = lazy.x;
+        y = lazy.y;
     }
 
     // Place dabs at even screen-space spacing along the cursor path.
@@ -608,6 +633,16 @@ void App::dabAt(float x, float y) {
         x += rnd() * recipe->jitter * radiusPx_;
         y += rnd() * recipe->jitter * radiusPx_;
     }
+    dabRadiusScale_ = dabStrengthScale_ = 1.0f;
+    dabAngle_ = 0.0f;
+    if (strokeType_ == StrokeType::Spray) {
+        const SprayDab s = spray_.next(radiusPx_, sprayScatter_);
+        x += s.offset.x;
+        y += s.offset.y;
+        dabRadiusScale_ = s.scale;
+        dabStrengthScale_ = s.strength;
+        dabAngle_ = s.angle;
+    }
     RayHit hit;
     if (!pick(x, y, hit)) return;
     int w = 0, h = 0;
@@ -618,15 +653,17 @@ void App::dabAt(float x, float y) {
     p.center = hit.position;
     p.viewDir = camera_.forward();
     p.radius = radiusPx_ * (pressureSize_ ? std::max(pressure, 0.05f) : 1.0f) *
-               camera_.worldPerPixel(hit.position, float(h));
-    p.strength = strength_;
+               camera_.worldPerPixel(hit.position, float(h)) * dabRadiusScale_;
+    p.strength = strength_ * dabStrengthScale_;
     p.pressure = pressureStrength_ ? pressure : 1.0f;
     p.invert = strokeInvert_;
     p.frontFacesOnly = frontFacesOnly_;
+    p.alpha = &doc_.brushAlpha;
+    p.alphaUp = screenUpVector(dabAngle_);
+    p.strokeDelta = haveLastDab_ ? hit.position - lastDabHit_ : glm::vec3(0.0f);
+    lastDabHit_ = hit.position;
+    haveLastDab_ = true;
     if (recipe) {
-        p.strokeDelta = haveLastDab_ ? hit.position - lastDabHit_ : glm::vec3(0.0f);
-        lastDabHit_ = hit.position;
-        haveLastDab_ = true;
         doc_.sculptor.dabRecipe(doc_.mesh, doc_.bvh, *recipe, p, symmetry_);
         return;
     }
@@ -1585,7 +1622,9 @@ void App::drawToolPanel() {
         const auto type = BrushType(i);
         const bool selected = brush_ == type && doc_.activeBrush < 0;
         if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        std::string label = std::to_string(i + 1) + "  " + brushName(type);
+        // Hotkeys 1-9 and 0 cover the first ten brushes.
+        std::string label = (i < 9 ? std::to_string(i + 1) : i == 9 ? std::string("0") : std::string(" ")) + "  " +
+                            brushName(type);
         if (ImGui::Button(label.c_str(), ImVec2(bw, 0))) {
             brush_ = type;
             doc_.activeBrush = -1;
@@ -1614,6 +1653,7 @@ void App::drawToolPanel() {
     ImGui::PopItemWidth();
     ImGui::Checkbox("Invert (Alt)", &invertToggle_);
     ImGui::Checkbox("Front faces only", &frontFacesOnly_);
+    drawBrushOptions();
 
     ImGui::SeparatorText("Symmetry");
     ImGui::Checkbox("X", &symmetry_.x);
@@ -1709,6 +1749,12 @@ void App::drawBrushCursor() {
                                                          : IM_COL32(255, 190, 120, 200);
     dl->AddCircle(c, r, col, 64, 1.5f);
     dl->AddCircle(c, r * (0.25f + 0.75f * (1.0f - strength_)), IM_COL32(255, 255, 255, 60), 48, 1.0f);
+    if (strokeType_ == StrokeType::LazyMouse && drag_ == Drag::Stroke) {
+        // The string from the cursor to the lagging brush point.
+        const ImVec2 lp(lazyMouse_.point.x, lazyMouse_.point.y);
+        dl->AddLine(c, lp, IM_COL32(255, 255, 255, 120), 1.0f);
+        dl->AddCircleFilled(lp, 3.0f, col);
+    }
 }
 
 } // namespace sf
