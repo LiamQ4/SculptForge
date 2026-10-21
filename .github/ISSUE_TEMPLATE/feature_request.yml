@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest a brush, tool, workflow or integration
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the artistic or pipeline problem, not just the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How would you like it to work?
+  - type: textarea
+    id: other
+    attributes:
+      label: How do other tools handle it?
+      description: ZBrush, Blender, Nomad, Mudbox... Screenshots and links welcome.

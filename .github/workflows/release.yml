@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build, e.g. v0.1.0
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }} (.deb, AppImage, .tar.gz)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, os: ubuntu-22.04, ld: x86_64 }
+          - { arch: arm64, os: ubuntu-22.04-arm, ld: aarch64 }
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ env.TAG }}' }
+      - run: sudo ./packaging/linux/install-build-deps.sh
+      - name: Build and test
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DSCULPTFORGE_USE_SYSTEM_SDL=OFF
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+      - name: .deb and .tar.gz
+        run: cd build && cpack -G "DEB;TGZ"
+      - name: AppImage
+        run: |
+          DESTDIR=$PWD/AppDir cmake --install build
+          curl -fsSLo linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.ld }}.AppImage
+          chmod +x linuxdeploy
+          VERSION=${TAG#v} ./linuxdeploy --appimage-extract-and-run --appdir AppDir \
+            --desktop-file AppDir/usr/share/applications/org.sculptforge.SculptForge.desktop \
+            --icon-file assets/branding/sculptforge-256.png --icon-filename org.sculptforge.SculptForge \
+            --output appimage
+          mv SculptForge-*.AppImage build/SculptForge-${TAG#v}-linux-${{ matrix.arch }}.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            build/*.deb
+            build/*.tar.gz
+            build/*.AppImage
+
+  rpm:
+    name: RPM ${{ matrix.arch }} (Fedora, RHEL 9+)
+    runs-on: ${{ matrix.os }}
+    container: almalinux:9
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, os: ubuntu-24.04 }
+          - { arch: arm64, os: ubuntu-24.04-arm }
+    steps:
+      - run: dnf -y install git
+      - uses: actions/checkout@v4
+        with: { ref: '${{ env.TAG }}' }
+      - run: ./packaging/linux/install-build-deps.sh
+      - name: Build, test and package
+        run: |
+          source /opt/rh/gcc-toolset-13/enable
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DSCULPTFORGE_USE_SYSTEM_SDL=OFF
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+          cd build && cpack -G RPM
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.arch }}
+          path: build/*.rpm
+
+  macos:
+    name: macOS (universal .dmg)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ env.TAG }}' }
+      - name: Build and test
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+      - name: Package (signed ad-hoc inside CPack, see cmake/MacSign.cmake)
+        run: cd build && cpack -G DragNDrop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: build/*.dmg
+
+  windows:
+    name: Windows x64 (installer, .zip)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ env.TAG }}' }
+      - name: Build and test
+        run: |
+          cmake -S . -B build -DSCULPTFORGE_USE_SYSTEM_SDL=OFF
+          cmake --build build --config Release --parallel
+          ctest --test-dir build -C Release --output-on-failure
+      - name: Package
+        run: cd build && cpack -C Release -G "NSIS;ZIP"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            build/*.exe
+            build/*.zip
+
+  publish:
+    name: Publish GitHub Release
+    needs: [linux, rpm, macos, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ env.TAG }}' }
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Release notes from CHANGELOG
+        run: |
+          awk "/^## \[${TAG#v}\]/{flag=1;next} /^## \[/{flag=0} flag" CHANGELOG.md > notes.md
+          cat packaging/release-notes-footer.md >> notes.md
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "SculptForge ${TAG#v}" --notes-file notes.md
+          gh release upload "$TAG" dist/* --clobber

@@ -1,0 +1,46 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to report a problem! Please search existing issues first.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Choose the Clay brush ...
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: SculptForge version
+      description: Help → About, or the release you downloaded.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Ubuntu / Debian, Fedora / RHEL, Arch Linux, Other Linux]
+    validations:
+      required: true
+  - type: textarea
+    id: gpu
+    attributes:
+      label: GPU and driver (for display or performance problems)
+      description: The first lines printed in the terminal show the OpenGL version and renderer.
+  - type: textarea
+    id: files
+    attributes:
+      label: Files or screenshots
+      description: Drag a screenshot or a small model file here if it helps. Don't attach API keys.

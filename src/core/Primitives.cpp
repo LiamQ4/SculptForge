@@ -1,0 +1,163 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "core/Primitives.h"
+
+#include <cmath>
+#include <numbers>
+#include <unordered_map>
+
+namespace sf {
+
+namespace {
+
+uint64_t edgeKey(uint32_t a, uint32_t b) {
+    if (a > b) std::swap(a, b);
+    return (uint64_t(a) << 32) | b;
+}
+
+void finalize(Mesh& m) {
+    m.rebuildTopology();
+    m.recomputeAllNormals();
+}
+
+} // namespace
+
+Mesh makeIcosphere(int subdivisions, float radius) {
+    const float t = (1.0f + std::sqrt(5.0f)) / 2.0f;
+    Mesh m;
+    m.positions = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0}, {0, -1, t}, {0, 1, t},
+                   {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
+    m.triangles = {{0, 11, 5}, {0, 5, 1},  {0, 1, 7},   {0, 7, 10}, {0, 10, 11}, {1, 5, 9}, {5, 11, 4},
+                   {11, 10, 2}, {10, 7, 6}, {7, 1, 8},   {3, 9, 4},  {3, 4, 2},   {3, 2, 6}, {3, 6, 8},
+                   {3, 8, 9},  {4, 9, 5},  {2, 4, 11},  {6, 2, 10}, {8, 6, 7},   {9, 8, 1}};
+    for (auto& p : m.positions) p = glm::normalize(p);
+
+    for (int level = 0; level < subdivisions; ++level) {
+        std::unordered_map<uint64_t, uint32_t> mids;
+        mids.reserve(m.triangles.size() * 2);
+        auto mid = [&](uint32_t a, uint32_t b) {
+            auto [it, inserted] = mids.try_emplace(edgeKey(a, b), uint32_t(m.positions.size()));
+            if (inserted) m.positions.push_back(glm::normalize(m.positions[a] + m.positions[b]));
+            return it->second;
+        };
+        std::vector<glm::uvec3> tris;
+        tris.reserve(m.triangles.size() * 4);
+        for (const auto& tri : m.triangles) {
+            uint32_t ab = mid(tri.x, tri.y), bc = mid(tri.y, tri.z), ca = mid(tri.z, tri.x);
+            tris.push_back({tri.x, ab, ca});
+            tris.push_back({tri.y, bc, ab});
+            tris.push_back({tri.z, ca, bc});
+            tris.push_back({ab, bc, ca});
+        }
+        m.triangles = std::move(tris);
+    }
+    for (auto& p : m.positions) p *= radius;
+    finalize(m);
+    return m;
+}
+
+Mesh makePlane(int resolution, float size) {
+    Mesh m;
+    const int n = std::max(resolution, 1);
+    for (int j = 0; j <= n; ++j)
+        for (int i = 0; i <= n; ++i)
+            m.positions.emplace_back((float(i) / n - 0.5f) * size, 0.0f, (float(j) / n - 0.5f) * size);
+    for (int j = 0; j < n; ++j) {
+        for (int i = 0; i < n; ++i) {
+            uint32_t a = j * (n + 1) + i, b = a + 1, c = a + (n + 1), d = c + 1;
+            m.triangles.push_back({a, c, b});
+            m.triangles.push_back({b, c, d});
+        }
+    }
+    finalize(m);
+    return m;
+}
+
+Mesh loopSubdivide(const Mesh& src) {
+    const uint32_t nv = static_cast<uint32_t>(src.vertexCount());
+
+    // Edge -> (new vertex index, use count, opposite vertices).
+    struct EdgeInfo {
+        uint32_t index;
+        uint32_t count;
+        uint32_t opp[2];
+    };
+    std::unordered_map<uint64_t, EdgeInfo> edges;
+    edges.reserve(src.triangles.size() * 2);
+    uint32_t next = nv;
+    for (const auto& t : src.triangles) {
+        for (int e = 0; e < 3; ++e) {
+            uint32_t a = t[e], b = t[(e + 1) % 3], c = t[(e + 2) % 3];
+            auto [it, inserted] = edges.try_emplace(edgeKey(a, b), EdgeInfo{next, 0, {c, c}});
+            if (inserted) ++next;
+            if (it->second.count < 2) it->second.opp[it->second.count] = c;
+            ++it->second.count;
+        }
+    }
+
+    // Boundary neighbours per vertex (edges used by exactly one triangle).
+    std::vector<std::vector<uint32_t>> boundaryNbrs(nv);
+    for (const auto& [key, e] : edges) {
+        if (e.count == 1) {
+            uint32_t a = uint32_t(key >> 32), b = uint32_t(key & 0xffffffffu);
+            boundaryNbrs[a].push_back(b);
+            boundaryNbrs[b].push_back(a);
+        }
+    }
+
+    // Loop subdivision is linear, so the same stencils apply to positions and
+    // to sculpt-layer offsets, keeping layers consistent across levels.
+    auto subdivideAttribute = [&](const std::vector<glm::vec3>& P) {
+        std::vector<glm::vec3> out(next);
+        for (uint32_t v = 0; v < nv; ++v) {
+            const auto& bn = boundaryNbrs[v];
+            if (bn.size() == 2) {
+                out[v] = 0.75f * P[v] + 0.125f * (P[bn[0]] + P[bn[1]]);
+            } else if (!bn.empty()) {
+                out[v] = P[v]; // corner / non-manifold: keep fixed
+            } else {
+                auto ring = src.neighbors(v);
+                const float n = static_cast<float>(ring.size());
+                if (n < 2) {
+                    out[v] = P[v];
+                    continue;
+                }
+                float c = 0.375f + 0.25f * std::cos(2.0f * std::numbers::pi_v<float> / n);
+                float beta = (0.625f - c * c) / n;
+                glm::vec3 sum(0.0f);
+                for (uint32_t u : ring) sum += P[u];
+                out[v] = (1.0f - n * beta) * P[v] + beta * sum;
+            }
+        }
+        for (const auto& [key, e] : edges) {
+            uint32_t a = uint32_t(key >> 32), b = uint32_t(key & 0xffffffffu);
+            if (e.count == 2)
+                out[e.index] = 0.375f * (P[a] + P[b]) + 0.125f * (P[e.opp[0]] + P[e.opp[1]]);
+            else
+                out[e.index] = 0.5f * (P[a] + P[b]);
+        }
+        return out;
+    };
+
+    Mesh out;
+    out.positions = subdivideAttribute(src.positions);
+    if (!src.layers.empty()) {
+        out.base = subdivideAttribute(src.base);
+        for (const auto& l : src.layers) out.layers.push_back({l.name, subdivideAttribute(l.delta), l.weight});
+    }
+
+    out.triangles.reserve(src.triangles.size() * 4);
+    for (const auto& t : src.triangles) {
+        uint32_t ab = edges.at(edgeKey(t.x, t.y)).index;
+        uint32_t bc = edges.at(edgeKey(t.y, t.z)).index;
+        uint32_t ca = edges.at(edgeKey(t.z, t.x)).index;
+        out.triangles.push_back({t.x, ab, ca});
+        out.triangles.push_back({t.y, bc, ab});
+        out.triangles.push_back({t.z, ca, bc});
+        out.triangles.push_back({ab, bc, ca});
+    }
+    finalize(out);
+    return out;
+}
+
+} // namespace sf

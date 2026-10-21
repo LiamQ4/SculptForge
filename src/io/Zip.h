@@ -1,0 +1,27 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Minimal uncompressed ("stored") ZIP archives, which is exactly what USDZ
+// is: no compression, no encryption, every file's data 64-byte aligned.
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace sf {
+
+struct ZipEntry {
+    std::string name;
+    std::vector<uint8_t> data;
+};
+
+uint32_t crc32(const uint8_t* data, size_t size);
+
+// Writes entries in order with each file's data aligned to `alignment` bytes.
+bool writeStoredZip(const std::string& path, const std::vector<ZipEntry>& entries, size_t alignment, std::string& error);
+
+// Reads a ZIP whose entries are stored (uncompressed), as USDZ requires.
+bool readStoredZip(const std::string& path, std::vector<ZipEntry>& entries, std::string& error);
+
+} // namespace sf

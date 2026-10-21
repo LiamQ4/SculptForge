@@ -1,0 +1,68 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "app/App.h"
+
+#include <SDL3/SDL_main.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+
+namespace {
+
+void usage() {
+    std::puts(
+        "Usage: sculptforge [model / splats / image file] [options]\n"
+        "\n"
+        "  --run \"<commands>\"     Run commands at start-up (see sculptforge-cli --list)\n"
+        "  --render out.png         Render headless and exit (thumbnails, review sheets)\n"
+        "  --turntable N            With --render: N frames around the model (out_000.png ...)\n"
+        "  --size WxH               Render size (default 1024x1024)\n"
+        "  --view YAW,PITCH         Camera angles in degrees (default -30,-15)\n"
+        "  --wireframe              Render with wireframe overlay\n"
+        "  --hide-mesh              Render only the Gaussian splats\n"
+        "  --demo NAME              Play a scripted demo (sculpt, image-to-3d, brush-lab, game-ready, splats)\n"
+        "  --record out.mp4         Record the demo offscreen to a video (needs ffmpeg) and exit\n"
+        "  --demo-asset FILE        Image or model the demo opens\n"
+        "  --demo-output FILE       Save the demo's result (e.g. creature.glb)\n"
+        "  --fps N                  Recording frame rate (default 30)");
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    sf::AppOptions options;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : std::string(); };
+        if (a == "--run") options.script += next() + "\n";
+        else if (a == "--render") options.renderPath = next();
+        else if (a == "--turntable") options.turntable = std::atoi(next().c_str());
+        else if (a == "--size") std::sscanf(next().c_str(), "%dx%d", &options.width, &options.height);
+        else if (a == "--view") std::sscanf(next().c_str(), "%f,%f", &options.yawDegrees, &options.pitchDegrees);
+        else if (a == "--wireframe") options.wireframe = true;
+        else if (a == "--hide-mesh") options.hideMesh = true;
+        else if (a == "--demo") options.demo = next();
+        else if (a == "--record") options.recordPath = next();
+        else if (a == "--demo-asset") options.demoAsset = next();
+        else if (a == "--demo-output") options.demoOutput = next();
+        else if (a == "--fps") options.fps = std::atoi(next().c_str());
+        else if (a == "-h" || a == "--help") {
+            usage();
+            return 0;
+        } else if (!a.empty() && a[0] != '-') options.openPath = a;
+        else {
+            std::fprintf(stderr, "Unknown option %s\n", a.c_str());
+            usage();
+            return 1;
+        }
+    }
+    sf::App app;
+    if (!app.init(options)) {
+        app.shutdown();
+        return 1;
+    }
+    int code = app.run();
+    app.shutdown();
+    return code;
+}

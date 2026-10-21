@@ -1,0 +1,617 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "io/GltfIO.h"
+
+#include "core/Json.h"
+
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+#include <cmath>
+#include <functional>
+#include <iterator>
+#include <map>
+#include <unordered_map>
+
+#include <array>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
+namespace sf {
+
+namespace {
+
+std::string jsonEscape(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        if (static_cast<unsigned char>(c) < 0x20) continue;
+        out += c;
+    }
+    return out;
+}
+
+struct BinWriter {
+    std::vector<uint8_t> data;
+    // Appends 4-byte aligned data and returns its byte offset.
+    size_t append(const void* src, size_t bytes) {
+        size_t offset = data.size();
+        data.resize(offset + bytes);
+        std::memcpy(data.data() + offset, src, bytes);
+        while (data.size() % 4) data.push_back(0);
+        return offset;
+    }
+};
+
+void minMax(const std::vector<glm::vec3>& v, glm::vec3& lo, glm::vec3& hi) {
+    lo = glm::vec3(std::numeric_limits<float>::max());
+    hi = glm::vec3(std::numeric_limits<float>::lowest());
+    for (const auto& p : v) {
+        lo = glm::min(lo, p);
+        hi = glm::max(hi, p);
+    }
+    if (v.empty()) lo = hi = glm::vec3(0.0f);
+}
+
+std::string vec3Json(const glm::vec3& v) {
+    std::ostringstream s;
+    s.precision(9);
+    s << "[" << v.x << "," << v.y << "," << v.z << "]";
+    return s.str();
+}
+
+bool writeGlbFile(const std::string& path, std::string jsonStr, const std::vector<uint8_t>& bin, std::string& error) {
+    while (jsonStr.size() % 4) jsonStr += ' ';
+    const uint32_t totalLength = 12 + 8 + uint32_t(jsonStr.size()) + 8 + uint32_t(bin.size());
+    std::ofstream file(std::filesystem::path(std::u8string(path.begin(), path.end())), std::ios::binary);
+    if (!file) {
+        error = "Cannot write " + path;
+        return false;
+    }
+    auto u32 = [&](uint32_t v) { file.write(reinterpret_cast<const char*>(&v), 4); };
+    u32(0x46546C67); // "glTF"
+    u32(2);
+    u32(totalLength);
+    u32(uint32_t(jsonStr.size()));
+    u32(0x4E4F534A); // "JSON"
+    file.write(jsonStr.data(), std::streamsize(jsonStr.size()));
+    u32(uint32_t(bin.size()));
+    u32(0x004E4942); // "BIN\0"
+    file.write(reinterpret_cast<const char*>(bin.data()), std::streamsize(bin.size()));
+    if (!file) {
+        error = "Write failed for " + path;
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool saveGlb(const std::string& path, const Mesh& mesh, const std::string& name, std::string& error) {
+    if (mesh.triangleCount() == 0) {
+        error = "Mesh is empty";
+        return false;
+    }
+
+    // Base shape and its normals.
+    Mesh baseMesh;
+    baseMesh.positions = mesh.basePositions();
+    baseMesh.triangles = mesh.triangles;
+    baseMesh.rebuildTopology();
+    baseMesh.recomputeAllNormals();
+
+    BinWriter bin;
+    struct View {
+        size_t offset, length;
+        bool indices;
+    };
+    std::vector<View> views;
+    std::ostringstream accessors;
+    int accessorCount = 0;
+
+    auto addVec3 = [&](const std::vector<glm::vec3>& v, bool withMinMax) {
+        size_t off = bin.append(v.data(), v.size() * sizeof(glm::vec3));
+        views.push_back({off, v.size() * sizeof(glm::vec3), false});
+        accessors << (accessorCount ? "," : "") << "{\"bufferView\":" << views.size() - 1
+                  << ",\"componentType\":5126,\"count\":" << v.size() << ",\"type\":\"VEC3\"";
+        if (withMinMax) {
+            glm::vec3 lo, hi;
+            minMax(v, lo, hi);
+            accessors << ",\"min\":" << vec3Json(lo) << ",\"max\":" << vec3Json(hi);
+        }
+        accessors << "}";
+        return accessorCount++;
+    };
+
+    int posAcc = addVec3(baseMesh.positions, true);
+    int nrmAcc = addVec3(baseMesh.normals, false);
+
+    size_t idxOff = bin.append(mesh.triangles.data(), mesh.triangleCount() * sizeof(glm::uvec3));
+    views.push_back({idxOff, mesh.triangleCount() * sizeof(glm::uvec3), true});
+    accessors << ",{\"bufferView\":" << views.size() - 1 << ",\"componentType\":5125,\"count\":"
+              << mesh.triangleCount() * 3 << ",\"type\":\"SCALAR\"}";
+    int idxAcc = accessorCount++;
+
+    std::vector<int> targetAccs;
+    for (const auto& l : mesh.layers) targetAccs.push_back(addVec3(l.delta, true));
+
+    std::ostringstream json;
+    json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"SculptForge\"},\"scene\":0,"
+         << "\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0,\"name\":\"" << jsonEscape(name) << "\"}],"
+         << "\"meshes\":[{\"name\":\"" << jsonEscape(name) << "\",\"primitives\":[{\"attributes\":{\"POSITION\":"
+         << posAcc << ",\"NORMAL\":" << nrmAcc << "},\"indices\":" << idxAcc << ",\"mode\":4";
+    if (!mesh.layers.empty()) {
+        json << ",\"targets\":[";
+        for (size_t i = 0; i < targetAccs.size(); ++i) json << (i ? "," : "") << "{\"POSITION\":" << targetAccs[i] << "}";
+        json << "]";
+    }
+    json << "}]";
+    if (!mesh.layers.empty()) {
+        json << ",\"weights\":[";
+        for (size_t i = 0; i < mesh.layers.size(); ++i) json << (i ? "," : "") << mesh.layers[i].weight;
+        json << "],\"extras\":{\"targetNames\":[";
+        for (size_t i = 0; i < mesh.layers.size(); ++i)
+            json << (i ? "," : "") << "\"" << jsonEscape(mesh.layers[i].name) << "\"";
+        json << "]}";
+    }
+    json << "}],\"accessors\":[" << accessors.str() << "],\"bufferViews\":[";
+    for (size_t i = 0; i < views.size(); ++i)
+        json << (i ? "," : "") << "{\"buffer\":0,\"byteOffset\":" << views[i].offset << ",\"byteLength\":"
+             << views[i].length << ",\"target\":" << (views[i].indices ? 34963 : 34962) << "}";
+    json << "],\"buffers\":[{\"byteLength\":" << bin.data.size() << "}]}";
+
+    return writeGlbFile(path, json.str(), bin.data, error);
+}
+
+bool saveSplatGlb(const std::string& path, const SplatCloud& c, std::string& error) {
+    if (c.empty()) {
+        error = "There are no splats to export";
+        return false;
+    }
+    if (std::string v = c.validate(); !v.empty()) {
+        error = v;
+        return false;
+    }
+    BinWriter bin;
+    std::ostringstream accessors, views;
+    int count = 0;
+    auto add = [&](const std::vector<float>& data, const char* type, bool withMinMax, const std::vector<glm::vec3>* v3) {
+        const size_t off = bin.append(data.data(), data.size() * sizeof(float));
+        views << (count ? "," : "") << "{\"buffer\":0,\"byteOffset\":" << off << ",\"byteLength\":"
+              << data.size() * sizeof(float) << ",\"target\":34962}";
+        accessors << (count ? "," : "") << "{\"bufferView\":" << count << ",\"componentType\":5126,\"count\":" << c.size()
+                  << ",\"type\":\"" << type << "\"";
+        if (withMinMax && v3) {
+            glm::vec3 lo, hi;
+            minMax(*v3, lo, hi);
+            accessors << ",\"min\":" << vec3Json(lo) << ",\"max\":" << vec3Json(hi);
+        }
+        accessors << "}";
+        return count++;
+    };
+    auto flat3 = [](const std::vector<glm::vec3>& v) {
+        std::vector<float> f;
+        f.reserve(v.size() * 3);
+        for (const auto& x : v) f.insert(f.end(), {x.x, x.y, x.z});
+        return f;
+    };
+    const size_t K = size_t(c.shCount());
+    std::vector<float> rot, color, sh0;
+    for (size_t i = 0; i < c.size(); ++i) {
+        const glm::quat& q = c.rotations[i];
+        rot.insert(rot.end(), {q.x, q.y, q.z, q.w});
+        const glm::vec3 rgb = glm::clamp(c.color(i), glm::vec3(0.0f), glm::vec3(1.0f));
+        color.insert(color.end(), {rgb.x, rgb.y, rgb.z, c.opacities[i]});
+        sh0.insert(sh0.end(), {c.sh[i * K].x, c.sh[i * K].y, c.sh[i * K].z});
+    }
+    std::ostringstream attrs;
+    const std::string prefix = "\"KHR_gaussian_splatting:";
+    attrs << "\"POSITION\":" << add(flat3(c.positions), "VEC3", true, &c.positions);
+    attrs << ",\"COLOR_0\":" << add(color, "VEC4", false, nullptr);
+    attrs << "," << prefix << "ROTATION\":" << add(rot, "VEC4", false, nullptr);
+    attrs << "," << prefix << "SCALE\":" << add(flat3(c.scales), "VEC3", false, nullptr);
+    attrs << "," << prefix << "OPACITY\":" << add(c.opacities, "SCALAR", false, nullptr);
+    attrs << "," << prefix << "SH_DEGREE_0_COEF_0\":" << add(sh0, "VEC3", false, nullptr);
+    for (size_t k = 1; k < K; ++k) {
+        const int d = int(std::sqrt(double(k)) + 1e-9), m = int(k) - d * d;
+        std::vector<float> coef;
+        coef.reserve(c.size() * 3);
+        for (size_t i = 0; i < c.size(); ++i) coef.insert(coef.end(), {c.sh[i * K + k].x, c.sh[i * K + k].y, c.sh[i * K + k].z});
+        attrs << "," << prefix << "SH_DEGREE_" << d << "_COEF_" << m << "\":" << add(coef, "VEC3", false, nullptr);
+    }
+
+    std::ostringstream json;
+    json.precision(9);
+    json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"SculptForge\"},\"extensionsUsed\":[\"KHR_gaussian_splatting\"],"
+         << "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0,\"name\":\"" << jsonEscape(c.name) << "\"";
+    if (c.transform != glm::mat4(1.0f)) {
+        json << ",\"matrix\":[";
+        for (int i = 0; i < 16; ++i) json << (i ? "," : "") << glm::value_ptr(c.transform)[i];
+        json << "]";
+    }
+    json << "}],\"meshes\":[{\"name\":\"" << jsonEscape(c.name) << "\",\"primitives\":[{\"mode\":0,\"attributes\":{"
+         << attrs.str() << "},\"extensions\":{\"KHR_gaussian_splatting\":{\"kernel\":\"ellipse\","
+         << "\"colorSpace\":\"srgb_rec709_display\",\"projection\":\"perspective\",\"sortingMethod\":\"cameraDistance\"}}}]}],"
+         << "\"accessors\":[" << accessors.str() << "],\"bufferViews\":[" << views.str() << "],\"buffers\":[{\"byteLength\":"
+         << bin.data.size() << "}]}";
+    return writeGlbFile(path, json.str(), bin.data, error);
+}
+
+namespace {
+
+std::vector<uint8_t> base64Decode(const std::string& in) {
+    static const auto table = [] {
+        std::array<int, 256> t;
+        t.fill(-1);
+        const char* chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; i < 64; ++i) t[uint8_t(chars[i])] = i;
+        return t;
+    }();
+    std::vector<uint8_t> out;
+    out.reserve(in.size() * 3 / 4);
+    int val = 0, bits = -8;
+    for (unsigned char c : in) {
+        if (table[c] < 0) continue;
+        val = (val << 6) | table[c];
+        bits += 6;
+        if (bits >= 0) {
+            out.push_back(uint8_t((val >> bits) & 0xff));
+            bits -= 8;
+        }
+    }
+    return out;
+}
+
+bool readFile(const std::filesystem::path& p, std::vector<uint8_t>& out) {
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return false;
+    out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    return true;
+}
+
+struct GltfReader {
+    Json doc;
+    std::vector<std::vector<uint8_t>> buffers;
+    std::string error;
+
+    // Reads accessor `index` as floats (VEC3) or indices (SCALAR); returns false on unsupported layouts.
+    bool readVec3(int index, std::vector<glm::vec3>& out) {
+        const Json& acc = doc["accessors"][size_t(index)];
+        if (acc["type"].asString() != "VEC3" || int(acc["componentType"].asNumber()) != 5126) {
+            error = "Only float VEC3 positions are supported";
+            return false;
+        }
+        const size_t count = size_t(acc["count"].asNumber());
+        out.assign(count, glm::vec3(0.0f));
+        if (acc["bufferView"].isNull()) return true; // all zeros (sparse not supported)
+        const uint8_t* base;
+        size_t stride, available;
+        if (!view(acc, 12, base, stride, available)) return false;
+        if (count && (count - 1) * stride + 12 > available) return fail("Accessor out of range");
+        for (size_t i = 0; i < count; ++i) std::memcpy(&out[i], base + i * stride, 12);
+        return true;
+    }
+
+    // Reads `components` values per element as floats, decoding normalized integers.
+    bool readFloats(int index, int components, std::vector<float>& out) {
+        const Json& acc = doc["accessors"][size_t(index)];
+        static const std::map<std::string, int> typeComponents = {{"SCALAR", 1}, {"VEC2", 2}, {"VEC3", 3}, {"VEC4", 4}};
+        auto tc = typeComponents.find(acc["type"].asString());
+        if (tc == typeComponents.end() || tc->second != components) return fail("Unexpected accessor type");
+        const int type = int(acc["componentType"].asNumber());
+        const size_t size = type == 5126 ? 4 : (type == 5122 || type == 5123) ? 2 : (type == 5120 || type == 5121) ? 1 : 0;
+        if (!size) return fail("Unsupported accessor component type");
+        const bool normalized = acc["normalized"].asBool(false);
+        const size_t count = size_t(acc["count"].asNumber());
+        out.assign(count * size_t(components), 0.0f);
+        if (acc["bufferView"].isNull()) return true;
+        const uint8_t* base;
+        size_t stride, available;
+        const size_t element = size * size_t(components);
+        if (!view(acc, element, base, stride, available)) return false;
+        if (count && (count - 1) * stride + element > available) return fail("Accessor out of range");
+        for (size_t i = 0; i < count; ++i)
+            for (int c = 0; c < components; ++c) {
+                const uint8_t* p = base + i * stride + size_t(c) * size;
+                float v = 0.0f;
+                switch (type) {
+                case 5126: std::memcpy(&v, p, 4); break;
+                case 5120: v = normalized ? std::max(float(int8_t(p[0])) / 127.0f, -1.0f) : float(int8_t(p[0])); break;
+                case 5121: v = normalized ? float(p[0]) / 255.0f : float(p[0]); break;
+                case 5122: {
+                    int16_t x;
+                    std::memcpy(&x, p, 2);
+                    v = normalized ? std::max(float(x) / 32767.0f, -1.0f) : float(x);
+                    break;
+                }
+                default: {
+                    uint16_t x;
+                    std::memcpy(&x, p, 2);
+                    v = normalized ? float(x) / 65535.0f : float(x);
+                }
+                }
+                out[i * size_t(components) + size_t(c)] = v;
+            }
+        return true;
+    }
+
+    bool readIndices(int index, std::vector<uint32_t>& out) {
+        const Json& acc = doc["accessors"][size_t(index)];
+        const int type = int(acc["componentType"].asNumber());
+        const size_t size = type == 5125 ? 4 : type == 5123 ? 2 : type == 5121 ? 1 : 0;
+        if (!size) return fail("Unsupported index type");
+        const size_t count = size_t(acc["count"].asNumber());
+        const uint8_t* base;
+        size_t stride, available;
+        if (!view(acc, size, base, stride, available)) return false;
+        if (count && (count - 1) * stride + size > available) return fail("Accessor out of range");
+        out.resize(count);
+        for (size_t i = 0; i < count; ++i) {
+            const uint8_t* p = base + i * stride;
+            out[i] = size == 4 ? uint32_t(p[0] | p[1] << 8 | p[2] << 16 | uint32_t(p[3]) << 24)
+                     : size == 2 ? uint32_t(p[0] | p[1] << 8)
+                                 : uint32_t(p[0]);
+        }
+        return true;
+    }
+
+    bool view(const Json& acc, size_t elementSize, const uint8_t*& base, size_t& stride, size_t& available) {
+        const Json& bv = doc["bufferViews"][size_t(acc["bufferView"].asNumber())];
+        const size_t buf = size_t(bv["buffer"].asNumber());
+        if (buf >= buffers.size()) return fail("Missing buffer");
+        const size_t viewOffset = size_t(bv["byteOffset"].asNumber());
+        const size_t viewLength = size_t(bv["byteLength"].asNumber());
+        const size_t accOffset = size_t(acc["byteOffset"].asNumber());
+        if (viewOffset + viewLength > buffers[buf].size() || accOffset > viewLength) return fail("Buffer view out of range");
+        base = buffers[buf].data() + viewOffset + accOffset;
+        stride = bv["byteStride"].isNumber() ? size_t(bv["byteStride"].asNumber()) : elementSize;
+        available = viewLength - accOffset;
+        return true;
+    }
+
+    bool fail(const std::string& msg) {
+        if (error.empty()) error = msg;
+        return false;
+    }
+};
+
+glm::mat4 nodeMatrix(const Json& node) {
+    if (node["matrix"].size() == 16) {
+        glm::mat4 m;
+        for (int i = 0; i < 16; ++i) glm::value_ptr(m)[i] = float(node["matrix"][size_t(i)].asNumber());
+        return m;
+    }
+    glm::mat4 m(1.0f);
+    const Json& t = node["translation"];
+    if (t.size() == 3)
+        m = glm::translate(m, glm::vec3(float(t[0].asNumber()), float(t[1].asNumber()), float(t[2].asNumber())));
+    const Json& r = node["rotation"];
+    if (r.size() == 4)
+        m *= glm::mat4_cast(glm::quat(float(r[3].asNumber()), float(r[0].asNumber()), float(r[1].asNumber()),
+                                      float(r[2].asNumber())));
+    const Json& s = node["scale"];
+    if (s.size() == 3) m = glm::scale(m, glm::vec3(float(s[0].asNumber()), float(s[1].asNumber()), float(s[2].asNumber())));
+    return m;
+}
+
+} // namespace
+
+bool loadGltf(const std::string& path, Mesh& out, std::string& error, SplatCloud* splatsOut) {
+    const std::filesystem::path fsPath(std::u8string(path.begin(), path.end()));
+    std::vector<uint8_t> file;
+    if (!readFile(fsPath, file)) {
+        error = "Cannot open " + path;
+        return false;
+    }
+
+    GltfReader r;
+    std::string jsonText;
+    std::vector<uint8_t> glbBin;
+    bool hasGlbBin = false;
+    if (file.size() >= 12 && std::memcmp(file.data(), "glTF", 4) == 0) {
+        size_t offset = 12;
+        while (offset + 8 <= file.size()) {
+            uint32_t len, type;
+            std::memcpy(&len, file.data() + offset, 4);
+            std::memcpy(&type, file.data() + offset + 4, 4);
+            offset += 8;
+            if (offset + len > file.size()) {
+                error = "Truncated GLB file";
+                return false;
+            }
+            if (type == 0x4E4F534A) jsonText.assign(reinterpret_cast<const char*>(file.data() + offset), len);
+            else if (type == 0x004E4942) {
+                glbBin.assign(file.begin() + std::ptrdiff_t(offset), file.begin() + std::ptrdiff_t(offset + len));
+                hasGlbBin = true;
+            }
+            offset += (len + 3) & ~size_t(3);
+        }
+    } else {
+        jsonText.assign(file.begin(), file.end());
+    }
+    if (!Json::parse(jsonText, r.doc, error)) {
+        error = "Invalid glTF JSON: " + error;
+        return false;
+    }
+
+    for (size_t i = 0; i < r.doc["buffers"].size(); ++i) {
+        const std::string& uri = r.doc["buffers"][i]["uri"].asString();
+        std::vector<uint8_t> data;
+        if (uri.empty() && i == 0 && hasGlbBin) {
+            data = std::move(glbBin);
+        } else if (uri.rfind("data:", 0) == 0) {
+            size_t comma = uri.find(',');
+            if (comma == std::string::npos) {
+                error = "Bad data URI";
+                return false;
+            }
+            data = base64Decode(uri.substr(comma + 1));
+        } else if (!uri.empty()) {
+            if (uri.find("..") != std::string::npos || std::filesystem::path(uri).is_absolute()) {
+                error = "Refusing buffer path outside the model's folder: " + uri;
+                return false;
+            }
+            if (!readFile(fsPath.parent_path() / std::filesystem::path(uri), data)) {
+                error = "Missing buffer file: " + uri;
+                return false;
+            }
+        }
+        r.buffers.push_back(std::move(data));
+    }
+
+    Mesh m;
+    std::vector<std::vector<glm::vec3>> targetDeltas;
+    std::vector<std::string> targetNames;
+    std::vector<float> targetWeights;
+    bool targetsConsistent = true;
+
+    SplatCloud splats;
+    auto readSplats = [&](const Json& prim, const glm::mat4& world) -> bool {
+        const Json& at = prim["attributes"];
+        const char* prefix = "KHR_gaussian_splatting:";
+        auto attr = [&](const std::string& n) { return at[n].isNumber() ? int(at[n].asNumber()) : -1; };
+        const int pos = attr("POSITION"), rot = attr(std::string(prefix) + "ROTATION"),
+                  scl = attr(std::string(prefix) + "SCALE"), opa = attr(std::string(prefix) + "OPACITY"),
+                  dc = attr(std::string(prefix) + "SH_DEGREE_0_COEF_0");
+        if (pos < 0 || rot < 0 || scl < 0 || opa < 0 || dc < 0) return r.fail("Incomplete KHR_gaussian_splatting primitive");
+        std::vector<glm::vec3> p;
+        std::vector<float> q, sc, op, c0;
+        if (!r.readVec3(pos, p) || !r.readFloats(rot, 4, q) || !r.readFloats(scl, 3, sc) || !r.readFloats(opa, 1, op) ||
+            !r.readFloats(dc, 3, c0))
+            return false;
+        const size_t n = p.size();
+        if (q.size() != n * 4 || sc.size() != n * 3 || op.size() != n || c0.size() != n * 3)
+            return r.fail("KHR_gaussian_splatting attributes have different counts");
+        int degree = 0;
+        for (int d = 1; d <= 3; ++d) {
+            bool complete = true;
+            for (int m = 0; m < 2 * d + 1; ++m)
+                complete &= attr(std::string(prefix) + "SH_DEGREE_" + std::to_string(d) + "_COEF_" + std::to_string(m)) >= 0;
+            if (!complete) break;
+            degree = d;
+        }
+        splats.resize(n, degree);
+        const size_t K = size_t(splats.shCount());
+        for (size_t i = 0; i < n; ++i) {
+            splats.positions[i] = p[i];
+            glm::quat qq(q[i * 4 + 3], q[i * 4], q[i * 4 + 1], q[i * 4 + 2]); // glTF stores x, y, z, w
+            const float len = glm::length(qq);
+            splats.rotations[i] = len > 0.0f ? qq / len : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+            splats.scales[i] = glm::vec3(sc[i * 3], sc[i * 3 + 1], sc[i * 3 + 2]);
+            splats.opacities[i] = op[i];
+            splats.sh[i * K] = glm::vec3(c0[i * 3], c0[i * 3 + 1], c0[i * 3 + 2]);
+        }
+        for (size_t k = 1; k < K; ++k) {
+            const int d = int(std::sqrt(double(k)) + 1e-9), m = int(k) - d * d;
+            std::vector<float> coef;
+            if (!r.readFloats(attr(std::string(prefix) + "SH_DEGREE_" + std::to_string(d) + "_COEF_" + std::to_string(m)), 3, coef))
+                return false;
+            if (coef.size() != n * 3) return r.fail("KHR_gaussian_splatting SH count mismatch");
+            for (size_t i = 0; i < n; ++i) splats.sh[i * K + k] = glm::vec3(coef[i * 3], coef[i * 3 + 1], coef[i * 3 + 2]);
+        }
+        splats.transform = world;
+        return true;
+    };
+
+    std::function<bool(int, const glm::mat4&, int)> visit = [&](int nodeIndex, const glm::mat4& parent, int depth) {
+        if (depth > 64) return r.fail("Node hierarchy too deep");
+        const Json& node = r.doc["nodes"][size_t(nodeIndex)];
+        const glm::mat4 world = parent * nodeMatrix(node);
+        const glm::mat3 linear(world);
+        if (node["mesh"].isNumber()) {
+            const Json& mesh = r.doc["meshes"][size_t(node["mesh"].asNumber())];
+            for (const Json& prim : mesh["primitives"].items()) {
+                const Json& gs = prim["extensions"]["KHR_gaussian_splatting"];
+                if (gs.isObject()) {
+                    if (splatsOut && splats.empty() && !readSplats(prim, world)) return false;
+                    continue;
+                }
+                if (prim["mode"].isNumber() && int(prim["mode"].asNumber()) != 4) continue; // triangles only
+                if (!prim["attributes"]["POSITION"].isNumber()) continue;
+                std::vector<glm::vec3> pos;
+                if (!r.readVec3(int(prim["attributes"]["POSITION"].asNumber()), pos)) return false;
+                std::vector<uint32_t> idx;
+                if (prim["indices"].isNumber()) {
+                    if (!r.readIndices(int(prim["indices"].asNumber()), idx)) return false;
+                } else {
+                    idx.resize(pos.size());
+                    for (uint32_t i = 0; i < idx.size(); ++i) idx[i] = i;
+                }
+                const uint32_t baseIndex = uint32_t(m.positions.size());
+                for (const auto& p : pos) m.positions.push_back(glm::vec3(world * glm::vec4(p, 1.0f)));
+                for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+                    if (idx[t] >= pos.size() || idx[t + 1] >= pos.size() || idx[t + 2] >= pos.size())
+                        return r.fail("Index out of range");
+                    m.triangles.push_back({baseIndex + idx[t], baseIndex + idx[t + 1], baseIndex + idx[t + 2]});
+                }
+
+                // Morph targets -> sculpt layers (only when every primitive has the same set).
+                const Json& targets = prim["targets"];
+                if (targetDeltas.empty() && baseIndex == 0) {
+                    targetDeltas.resize(targets.size());
+                    for (size_t k = 0; k < targets.size(); ++k) {
+                        const Json& names = mesh["extras"]["targetNames"];
+                        targetNames.push_back(names[k].isString() ? names[k].asString() : "Shape " + std::to_string(k + 1));
+                        targetWeights.push_back(float(mesh["weights"][k].asNumber(0.0)));
+                    }
+                } else if (targets.size() != targetDeltas.size()) {
+                    targetsConsistent = false;
+                }
+                for (size_t k = 0; k < targetDeltas.size(); ++k) {
+                    std::vector<glm::vec3> d(pos.size(), glm::vec3(0.0f));
+                    if (k < targets.size() && targets[k]["POSITION"].isNumber() &&
+                        !r.readVec3(int(targets[k]["POSITION"].asNumber()), d))
+                        return false;
+                    d.resize(pos.size(), glm::vec3(0.0f));
+                    for (const auto& v : d) targetDeltas[k].push_back(linear * v);
+                }
+            }
+        }
+        for (const Json& child : node["children"].items())
+            if (!visit(int(child.asNumber()), world, depth + 1)) return false;
+        return true;
+    };
+
+    const Json& scenes = r.doc["scenes"];
+    if (scenes.size() > 0) {
+        const Json& scene = scenes[size_t(r.doc["scene"].asNumber(0))];
+        for (const Json& n : scene["nodes"].items())
+            if (!visit(int(n.asNumber()), glm::mat4(1.0f), 0)) {
+                error = r.error;
+                return false;
+            }
+    } else {
+        for (size_t i = 0; i < r.doc["nodes"].size(); ++i)
+            if (!visit(int(i), glm::mat4(1.0f), 0)) {
+                error = r.error;
+                return false;
+            }
+    }
+    if (splatsOut && !splats.empty()) {
+        auto stem = std::filesystem::path(fsPath).stem().u8string();
+        splats.name = std::string(stem.begin(), stem.end());
+        *splatsOut = std::move(splats);
+        if (m.triangles.empty()) {
+            out = Mesh();
+            return true;
+        }
+    }
+    if (m.triangles.empty()) {
+        error = r.error.empty() ? "No triangle meshes found in " + path : r.error;
+        return false;
+    }
+
+    // Weld vertices split along UV/normal seams so strokes don't tear the surface.
+    std::vector<SculptLayer> layers;
+    if (targetsConsistent)
+        for (size_t k = 0; k < targetDeltas.size(); ++k)
+            layers.push_back({targetNames[k], std::move(targetDeltas[k]), targetWeights[k]});
+    Mesh welded = weldImported(m, layers);
+    out = std::move(welded);
+    return true;
+}
+
+} // namespace sf

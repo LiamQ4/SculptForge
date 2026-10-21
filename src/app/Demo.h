@@ -1,0 +1,84 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Scripted demos for recording product videos: a timeline of real input
+// (mouse moves, clicks, brush strokes, typing) played into the running app,
+// with captions and a visible cursor drawn on top. UI elements are found by
+// their labels through Dear ImGui's test-engine hooks, so the demo clicks the
+// real buttons rather than calling functions behind the UI's back.
+//
+//   sculptforge --demo sculpt --record sculpt.mp4 --size 1920x1080
+#pragma once
+
+#include <glm/glm.hpp>
+#include <imgui.h>
+
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace sf {
+
+class App;
+
+class Demo {
+public:
+    explicit Demo(App& app) : app_(app) {}
+
+    static std::vector<std::string> names();
+    bool load(const std::string& name, std::string& error);
+
+    void update(float dt);   // before the UI is built: plays the timeline
+    void drawOverlay();      // inside the ImGui frame: captions and cursor
+    bool finished() const { return step_ >= steps_.size(); }
+    int frameStride() const { return stride_; } // >1 while fast-forwarding through waits
+
+    // Screen rect of the most recent UI item with this label (text before "##" also matches).
+    bool findItem(const std::string& label, ImVec2& center) const;
+    static void beginFrame(); // clears the item table (called before ImGui::NewFrame)
+
+private:
+    using Step = std::function<bool(float t)>; // returns true when done; t = seconds since the step began
+
+    // Timeline building blocks.
+    void wait(float seconds);
+    void caption(const std::string& title, const std::string& subtitle, float seconds);
+    void moveTo(float x, float y, float seconds);
+    void moveToItem(const std::string& label, float seconds = 0.6f);
+    void click(const std::string& label);  // move to the item and click it
+    void stroke(std::function<ImVec2(float u)> path, float seconds, bool invert = false);
+    void orbit(float dx, float dy, float seconds); // right-drag on the background
+    void type(char* buffer, size_t size, const std::string& text, float seconds);
+    void run(std::function<void()> action);
+    void waitUntil(std::function<bool()> done, float timeout, int stride);
+
+    void buildSculpt();
+    void buildImageTo3D();
+    void buildBrushLab();
+    void buildGameReady();
+    void buildSplats();
+
+    // Input injection.
+    void mouseMotion(float x, float y);
+    void mouseButton(bool down, int button);
+
+    // World -> screen in window coordinates.
+    ImVec2 project(const glm::vec3& p) const;
+
+    App& app_;
+    std::vector<Step> steps_;
+    size_t step_ = 0;
+    float stepTime_ = 0.0f;
+    int stride_ = 1;
+    ImVec2 mouse_{960, 540};
+    bool buttonDown_ = false;
+
+    struct Caption {
+        std::string title, subtitle;
+        float start = 0.0f, duration = 0.0f;
+    };
+    std::vector<Caption> captions_;
+    float clock_ = 0.0f;
+};
+
+} // namespace sf

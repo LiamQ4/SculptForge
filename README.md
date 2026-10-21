@@ -1,0 +1,224 @@
+<p align="center">
+  <img src="assets/branding/sculptforge-256.png" width="112" alt="SculptForge logo">
+</p>
+
+<h1 align="center">SculptForge</h1>
+
+<p align="center">
+  <strong>Free, open-source digital sculpting for Linux, macOS and Windows,<br>
+  with game-ready pipelines and bring-your-own AI.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/islandmed/SculptForge/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/islandmed/SculptForge/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/islandmed/SculptForge/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/islandmed/SculptForge?color=f28c3c"></a>
+  <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue"></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-555">
+</p>
+
+<p align="center">
+  <a href="https://islandmed.github.io/SculptForge/"><b>Website & demo videos</b></a> ·
+  <a href="https://github.com/islandmed/SculptForge/releases/latest"><b>Download</b></a> ·
+  <a href="#features">Features</a> ·
+  <a href="#building">Build from source</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
+</p>
+
+<p align="center">
+  <a href="https://islandmed.github.io/SculptForge/#demos"><img src="docs/images/sculpt-demo.gif" width="800" alt="Sculpting a creature head with the Move, Clay and Crease brushes and symmetry in SculptForge"></a>
+</p>
+
+SculptForge is a focused sculpting application in the spirit of ZBrush. It starts instantly, works offline,
+and fits into game and animation pipelines: sculpt a character, generate its LODs, sculpt blend shapes, and
+send it straight into Unreal Engine. Optional AI tools design brushes from a description and turn images or
+text into sculptable models, using the model *you* choose. That can be a free one, or one running entirely
+on your own machine.
+
+> **Status: early release (v0.1).** The core sculpting, pipeline and AI features work and are tested on every
+> commit. Multiresolution sculpting, masking, retopology, UVs and texture painting are still on the
+> [roadmap](ROADMAP.md).
+
+## Features
+
+**Sculpting**
+- Standard, Clay, Smooth, Move, Inflate, Crease, Flatten and Pinch brushes; X/Y/Z symmetry; tablet pressure;
+  ZBrush-style modifiers and navigation.
+- Unlimited undo, Loop subdivision, **voxel remesh** (DynaMesh-style) and quadric decimation.
+- **Sculpt layers** that work as blend shapes, with live weights and playback.
+
+**Brush Lab: describe a brush, AI builds it**
+- "Dry cracked mud", "overlapping dragon scales", then "make it sharper". Brushes are recipes (data, never
+  code), with every value exposed as a slider. Share them as `.sfbrush` files.
+- Works with Claude (Anthropic API) or any OpenAI-compatible endpoint, including **local models through
+  Ollama or LM Studio**.
+
+**Generate 3D from an image or text**
+- A sketch, a piece of concept art or a description becomes a full 3D model (limbs, back and all), then gets
+  remeshed so you can sculpt it straight away.
+- **Free** through the official Hugging Face demos of Hunyuan3D 2 / 2.1, TRELLIS.2 and Stable Fast 3D; or
+  paid with your own fal.ai or Meshy key; or plug in any local model.
+  See [AI services & model licences](docs/ai-services.md).
+- Offline tools as well: silhouette blockout, relief, and stamp-from-view.
+
+**Game & animation pipelines**
+- One-click **LOD chains**; blend shapes survive on every level.
+- **Send to Unreal** (Ctrl+U) imports or updates the asset in a running Unreal Editor, on this computer or
+  another one on your network, with no plugin to install. Static meshes come with LODs, skeletal meshes with
+  morph targets. See [docs/unreal.md](docs/unreal.md).
+- **FBX** (binary 7.4, LOD groups, blend shapes), **glTF/GLB** (morph targets), **OpenUSD** USDA/USDZ (UsdSkel
+  blend shapes), OBJ and PLY. Exports are checked with the Khronos glTF validator and OpenUSD's `usdchecker`.
+
+**Gaussian splats**
+- Open phone captures (Polycam, Luma, Postshot, Scaniverse and others) as a sculpting reference, convert them
+  into watertight meshes, or turn a sculpt into splats.
+- Supports PLY (up to SH degree 3), `.splat`, glTF **`KHR_gaussian_splatting`** and OpenUSD
+  **`ParticleField3DGaussianSplat`**.
+
+**Automation**
+- `sculptforge-cli` runs every operation headless, for build farms and pipelines.
+- A built-in **MCP server** (`sculptforge-cli --mcp`) lets Claude Code, Claude Desktop or any MCP client
+  sculpt, convert and export.
+- Headless thumbnail and turntable rendering, plus a scripted demo recorder (`--demo … --record`).
+
+<table>
+  <tr>
+    <td><img src="docs/images/screenshot-brush-lab.jpg" alt="Brush Lab: an AI-designed cracked-mud brush carved into a plane"></td>
+    <td><img src="docs/images/screenshot-game-ready.jpg" alt="LOD chain preview with wireframe and the Game Ready panel"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Brush Lab: "dry cracked mud", designed by a local model</sub></td>
+    <td align="center"><sub>One-click LODs, blend shapes and Send to Unreal</sub></td>
+  </tr>
+</table>
+
+## Install
+
+Download the latest build for your system from the
+**[releases page](https://github.com/islandmed/SculptForge/releases/latest)**:
+
+| System | Package |
+|---|---|
+| Windows 10/11 | Installer (`.exe`) or portable `.zip` |
+| macOS 11+ (Apple Silicon & Intel) | `.dmg` |
+| Ubuntu / Debian / Mint / Pop!_OS | `.deb` (x86_64, ARM64): `sudo apt install ./sculptforge_*.deb` |
+| Fedora / RHEL 9+ / Rocky / Alma | `.rpm` (x86_64, ARM64): `sudo dnf install ./sculptforge-*.rpm` |
+| Any Linux | `.AppImage` (x86_64, ARM64) |
+| Arch Linux | AUR: `yay -S sculptforge` ([PKGBUILD](packaging/arch/PKGBUILD)) |
+
+The builds aren't code-signed yet. On **macOS**, right-click the app and choose **Open** the first time. On
+**Windows**, if SmartScreen appears, choose **More info → Run anyway**.
+
+## Building
+
+Requirements: CMake 3.24+ and a C++20 compiler (GCC 11+, Clang 14+, Xcode 15+ or Visual Studio 2022).
+Dear ImGui, GLM and (if it isn't installed already) SDL3 are fetched automatically. AI features use libcurl
+on Linux and macOS, and the built-in WinHTTP on Windows.
+
+```sh
+# Linux only: install compilers and X11/Wayland/GL/curl headers (Debian/Ubuntu or Fedora/RHEL)
+sudo ./packaging/linux/install-build-deps.sh
+
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+./build/sculptforge            # Windows: build\Release\sculptforge.exe · macOS: open build/SculptForge.app
+```
+
+`cpack` in the build folder makes the platform's packages (`.deb`/`.rpm`/`.tar.gz`, `.dmg`, or installer and
+`.zip`).
+
+## Pipelines & automation
+
+```sh
+# LOD chain for a game asset
+sculptforge-cli -c 'open path=rock.obj; export_lods path=out/rock.glb levels=4 ratio=0.5'
+
+# Concept art or a description -> sculptable 3D model (free, via Hugging Face)
+sculptforge-cli -c 'image_to_3d path=hero.png; export_usd path=hero.usdz'
+sculptforge-cli -c 'text_to_3d prompt="a stylised dragon head"; export_glb path=dragon.glb'
+
+# Sculpt -> Unreal (static mesh with 4 LODs, 2 m tall)
+sculptforge-cli -c 'open path=statue.obj; unreal_send destination=/Game/Props height_cm=200 lods=4'
+
+# Phone capture -> watertight base mesh
+sculptforge-cli -c 'open path=scan.ply; splat_transform rotate_x=180 fit=true; splat_clean; splat_to_mesh resolution=256; export_glb path=base.glb'
+
+# Design a brush with a local model and save it for the team
+sculptforge-cli -c 'brush_ai prompt="weathered stone edges" provider=openai-compatible model=qwen3:4b-instruct; brush_save path=stone.sfbrush'
+
+# Review-sheet turntable (8 frames)
+sculptforge model.glb --render review/model.png --turntable 8 --size 1024x1024
+```
+
+Run `sculptforge-cli --list` for every command.
+
+### Let an AI agent sculpt (MCP)
+
+```sh
+claude mcp add sculptforge -- /path/to/sculptforge-cli --mcp      # Claude Code
+```
+
+For Claude Desktop or other MCP clients, add a stdio server whose command is `sculptforge-cli` with the
+argument `--mcp`. The agent gets every command as a tool and works on one live scene per session.
+
+## Controls
+
+| Action | Input |
+|---|---|
+| Sculpt | Left-drag on the model |
+| Subtract / invert | Hold **Alt** |
+| Smooth | Hold **Shift** |
+| Rotate | Left-drag background, or right-drag |
+| Pan | Alt + left-drag background, or middle-drag |
+| Zoom | Mouse wheel, or Ctrl + left-drag background |
+| Brush size | `[` / `]` |
+| Select brush | `1`–`8` |
+| Toggle X symmetry / wireframe | `X` / `W` |
+| Frame model | `F` |
+| Subdivide | Ctrl+D |
+| Undo / Redo | Ctrl+Z / Ctrl+Shift+Z |
+| Open / Save | Ctrl+O / Ctrl+S |
+| Export GLB | Ctrl+E |
+| Send to Unreal | Ctrl+U |
+
+## Project layout
+
+```
+src/core     Mesh, BVH, brushes & recipes, layers, undo, subdivision, decimation,
+             voxel remesh, Gaussian splats, image-to-3D, command registry (no GPU/UI)
+src/io       File formats: OBJ, FBX, glTF/GLB (+ KHR_gaussian_splatting), PLY, .splat, USDA/USDZ
+src/ai       Bring-your-own AI: HTTPS client, brush assistant, image/text-to-3D services, Gradio client
+src/link     Live links to game engines (Unreal Python remote execution)
+src/cli      sculptforge-cli and its MCP server
+src/render   OpenGL 3.3 renderer, splat renderer, offscreen capture
+src/app      SDL3 + Dear ImGui application, scripted demo recorder
+packaging    Linux desktop/AppStream files, Windows resources, Arch PKGBUILD
+website      Project website (GitHub Pages)
+tests        Unit tests
+```
+
+## Privacy
+
+SculptForge has no telemetry, no account and no servers of its own. AI features are optional and talk
+directly to the service you choose. See [docs/ai-services.md](docs/ai-services.md) for exactly what is sent
+where, and for the licences of the AI models.
+
+## Contributing
+
+Contributions are welcome: bug reports, brushes, docs and code. Read [CONTRIBUTING.md](CONTRIBUTING.md)
+and the [Code of Conduct](CODE_OF_CONDUCT.md). Please report security issues privately (see
+[SECURITY.md](SECURITY.md)).
+
+## License
+
+Copyright © 2026 The SculptForge contributors.
+
+SculptForge is free software, licensed under the [GNU General Public License v3.0 or later](LICENSE). You own
+everything you make with it; the GPL covers the program, not your models. Third-party components and their
+licences are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+<sub>SculptForge is an independent project and is not affiliated with or endorsed by Maxon, Epic Games,
+Autodesk, Pixar, the Khronos Group, Hugging Face, Tencent, Microsoft, Stability AI, Anthropic, fal or Meshy.
+ZBrush is a trademark of Maxon. Unreal and Unreal Engine are trademarks of Epic Games, Inc. FBX is a trademark
+of Autodesk, Inc. glTF is a trademark of the Khronos Group Inc. Other names are trademarks of their respective
+owners.</sub>

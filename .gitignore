@@ -1,0 +1,12 @@
+build/
+build-*/
+out/
+.cache/
+.vscode/
+.idea/
+*.swp
+compile_commands.json
+imgui.ini
+.DS_Store
+*.user
+Testing/

@@ -1,0 +1,234 @@
+cmake_minimum_required(VERSION 3.24)
+project(SculptForge VERSION 0.1.0 LANGUAGES C CXX)
+include(GNUInstallDirs)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+option(SCULPTFORGE_BUILD_APP "Build the SculptForge desktop application" ON)
+option(SCULPTFORGE_BUILD_TESTS "Build unit tests" ON)
+option(SCULPTFORGE_USE_SYSTEM_SDL "Use an installed SDL3 if one is found" ON)
+
+include(cmake/Dependencies.cmake)
+
+# --- Core library: geometry, sculpting, undo, commands, file IO (no GPU/UI) ---
+add_library(sculptforge_core STATIC
+  src/core/Mesh.cpp
+  src/core/BVH.cpp
+  src/core/Sculpt.cpp
+  src/core/Undo.cpp
+  src/core/Primitives.cpp
+  src/core/Document.cpp
+  src/core/Commands.cpp
+  src/core/Decimate.cpp
+  src/core/Script.cpp
+  src/core/Json.cpp
+  src/core/BrushRecipe.cpp
+  src/core/Image.cpp
+  src/core/ImageTo3D.cpp
+  src/core/Splats.cpp
+  src/core/Voxel.cpp
+  src/core/EnginePresets.cpp
+  src/io/ObjIO.cpp
+  src/io/FbxIO.cpp
+  third_party/ufbx/ufbx.c
+  src/io/GltfIO.cpp
+  src/io/PlyIO.cpp
+  src/io/UsdIO.cpp
+  src/io/Zip.cpp
+)
+target_include_directories(sculptforge_core PUBLIC src PRIVATE third_party/stb third_party/ufbx)
+# Third-party C code: compile quietly.
+if(MSVC)
+  set_source_files_properties(third_party/ufbx/ufbx.c PROPERTIES COMPILE_OPTIONS "/w")
+else()
+  set_source_files_properties(third_party/ufbx/ufbx.c PROPERTIES COMPILE_OPTIONS "-w")
+endif()
+target_link_libraries(sculptforge_core PUBLIC glm::glm)
+target_compile_definitions(sculptforge_core PUBLIC GLM_FORCE_XYZW_ONLY)
+if(MSVC)
+  target_compile_options(sculptforge_core PRIVATE /W4 /utf-8 /permissive-)
+  target_compile_definitions(sculptforge_core PUBLIC NOMINMAX _USE_MATH_DEFINES)
+else()
+  target_compile_options(sculptforge_core PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+
+# --- Bring-your-own-AI (brush assistant). HTTPS via WinHTTP or libcurl. ---
+add_library(sculptforge_ai STATIC src/ai/Http.cpp src/ai/BrushAssistant.cpp src/ai/Generator3D.cpp
+  src/ai/ImageTo3DService.cpp src/ai/GradioClient.cpp src/ai/AiCommands.cpp src/link/Socket.cpp src/link/UnrealLink.cpp)
+target_link_libraries(sculptforge_ai PUBLIC sculptforge_core)
+if(WIN32)
+  target_link_libraries(sculptforge_ai PRIVATE winhttp ws2_32)
+else()
+  find_package(CURL QUIET)
+  if(CURL_FOUND)
+    target_link_libraries(sculptforge_ai PRIVATE CURL::libcurl)
+    target_compile_definitions(sculptforge_ai PRIVATE SF_HAVE_CURL)
+  else()
+    message(WARNING "libcurl not found: AI features will report that HTTP is unavailable")
+  endif()
+endif()
+if(MSVC)
+  target_compile_options(sculptforge_ai PRIVATE /W4 /utf-8 /permissive-)
+else()
+  target_compile_options(sculptforge_ai PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+
+# --- Headless command-line tool (pipelines, build farms, AI agents) ---
+add_executable(sculptforge-cli src/cli/main.cpp src/cli/McpServer.cpp)
+target_link_libraries(sculptforge-cli PRIVATE sculptforge_core sculptforge_ai)
+
+# --- Desktop application ---
+if(SCULPTFORGE_BUILD_APP)
+  include(cmake/EmbedFile.cmake)
+  embed_files(${CMAKE_CURRENT_BINARY_DIR}/EmbeddedFonts.cpp sf::assets
+    fontRegular ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf
+    fontSemiBold ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Inter-SemiBold.ttf
+    appIcon ${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/sculptforge-256.png)
+  add_executable(sculptforge
+    ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedFonts.cpp
+    src/app/main.cpp
+    src/app/App.cpp
+    src/app/Demo.cpp
+    src/render/GL.cpp
+    src/render/Camera.cpp
+    src/render/Renderer.cpp
+  )
+  target_link_libraries(sculptforge PRIVATE sculptforge_core sculptforge_ai imgui SDL3::SDL3)
+  target_compile_definitions(sculptforge PRIVATE SCULPTFORGE_VERSION="${PROJECT_VERSION}")
+  if(MSVC)
+    target_compile_options(sculptforge PRIVATE /W4 /utf-8 /permissive-)
+  else()
+    target_compile_options(sculptforge PRIVATE -Wall -Wextra -Wno-unused-parameter)
+  endif()
+  if(WIN32)
+    set_target_properties(sculptforge PROPERTIES WIN32_EXECUTABLE $<CONFIG:Release,MinSizeRel>)
+    set(ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/sculptforge.ico")
+    string(REPLACE "/" "\\\\" ICON_PATH "${ICON_PATH}")
+    configure_file(packaging/windows/sculptforge.rc ${CMAKE_CURRENT_BINARY_DIR}/sculptforge.rc @ONLY)
+    target_sources(sculptforge PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/sculptforge.rc)
+  endif()
+  if(APPLE)
+    # App icon: build an .icns from the 1024 px PNG with Apple's own tools.
+    set(ICONSET ${CMAKE_CURRENT_BINARY_DIR}/SculptForge.iconset)
+    set(ICNS ${CMAKE_CURRENT_BINARY_DIR}/SculptForge.icns)
+    set(ICON_SRC ${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/sculptforge-1024.png)
+    set(ICON_COMMANDS COMMAND ${CMAKE_COMMAND} -E make_directory ${ICONSET})
+    foreach(size 16 32 128 256 512)
+      math(EXPR size2 "${size} * 2")
+      list(APPEND ICON_COMMANDS
+        COMMAND sips -z ${size} ${size} ${ICON_SRC} --out ${ICONSET}/icon_${size}x${size}.png
+        COMMAND sips -z ${size2} ${size2} ${ICON_SRC} --out ${ICONSET}/icon_${size}x${size}@2x.png)
+    endforeach()
+    add_custom_command(OUTPUT ${ICNS} ${ICON_COMMANDS}
+      COMMAND iconutil -c icns ${ICONSET} -o ${ICNS}
+      DEPENDS ${ICON_SRC} VERBATIM)
+    target_sources(sculptforge PRIVATE ${ICNS})
+    set_source_files_properties(${ICNS} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    set_target_properties(sculptforge PROPERTIES
+      MACOSX_BUNDLE TRUE
+      OUTPUT_NAME "SculptForge"
+      MACOSX_BUNDLE_BUNDLE_NAME "SculptForge"
+      MACOSX_BUNDLE_GUI_IDENTIFIER "org.sculptforge.SculptForge"
+      MACOSX_BUNDLE_ICON_FILE "SculptForge.icns"
+      MACOSX_BUNDLE_COPYRIGHT "Copyright (C) 2026 The SculptForge contributors. GPL-3.0-or-later."
+      MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+      MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
+    install(TARGETS sculptforge BUNDLE DESTINATION .)
+    # The command-line tool travels inside the app bundle.
+    install(TARGETS sculptforge-cli RUNTIME DESTINATION SculptForge.app/Contents/MacOS)
+  else()
+    install(TARGETS sculptforge RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  endif()
+endif()
+
+# --- Install layout and packages ---
+if(NOT APPLE)
+  install(TARGETS sculptforge-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+if(UNIX AND NOT APPLE)
+  install(FILES packaging/linux/org.sculptforge.SculptForge.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+  install(FILES packaging/linux/org.sculptforge.SculptForge.metainfo.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+  install(FILES assets/branding/sculptforge-icon.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+          RENAME org.sculptforge.SculptForge.svg)
+  install(FILES assets/branding/sculptforge-256.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps
+          RENAME org.sculptforge.SculptForge.png)
+  install(FILES assets/branding/sculptforge-512.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps
+          RENAME org.sculptforge.SculptForge.png)
+endif()
+if(APPLE)
+  set(SF_DOC_DIR .)
+elseif(WIN32)
+  set(SF_DOC_DIR doc)
+else()
+  set(SF_DOC_DIR ${CMAKE_INSTALL_DOCDIR})
+endif()
+install(FILES LICENSE THIRD_PARTY_NOTICES.md README.md CHANGELOG.md DESTINATION ${SF_DOC_DIR})
+install(FILES docs/ai-services.md docs/unreal.md docs/generators.md DESTINATION ${SF_DOC_DIR}/docs)
+
+set(CPACK_PACKAGE_NAME "sculptforge")
+set(CPACK_PACKAGE_VENDOR "The SculptForge contributors")
+set(CPACK_PACKAGE_CONTACT "https://github.com/islandmed/SculptForge/issues")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Free and open-source digital sculpting with game-engine pipelines")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://islandmed.github.io/SculptForge/")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_RESOURCE_FILE_LICENSE ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE)
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "SculptForge")
+set(CPACK_PACKAGE_EXECUTABLES "sculptforge" "SculptForge")
+string(TOLOWER "${CMAKE_SYSTEM_NAME}" SF_OS)
+set(SF_ARCH ${CMAKE_SYSTEM_PROCESSOR})
+if(SF_ARCH MATCHES "^(AMD64|amd64|x86_64)$")
+  set(SF_ARCH x86_64)
+elseif(SF_ARCH MATCHES "^(arm64|ARM64|aarch64)$")
+  set(SF_ARCH arm64)
+endif()
+if(APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES ";")
+  set(SF_ARCH universal)
+endif()
+set(CPACK_PACKAGE_FILE_NAME "SculptForge-${PROJECT_VERSION}-${SF_OS}-${SF_ARCH}")
+set(CPACK_STRIP_FILES ON)
+# Debian / Ubuntu
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+set(CPACK_DEBIAN_PACKAGE_SECTION graphics)
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "The SculptForge contributors <https://github.com/islandmed/SculptForge>")
+# Fedora / RHEL
+set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
+set(CPACK_RPM_PACKAGE_LICENSE "GPL-3.0-or-later")
+set(CPACK_RPM_PACKAGE_GROUP "Applications/Multimedia")
+set(CPACK_RPM_PACKAGE_URL "https://islandmed.github.io/SculptForge/")
+set(CPACK_RPM_PACKAGE_AUTOREQ ON)
+# Windows installer
+set(CPACK_NSIS_DISPLAY_NAME "SculptForge")
+set(CPACK_NSIS_PACKAGE_NAME "SculptForge")
+set(CPACK_NSIS_MUI_ICON ${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/sculptforge.ico)
+set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\\\sculptforge.exe")
+set(CPACK_NSIS_URL_INFO_ABOUT "https://islandmed.github.io/SculptForge/")
+set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+set(CPACK_NSIS_CREATE_ICONS_EXTRA "CreateShortCut '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\SculptForge.lnk' '$INSTDIR\\\\bin\\\\sculptforge.exe'")
+# macOS disk image
+set(CPACK_DMG_VOLUME_NAME "SculptForge")
+if(APPLE)
+  set(CPACK_PRE_BUILD_SCRIPTS ${CMAKE_CURRENT_SOURCE_DIR}/cmake/MacSign.cmake)
+endif()
+if(WIN32)
+  set(CPACK_GENERATOR "NSIS;ZIP")
+elseif(APPLE)
+  set(CPACK_GENERATOR "DragNDrop")
+else()
+  set(CPACK_GENERATOR "DEB;RPM;TGZ")
+endif()
+include(CPack)
+
+# --- Tests ---
+if(SCULPTFORGE_BUILD_TESTS)
+  enable_testing()
+  add_executable(sculptforge_tests tests/test_main.cpp src/cli/McpServer.cpp)
+  target_link_libraries(sculptforge_tests PRIVATE sculptforge_core sculptforge_ai)
+  add_test(NAME sculptforge_tests COMMAND sculptforge_tests)
+endif()
