@@ -265,13 +265,13 @@ bool loadPly(const std::string& path, Mesh& mesh, SplatCloud& splats, PlyContent
                         }
                         cloud.scales[r][c] = std::exp(float(row[size_t(sc[c])]));
                     }
-                    glm::quat q(float(row[size_t(rt[0])]), float(row[size_t(rt[1])]), float(row[size_t(rt[2])]),
-                                float(row[size_t(rt[3])]));
+                    const glm::quat q{float(row[size_t(rt[0])]), float(row[size_t(rt[1])]), float(row[size_t(rt[2])]),
+                                      float(row[size_t(rt[3])])};
                     const float len = glm::length(q);
                     cloud.rotations[r] = len > 0.0f ? q / len : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
                     cloud.opacities[r] = sigmoid(float(row[size_t(op)]));
                 } else if (rgb[0] >= 0 && rgb[1] >= 0 && rgb[2] >= 0) {
-                    glm::vec3 c(float(row[size_t(rgb[0])]), float(row[size_t(rgb[1])]), float(row[size_t(rgb[2])]));
+                    const glm::vec3 c{float(row[size_t(rgb[0])]), float(row[size_t(rgb[1])]), float(row[size_t(rgb[2])])};
                     pointColors[r] = rgbIsByte ? c / 255.0f : c;
                 }
             } else if (isFace && poly.size() >= 3) {

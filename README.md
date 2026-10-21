@@ -5,8 +5,8 @@
 <h1 align="center">SculptForge</h1>
 
 <p align="center">
-  <strong>Free, open-source digital sculpting for Linux, macOS and Windows,<br>
-  with game-ready pipelines and bring-your-own AI.</strong>
+  <strong>The free, open-source alternative to ZBrush.</strong><br>
+  Digital sculpting for Linux, macOS and Windows, with game-ready pipelines and bring-your-own AI.
 </p>
 
 <p align="center">
@@ -28,11 +28,29 @@
   <a href="https://islandmed.github.io/SculptForge/#demos"><img src="docs/images/sculpt-demo.gif" width="800" alt="Sculpting a creature head with the Move, Clay and Crease brushes and symmetry in SculptForge"></a>
 </p>
 
-SculptForge is a focused sculpting application in the spirit of ZBrush. It starts instantly, works offline,
+SculptForge is a free, open-source alternative to ZBrush: a focused sculpting app with the brushes, symmetry and
+navigation ZBrush artists already know. It costs nothing, has no subscription, runs natively on Linux as well as
+Windows and macOS, and comes with source code you can change. It starts instantly, works offline,
 and fits into game and animation pipelines: sculpt a character, generate its LODs, sculpt blend shapes, and
 send it straight into Unreal Engine. Optional AI tools design brushes from a description and turn images or
 text into sculptable models, using the model *you* choose. That can be a free one, or one running entirely
 on your own machine.
+
+## Coming from ZBrush?
+
+| | SculptForge | ZBrush |
+|---|---|---|
+| Price | **Free**, forever | Subscription |
+| Source code | **Open (GPL-3.0)** | Closed |
+| Linux | **Native** | Not available |
+| Familiar brushes, symmetry, Alt/Shift modifiers | **Yes** | Yes |
+| Send to Unreal, LOD chains, blend shapes → morph targets | **Built in** | Via plugins / export |
+| Image or text → sculptable 3D model | **Built in** (free models) | No |
+| Gaussian splats, OpenUSD / USDZ | **Built in** | No |
+| AI agents (MCP), headless scripting | **Built in** | ZScript |
+| Multiresolution (subdivision levels), ZRemesher-class retopology, polypaint, UVs | Not yet ([roadmap](ROADMAP.md)) | Yes |
+
+SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models over as OBJ, FBX or GLB.
 
 > **Status: early release (v0.1).** The core sculpting, pipeline and AI features work and are tested on every
 > commit. Multiresolution sculpting, masking, retopology, UVs and texture painting are still on the

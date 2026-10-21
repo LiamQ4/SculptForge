@@ -495,7 +495,8 @@ bool loadFbx(const std::string& path, Mesh& out, std::string& error) {
         if (!mesh || !node->visible || isLowerLod(node)) continue;
         const uint32_t base = uint32_t(m.positions.size());
         const ufbx_matrix& xf = node->geometry_to_world;
-        const ufbx_vec3 origin = ufbx_transform_position(&xf, ufbx_vec3{0, 0, 0});
+        const ufbx_vec3 zero = {};
+        const ufbx_vec3 origin = ufbx_transform_position(&xf, zero);
         for (size_t v = 0; v < mesh->vertices.count; ++v) m.positions.push_back(toVec(ufbx_transform_position(&xf, mesh->vertices.data[v])));
         tri.resize(mesh->max_face_triangles * 3);
         for (size_t f = 0; f < mesh->faces.count; ++f) {
