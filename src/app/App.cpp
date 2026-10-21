@@ -247,6 +247,7 @@ int App::renderHeadless() {
     camera_.pitch = glm::radians(options_.pitchDegrees);
     RenderSettings settings = renderSettings_;
     settings.wireframe = options_.wireframe;
+    settings.showPolygroups = settings.showPolygroups || options_.polygroups;
     settings.showMesh = !options_.hideMesh;
     renderer_.sync(doc_.mesh);
     renderer_.syncSplats(doc_.splats, doc_.splatsVersion);

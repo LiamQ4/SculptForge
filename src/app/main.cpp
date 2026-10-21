@@ -20,6 +20,7 @@ void usage() {
         "  --size WxH               Render size (default 1024x1024)\n"
         "  --view YAW,PITCH         Camera angles in degrees (default -30,-15)\n"
         "  --wireframe              Render with wireframe overlay\n"
+        "  --polygroups             Render with polygroup colours\n"
         "  --hide-mesh              Render only the Gaussian splats\n"
         "  --demo NAME              Play a scripted demo (sculpt, image-to-3d, brush-lab, game-ready, splats)\n"
         "  --record out.mp4         Record the demo offscreen to a video (needs ffmpeg) and exit\n"
@@ -41,6 +42,7 @@ int main(int argc, char** argv) {
         else if (a == "--size") std::sscanf(next().c_str(), "%dx%d", &options.width, &options.height);
         else if (a == "--view") std::sscanf(next().c_str(), "%f,%f", &options.yawDegrees, &options.pitchDegrees);
         else if (a == "--wireframe") options.wireframe = true;
+        else if (a == "--polygroups") options.polygroups = true;
         else if (a == "--hide-mesh") options.hideMesh = true;
         else if (a == "--demo") options.demo = next();
         else if (a == "--record") options.recordPath = next();

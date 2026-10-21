@@ -225,10 +225,10 @@ void registerMaskingCommands(CommandRegistry& registry) {
         });
     add("mask_by_polygroup", "Mask by Polygroup",
         "Mask the vertices of one polygroup (meshes without polygroups are all group 0).",
-        {{"index", T::Number, "Polygroup id.", true},
+        {{"group", T::Number, "Polygroup id.", true},
          {"add", T::Bool, "Add to the current mask instead of replacing it. Default false.", false}},
         [](Mesh& m, const Args& a) {
-            return maskByPolygroup(m, uint32_t(std::max(0.0, argNumber(a, "index", 0))), argBool(a, "add", false));
+            return maskByPolygroup(m, uint32_t(std::max(0.0, argNumber(a, "group", 0))), argBool(a, "add", false));
         });
 }
 

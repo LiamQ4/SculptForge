@@ -88,7 +88,7 @@ void App::drawMaskingSection() {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
     ImGui::SliderFloat("##cavitythreshold", &cavityThreshold_, -0.2f, 0.5f, "threshold %.2f");
-    if (ImGui::Button("By polygroup", ImVec2(half, 0))) runCommand("mask_by_polygroup", {{"index", double(maskGroup_)}});
+    if (ImGui::Button("By polygroup", ImVec2(half, 0))) runCommand("mask_by_polygroup", {{"group", double(maskGroup_)}});
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mask one polygroup (replaces the mask)");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);

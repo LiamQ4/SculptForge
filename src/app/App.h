@@ -33,6 +33,7 @@ struct AppOptions {
     float yawDegrees = -30.0f, pitchDegrees = -15.0f;
     int turntable = 0; // headless: render N frames around the model (<path>_000.png ...)
     bool wireframe = false;
+    bool polygroups = false; // headless: colour each polygroup
     bool hideMesh = false; // headless: show only the splats
     std::string demo;       // scripted demo to play (see Demo.h)
     std::string recordPath; // record the session to this .mp4 (needs ffmpeg) and exit

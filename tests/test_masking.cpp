@@ -245,7 +245,7 @@ TEST(mask_by_polygroup) {
         const auto& tri = m.triangles[t];
         m.polygroups[t] = (m.positions[tri.x].z + m.positions[tri.y].z + m.positions[tri.z].z) > 0.0f ? 2u : 0u;
     }
-    CHECK(registry().execute(d, "mask_by_polygroup", {{"index", 2.0}}).ok);
+    CHECK(registry().execute(d, "mask_by_polygroup", {{"group", 2.0}}).ok);
     bool ok = true;
     for (uint32_t v = 0; v < m.vertexCount(); ++v) {
         if (m.positions[v].z > 0.2f) ok &= m.mask[v] == 1.0f;
@@ -253,14 +253,14 @@ TEST(mask_by_polygroup) {
     }
     CHECK(ok);
     // Replace vs add.
-    CHECK(registry().execute(d, "mask_by_polygroup", {{"index", 0.0}}).ok);
+    CHECK(registry().execute(d, "mask_by_polygroup", {{"group", 0.0}}).ok);
     bool replaced = true;
     for (uint32_t v = 0; v < m.vertexCount(); ++v)
         if (m.positions[v].z > 0.2f) replaced &= m.mask[v] == 0.0f;
     CHECK(replaced);
-    CHECK(registry().execute(d, "mask_by_polygroup", {{"index", 2.0}, {"add", true}}).ok);
+    CHECK(registry().execute(d, "mask_by_polygroup", {{"group", 2.0}, {"add", true}}).ok);
     CHECK(countMasked(m) == m.vertexCount());
-    CHECK(!registry().execute(d, "mask_by_polygroup", {}).ok); // index is required
+    CHECK(!registry().execute(d, "mask_by_polygroup", {}).ok); // group is required
     CHECK(registry().execute(d, "undo").ok);
     CHECK(registry().execute(d, "undo").ok);
     CHECK(registry().execute(d, "undo").ok);
