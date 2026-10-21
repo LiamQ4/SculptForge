@@ -48,15 +48,15 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 | Image or text → sculptable 3D model | **Built in** (free models) | No |
 | Gaussian splats, OpenUSD / USDZ | **Built in** | No |
 | AI agents (MCP), headless scripting | **Built in** | ZScript |
-| Masking, polygroups, visibility (Ctrl / Ctrl+Shift), polypaint, MatCaps | **Yes** (development version) | Yes |
-| GoZ exchange with ZBrush | **Yes** (development version; not yet tested against a live ZBrush) | Yes |
+| Masking, polygroups, visibility (Ctrl / Ctrl+Shift), polypaint, MatCaps | **Yes** | Yes |
+| GoZ exchange with ZBrush | **Yes** (new in 0.2; not yet tested against a live ZBrush) | Yes |
 | Multiresolution (subdivision levels), dynamic topology, ZRemesher-class retopology, UV unwrapping | Not yet ([roadmap](ROADMAP.md)) | Yes |
 
 SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models over with GoZ (`.GoZ` files
 keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 
-> **Status: early release (v0.1).** The core sculpting, pipeline and AI features work and are tested on every
-> commit. The development version on `main` adds masking, polygroups, polypaint, project files and GoZ (see the
+> **Status: early release (v0.2).** The core sculpting, pipeline and AI features work and are tested on every
+> commit. Version 0.2 adds masking, polygroups, polypaint, MatCaps, new brushes, project files and GoZ (see the
 > [changelog](CHANGELOG.md)). Multiresolution sculpting, dynamic topology, retopology, UV unwrapping and texture
 > painting are still on the [roadmap](ROADMAP.md).
 

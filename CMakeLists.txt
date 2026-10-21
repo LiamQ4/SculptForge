@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(SculptForge VERSION 0.1.0 LANGUAGES C CXX)
+project(SculptForge VERSION 0.2.0 LANGUAGES C CXX)
 include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -100,6 +100,7 @@ endif()
 
 # --- Headless command-line tool (pipelines, build farms, AI agents) ---
 add_executable(sculptforge-cli src/cli/main.cpp src/cli/McpServer.cpp)
+target_compile_definitions(sculptforge-cli PRIVATE SCULPTFORGE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(sculptforge-cli PRIVATE sculptforge_core sculptforge_ai)
 
 # --- Desktop application ---

@@ -4,7 +4,7 @@ All notable changes to SculptForge are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-21
 
 ### Sculpting
 - New brushes: Dam Standard, Clay Buildup, Snake Hook, Trim (dynamic; Alt fills), Layer and Nudge. Keys 1-9 and 0
@@ -47,6 +47,12 @@ All notable changes to SculptForge are listed here. The format follows
 - STL import (binary and ASCII) and binary STL export. Opening a `.ZTL`/`.ZPR` file now explains that the format is
   proprietary and suggests GoZ or OBJ/FBX.
 
+### Security and robustness
+- File loaders were fuzzed with libFuzzer, AddressSanitizer and UndefinedBehaviorSanitizer (about 8 million
+  inputs). Malformed PLY headers could request huge allocations or cast invalid values, and NaN or far-off
+  coordinates could overflow the vertex-welding grid; all are fixed, with regression tests.
+- The GoZ bridge refuses shell-unsafe paths before launching ZBrush.
+
 ## [0.1.0] - 2026-10-20
 
 First public release.
@@ -80,5 +86,5 @@ First public release.
 - Rez package (`packaging/rez`).
 - Headless thumbnail/turntable rendering and scripted demo recording.
 
-[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/islandmed/SculptForge/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/islandmed/SculptForge/releases/tag/v0.1.0

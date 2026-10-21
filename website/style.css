@@ -51,6 +51,12 @@ p { margin: 0 0 1em; }
 /* Hero */
 .hero { padding: 72px 0 56px; background: radial-gradient(1200px 600px at 15% -10%, rgba(242, 140, 60, 0.16), transparent 60%); }
 .hero-grid { display: grid; grid-template-columns: 1.05fr 1.2fr; gap: 48px; align-items: center; }
+.new-badge { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 18px; padding: 5px 14px 5px 5px;
+             border: 1px solid var(--border); border-radius: 999px; background: rgba(242, 140, 60, 0.06); color: #cfcfd6;
+             font-size: 0.88rem; }
+.new-badge span { flex: none; white-space: nowrap; background: var(--accent); color: #1a0d04; font-weight: 600; font-size: 0.75rem; padding: 3px 10px;
+                  border-radius: 999px; }
+.new-badge:hover { text-decoration: none; border-color: var(--accent); color: var(--text); }
 .eyebrow { color: var(--accent-2); font-weight: 600; font-size: 0.85rem; letter-spacing: 0.08em; text-transform: uppercase; }
 .nowrap { white-space: nowrap; }
 /* Solid colour (not gradient-clipped text) so dark-mode extensions and forced colours keep it readable. */
@@ -155,6 +161,7 @@ p { margin: 0 0 1em; }
   .hero { padding: 28px 0 44px; }
   .hero-grid { gap: 0; }
   .hero-copy { display: contents; }
+  .new-badge { order: 0; font-size: 0.8rem; margin-bottom: 14px; justify-self: start; }
   .eyebrow { order: 1; font-size: 0.72rem; margin-bottom: 0.7em; }
   .hero h1 { order: 2; font-size: 2.6rem; margin-bottom: 0.35em; }
   .lede { display: none; }

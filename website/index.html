@@ -15,7 +15,7 @@
   <meta property="og:image" content="https://islandmed.github.io/SculptForge/img/social-preview.png?v=2">
   <meta property="og:url" content="https://islandmed.github.io/SculptForge/">
   <meta name="twitter:card" content="summary_large_image">
-  <link rel="stylesheet" href="style.css?v=2">
+  <link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
   <header class="nav">
@@ -36,6 +36,8 @@
     <section class="hero">
       <div class="wrap hero-grid">
         <div class="hero-copy">
+          <a class="new-badge" href="https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md"><span>New in 0.2</span>
+            Masking, polypaint, polygroups and GoZ →</a>
           <p class="eyebrow">The free, open-source alternative to ZBrush</p>
           <h1><span class="nowrap">Sculpt it.</span> <span class="nowrap">Forge it.</span><br><span class="accent">Ship it.</span></h1>
           <p class="lede">Digital sculpting for Linux, macOS and Windows: the brushes, symmetry and navigation
@@ -76,8 +78,23 @@
         <div class="grid">
           <article class="card">
             <h3>Sculpt the way you already do</h3>
-            <p>Standard, Clay, Move, Inflate, Crease, Flatten, Pinch and Smooth, with symmetry, tablet pressure,
-              ZBrush-style navigation, unlimited undo, subdivision and voxel remesh.</p>
+            <p>Fourteen brushes including Clay Buildup, Dam Standard, Snake Hook, Trim and Move, with alphas, lazy
+              mouse, symmetry, tablet pressure, ZBrush-style navigation, subdivision and voxel remesh.</p>
+          </article>
+          <article class="card">
+            <h3>Masking and polygroups</h3>
+            <p>Hold Ctrl to paint a mask, mask by cavity, and grow, shrink or blur it. Auto-group by angle or by
+              piece, then Ctrl+Shift+click to isolate a group and work on just that part.</p>
+          </article>
+          <article class="card">
+            <h3>Polypaint and MatCaps</h3>
+            <p>Paint colour straight onto the sculpt, tint the cavities, and judge forms under Red Wax, Clay, Skin,
+              Bronze, Chrome or White materials.</p>
+          </article>
+          <article class="card">
+            <h3>Works with ZBrush</h3>
+            <p>Open and save GoZ files with polygroups, masks, UVs and polypaint, and send models to and from
+              ZBrush on Windows and macOS. Project files keep everything, with autosave and crash recovery.</p>
           </article>
           <article class="card">
             <h3>Brush Lab: describe a brush</h3>
@@ -244,7 +261,7 @@ verts = doc.vertices   # NumPy (N, 3)</code></pre>
     <section id="download" class="section alt">
       <div class="wrap">
         <h2>Download</h2>
-        <p class="section-lede">Version 0.1.0. All builds come from the
+        <p class="section-lede">Version 0.2.0. All builds come from the
           <a href="https://github.com/islandmed/SculptForge/releases/latest">latest GitHub release</a>, with
           SHA-256 checksums.</p>
         <div class="downloads">
@@ -284,8 +301,8 @@ verts = doc.vertices   # NumPy (N, 3)</code></pre>
         <details><summary>Can SculptForge replace ZBrush for me?</summary>
           <p>For many sculpting and game-asset jobs, yes. Blocking out, sculpting forms and detail, blend shapes,
             LODs and getting assets into Unreal, glTF or USD all work today, with familiar brushes and controls.
-            Masking, polygroups and visibility, polypaint, MatCaps, project files and GoZ exchange with ZBrush are
-            in the development version and will ship in the next release. SculptForge doesn't yet have
+            Masking, polygroups and hide/show, polypaint, MatCaps, project files and GoZ exchange with ZBrush work
+            too, with the controls ZBrush users expect. SculptForge doesn't yet have
             multiresolution subdivision levels, dynamic topology, ZRemesher-class retopology or UV unwrapping, and
             it can't open ZBrush's .ZTL files (use GoZ, or export OBJ or FBX from ZBrush). It's an independent
             project, not affiliated with Maxon.</p></details>

@@ -6,6 +6,10 @@
 
 #include <iostream>
 
+#ifndef SCULPTFORGE_VERSION
+#define SCULPTFORGE_VERSION "unknown"
+#endif
+
 namespace sf {
 
 namespace {
@@ -77,7 +81,7 @@ std::string handleMcpMessage(const CommandRegistry& registry, Document& doc, con
         result.set("capabilities", caps);
         Json info = Json::object();
         info.set("name", "sculptforge");
-        info.set("version", "0.1.0");
+        info.set("version", SCULPTFORGE_VERSION);
         result.set("serverInfo", info);
         result.set("instructions",
                    "SculptForge is a digital sculpting tool. One scene is kept for the whole session: start with "
