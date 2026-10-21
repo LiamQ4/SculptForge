@@ -6,6 +6,7 @@
 #include "core/EnginePresets.h"
 #include "core/ImageTo3D.h"
 #include "core/Primitives.h"
+#include "core/Project.h"
 #include "core/Splats.h"
 #include "core/Voxel.h"
 #include "io/FbxIO.h"
@@ -108,10 +109,12 @@ CommandRegistry::CommandRegistry() {
     add({"open",
          "Open a file: models (.obj, .fbx, .glb, .gltf, .ply, .usda, .usdz) replace the scene; Gaussian splats "
          "(.ply/.splat captures, KHR_gaussian_splatting .glb, USD ParticleField) load as a reference next to the sculpt. "
-         "glTF morph targets and FBX/USD blend shapes become sculpt layers.",
+         "glTF morph targets and FBX/USD blend shapes become sculpt layers. SculptForge projects (.sfproj) "
+         "restore the whole scene.",
          {{"path", T::String, "File path (UTF-8).", true}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path");
+             if (isProjectPath(path)) return openProjectCommand(doc, path);
              const std::string ext = lowerExtension(path);
              Mesh m;
              SplatCloud splats;
@@ -127,7 +130,8 @@ CommandRegistry::CommandRegistry() {
              } else ok = loadObj(path, m, err);
              if (!ok) return {false, err};
              std::string msg = "Opened " + path;
-             if (m.triangleCount()) {
+             const bool hasMesh = m.triangleCount() > 0;
+             if (hasMesh) {
                  doc.setMesh(std::move(m));
                  doc.path = ext == ".obj" ? path : std::string(); // other formats are exported explicitly
                  msg += " (" + std::to_string(doc.mesh.triangleCount()) + " triangles" +
@@ -138,6 +142,7 @@ CommandRegistry::CommandRegistry() {
                  doc.splatsChanged();
                  msg += " (" + std::to_string(doc.splats.size()) + " Gaussian splats, SH degree " +
                         std::to_string(doc.splats.shDegree) + ")";
+                 if (hasMesh) doc.markClean(); // a model with its own splats is one freshly opened scene
              }
              return {true, msg};
          }});
@@ -234,7 +239,7 @@ CommandRegistry::CommandRegistry() {
              std::string err;
              if (!saveObj(path, doc.mesh, err)) return {false, err};
              doc.path = path;
-             doc.modified = false;
+             doc.markClean();
              return {true, "Saved " + path};
          }});
 
@@ -596,6 +601,8 @@ CommandRegistry::CommandRegistry() {
                    << b.max.y << ", " << b.max.z << ")";
              return {true, s.str()};
          }});
+
+    registerProjectCommands(*this);
 }
 
 void CommandRegistry::add(Command cmd) { commands_.push_back(std::move(cmd)); }

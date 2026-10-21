@@ -41,6 +41,7 @@ add_library(sculptforge_core STATIC
   src/core/Splats.cpp
   src/core/Voxel.cpp
   src/core/EnginePresets.cpp
+  src/core/Project.cpp
   src/io/ObjIO.cpp
   src/io/FbxIO.cpp
   third_party/ufbx/ufbx.c
@@ -58,6 +59,7 @@ else()
 endif()
 target_link_libraries(sculptforge_core PUBLIC glm::glm)
 target_compile_definitions(sculptforge_core PUBLIC GLM_FORCE_XYZW_ONLY)
+target_compile_definitions(sculptforge_core PRIVATE SCULPTFORGE_VERSION="${PROJECT_VERSION}") # written into projects
 if(MSVC)
   target_compile_options(sculptforge_core PRIVATE /W4 /utf-8 /permissive-)
   target_compile_definitions(sculptforge_core PUBLIC NOMINMAX _USE_MATH_DEFINES)
@@ -103,6 +105,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/main.cpp
     src/app/App.cpp
     src/app/Demo.cpp
+    src/app/PanelProject.cpp
     src/render/GL.cpp
     src/render/Camera.cpp
     src/render/Renderer.cpp

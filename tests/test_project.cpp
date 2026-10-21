@@ -1,0 +1,277 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Project files (.sfproj): lossless round trip of the mesh, every optional
+// attribute, layers and splats; version handling; dirty tracking; recent files.
+#include "TestHarness.h"
+
+#include "core/Commands.h"
+#include "core/Primitives.h"
+#include "core/Project.h"
+#include "io/Zip.h"
+
+#include <filesystem>
+
+using namespace sf;
+
+namespace {
+
+Document makeRichDoc() {
+    Mesh m = makeIcosphere(2);
+    m.ensureMask();
+    m.ensureColors();
+    for (uint32_t v = 0; v < m.vertexCount(); ++v) {
+        m.mask[v] = float(v % 7) / 6.0f;
+        m.colors[v] = glm::vec3(float(v % 3) * 0.5f, 0.25f, 1.0f / float(v + 1));
+    }
+    m.ensurePolygroups();
+    m.ensureHidden();
+    for (uint32_t t = 0; t < m.triangleCount(); ++t) {
+        m.polygroups[t] = t % 5 + 100000u;
+        m.hidden[t] = t % 11 == 0 ? 1 : 0;
+    }
+    m.uvs.resize(m.triangleCount() * 3);
+    for (size_t i = 0; i < m.uvs.size(); ++i) m.uvs[i] = glm::vec2(float(i) * 0.001f, -float(i) * 0.5f);
+    m.addLayer("Smile");
+    m.addLayer("Blink L");
+    for (uint32_t v = 0; v < m.vertexCount(); ++v) {
+        m.layers[0].delta[v] = glm::vec3(0.01f * float(v % 4), 0, 0);
+        m.layers[1].delta[v] = glm::vec3(0, -0.002f * float(v % 9), 0.1f);
+    }
+    m.setLayerWeight(0, 0.75f);
+    m.setLayerWeight(1, -0.3f);
+
+    Document doc = makeDoc(std::move(m));
+    doc.activeLayer = 1;
+    doc.splats.resize(37, 1);
+    for (size_t i = 0; i < doc.splats.size(); ++i) {
+        doc.splats.positions[i] = glm::vec3(float(i), -float(i) * 0.5f, 2.0f);
+        doc.splats.rotations[i] = glm::normalize(glm::quat(1.0f, 0.1f * float(i), 0.2f, -0.3f));
+        doc.splats.scales[i] = glm::vec3(0.01f, 0.02f, 0.03f * float(i + 1));
+        doc.splats.opacities[i] = float(i) / 37.0f;
+    }
+    for (size_t i = 0; i < doc.splats.sh.size(); ++i) doc.splats.sh[i] = glm::vec3(float(i) * 0.01f, 0.5f, -0.25f);
+    doc.splats.transform = glm::mat4(2.0f);
+    doc.splats.transform[3] = glm::vec4(1, 2, 3, 1);
+    doc.splats.name = "Capture";
+    BrushRecipe recipe;
+    recipe.name = "Test Scales";
+    recipe.description = "for the project test";
+    doc.activeBrush = doc.addBrush(recipe);
+    Json cam = Json::object();
+    cam.set("distance", 7.5);
+    doc.projectSettings.set("camera", std::move(cam));
+    doc.projectSettings.set("future_feature", "kept");
+    return doc;
+}
+
+std::string readManifest(const std::string& path) {
+    std::vector<ZipEntry> entries;
+    std::string err;
+    if (!readStoredZip(path, entries, err)) return {};
+    for (const auto& e : entries)
+        if (e.name == "manifest.json") return std::string(e.data.begin(), e.data.end());
+    return {};
+}
+
+// Rewrites the manifest of an existing project with `edit` applied.
+bool editManifest(const std::string& path, const std::function<void(Json&)>& edit) {
+    std::vector<ZipEntry> entries;
+    std::string err;
+    if (!readStoredZip(path, entries, err)) return false;
+    for (auto& e : entries) {
+        if (e.name != "manifest.json") continue;
+        Json j;
+        if (!Json::parse(std::string(e.data.begin(), e.data.end()), j, err)) return false;
+        edit(j);
+        const std::string text = j.dump();
+        e.data.assign(text.begin(), text.end());
+    }
+    return writeStoredZip(path, entries, 1, err);
+}
+
+} // namespace
+
+TEST(project_round_trip_every_attribute) {
+    Document doc = makeRichDoc();
+    const std::string path = tempPath("sf_project_roundtrip.sfproj");
+    std::string err;
+    CHECK(saveProject(path, doc, err));
+
+    Document back;
+    back.splats.resize(3, 0); // replaced by the project's splats
+    CHECK(loadProject(path, back, err));
+    const Mesh& a = doc.mesh;
+    const Mesh& b = back.mesh;
+    CHECK(b.positions == a.positions);
+    CHECK(b.triangles == a.triangles);
+    CHECK(b.base == a.base);
+    CHECK(b.mask == a.mask);
+    CHECK(b.colors == a.colors);
+    CHECK(b.polygroups == a.polygroups);
+    CHECK(b.hidden == a.hidden);
+    CHECK(b.uvs == a.uvs);
+    CHECK(b.layers.size() == 2);
+    for (size_t i = 0; i < b.layers.size() && i < a.layers.size(); ++i) {
+        CHECK(b.layers[i].name == a.layers[i].name);
+        CHECK(b.layers[i].weight == a.layers[i].weight);
+        CHECK(b.layers[i].delta == a.layers[i].delta);
+    }
+    CHECK(b.normals.size() == b.vertexCount());
+    CHECK(back.activeLayer == 1);
+
+    const SplatCloud& sa = doc.splats;
+    const SplatCloud& sb = back.splats;
+    CHECK(sb.size() == sa.size() && sb.shDegree == sa.shDegree);
+    CHECK(sb.positions == sa.positions && sb.scales == sa.scales && sb.opacities == sa.opacities && sb.sh == sa.sh);
+    bool rotOk = sb.rotations.size() == sa.rotations.size();
+    for (size_t i = 0; rotOk && i < sa.rotations.size(); ++i)
+        rotOk = sb.rotations[i].x == sa.rotations[i].x && sb.rotations[i].y == sa.rotations[i].y &&
+                sb.rotations[i].z == sa.rotations[i].z && sb.rotations[i].w == sa.rotations[i].w;
+    CHECK(rotOk);
+    CHECK(sb.transform == sa.transform);
+    CHECK(sb.name == "Capture");
+
+    CHECK(back.activeBrush >= 0 && back.brushes[size_t(back.activeBrush)].name == "Test Scales");
+    CHECK(back.projectSettings["camera"]["distance"].asNumber() == 7.5);
+    CHECK(back.projectSettings["future_feature"].asString() == "kept");
+    CHECK(back.path == path);
+    CHECK(!back.dirty());
+    CHECK(!back.undo.canUndo());
+    std::filesystem::remove(path);
+}
+
+TEST(project_plain_mesh_keeps_attributes_empty) {
+    Document doc = makeDoc(makeIcosphere(1));
+    const std::string path = tempPath("sf_project_plain.sfproj");
+    std::string err;
+    CHECK(saveProject(path, doc, err));
+    Document back;
+    CHECK(loadProject(path, back, err));
+    CHECK(back.mesh.positions == doc.mesh.positions);
+    CHECK(!back.mesh.hasMask() && !back.mesh.hasColors() && !back.mesh.hasPolygroups() && !back.mesh.hasHidden() &&
+          !back.mesh.hasUvs());
+    CHECK(back.mesh.layers.empty() && back.mesh.base.empty() && back.splats.empty());
+    std::filesystem::remove(path);
+}
+
+TEST(project_commands_and_open) {
+    CommandRegistry reg;
+    Document doc = makeRichDoc();
+    const std::string path = tempPath("sf_project_cmd.sfproj");
+    std::filesystem::remove(path);
+    CHECK(!reg.execute(doc, "save_project").ok); // no project path yet
+    const std::string noExt = path.substr(0, path.size() - std::string(kProjectExtension).size());
+    CHECK(reg.execute(doc, "save_project", {{"path", noExt}}).ok);
+    CHECK(doc.path == path && std::filesystem::exists(path) && !doc.dirty());
+    CHECK(reg.execute(doc, "save_project").ok); // defaults to the project path
+
+    Document other = makeDoc(makeIcosphere(1));
+    CommandResult r = reg.execute(other, "open", {{"path", path}});
+    CHECK(r.ok);
+    CHECK(other.mesh.triangleCount() == doc.mesh.triangleCount() && other.mesh.layers.size() == 2);
+    Document third;
+    CHECK(reg.execute(third, "open_project", {{"path", path}}).ok);
+    CHECK(third.mesh.colors == doc.mesh.colors);
+    CHECK(!reg.execute(third, "open_project", {{"path", tempPath("sf_project_missing.sfproj")}}).ok);
+    CHECK(isProjectPath("a/b/Scene.SFPROJ") && !isProjectPath("scene.obj"));
+    std::filesystem::remove(path);
+}
+
+TEST(project_version_handling) {
+    Document doc = makeDoc(makeIcosphere(1));
+    const std::string path = tempPath("sf_project_version.sfproj");
+    std::string err;
+    CHECK(saveProject(path, doc, err));
+    const std::string manifest = readManifest(path);
+    CHECK(manifest.find("\"version\": 1") != std::string::npos || manifest.find("\"version\":1") != std::string::npos);
+    CHECK(manifest.find("app_version") != std::string::npos);
+
+    // Unknown fields (top level and inside the mesh) are ignored.
+    CHECK(editManifest(path, [](Json& j) {
+        j.set("shiny_new_thing", Json::object());
+        Json mesh = j["mesh"];
+        mesh.set("creases", "future blob");
+        j.set("mesh", std::move(mesh));
+    }));
+    Document back;
+    CHECK(loadProject(path, back, err));
+    CHECK(back.mesh.positions == doc.mesh.positions);
+
+    // A newer format is refused with a clear message and leaves the document alone.
+    CHECK(editManifest(path, [](Json& j) {
+        j.set("version", kProjectVersion + 1);
+        j.set("app_version", "9.9.9");
+    }));
+    Document keep = makeDoc(makePlane(4));
+    const size_t tris = keep.mesh.triangleCount();
+    err.clear();
+    CHECK(!loadProject(path, keep, err));
+    CHECK(err.find("newer") != std::string::npos && err.find("9.9.9") != std::string::npos);
+    CHECK(keep.mesh.triangleCount() == tris);
+
+    // Not a project / corrupt blob.
+    CHECK(editManifest(path, [](Json& j) { j.set("format", "something else"); }));
+    CHECK(!loadProject(path, keep, err));
+    CHECK(saveProject(path, doc, err));
+    CHECK(editManifest(path, [](Json& j) {
+        Json mesh = j["mesh"];
+        mesh.set("vertex_count", double(j["mesh"]["vertex_count"].asNumber() + 1));
+        j.set("mesh", std::move(mesh));
+    }));
+    err.clear();
+    CHECK(!loadProject(path, keep, err) && !err.empty());
+    CHECK(keep.mesh.triangleCount() == tris);
+    std::filesystem::remove(path);
+}
+
+TEST(project_dirty_tracking) {
+    CommandRegistry reg;
+    Document doc;
+    CHECK(reg.execute(doc, "new_sphere", {{"subdivisions", 2.0}}).ok);
+    CHECK(!doc.dirty());
+    CHECK(reg.execute(doc, "subdivide").ok);
+    CHECK(doc.dirty());
+    const std::string path = tempPath("sf_project_dirty.sfproj");
+    CHECK(reg.execute(doc, "save_project", {{"path", path}}).ok);
+    CHECK(!doc.dirty());
+    CHECK(reg.execute(doc, "undo").ok);
+    CHECK(doc.dirty());
+    CHECK(reg.execute(doc, "redo").ok);
+    CHECK(doc.dirty()); // redo is a change too (conservative)
+    doc.markClean();
+    doc.mesh.ensureMask();
+    doc.undo.push(UndoRecord::captureMask(doc.mesh, "Mask All")); // e.g. a command another feature adds
+    CHECK(doc.dirty());
+    doc.markClean();
+    CHECK(reg.execute(doc, "layer_add", {{"name", std::string("L")}}).ok);
+    CHECK(doc.dirty());
+    doc.markClean();
+    CHECK(reg.execute(doc, "layer_set_weight", {{"index", 0.0}, {"weight", 0.5}}).ok);
+    CHECK(doc.dirty());
+    doc.markClean();
+    CHECK(reg.execute(doc, "mesh_to_splats", {{"count", 1000.0}}).ok);
+    CHECK(doc.dirty());
+    CHECK(reg.execute(doc, "open", {{"path", path}}).ok);
+    CHECK(!doc.dirty());
+    std::filesystem::remove(path);
+}
+
+TEST(project_recent_files_logic) {
+    std::vector<std::string> list;
+    list = addRecentFile(list, "/a.sfproj");
+    list = addRecentFile(list, "/b.obj");
+    list = addRecentFile(list, "/a.sfproj"); // moves to the front, no duplicate
+    CHECK((list == std::vector<std::string>{"/a.sfproj", "/b.obj"}));
+    list = addRecentFile(list, "");
+    CHECK(list.size() == 2);
+    for (int i = 0; i < 15; ++i) list = addRecentFile(list, "/f" + std::to_string(i));
+    CHECK(list.size() == kMaxRecentFiles);
+    CHECK(list.front() == "/f14" && list.back() == "/f5");
+    CHECK(addRecentFile({"x", "y", "z"}, "w", 2) == (std::vector<std::string>{"w", "x"}));
+
+    auto pruned = pruneRecentFiles({"/keep1", "/gone", "", "/keep1", "/keep2"},
+                                   [](const std::string& p) { return p != "/gone"; });
+    CHECK((pruned == std::vector<std::string>{"/keep1", "/keep2"}));
+    CHECK(pruneRecentFiles({"/x"}, [](const std::string&) { return false; }).empty());
+}
