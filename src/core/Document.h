@@ -27,6 +27,7 @@ struct Document {
     // Recipe brush library (built-ins, loaded .sfbrush files, AI-made brushes).
     std::vector<BrushRecipe> brushes = builtinBrushRecipes();
     int activeBrush = -1; // index into `brushes`, -1 = use a built-in brush type
+    glm::vec3 paintColor{0.6f, 0.03f, 0.02f}; // current polypaint colour (linear RGB; see set_color)
     // Adds or replaces (by name) a recipe and returns its index.
     int addBrush(BrushRecipe recipe);
     // Gaussian splats shown alongside the mesh (a capture used as reference or

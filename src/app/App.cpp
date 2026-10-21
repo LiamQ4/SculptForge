@@ -162,6 +162,7 @@ bool App::init(const AppOptions& options) {
         io.IniFilename = nullptr;
     }
     ai::registerAiCommands(commands_, [this] { return aiSettings_; });
+    registerPaintUiCommands();
     std::snprintf(falKey_, sizeof falKey_, "%s", aiSettings_.falKey.c_str());
     std::snprintf(falModel_, sizeof falModel_, "%s", aiSettings_.falModel.c_str());
     std::snprintf(meshyKey_, sizeof meshyKey_, "%s", aiSettings_.meshyKey.c_str());
@@ -520,8 +521,16 @@ void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
     case SDLK_W: renderSettings_.wireframe = !renderSettings_.wireframe; break;
     case SDLK_F: camera_.frame(sceneBounds()); break;
     case SDLK_F1: showHelp_ = !showHelp_; break;
+    case SDLK_P:
+        paintMode_ = !paintMode_;
+        if (paintMode_) showPolypaintPanel_ = true; // colour picker at hand
+        break;
+    case SDLK_C: pickColorUnderCursor(); break;
     default:
-        if (key >= SDLK_1 && key < SDLK_1 + int(BrushType::Count)) brush_ = BrushType(key - SDLK_1);
+        if (key >= SDLK_1 && key < SDLK_1 + int(BrushType::Count)) {
+            brush_ = BrushType(key - SDLK_1);
+            paintMode_ = false;
+        }
         break;
     }
 }
@@ -533,9 +542,14 @@ void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
 void App::beginStroke(float x, float y, const RayHit& hit) {
     strokeBrush_ = activeBrush();
     strokeInvert_ = invertToggle_ != ((SDL_GetModState() & SDL_KMOD_ALT) != 0);
-    const BrushRecipe* recipe = strokeBrush_ == BrushType::Smooth ? nullptr : activeRecipe();
+    // Shift still smooths geometry while the Paint brush is active (ZBrush behaviour).
+    strokePaint_ = strokeBrush_ != BrushType::Smooth && (paintMode_ || paintRgb_);
+    strokeSculpt_ = !(strokePaint_ && paintMode_);
+    const BrushRecipe* recipe = strokeRecipe();
     haveLastDab_ = false;
-    if (!doc_.sculptor.beginStroke(doc_.mesh, recipe ? recipe->name : brushName(strokeBrush_), doc_.activeLayer)) {
+    if (!doc_.sculptor.beginStroke(doc_.mesh,
+                                   !strokeSculpt_ ? std::string("Paint") : recipe ? recipe->name : brushName(strokeBrush_),
+                                   strokeSculpt_ ? doc_.activeLayer : -1)) {
         status_ = "Active layer weight is 0 - raise it to sculpt into the layer";
         drag_ = Drag::Orbit;
         return;
@@ -543,11 +557,12 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
     drag_ = Drag::Stroke;
     playingLayer_ = -1;
     clearLods();
+    beginPaintStroke();
     lastX_ = x;
     lastY_ = y;
     residual_ = 0.0f;
 
-    if (strokeBrush_ == BrushType::Move && !recipe) {
+    if (strokeBrush_ == BrushType::Move && !recipe && strokeSculpt_) {
         int w = 0, h = 0;
         SDL_GetWindowSize(window_, &w, &h);
         float pressure = lastInputPen_ && pressureSize_ ? penPressure_ : 1.0f;
@@ -564,8 +579,8 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
 }
 
 void App::strokeTo(float x, float y) {
-    const BrushRecipe* recipe = strokeBrush_ == BrushType::Smooth ? nullptr : activeRecipe();
-    if (strokeBrush_ == BrushType::Move && !recipe) {
+    const BrushRecipe* recipe = strokeRecipe();
+    if (strokeBrush_ == BrushType::Move && !recipe && strokeSculpt_) {
         int w = 0, h = 0;
         SDL_GetWindowSize(window_, &w, &h);
         glm::vec3 origin, dir;
@@ -596,7 +611,7 @@ void App::strokeTo(float x, float y) {
 }
 
 void App::dabAt(float x, float y) {
-    const BrushRecipe* recipe = strokeBrush_ == BrushType::Smooth ? nullptr : activeRecipe();
+    const BrushRecipe* recipe = strokeRecipe();
     if (recipe && recipe->jitter > 0.0f) {
         // Deterministic per-stroke scatter (xorshift).
         auto rnd = [this] {
@@ -623,6 +638,8 @@ void App::dabAt(float x, float y) {
     p.pressure = pressureStrength_ ? pressure : 1.0f;
     p.invert = strokeInvert_;
     p.frontFacesOnly = frontFacesOnly_;
+    if (strokePaint_) paintAt(p);
+    if (!strokeSculpt_) return;
     if (recipe) {
         p.strokeDelta = haveLastDab_ ? hit.position - lastDabHit_ : glm::vec3(0.0f);
         lastDabHit_ = hit.position;
@@ -635,6 +652,7 @@ void App::dabAt(float x, float y) {
 
 void App::endStroke() {
     UndoRecord r = doc_.sculptor.endStroke();
+    finishPaintStroke(r);
     if (!r.empty()) {
         doc_.undo.push(std::move(r));
         doc_.modified = true;
@@ -652,7 +670,8 @@ void App::runCommand(const std::string& name, const Args& args) {
     status_ = r.message;
     if (r.ok && name != "export_glb" && name != "export_lods" && name != "export_usd" && name != "export_fbx" &&
         name != "export_unreal" && name.rfind("unreal_", 0) != 0 && name != "save_obj" &&
-        name != "mesh_info" && name.rfind("brush_", 0) != 0 && name.rfind("splat_", 0) != 0 && name != "mesh_to_splats") {
+        name != "mesh_info" && name.rfind("brush_", 0) != 0 && name.rfind("splat_", 0) != 0 && name != "mesh_to_splats" &&
+        name != "set_color" && name != "set_material" && name != "export_ply") {
         clearLods();
         playingLayer_ = -1;
     }
@@ -821,6 +840,7 @@ void App::drawUi() {
     drawSplatSection();
     if (showBrushLab_) drawBrushLab();
     if (showImageTo3D_) drawImageTo3D();
+    if (showPolypaintPanel_) drawPolypaintPanel();
     if (previewLod_ >= 0) {
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         std::string banner = "Previewing LOD" + std::to_string(previewLod_) + "  -  " +
@@ -869,6 +889,8 @@ void App::drawUi() {
                 "Zoom              Mouse wheel / Ctrl + left drag background\n"
                 "Brush size        [ and ]\n"
                 "Brushes           1-8\n"
+                "Paint brush       P (colour only; Alt paints white)\n"
+                "Pick colour       C over the model\n"
                 "Symmetry X        X\n"
                 "Wireframe         W\n"
                 "Frame model       F\n"
@@ -929,6 +951,7 @@ void App::drawMenuBar() {
         ImGui::MenuItem("Game Ready Panel", nullptr, &showGamePanel_);
         ImGui::MenuItem("Gaussian Splats", nullptr, &showSplatsPanel_);
         ImGui::MenuItem("Brush Lab", nullptr, &showBrushLab_);
+        ImGui::MenuItem("Polypaint & Materials", nullptr, &showPolypaintPanel_);
         ImGui::MenuItem("Generate 3D", nullptr, &showImageTo3D_);
         ImGui::MenuItem("Show Splats", nullptr, &renderSettings_.showSplats, !doc_.splats.empty());
         if (ImGui::MenuItem("Frame Model", "F")) camera_.frame(sceneBounds());
@@ -1583,12 +1606,13 @@ void App::drawToolPanel() {
     const float bw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
     for (int i = 0; i < int(BrushType::Count); ++i) {
         const auto type = BrushType(i);
-        const bool selected = brush_ == type && doc_.activeBrush < 0;
+        const bool selected = brush_ == type && doc_.activeBrush < 0 && !paintMode_;
         if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
         std::string label = std::to_string(i + 1) + "  " + brushName(type);
         if (ImGui::Button(label.c_str(), ImVec2(bw, 0))) {
             brush_ = type;
             doc_.activeBrush = -1;
+            paintMode_ = false;
         }
         if (selected) ImGui::PopStyleColor();
         if (i % 2 == 0) ImGui::SameLine();
@@ -1597,7 +1621,10 @@ void App::drawToolPanel() {
     ImGui::SeparatorText("Custom brushes");
     if (ImGui::BeginListBox("##custom", ImVec2(-1, ImGui::GetTextLineHeightWithSpacing() * 5.5f))) {
         for (int i = 0; i < int(doc_.brushes.size()); ++i) {
-            if (ImGui::Selectable(doc_.brushes[i].name.c_str(), doc_.activeBrush == i)) doc_.activeBrush = i;
+            if (ImGui::Selectable(doc_.brushes[i].name.c_str(), doc_.activeBrush == i)) {
+                doc_.activeBrush = i;
+                paintMode_ = false;
+            }
             if (ImGui::IsItemHovered() && !doc_.brushes[i].description.empty())
                 ImGui::SetTooltip("%s", doc_.brushes[i].description.c_str());
         }
@@ -1607,6 +1634,8 @@ void App::drawToolPanel() {
         showBrushLab_ = !showBrushLab_;
     if (ImGui::Button(showImageTo3D_ ? "Hide Generate 3D" : "Generate 3D...", ImVec2(-1, 0)))
         showImageTo3D_ = !showImageTo3D_;
+    if (ImGui::Button(showPolypaintPanel_ ? "Hide Polypaint" : "Polypaint & Materials...", ImVec2(-1, 0)))
+        showPolypaintPanel_ = !showPolypaintPanel_;
 
     ImGui::PushItemWidth(-ImGui::CalcTextSize("Strength").x - ImGui::GetStyle().ItemInnerSpacing.x);
     ImGui::SliderFloat("Size", &radiusPx_, 2.0f, 800.0f, "%.0f px", ImGuiSliderFlags_Logarithmic);
@@ -1704,9 +1733,13 @@ void App::drawBrushCursor() {
     const float r = radiusPx_ * (pressureSize_ && lastInputPen_ ? std::max(penPressure_, 0.05f) : 1.0f);
     const ImVec2 c(mouseX_, mouseY_);
     const bool inverted = invertToggle_ != ((SDL_GetModState() & SDL_KMOD_ALT) != 0);
-    const ImU32 col = activeBrush() == BrushType::Smooth ? IM_COL32(120, 200, 255, 200)
-                      : inverted                         ? IM_COL32(255, 110, 110, 200)
-                                                         : IM_COL32(255, 190, 120, 200);
+    ImU32 col = activeBrush() == BrushType::Smooth ? IM_COL32(120, 200, 255, 200)
+                : inverted                         ? IM_COL32(255, 110, 110, 200)
+                                                   : IM_COL32(255, 190, 120, 200);
+    if (paintMode_ && activeBrush() != BrushType::Smooth) { // Paint brush: ring in the paint colour
+        const glm::vec3 c = linearToSrgb(inverted ? glm::vec3(1.0f) : doc_.paintColor);
+        col = ImGui::GetColorU32(ImVec4(c.x, c.y, c.z, 0.9f));
+    }
     dl->AddCircle(c, r, col, 64, 1.5f);
     dl->AddCircle(c, r * (0.25f + 0.75f * (1.0f - strength_)), IM_COL32(255, 255, 255, 60), 48, 1.0f);
 }

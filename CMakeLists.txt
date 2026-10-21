@@ -41,6 +41,8 @@ add_library(sculptforge_core STATIC
   src/core/Splats.cpp
   src/core/Voxel.cpp
   src/core/EnginePresets.cpp
+  src/core/Polypaint.cpp
+  src/core/Matcap.cpp
   src/io/ObjIO.cpp
   src/io/FbxIO.cpp
   third_party/ufbx/ufbx.c
@@ -103,6 +105,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/main.cpp
     src/app/App.cpp
     src/app/Demo.cpp
+    src/app/PanelPolypaint.cpp
     src/render/GL.cpp
     src/render/Camera.cpp
     src/render/Renderer.cpp

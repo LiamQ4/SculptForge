@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "render/Renderer.h"
 
+#include "core/Matcap.h"
+
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
@@ -49,6 +51,8 @@ uniform int uPaint;      // 1: vertex colours replace the base colour
 uniform int uShowMask;   // 1: darken masked areas
 uniform int uGroups;     // 0: off, 1: per-triangle ids from uGroupIds, 2: everything is group 0
 uniform usamplerBuffer uGroupIds;
+uniform int uMatcap;          // 1: shade with the matcap texture instead of the studio lights
+uniform sampler2D uMatcapTex; // sRGB-encoded lit sphere (core/Matcap.h)
 out vec4 fragColor;
 // Keep in sync with sf::polygroupColor.
 vec3 groupColor(uint id) {
@@ -64,12 +68,26 @@ vec3 groupColor(uint id) {
 }
 void main() {
     vec3 albedo = uBaseColor;
-    if (uGroups == 1) albedo = groupColor(texelFetch(uGroupIds, gl_PrimitiveID).r);
-    else if (uGroups == 2) albedo = groupColor(0u);
-    else if (uPaint == 1) albedo = vColor;
+    vec3 tint = vec3(1.0); // multiplies a matcap: polypaint or polygroup colours
+    if (uGroups == 1) albedo = tint = groupColor(texelFetch(uGroupIds, gl_PrimitiveID).r);
+    else if (uGroups == 2) albedo = tint = groupColor(0u);
+    else if (uPaint == 1) albedo = tint = vColor;
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
     vec3 v = normalize(-vPos);
+    if (uMatcap == 1) {
+        // View-aligned basis so the material stays put towards the edges of a perspective view.
+        vec3 bx = normalize(vec3(v.z, 0.0, -v.x));
+        vec3 by = cross(v, bx);
+        vec2 uv = vec2(dot(bx, n), dot(by, n)) * 0.495 + 0.5;
+        vec3 mc = pow(texture(uMatcapTex, uv).rgb, vec3(2.2));
+        float mcrease = smoothstep(0.0, 0.16, vCurvature);
+        float mridge = smoothstep(0.0, 0.2, -vCurvature);
+        vec3 c = mc * tint * (1.0 - 0.55 * mcrease) * (1.0 + 0.2 * mridge);
+        if (uShowMask == 1) c *= 1.0 - 0.75 * clamp(vMask, 0.0, 1.0);
+        fragColor = vec4(pow(c, vec3(1.0 / 2.2)), 1.0);
+        return;
+    }
     vec3 key = normalize(vec3(0.45, 0.65, 0.6));
     vec3 fill = normalize(vec3(-0.7, -0.1, 0.4));
     float diff = max((dot(n, key) + 0.25) / 1.25, 0.0);
@@ -173,6 +191,8 @@ void main() {
     fragColor = vec4(vColor.rgb, alpha);
 }
 )";
+
+constexpr GLenum kTexture2 = 0x84C2; // GL_TEXTURE2 (matcap)
 
 GLuint compile(GLenum type, const char* src, std::string& error) {
     GLuint s = gl::CreateShader(type);
@@ -281,7 +301,27 @@ bool Renderer::init(std::string& error) {
     gl::BindBuffer(GL_ARRAY_BUFFER, 0);
     gl::GenBuffers(1, &groupData_);
     gl::GenTextures(1, &groupTexture_);
+
+    // Built-in matcaps, generated once (6 x 256 KB).
+    matcapTextures_.assign(size_t(matcapCount()), 0);
+    gl::GenTextures(GLsizei(matcapTextures_.size()), matcapTextures_.data());
+    gl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    for (int i = 0; i < matcapCount(); ++i) {
+        constexpr int kSize = 256;
+        const std::vector<uint8_t> pixels = generateMatcap(i, kSize);
+        gl::BindTexture(GL_TEXTURE_2D, matcapTextures_[size_t(i)]);
+        gl::TexImage2D(GL_TEXTURE_2D, 0, GLint(GL_RGBA8), kSize, kSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(GL_LINEAR));
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(GL_LINEAR));
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE));
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE));
+    }
+    gl::BindTexture(GL_TEXTURE_2D, 0);
     return true;
+}
+
+GLuint Renderer::matcapTexture(int index) const {
+    return index >= 0 && index < int(matcapTextures_.size()) ? matcapTextures_[size_t(index)] : 0;
 }
 
 void Renderer::shutdown() {
@@ -292,6 +332,8 @@ void Renderer::shutdown() {
     gl::DeleteBuffers(1, &maskBuffer_);
     gl::DeleteBuffers(1, &groupData_);
     gl::DeleteTextures(1, &groupTexture_);
+    if (!matcapTextures_.empty()) gl::DeleteTextures(GLsizei(matcapTextures_.size()), matcapTextures_.data());
+    matcapTextures_.clear();
     gl::DeleteBuffers(1, &indexBuffer_);
     gl::DeleteVertexArrays(1, &vao_);
     gl::DeleteVertexArrays(1, &emptyVao_);
@@ -632,6 +674,11 @@ void Renderer::draw(const Camera& camera, int fbWidth, int fbHeight, const Rende
     gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uShowMask"), settings.showMask && hasMask_ ? 1 : 0);
     gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uGroups"), settings.showPolygroups ? (hasGroups_ ? 1 : 2) : 0);
     gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uGroupIds"), 1);
+    const GLuint matcap = matcapTexture(settings.matcap);
+    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uMatcap"), matcap ? 1 : 0);
+    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uMatcapTex"), 2);
+    gl::ActiveTexture(kTexture2);
+    gl::BindTexture(GL_TEXTURE_2D, matcap);
     // Constant values for the attribute arrays that are disabled.
     if (!hasColors_) gl::VertexAttrib3f(3, 1.0f, 1.0f, 1.0f);
     if (!hasMask_) gl::VertexAttrib1f(4, 0.0f);
@@ -644,6 +691,8 @@ void Renderer::draw(const Camera& camera, int fbWidth, int fbHeight, const Rende
     gl::Disable(GL_POLYGON_OFFSET_FILL);
     gl::ActiveTexture(GL_TEXTURE1);
     gl::BindTexture(GL_TEXTURE_BUFFER, 0);
+    gl::ActiveTexture(kTexture2);
+    gl::BindTexture(GL_TEXTURE_2D, 0);
     gl::ActiveTexture(GL_TEXTURE0);
 
     if (settings.wireframe) {
