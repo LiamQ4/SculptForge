@@ -113,7 +113,7 @@ retopology, a full ZBrush feature list, rendering/animation (use Blender).
 - ✅ Polypaint: Paint brush, RGB while sculpting, colour pick, fill (respecting the mask), cavity paint;
   exported to PLY, glTF, OBJ, USD and GoZ
 - 📋 UV unwrapping and editing, texture baking (normal/displacement)
-- ✅ STL import/export (binary and ASCII)
+- ✅ STL import (binary and ASCII) and binary export
 - 📋 Binary USD (usdc), SPZ-compressed splats, USD references/payloads
 - 📋 Splat editing: crop box, paint-select, sculpt deforming nearby splats
 

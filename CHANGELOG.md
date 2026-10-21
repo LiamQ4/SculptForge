@@ -44,7 +44,7 @@ All notable changes to SculptForge are listed here. The format follows
 - ZBrush GoZ: `.GoZ` import and export with polygroups, mask, polypaint and UVs (quads are kept), and the GoZ
   bridge (`goz_send`, `goz_receive`, File > ZBrush (GoZ)) on Windows and macOS. The format follows the open-source
   GoB add-on; the live bridge has not yet been tested against a running ZBrush. See [docs/goz.md](docs/goz.md).
-- STL import and export (binary and ASCII). Opening a `.ZTL`/`.ZPR` file now explains that the format is
+- STL import (binary and ASCII) and binary STL export. Opening a `.ZTL`/`.ZPR` file now explains that the format is
   proprietary and suggests GoZ or OBJ/FBX.
 
 ## [0.1.0] - 2026-10-20
