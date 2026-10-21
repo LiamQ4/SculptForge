@@ -86,8 +86,8 @@ public:
     // Mirror sign vectors for the enabled symmetry axes (always starts with (1,1,1)).
     static std::vector<glm::vec3> mirrors(Symmetry sym);
 
-    // Puts every vertex the current stroke moved back where it started (the
-    // stroke stays open). DragRect re-stamps from scratch while dragging.
+    // Puts every vertex the current stroke moved (or painted) back the way it
+    // started (the stroke stays open). DragRect re-stamps from scratch while dragging.
     void restoreStroke(Mesh& mesh, BVH& bvh);
 
 private:

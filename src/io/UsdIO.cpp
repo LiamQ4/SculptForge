@@ -144,6 +144,14 @@ void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::
     w.line("    interpolation = \"vertex\"");
     w.line(")");
     w.array("point3f[] points", base.positions, [&](const glm::vec3& p) { w.vec3(p); });
+    if (mesh.hasColors() && mesh.colors.size() == mesh.vertexCount()) {
+        // Polypaint (linear, as USD expects); the material reads it through a primvar reader.
+        w.array("color3f[] primvars:displayColor", mesh.colors, [&](const glm::vec3& c) { w.vec3(c); });
+        w.s.pop_back();
+        w.s += " (\n";
+        w.line("    interpolation = \"vertex\"");
+        w.line(")");
+    }
     w.line("uniform token subdivisionScheme = \"none\"");
     if (skinned) {
         w.array("uniform token[] skel:blendShapes", shapeNames, [&](const std::string& n) { w.s += quoted(n); });
@@ -243,11 +251,20 @@ std::string buildUsda(const Mesh* mesh, const SplatCloud* splats, const std::str
         w.s += '\n';
         w.open("def Shader \"PreviewSurface\"");
         w.line("uniform token info:id = \"UsdPreviewSurface\"");
-        w.line("color3f inputs:diffuseColor = (0.8, 0.55, 0.45)");
+        if (mesh->hasColors()) w.line("color3f inputs:diffuseColor.connect = <" + material + "/Polypaint.outputs:result>");
+        else w.line("color3f inputs:diffuseColor = (0.8, 0.55, 0.45)");
         w.line("float inputs:metallic = 0");
         w.line("float inputs:roughness = 0.65");
         w.line("token outputs:surface");
         w.close();
+        if (mesh->hasColors()) {
+            w.s += '\n';
+            w.open("def Shader \"Polypaint\"");
+            w.line("uniform token info:id = \"UsdPrimvarReader_float3\"");
+            w.line("string inputs:varname = \"displayColor\"");
+            w.line("float3 outputs:result");
+            w.close();
+        }
         w.close();
         w.close();
     }

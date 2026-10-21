@@ -141,7 +141,9 @@ void App::dragRectTo(float x, float y) {
     p.frontFacesOnly = frontFacesOnly_;
     p.alpha = &doc_.brushAlpha;
     p.alphaUp = glm::normalize(q * glm::vec3(drag.x, -drag.y, 0.0f)); // the alpha's top follows the drag
-    const BrushRecipe* recipe = strokeBrush_ == BrushType::Smooth ? nullptr : activeRecipe();
+    if (strokePaint_) paintAt(p); // restoreStroke reverted the previous stamp's colours too
+    if (!strokeSculpt_) return;
+    const BrushRecipe* recipe = strokeRecipe();
     if (recipe) doc_.sculptor.dabRecipe(doc_.mesh, doc_.bvh, *recipe, p, symmetry_);
     else doc_.sculptor.dab(doc_.mesh, doc_.bvh, strokeBrush_, p, symmetry_);
 }

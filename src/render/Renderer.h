@@ -19,6 +19,7 @@ struct RenderSettings {
     bool showPolypaint = true;   // vertex colours replace baseColor when the mesh has them
     bool showMask = true;        // masked areas render darker (ZBrush style)
     bool showPolygroups = false; // colour each polygroup (see polygroupColor)
+    int matcap = -1;             // built-in MatCap material (core/Matcap.h); -1 = studio clay lighting
     bool showMesh = true;
     bool showSplats = true;
     float splatOpacity = 1.0f; // global fade for using a capture as reference
@@ -49,6 +50,9 @@ public:
     bool beginCapture(int width, int height, std::string& error);
     void endCapture(std::vector<uint8_t>& rgba); // top-down RGBA rows
 
+    // Texture of built-in matcap `index` (sRGB RGBA8, rows bottom-up) for UI previews; 0 if none.
+    GLuint matcapTexture(int index) const;
+
 private:
     void drawSplats(const glm::mat4& view, const glm::mat4& proj, int fbWidth, int fbHeight, float opacity);
 
@@ -73,6 +77,7 @@ private:
     std::vector<glm::uvec3> visibleTris_;
     std::vector<uint32_t> visibleGroups_;
     GLsizei indexCount_ = 0;
+    std::vector<GLuint> matcapTextures_; // one per built-in matcap (core/Matcap.h)
     size_t vertexCapacity_ = 0;
 };
 

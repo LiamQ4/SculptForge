@@ -26,6 +26,9 @@ void App::beginMaskStroke(float x, float y) {
     strokeInvert_ = (SDL_GetModState() & SDL_KMOD_ALT) != 0; // Ctrl+Alt erases
     if (!doc_.sculptor.beginStroke(doc_.mesh, strokeInvert_ ? "Unmask" : "Mask", -1)) return;
     strokeMask_ = true;
+    strokePaint_ = false; // mask strokes never paint or sculpt
+    strokeSculpt_ = true;
+    paintSnapshot_.reset();
     strokeBrush_ = BrushType::Standard;
     haveLastDab_ = false;
     drag_ = Drag::Stroke;

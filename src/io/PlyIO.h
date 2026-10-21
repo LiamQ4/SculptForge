@@ -30,4 +30,8 @@ bool saveSplatPly(const std::string& path, const SplatCloud& splats, std::string
 bool loadDotSplat(const std::string& path, SplatCloud& splats, std::string& error);
 bool saveDotSplat(const std::string& path, const SplatCloud& splats, std::string& error);
 
+// Writes a triangle mesh (binary little-endian: positions, normals and, when
+// the mesh has polypaint, uchar red/green/blue in sRGB) that loadPly reads back.
+bool savePlyMesh(const std::string& path, const Mesh& mesh, std::string& error);
+
 } // namespace sf

@@ -268,6 +268,20 @@ private:
     bool alphaInvert_ = false;
     std::mutex alphaMutex_;
     std::string pendingAlphaPath_; // set by the file dialog thread
+    // Polypaint and MatCap materials (PanelPolypaint.cpp)
+    bool paintMode_ = false;  // Paint brush: colour only, no sculpting (ZBrush Rgb on, Zadd off)
+    bool paintRgb_ = false;   // also paint the colour while sculpting (ZBrush Rgb + Zadd)
+    bool strokePaint_ = false, strokeSculpt_ = true;
+    bool showPolypaintPanel_ = false; // off by default (keeps the viewport and demo videos clear)
+    void registerPaintUiCommands();
+    void drawPolypaintPanel();
+    void paintAt(const DabParams& p);
+    void pickColorUnderCursor();
+    // First paint stroke on a mesh without polypaint: undo restores this snapshot so the attribute goes away again.
+    std::unique_ptr<Mesh> paintSnapshot_;
+    void beginPaintStroke();
+    void finishPaintStroke(UndoRecord& record);
+    const BrushRecipe* strokeRecipe() const; // recipe the current stroke sculpts with (none for Smooth / paint only)
 };
 
 } // namespace sf

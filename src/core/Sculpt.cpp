@@ -529,7 +529,13 @@ void Sculptor::grab(Mesh& mesh, BVH& bvh, const glm::vec3& delta) {
 
 // Puts every vertex the current stroke moved back to its stroke-start position.
 void Sculptor::restoreStroke(Mesh& mesh, BVH& bvh) {
-    if (!active_ || record_.positions.empty()) return;
+    if (!active_) return;
+    // Polypaint laid down by the stroke so far (Paint brush / RGB while sculpting).
+    if (!record_.colors.empty() && mesh.hasColors()) {
+        const auto& ci = record_.colors.indices;
+        for (size_t i = 0; i < ci.size(); ++i) mesh.colors[ci[i]] = record_.colors.values[i];
+    }
+    if (record_.positions.empty()) return;
     auto& target = mesh.layerTarget(layer_);
     const auto& idx = record_.positions.indices;
     for (size_t i = 0; i < idx.size(); ++i) target[idx[i]] = record_.positions.values[i];
