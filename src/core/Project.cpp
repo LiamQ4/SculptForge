@@ -372,7 +372,9 @@ void registerProjectCommands(CommandRegistry& registry) {
                   [](Document& doc, const Args& a) -> CommandResult {
                       std::string path = argString(a, "path", isProjectPath(doc.path) ? doc.path : std::string());
                       if (path.empty()) return {false, "No path given"};
-                      if (fsPath(path).extension().empty()) path += kProjectExtension;
+                      // Any other extension too: "head.obj" must not overwrite an OBJ with a ZIP
+                      // that open, isProjectPath and Ctrl+S would not recognise.
+                      if (!isProjectPath(path)) path += kProjectExtension;
                       std::string err;
                       if (!saveProject(path, doc, err)) return {false, err};
                       doc.path = path;

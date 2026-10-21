@@ -306,3 +306,17 @@ TEST(matcap_builtin_materials) {
     // Deterministic.
     CHECK(generateMatcap(findMatcap("Chrome"), size) == chrome);
 }
+
+TEST(polypaint_restore_stroke_marks_colors_dirty) {
+    // DragRect re-stamps by restoring the stroke first: the reverted colours must reach the GPU.
+    Document doc = makeDoc(makeIcosphere(3));
+    Mesh& m = doc.mesh;
+    const uint32_t centre = nearestVertex(m, {1, 0, 0});
+    CHECK(doc.sculptor.beginStroke(m, "Paint"));
+    CHECK(paintDab(doc.sculptor, m, doc.bvh, paintParams(m.positions[centre], 0.5f), kRed, Symmetry{}) > 0);
+    m.clearDirty(); // uploaded
+    doc.sculptor.restoreStroke(m, doc.bvh);
+    CHECK(m.colors[centre] == glm::vec3(1.0f));
+    CHECK(m.dirtyBegin <= centre && centre < m.dirtyEnd);
+    doc.undo.push(doc.sculptor.endStroke());
+}

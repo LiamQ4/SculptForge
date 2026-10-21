@@ -129,8 +129,10 @@ void App::tickProject(float dt) {
     }
     autosaveTimer_ += dt;
     const uint64_t revision = doc_.undo.revision() * 1000003u + doc_.splatsVersion;
+    // Edits only `modified` tracks (layer weights, Python setters) leave the revision alone, so
+    // while it is set autosave every interval rather than trusting an unchanged revision.
     if (autosaveMinutes_ <= 0 || autosaveTimer_ < float(autosaveMinutes_) * 60.0f || doc_.sculptor.strokeActive() ||
-        revision == autosaveRevision_)
+        (revision == autosaveRevision_ && !doc_.modified))
         return;
     autosaveTimer_ = 0.0f;
     storeProjectSettings();

@@ -765,6 +765,8 @@ void App::queueFile(FileAction action, std::string path) {
                 : action == FileAction::ExportUnreal ? ".fbx"
                 : action == FileAction::SaveProject ? ".sfproj"
                                                    : ".glb";
+    else if (action == FileAction::SaveProject && !path.empty() && !isProjectPath(path))
+        path += kProjectExtension; // as save_project does, so the recent list gets the real name
     std::lock_guard lock(pendingMutex_);
     pendingFiles_.push_back({action, std::move(path)});
 }
@@ -796,8 +798,16 @@ void App::saveFileDialog(FileAction action) {
                                           : action == FileAction::ExportUnreal ? kFbxFilters
                                                                               : kGlbFilters;
     const int count = action == FileAction::SaveSplats ? 3 : 2;
+    // Suggest the document's name with .obj (not its .sfproj path, which save_obj refuses).
+    std::string suggestion;
+    if (obj && !doc_.path.empty()) {
+        const std::u8string s = std::filesystem::path(std::u8string(doc_.path.begin(), doc_.path.end()))
+                                    .replace_extension(".obj")
+                                    .u8string();
+        suggestion.assign(s.begin(), s.end());
+    }
     SDL_ShowSaveFileDialog(onFileChosen, &dialogRequests_[int(action)], window_, filters, count,
-                           obj && !doc_.path.empty() ? doc_.path.c_str() : nullptr);
+                           suggestion.empty() ? nullptr : suggestion.c_str());
 }
 
 AABB App::sceneBounds() const {

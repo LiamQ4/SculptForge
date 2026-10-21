@@ -95,7 +95,15 @@ void App::drawPolygroupsSection() {
     ImGui::SeparatorText("Polygroups");
     ImGui::Checkbox("Show polygroups", &renderSettings_.showPolygroups);
     ImGui::SameLine();
-    ImGui::TextDisabled("%zu", visiblePolygroupCount(doc_.mesh));
+    const Mesh& m = doc_.mesh;
+    const std::array<uint64_t, 6> key = {doc_.undo.revision() + 1, uint64_t(doc_.modified), m.triangles.size(),
+                                         m.polygroups.size(), uint64_t(reinterpret_cast<uintptr_t>(m.polygroups.data())),
+                                         uint64_t(reinterpret_cast<uintptr_t>(m.hidden.data())) ^ m.hidden.size()};
+    if (key != visibleGroupsKey_) {
+        visibleGroupsKey_ = key;
+        visibleGroups_ = visiblePolygroupCount(m);
+    }
+    ImGui::TextDisabled("%zu", visibleGroups_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Visible polygroups");
 
     // Grouping buttons switch the polygroup colours on so the result is visible.

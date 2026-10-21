@@ -93,7 +93,9 @@ void App::pollGoz() {
         files.swap(gozPendingFiles_);
     }
     for (const auto& [kind, path] : files) {
-        if (kind == GozFile::Import) runGozCommand("goz_import", {{"path", path}});
+        // Importing replaces the scene and its undo history, so ask about unsaved work first.
+        if (kind == GozFile::Import)
+            confirmDiscard([this, p = path] { runGozCommand("goz_import", {{"path", p}}); });
         else runGozCommand(kind == GozFile::Export ? "goz_export" : "export_stl", {{"path", path}});
     }
 

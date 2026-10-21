@@ -243,15 +243,15 @@ CommandRegistry::CommandRegistry() {
          }});
 
     add({"save_obj",
-         "Save the mesh as a Wavefront OBJ file.",
-         {{"path", T::String, "File path (UTF-8). Defaults to the current document path.", false}},
+         "Export the mesh as a Wavefront OBJ file. OBJ cannot hold the mask, polygroups, visibility, sculpt layers "
+         "or splats, so this is an export: the document keeps its path and unsaved-changes state.",
+         {{"path", T::String, "File path (UTF-8). Defaults to the current document path unless that is a project.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
-             std::string path = argString(a, "path", doc.path);
+             std::string path = argString(a, "path", isProjectPath(doc.path) ? std::string() : doc.path);
              if (path.empty()) return {false, "No path given"};
+             if (isProjectPath(path)) return {false, "Use save_project for .sfproj files"};
              std::string err;
              if (!saveObj(path, doc.mesh, err)) return {false, err};
-             doc.path = path;
-             doc.markClean();
              return {true, "Saved " + path};
          }});
 

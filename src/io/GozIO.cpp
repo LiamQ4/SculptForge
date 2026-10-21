@@ -320,6 +320,19 @@ std::vector<uint8_t> writeGoz(const Mesh& mesh, const std::string& name, const G
     std::vector<glm::vec2> faceUvs;
     std::vector<uint16_t> faceGroups;
     faces.reserve(nt);
+    // GoZ polygroups are 16-bit. Truncating larger ids would merge unrelated groups,
+    // so when any id is too big, number the distinct ids 0, 1, 2... instead (only
+    // more than 65536 distinct groups still have to share ids).
+    std::vector<uint32_t> groupIds;
+    if (groups && std::any_of(mesh.polygroups.begin(), mesh.polygroups.end(), [](uint32_t g) { return g > 0xffffu; })) {
+        groupIds = mesh.polygroups;
+        std::sort(groupIds.begin(), groupIds.end());
+        groupIds.erase(std::unique(groupIds.begin(), groupIds.end()), groupIds.end());
+    }
+    auto gozGroup = [&](uint32_t g) {
+        if (groupIds.empty()) return uint16_t(g);
+        return uint16_t(size_t(std::lower_bound(groupIds.begin(), groupIds.end(), g) - groupIds.begin()) & 0xffffu);
+    };
     for (size_t t = 0; t < nt; ++t) {
         const glm::uvec3& a = mesh.triangles[t];
         const glm::vec2* ua = uvs ? &mesh.uvs[t * 3] : nullptr;
@@ -339,7 +352,7 @@ std::vector<uint8_t> writeGoz(const Mesh& mesh, const std::string& name, const G
             faces.push_back({{a.x, a.y, a.z, kNoIndex}});
             if (uvs) faceUvs.insert(faceUvs.end(), {ua[0], ua[1], ua[2], glm::vec2(0.0f, 0.0f)}); // GoB pads with (0, 1) in GoZ space
         }
-        if (groups) faceGroups.push_back(uint16_t(mesh.polygroups[t] & 0xffffu));
+        if (groups) faceGroups.push_back(gozGroup(mesh.polygroups[t]));
         if (paired) ++t;
     }
 
@@ -515,17 +528,42 @@ std::string gozObjectListPath(const std::string& root) {
     return root.empty() ? std::string() : pathUtf8(utf8Path(root) / "GoZBrush" / "GoZ_ObjectList.txt");
 }
 
+bool gozShellSafePath(const std::string& path) {
+    for (unsigned char c : path) {
+        if (c < 0x20 || c == 0x7f || c == '"' || c == '$' || c == '`' || c == '%' || c == '!') return false;
+#ifndef _WIN32
+        if (c == '\\') return false;
+#endif
+    }
+    return true;
+}
+
 bool gozSend(const Mesh& mesh, const GozSendOptions& o, std::string& message) {
     const std::string root = o.root.empty() ? gozDefaultRoot() : o.root;
     if (root.empty()) {
         message = gozUnavailableMessage();
         return false;
     }
+    std::error_code ec;
+    if (o.launch) { // these paths reach the shell (launchDetached)
+        if (!gozShellSafePath(root)) {
+            message = "The GoZ folder path contains characters that are not allowed when launching ZBrush";
+            return false;
+        }
+        if (!o.zbrushPath.empty()) {
+            std::string file = pathUtf8(utf8Path(o.zbrushPath).filename());
+            std::transform(file.begin(), file.end(), file.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+            if (!gozShellSafePath(o.zbrushPath) || file.find("zbrush") == std::string::npos ||
+                !fs::exists(utf8Path(o.zbrushPath), ec)) {
+                message = "Not a ZBrush executable: " + o.zbrushPath;
+                return false;
+            }
+        }
+    }
     if (mesh.triangleCount() == 0) {
         message = "Nothing to send: the mesh is empty";
         return false;
     }
-    std::error_code ec;
     const fs::path rootPath = utf8Path(root);
     const fs::path brush = rootPath / "GoZBrush";
     const fs::path project = rootPath / "GoZProjects" / "Default";

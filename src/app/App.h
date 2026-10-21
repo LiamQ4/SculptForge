@@ -14,6 +14,8 @@
 #include <SDL3/SDL.h>
 #include <imgui.h>
 
+#include <array>
+#include <cstdint>
 #include <functional>
 #include <future>
 #include <memory>
@@ -253,6 +255,9 @@ private:
     bool hideRectActive_ = false;
     float hideRectX_ = 0.0f, hideRectY_ = 0.0f;
     float polygroupAngle_ = 30.0f;
+    // visiblePolygroupCount is O(triangles): recomputed only when the key below changes.
+    size_t visibleGroups_ = 0;
+    std::array<uint64_t, 6> visibleGroupsKey_{};
     // Stroke types, alphas and the extra brushes (PanelBrushes.cpp).
     void drawBrushOptions();
     void snakeHookTo(float x, float y);

@@ -533,7 +533,10 @@ void Sculptor::restoreStroke(Mesh& mesh, BVH& bvh) {
     // Polypaint laid down by the stroke so far (Paint brush / RGB while sculpting).
     if (!record_.colors.empty() && mesh.hasColors()) {
         const auto& ci = record_.colors.indices;
-        for (size_t i = 0; i < ci.size(); ++i) mesh.colors[ci[i]] = record_.colors.values[i];
+        for (size_t i = 0; i < ci.size(); ++i) {
+            mesh.colors[ci[i]] = record_.colors.values[i];
+            mesh.markDirty(ci[i]); // paint-only strokes return before updateNormals marks anything
+        }
     }
     if (record_.positions.empty()) return;
     auto& target = mesh.layerTarget(layer_);

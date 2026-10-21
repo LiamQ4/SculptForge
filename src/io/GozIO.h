@@ -64,9 +64,16 @@ struct GozSendOptions {
     std::string zbrushPath; // ZBrush executable to start if GoZBrushFromApp is missing (optional)
 };
 
+// Launching goes through the shell ("start"/"open"), and goz_send is reachable
+// from scripts and the MCP server, so a path it launches must be free of quotes
+// and shell expansion characters ($ ` % ! and, outside Windows, backslash).
+bool gozShellSafePath(const std::string& path);
+
 // Writes the mesh to <root>/GoZProjects/Default/<name>.GoZ, lists it in
 // GoZBrush/GoZ_ObjectList.txt, names SculptForge in GoZ_Application.txt and
 // (optionally) tells ZBrush to import it. `message` describes what happened.
+// With `launch`, a `zbrushPath` must name an existing ZBrush (its file name
+// contains "zbrush") and it and `root` must pass gozShellSafePath.
 bool gozSend(const Mesh& mesh, const GozSendOptions& options, std::string& message);
 
 // Reads every object in <root>/GoZBrush/GoZ_ObjectList.txt (what ZBrush last

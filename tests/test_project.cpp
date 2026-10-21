@@ -275,3 +275,31 @@ TEST(project_recent_files_logic) {
     CHECK((pruned == std::vector<std::string>{"/keep1", "/keep2"}));
     CHECK(pruneRecentFiles({"/x"}, [](const std::string&) { return false; }).empty());
 }
+
+TEST(project_save_obj_is_an_export) {
+    // OBJ drops the mask, groups, visibility and layers: it must not mark the project saved.
+    CommandRegistry reg;
+    Document doc = makeRichDoc();
+    const std::string proj = tempPath("sf_export_obj.sfproj"), obj = tempPath("sf_export_obj.obj");
+    CHECK(reg.execute(doc, "save_project", {{"path", proj}}).ok);
+    CHECK(reg.execute(doc, "mask_clear").ok);
+    CHECK(doc.dirty());
+    CHECK(reg.execute(doc, "save_obj", {{"path", obj}}).ok);
+    CHECK(std::filesystem::exists(obj));
+    CHECK(doc.dirty() && doc.path == proj);
+    CHECK(!reg.execute(doc, "save_obj").ok); // never writes an OBJ over the .sfproj
+    std::filesystem::remove(proj);
+    std::filesystem::remove(obj);
+}
+
+TEST(project_save_adds_extension_to_any_other_extension) {
+    CommandRegistry reg;
+    Document doc = makeRichDoc();
+    const std::string asked = tempPath("sf_project_head.obj");
+    std::filesystem::remove(asked);
+    CHECK(reg.execute(doc, "save_project", {{"path", asked}}).ok);
+    CHECK(!std::filesystem::exists(asked)); // the user's OBJ is untouched
+    CHECK(doc.path == asked + kProjectExtension && isProjectPath(doc.path));
+    CHECK(std::filesystem::exists(doc.path));
+    std::filesystem::remove(doc.path);
+}
