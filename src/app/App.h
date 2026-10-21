@@ -7,6 +7,7 @@
 #include "core/Commands.h"
 #include "core/Image.h"
 #include "core/Document.h"
+#include "core/Stroke.h"
 #include "render/Camera.h"
 #include "render/Renderer.h"
 
@@ -251,6 +252,22 @@ private:
     bool hideRectActive_ = false;
     float hideRectX_ = 0.0f, hideRectY_ = 0.0f;
     float polygroupAngle_ = 30.0f;
+    // Stroke types, alphas and the extra brushes (PanelBrushes.cpp).
+    void drawBrushOptions();
+    void snakeHookTo(float x, float y);
+    void dragRectTo(float x, float y);
+    glm::vec3 screenUpVector(float angle) const; // camera up rotated by `angle` around the view axis
+    static void SDLCALL onAlphaChosen(void* userdata, const char* const* files, int filter);
+    StrokeType strokeType_ = StrokeType::Dots;
+    LazyMouse lazyMouse_;
+    Spray spray_;
+    float sprayScatter_ = 1.0f;          // jitter radius as a fraction of brush size
+    glm::vec2 dragAnchor_{0.0f};         // DragRect: where the click landed (window pixels)
+    glm::vec3 dragAnchorHit_{0.0f};
+    float dabRadiusScale_ = 1.0f, dabStrengthScale_ = 1.0f, dabAngle_ = 0.0f; // per-dab overrides
+    bool alphaInvert_ = false;
+    std::mutex alphaMutex_;
+    std::string pendingAlphaPath_; // set by the file dialog thread
 };
 
 } // namespace sf

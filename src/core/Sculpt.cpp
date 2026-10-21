@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Sculpt.h"
 
+#include "core/BrushAlpha.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -17,6 +19,12 @@ const char* brushName(BrushType type) {
     case BrushType::Crease: return "Crease";
     case BrushType::Flatten: return "Flatten";
     case BrushType::Pinch: return "Pinch";
+    case BrushType::DamStandard: return "DamStandard";
+    case BrushType::ClayBuildup: return "ClayBuildup";
+    case BrushType::SnakeHook: return "SnakeHook";
+    case BrushType::Trim: return "Trim";
+    case BrushType::Layer: return "Layer";
+    case BrushType::Nudge: return "Nudge";
     default: return "?";
     }
 }
@@ -187,12 +195,17 @@ void Sculptor::dab(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p, Sym
         DabParams mp = p;
         mp.center *= m;
         mp.viewDir *= m;
+        mp.strokeDelta *= m;
+        mp.alphaUp *= m;
         dabSingle(mesh, bvh, type, mp);
     }
 }
 
 void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p) {
-    brushVertices(mesh, bvh, p.center, p.radius, verts_);
+    // Alphas and the square ClayBuildup tip reach into the corners of their square.
+    const bool useAlpha = p.alpha && !p.alpha->empty();
+    const float reach = useAlpha ? 1.4143f : type == BrushType::ClayBuildup ? 1.3f : 1.0f;
+    brushVertices(mesh, bvh, p.center, p.radius * reach, verts_);
     if (verts_.empty()) return;
 
     auto& pos = mesh.positions;
@@ -221,11 +234,23 @@ void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& 
     const float sign = p.invert ? -1.0f : 1.0f;
     const float r = p.radius;
 
+    // Brush-local frame on the area plane (alpha orientation, square tips).
+    glm::vec3 up = projectOnPlane(p.alphaUp, areaNormal);
+    if (glm::length(up) < 1e-6f)
+        up = projectOnPlane(std::abs(areaNormal.x) < 0.9f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0), areaNormal);
+    up = glm::normalize(up);
+    const glm::vec3 right = glm::cross(up, areaNormal);
+    const float strokeLen = glm::length(p.strokeDelta);
+    const glm::vec3 strokeDir = strokeLen > 1e-12f ? p.strokeDelta / strokeLen : glm::vec3(0.0f);
+    if (type == BrushType::Layer) prepareLayer(mesh, r * 0.08f * std::clamp(p.strength, 0.0f, 1.0f));
+
     scratch_.resize(verts_.size());
     for (size_t i = 0; i < verts_.size(); ++i) {
         const uint32_t v = verts_[i];
         const glm::vec3& x = pos[v];
-        const float f = brushFalloff(glm::distance(x, p.center), r);
+        const glm::vec3 o = x - p.center;
+        const float f = useAlpha ? p.alpha->sample(glm::dot(o, right) / r, glm::dot(o, up) / r)
+                                 : brushFalloff(glm::length(o), r);
         glm::vec3 d(0.0f);
 
         switch (type) {
@@ -266,6 +291,66 @@ void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& 
         case BrushType::Pinch:
             d = projectOnPlane(p.center - x, areaNormal) * (sign * 0.2f * s * f);
             break;
+        case BrushType::DamStandard: {
+            // Narrow, deep V-groove (a ridge when inverted); the sides are always
+            // pinched in toward the stroke line, so the crease stays sharp.
+            const float core = f * f * f * f;
+            d = areaNormal * (-sign * s * r * 0.08f * core);
+            glm::vec3 pull = projectOnPlane(p.center - x, areaNormal);
+            pull -= strokeDir * glm::dot(pull, strokeDir);
+            d += pull * (0.3f * s * f);
+            break;
+        }
+        case BrushType::ClayBuildup: {
+            // Square tip (rounded corners) with a flat top: a raised plane that
+            // everything below is pulled up to, so strokes build up in slabs.
+            float w = f;
+            if (!useAlpha) {
+                const float cheb = std::max(std::abs(glm::dot(o, right)), std::abs(glm::dot(o, up))) / r;
+                const float corner = std::clamp((1.3f - glm::length(o) / r) / 0.3f, 0.0f, 1.0f);
+                const float edge = std::clamp((1.0f - cheb) / 0.35f, 0.0f, 1.0f);
+                w = edge * edge * (3.0f - 2.0f * edge) * corner;
+            }
+            glm::vec3 planePoint = areaCenter + areaNormal * (sign * r * 0.08f * s);
+            float h = glm::dot(x - planePoint, areaNormal);
+            if (sign * h < 0.0f) d = -areaNormal * (h * w);
+            break;
+        }
+        case BrushType::SnakeHook: {
+            // Drag the region along with the stroke; the sides pinch in, so pulled shapes taper.
+            d = p.strokeDelta * f;
+            glm::vec3 side = p.center - x;
+            side -= strokeDir * glm::dot(side, strokeDir);
+            d += side * (0.1f * s * f * std::min(1.0f, strokeLen / (0.1f * r)));
+            break;
+        }
+        case BrushType::Trim: {
+            // Trim Dynamic: a plane just below the area cuts off whatever sticks out
+            // above it (fills up to it when inverted). sqrt falloff for a crisp edge.
+            glm::vec3 planePoint = areaCenter - areaNormal * (sign * r * 0.02f * s);
+            float h = glm::dot(x - planePoint, areaNormal);
+            if (sign * h > 0.0f) d = -areaNormal * (h * std::min(1.0f, std::sqrt(f) * (0.5f + s)));
+            break;
+        }
+        case BrushType::Layer: {
+            // Each vertex rises to the stroke's height x falloff once; later dabs
+            // only add what is missing, so overlaps within a stroke never stack.
+            if (layerStamp_[v] != layerEpoch_) {
+                layerStamp_[v] = layerEpoch_;
+                layerDone_[v] = 0.0f;
+                layerDir_[v] = areaNormal;
+            }
+            const float target = sign * layerHeight_ * std::clamp(p.pressure, 0.0f, 1.0f) * f;
+            if (std::abs(target) > std::abs(layerDone_[v])) {
+                d = layerDir_[v] * (target - layerDone_[v]);
+                layerDone_[v] = target;
+            }
+            break;
+        }
+        case BrushType::Nudge:
+            // Slide the surface sideways along the stroke without lifting it.
+            d = projectOnPlane(p.strokeDelta, nrm[v]) * (f * std::min(1.0f, 0.4f + s));
+            break;
         default:
             break;
         }
@@ -287,6 +372,7 @@ void Sculptor::dabRecipe(Mesh& mesh, BVH& bvh, const BrushRecipe& recipe, const 
         mp.center *= m;
         mp.viewDir *= m;
         mp.strokeDelta *= m;
+        mp.alphaUp *= m;
         dabRecipeSingle(mesh, bvh, recipe, mp);
     }
 }
@@ -296,6 +382,15 @@ void Sculptor::dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const
     if (verts_.empty()) return;
     const auto& pos = mesh.positions;
     const auto& nrm = mesh.normals;
+    // An alpha (if any) modulates the recipe's tip, oriented on the view-facing plane.
+    const bool useAlpha = p.alpha && !p.alpha->empty();
+    glm::vec3 aUp = projectOnPlane(p.alphaUp, p.viewDir);
+    aUp = glm::length(aUp) > 1e-6f ? glm::normalize(aUp) : glm::vec3(0, 1, 0);
+    const glm::vec3 aRight = glm::cross(aUp, -p.viewDir);
+    auto alphaWeight = [&](const glm::vec3& x) {
+        const glm::vec3 o = x - p.center;
+        return p.alpha->sample(glm::dot(o, aRight) / p.radius, glm::dot(o, aUp) / p.radius);
+    };
     if (p.frontFacesOnly) {
         std::erase_if(verts_, [&](uint32_t v) { return glm::dot(nrm[v], p.viewDir) > 0.0f; });
         if (verts_.empty()) return;
@@ -338,6 +433,7 @@ void Sculptor::dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const
         }
         if (r.pattern != BrushRecipe::Pattern::None && r.patternAmount > 0.0f)
             w *= glm::mix(1.0f, samplePattern(r.pattern, pos[v] * patternFreq), r.patternAmount);
+        if (useAlpha) w *= alphaWeight(pos[v]);
         weights_[i] = w;
     }
     if (wsum <= 0.0f) return;
@@ -429,6 +525,39 @@ void Sculptor::grab(Mesh& mesh, BVH& bvh, const glm::vec3& delta) {
     for (const auto& g : grab_) displace(mesh, g.vertex, delta * g.mirror * g.weight);
     mesh.updateNormals(grabVerts_);
     bvh.refit(mesh, grabVerts_);
+}
+
+// Puts every vertex the current stroke moved back to its stroke-start position.
+void Sculptor::restoreStroke(Mesh& mesh, BVH& bvh) {
+    if (!active_ || record_.positions.empty()) return;
+    auto& target = mesh.layerTarget(layer_);
+    const auto& idx = record_.positions.indices;
+    for (size_t i = 0; i < idx.size(); ++i) target[idx[i]] = record_.positions.values[i];
+    mesh.evaluate(idx);
+    mesh.updateNormals(idx);
+    bvh.refit(mesh, idx);
+    // The Layer brush starts over too.
+    if (layerEpoch_ != 0 && ++layerEpoch_ == 0) {
+        std::fill(layerStamp_.begin(), layerStamp_.end(), 0);
+        layerEpoch_ = 1;
+    }
+}
+
+// Sizes the Layer brush state and starts a fresh height map for each new stroke.
+void Sculptor::prepareLayer(const Mesh& mesh, float height) {
+    if (layerStamp_.size() != mesh.vertexCount()) {
+        layerStamp_.assign(mesh.vertexCount(), 0);
+        layerDone_.assign(mesh.vertexCount(), 0.0f);
+        layerDir_.assign(mesh.vertexCount(), glm::vec3(0.0f));
+        layerEpoch_ = 0;
+    }
+    if (layerEpoch_ != 0 && layerSeenStamp_ == stamp_) return;
+    layerSeenStamp_ = stamp_;
+    layerHeight_ = height;
+    if (++layerEpoch_ == 0) {
+        std::fill(layerStamp_.begin(), layerStamp_.end(), 0);
+        layerEpoch_ = 1;
+    }
 }
 
 } // namespace sf

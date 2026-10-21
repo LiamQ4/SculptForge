@@ -32,6 +32,7 @@ void App::beginMaskStroke(float x, float y) {
     lastX_ = x;
     lastY_ = y;
     residual_ = 0.0f;
+    lazyMouse_.reset(glm::vec2(x, y));
     dabAt(x, y);
 }
 

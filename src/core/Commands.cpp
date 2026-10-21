@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Commands.h"
 
+#include "core/BrushAlpha.h"
 #include "core/Decimate.h"
 #include "core/EnginePresets.h"
 #include "core/ImageTo3D.h"
@@ -469,6 +470,7 @@ CommandRegistry::CommandRegistry() {
              doc.activeBrush = doc.addBrush(std::move(r));
              return {true, "Loaded brush '" + doc.brushes[doc.activeBrush].name + "'"};
          }});
+    registerBrushCommands(*this); // brush_set_alpha (BrushAlpha.cpp)
 
     add({"splat_info", "Report the loaded Gaussian splats.", {},
          [](Document& doc, const Args&) -> CommandResult {

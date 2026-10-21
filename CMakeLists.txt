@@ -43,6 +43,8 @@ add_library(sculptforge_core STATIC
   src/core/Voxel.cpp
   src/core/EnginePresets.cpp
   src/core/Masking.cpp
+  src/core/BrushAlpha.cpp
+  src/core/Stroke.cpp
   src/io/ObjIO.cpp
   src/io/FbxIO.cpp
   third_party/ufbx/ufbx.c
@@ -107,6 +109,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/Demo.cpp
     src/app/PanelMasking.cpp
     src/app/PanelPolygroups.cpp
+    src/app/PanelBrushes.cpp
     src/render/GL.cpp
     src/render/Camera.cpp
     src/render/Renderer.cpp

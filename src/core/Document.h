@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/BVH.h"
+#include "core/BrushAlpha.h"
 #include "core/BrushRecipe.h"
 #include "core/Mesh.h"
 #include "core/Sculpt.h"
@@ -27,6 +28,7 @@ struct Document {
     // Recipe brush library (built-ins, loaded .sfbrush files, AI-made brushes).
     std::vector<BrushRecipe> brushes = builtinBrushRecipes();
     int activeBrush = -1; // index into `brushes`, -1 = use a built-in brush type
+    BrushAlpha brushAlpha; // stamp shaping every brush's falloff (empty = round); brush_set_alpha
     // Adds or replaces (by name) a recipe and returns its index.
     int addBrush(BrushRecipe recipe);
     // Gaussian splats shown alongside the mesh (a capture used as reference or
