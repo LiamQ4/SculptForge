@@ -1,0 +1,268 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Masking: mask strokes (symmetry, erase, undo), the mask_* commands and
+// brushes honouring a painted mask.
+#include "TestHarness.h"
+
+#include "core/Commands.h"
+#include "core/Masking.h"
+#include "core/Primitives.h"
+#include "core/Sculpt.h"
+
+#include <algorithm>
+#include <cmath>
+
+using namespace sf;
+
+namespace {
+
+const CommandRegistry& registry() {
+    static CommandRegistry r;
+    return r;
+}
+
+size_t countMasked(const Mesh& m, float above = 0.5f) {
+    if (!m.hasMask()) return 0;
+    return size_t(std::count_if(m.mask.begin(), m.mask.end(), [&](float x) { return x > above; }));
+}
+
+// Mask = 1 on vertices with x > `edge`, 0 elsewhere.
+void maskHalf(Mesh& m, float edge = 0.0f) {
+    m.ensureMask();
+    for (uint32_t v = 0; v < m.vertexCount(); ++v) m.mask[v] = m.positions[v].x > edge ? 1.0f : 0.0f;
+}
+
+void maskStroke(Document& d, const glm::vec3& center, float radius, bool erase, Symmetry sym, float strength = 1.0f) {
+    DabParams p;
+    p.center = center;
+    p.viewDir = -glm::normalize(center);
+    p.radius = radius;
+    p.strength = strength;
+    p.invert = erase;
+    CHECK(d.sculptor.beginStroke(d.mesh, erase ? "Unmask" : "Mask"));
+    for (int i = 0; i < 3; ++i) d.sculptor.dabMask(d.mesh, d.bvh, p, sym);
+    UndoRecord r = d.sculptor.endStroke();
+    if (!r.empty()) d.undo.push(std::move(r));
+}
+
+} // namespace
+
+TEST(mask_stroke_paints_with_symmetry_and_undoes) {
+    Document d = makeDoc(makeIcosphere(4));
+    const std::vector<glm::vec3> before = d.mesh.positions;
+    maskStroke(d, glm::vec3(0.7f, 0.0f, 0.714f), 0.3f, false, Symmetry{true, false, false});
+    CHECK(d.mesh.hasMask());
+    CHECK(d.mesh.positions == before); // masking never moves vertices
+    bool right = false, left = false, farAway = true;
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) {
+        const glm::vec3& x = d.mesh.positions[v];
+        if (glm::distance(x, glm::vec3(0.7f, 0.0f, 0.714f)) < 0.05f) right |= d.mesh.mask[v] > 0.9f;
+        if (glm::distance(x, glm::vec3(-0.7f, 0.0f, 0.714f)) < 0.05f) left |= d.mesh.mask[v] > 0.9f;
+        if (x.z < -0.2f) farAway &= d.mesh.mask[v] == 0.0f;
+    }
+    CHECK(right && left && farAway);
+    const std::vector<float> painted = d.mesh.mask;
+
+    CHECK(d.undo.undo(d.mesh, d.bvh));
+    CHECK(countMasked(d.mesh, 0.0f) == 0);
+    CHECK(d.undo.redo(d.mesh, d.bvh));
+    CHECK(d.mesh.mask == painted);
+
+    // Erasing (Ctrl+Alt) on one side only, without symmetry.
+    maskStroke(d, glm::vec3(0.7f, 0.0f, 0.714f), 0.3f, true, Symmetry{false, false, false});
+    bool rightErased = true, leftKept = false;
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) {
+        const glm::vec3& x = d.mesh.positions[v];
+        if (glm::distance(x, glm::vec3(0.7f, 0.0f, 0.714f)) < 0.05f) rightErased &= d.mesh.mask[v] < 0.1f;
+        if (glm::distance(x, glm::vec3(-0.7f, 0.0f, 0.714f)) < 0.05f) leftKept |= d.mesh.mask[v] > 0.9f;
+    }
+    CHECK(rightErased && leftKept);
+    CHECK(d.undo.undo(d.mesh, d.bvh));
+    CHECK(d.mesh.mask == painted);
+}
+
+TEST(mask_stroke_soft_strength_and_hidden) {
+    Document d = makeDoc(makeIcosphere(4));
+    maskStroke(d, glm::vec3(0, 0, 1), 0.4f, false, Symmetry{false, false, false}, 0.2f);
+    const float peak = *std::max_element(d.mesh.mask.begin(), d.mesh.mask.end());
+    CHECK(peak > 0.2f && peak < 0.9f); // low strength builds up gradually
+
+    // Hidden triangles' vertices are never masked.
+    Document h = makeDoc(makeIcosphere(4));
+    h.mesh.ensureHidden();
+    for (uint32_t t = 0; t < h.mesh.triangleCount(); ++t) {
+        const auto& tri = h.mesh.triangles[t];
+        h.mesh.hidden[t] = uint8_t((h.mesh.positions[tri.x].x + h.mesh.positions[tri.y].x + h.mesh.positions[tri.z].x) > 0.0f);
+    }
+    h.bvh.build(h.mesh);
+    maskStroke(h, glm::vec3(0, 0, 1), 0.5f, false, Symmetry{false, false, false});
+    bool hiddenUntouched = true, visiblePainted = false;
+    for (uint32_t v = 0; v < h.mesh.vertexCount(); ++v) {
+        if (h.mesh.vertexHidden(v)) hiddenUntouched &= h.mesh.maskAt(v) == 0.0f;
+        else visiblePainted |= h.mesh.maskAt(v) > 0.5f;
+    }
+    CHECK(hiddenUntouched && visiblePainted);
+}
+
+TEST(painted_mask_protects_from_brushes) {
+    Document d = makeDoc(makeIcosphere(4));
+    maskStroke(d, glm::vec3(0, 0, 1), 0.5f, false, Symmetry{false, false, false});
+    CHECK(registry().execute(d, "mask_sharpen", {{"iterations", 10.0}}).ok); // soft edge -> exactly 0 or 1
+    const std::vector<glm::vec3> before = d.mesh.positions;
+    DabParams p;
+    p.center = glm::vec3(0, 0, 1);
+    p.radius = 0.9f;
+    p.strength = 1.0f;
+    for (BrushType type : {BrushType::Standard, BrushType::Clay, BrushType::Inflate, BrushType::Smooth}) {
+        d.sculptor.beginStroke(d.mesh, "Sculpt");
+        for (int i = 0; i < 3; ++i) d.sculptor.dab(d.mesh, d.bvh, type, p, Symmetry{false, false, false});
+        d.undo.push(d.sculptor.endStroke());
+    }
+    bool maskedStill = true, freeMoved = false;
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) {
+        if (d.mesh.mask[v] >= 1.0f) maskedStill &= d.mesh.positions[v] == before[v];
+        else if (d.mesh.mask[v] == 0.0f) freeMoved |= d.mesh.positions[v] != before[v];
+    }
+    CHECK(countMasked(d.mesh, 0.999f) > 0);
+    CHECK(maskedStill && freeMoved);
+}
+
+TEST(mask_commands_registered) {
+    const std::string schema = registry().toolSchemaJson();
+    for (const char* name : {"mask_clear", "mask_all", "mask_invert", "mask_blur", "mask_sharpen", "mask_grow",
+                             "mask_shrink", "mask_by_cavity", "mask_by_polygroup"}) {
+        CHECK(registry().find(name) != nullptr);
+        CHECK(schema.find(std::string("\"") + name + "\"") != std::string::npos);
+    }
+}
+
+TEST(mask_all_invert_clear_undo) {
+    Document d = makeDoc(makeIcosphere(3));
+    const size_t n = d.mesh.vertexCount();
+    CHECK(registry().execute(d, "mask_all").ok);
+    CHECK(countMasked(d.mesh) == n);
+    CHECK(d.modified);
+    CHECK(registry().execute(d, "mask_invert").ok);
+    CHECK(countMasked(d.mesh, 0.0f) == 0);
+    CHECK(registry().execute(d, "mask_invert").ok);
+    CHECK(countMasked(d.mesh) == n);
+    CHECK(registry().execute(d, "mask_clear").ok);
+    CHECK(!d.mesh.hasMask()); // clearing frees the attribute
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(countMasked(d.mesh) == n);
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(countMasked(d.mesh, 0.0f) == 0);
+    CHECK(registry().execute(d, "redo").ok);
+    CHECK(countMasked(d.mesh) == n);
+
+    // A no-op adds no undo step.
+    Document e = makeDoc(makeIcosphere(2));
+    CHECK(registry().execute(e, "mask_clear").ok);
+    CHECK(!e.undo.canUndo());
+
+    // Invert of a plain mesh masks everything (Ctrl+click on the background).
+    CHECK(registry().execute(e, "mask_invert").ok);
+    CHECK(countMasked(e.mesh) == e.mesh.vertexCount());
+
+    // Hidden vertices keep their mask through invert / all.
+    Document h = makeDoc(makeIcosphere(3));
+    h.mesh.ensureHidden();
+    for (uint32_t t = 0; t < h.mesh.triangleCount(); ++t) h.mesh.hidden[t] = uint8_t(h.mesh.positions[h.mesh.triangles[t].x].y > 0.5f);
+    CHECK(registry().execute(h, "mask_invert").ok);
+    bool ok = true;
+    for (uint32_t v = 0; v < h.mesh.vertexCount(); ++v) ok &= h.mesh.mask[v] == (h.mesh.vertexHidden(v) ? 0.0f : 1.0f);
+    CHECK(ok);
+}
+
+TEST(mask_blur_sharpen_grow_shrink) {
+    Document d = makeDoc(makeIcosphere(4));
+    maskHalf(d.mesh);
+    const size_t masked = countMasked(d.mesh);
+    const std::vector<float> original = d.mesh.mask;
+
+    // Blur creates intermediate values along the edge but keeps the overall balance.
+    CHECK(registry().execute(d, "mask_blur", {{"iterations", 3.0}}).ok);
+    const size_t soft = size_t(std::count_if(d.mesh.mask.begin(), d.mesh.mask.end(), [](float m) { return m > 0.05f && m < 0.95f; }));
+    CHECK(soft > 0);
+    CHECK(std::all_of(d.mesh.mask.begin(), d.mesh.mask.end(), [](float m) { return m >= 0.0f && m <= 1.0f; }));
+    // Sharpen pushes them back towards 0/1.
+    CHECK(registry().execute(d, "mask_sharpen", {{"iterations", 6.0}}).ok);
+    const size_t softAfter = size_t(std::count_if(d.mesh.mask.begin(), d.mesh.mask.end(), [](float m) { return m > 0.05f && m < 0.95f; }));
+    CHECK(softAfter < soft);
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(d.mesh.mask == original);
+
+    CHECK(registry().execute(d, "mask_grow", {{"iterations", 2.0}}).ok);
+    const size_t grown = countMasked(d.mesh);
+    CHECK(grown > masked);
+    CHECK(registry().execute(d, "mask_shrink", {{"iterations", 4.0}}).ok);
+    CHECK(countMasked(d.mesh) < masked);
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(countMasked(d.mesh) == grown);
+
+    // Shrink of a single masked vertex removes it; grow of an empty mask does nothing.
+    Document e = makeDoc(makeIcosphere(2));
+    e.mesh.ensureMask();
+    e.mesh.mask[0] = 1.0f;
+    CHECK(maskShrink(e.mesh, 1));
+    CHECK(countMasked(e.mesh, 0.0f) == 0);
+    CHECK(!maskGrow(e.mesh, 3));
+}
+
+TEST(mask_by_cavity_finds_creases) {
+    // A sphere with a band pushed inwards: the rim of the band is concave.
+    Mesh m = makeIcosphere(5);
+    for (glm::vec3& p : m.positions)
+        if (std::abs(p.y) < 0.3f) p *= 0.85f;
+    m.recomputeAllNormals();
+    Document d = makeDoc(std::move(m));
+    CHECK(registry().execute(d, "mask_by_cavity", {{"strength", 1.0}, {"threshold", 0.02}}).ok);
+    bool convexFree = true, rimMasked = false;
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) {
+        const float y = std::abs(d.mesh.positions[v].y);
+        const float r = glm::length(d.mesh.positions[v]);
+        if (y > 0.6f) convexFree &= d.mesh.mask[v] == 0.0f; // smooth convex caps
+        if (r < 0.9f && y > 0.12f) rimMasked |= d.mesh.mask[v] > 0.5f; // bottom of the step at the band's edge
+    }
+    CHECK(convexFree && rimMasked);
+
+    // Strength scales the result; a huge threshold masks nothing.
+    CHECK(registry().execute(d, "mask_by_cavity", {{"strength", 0.4}}).ok);
+    CHECK(*std::max_element(d.mesh.mask.begin(), d.mesh.mask.end()) <= 0.4f + 1e-6f);
+    CHECK(registry().execute(d, "mask_by_cavity", {{"threshold", 1.0}}).ok);
+    CHECK(countMasked(d.mesh, 0.0f) == 0);
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(countMasked(d.mesh, 0.0f) > 0);
+}
+
+TEST(mask_by_polygroup) {
+    Document d = makeDoc(makeIcosphere(3));
+    Mesh& m = d.mesh;
+    m.ensurePolygroups();
+    for (uint32_t t = 0; t < m.triangleCount(); ++t) {
+        const auto& tri = m.triangles[t];
+        m.polygroups[t] = (m.positions[tri.x].z + m.positions[tri.y].z + m.positions[tri.z].z) > 0.0f ? 2u : 0u;
+    }
+    CHECK(registry().execute(d, "mask_by_polygroup", {{"index", 2.0}}).ok);
+    bool ok = true;
+    for (uint32_t v = 0; v < m.vertexCount(); ++v) {
+        if (m.positions[v].z > 0.2f) ok &= m.mask[v] == 1.0f;
+        if (m.positions[v].z < -0.2f) ok &= m.mask[v] == 0.0f;
+    }
+    CHECK(ok);
+    // Replace vs add.
+    CHECK(registry().execute(d, "mask_by_polygroup", {{"index", 0.0}}).ok);
+    bool replaced = true;
+    for (uint32_t v = 0; v < m.vertexCount(); ++v)
+        if (m.positions[v].z > 0.2f) replaced &= m.mask[v] == 0.0f;
+    CHECK(replaced);
+    CHECK(registry().execute(d, "mask_by_polygroup", {{"index", 2.0}, {"add", true}}).ok);
+    CHECK(countMasked(m) == m.vertexCount());
+    CHECK(!registry().execute(d, "mask_by_polygroup", {}).ok); // index is required
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(countMasked(m, 0.0f) == 0);
+}
