@@ -161,6 +161,7 @@ private:
     bool showLayersPanel_ = true;
     bool showGamePanel_ = true;
     bool showSplatsPanel_ = false;
+    bool hideUi_ = false;
     uint64_t seenSplatsVersion_ = 0;
     ai::AiSettings aiSettings_;
     std::string aiSettingsPath_;

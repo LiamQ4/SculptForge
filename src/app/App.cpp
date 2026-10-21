@@ -813,6 +813,7 @@ void App::updateTitle() {
 // ---------------------------------------------------------------------------
 
 void App::drawUi() {
+    if (hideUi_) return; // demos: clean beauty shots
     drawMenuBar();
     drawToolPanel();
     if (showLayersPanel_) drawLayersPanel();

@@ -77,7 +77,8 @@ bool parseScript(const std::string& text, std::vector<ScriptStatement>& out, std
             std::string s;
             ++i;
             while (i < text.size() && text[i] != '"') {
-                if (text[i] == '\\' && i + 1 < text.size()) ++i;
+                // Only \" and \\ are escapes, so Windows paths like "C:\Users\me\a.obj" stay intact.
+                if (text[i] == '\\' && i + 1 < text.size() && (text[i + 1] == '"' || text[i + 1] == '\\')) ++i;
                 if (text[i] == '\n') ++line;
                 s += text[i++];
             }

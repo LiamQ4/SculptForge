@@ -52,7 +52,9 @@ private:
     GLuint captureFbo_[2] = {}, captureRb_[3] = {};
     int captureW_ = 0, captureH_ = 0;
     GLuint vao_ = 0, emptyVao_ = 0;
-    GLuint posBuffer_ = 0, nrmBuffer_ = 0, indexBuffer_ = 0;
+    void updateCurvature(const Mesh& mesh, uint32_t begin, uint32_t end);
+    GLuint posBuffer_ = 0, nrmBuffer_ = 0, curvBuffer_ = 0, indexBuffer_ = 0;
+    std::vector<float> curvature_;
     GLsizei indexCount_ = 0;
     size_t vertexCapacity_ = 0;
 };

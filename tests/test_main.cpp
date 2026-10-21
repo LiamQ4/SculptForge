@@ -352,6 +352,16 @@ TEST(glb_export) {
     std::filesystem::remove(path);
 }
 
+TEST(script_windows_paths) {
+    std::vector<ScriptStatement> st;
+    std::string err;
+    const std::string windowsPath = R"(open path="C:\Users\me\sculpts\head.obj")";
+    CHECK(parseScript(windowsPath, st, err));
+    CHECK(st.size() == 1 && std::get<std::string>(st[0].args["path"]) == "C:\\Users\\me\\sculpts\\head.obj");
+    const std::string quoted = R"(brush_ai prompt="say \"hi\"")";
+    CHECK(parseScript(quoted, st, err) && std::get<std::string>(st[0].args["prompt"]) == "say \"hi\"");
+}
+
 TEST(script_parser_and_pipeline) {
     std::vector<ScriptStatement> st;
     std::string err;
@@ -1298,9 +1308,17 @@ TEST(free_huggingface_models) {
 
 int main() {
     for (const auto& t : registry()) {
+        std::printf("[ RUN] %s\n", t.name);
+        std::fflush(stdout); // so a crash still shows which test was running
         int before = g_failures;
-        t.fn();
+        try {
+            t.fn();
+        } catch (const std::exception& e) {
+            ++g_failures;
+            std::printf("  EXCEPTION: %s\n", e.what());
+        }
         std::printf("%s %s\n", g_failures == before ? "[ OK ]" : "[FAIL]", t.name);
+        std::fflush(stdout);
     }
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

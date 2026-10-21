@@ -52,6 +52,7 @@ private:
     void run(std::function<void()> action);
     void waitUntil(std::function<bool()> done, float timeout, int stride);
 
+    void buildShowcase();
     void buildSculpt();
     void buildImageTo3D();
     void buildBrushLab();
@@ -64,6 +65,8 @@ private:
 
     // World -> screen in window coordinates.
     ImVec2 project(const glm::vec3& p) const;
+    // A point on the model, given as a fraction of its on-screen bounds (nudged until it hits the surface).
+    ImVec2 onModel(float u, float v) const;
 
     App& app_;
     std::vector<Step> steps_;

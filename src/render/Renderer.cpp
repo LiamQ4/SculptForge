@@ -15,22 +15,27 @@ namespace {
 const char* kMeshVS = R"(#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
+layout(location = 2) in float aCurvature;
 uniform mat4 uView;
 uniform mat4 uProj;
 out vec3 vNormal;
 out vec3 vPos;
+out float vCurvature;
 void main() {
     vec4 p = uView * vec4(aPos, 1.0);
     vPos = p.xyz;
+    vCurvature = aCurvature;
     vNormal = mat3(uView) * aNormal;
     gl_Position = uProj * p;
 }
 )";
 
-// Studio "clay" shading: wrapped key light, cool fill, rim and soft spec.
+// Studio "clay" shading: wrapped key light, cool fill, rim, soft spec, and curvature-based
+// cavity/ridge shading so sculpted detail reads at a glance.
 const char* kMeshFS = R"(#version 330 core
 in vec3 vNormal;
 in vec3 vPos;
+in float vCurvature;
 uniform vec3 uColor;
 out vec4 fragColor;
 void main() {
@@ -45,9 +50,15 @@ void main() {
     vec3 h = normalize(key + v);
     float spec = pow(max(dot(n, h), 0.0), 40.0) * 0.18;
     float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.3;
-    float cavity = smoothstep(-0.2, 0.6, dot(n, v));
-    vec3 c = uColor * (0.18 * hemi + 0.85 * diff + fillL * vec3(0.7, 0.8, 1.0)) * mix(0.75, 1.0, cavity);
-    c += vec3(spec) + rim * vec3(0.8, 0.85, 1.0);
+    float facing = smoothstep(-0.2, 0.6, dot(n, v));
+    // vCurvature > 0 in creases, < 0 on ridges (see Renderer::updateCurvature).
+    float crease = smoothstep(0.0, 0.16, vCurvature);
+    float ridge = smoothstep(0.0, 0.2, -vCurvature);
+    float cavity = 1.0 - 0.62 * crease;
+    vec3 c = uColor * (0.12 * hemi + 0.95 * diff * diff + fillL * vec3(0.7, 0.8, 1.0)) * mix(0.7, 1.0, facing) * cavity;
+    c *= mix(vec3(1.0), vec3(0.72, 0.55, 0.5), crease * 0.7); // warm, deeper colour in the cracks
+    c += uColor * ridge * 0.3 * diff;                           // ridges catch the key light
+    c += vec3(spec) * (1.0 - crease) + rim * vec3(0.8, 0.85, 1.0);
     fragColor = vec4(pow(c, vec3(1.0 / 2.2)), 1.0);
 }
 )";
@@ -212,6 +223,10 @@ bool Renderer::init(std::string& error) {
     gl::BindBuffer(GL_ARRAY_BUFFER, nrmBuffer_);
     gl::EnableVertexAttribArray(1);
     gl::VertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), nullptr);
+    gl::GenBuffers(1, &curvBuffer_);
+    gl::BindBuffer(GL_ARRAY_BUFFER, curvBuffer_);
+    gl::EnableVertexAttribArray(2);
+    gl::VertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
     gl::BindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer_);
     gl::BindVertexArray(0);
     return true;
@@ -220,6 +235,7 @@ bool Renderer::init(std::string& error) {
 void Renderer::shutdown() {
     gl::DeleteBuffers(1, &posBuffer_);
     gl::DeleteBuffers(1, &nrmBuffer_);
+    gl::DeleteBuffers(1, &curvBuffer_);
     gl::DeleteBuffers(1, &indexBuffer_);
     gl::DeleteVertexArrays(1, &vao_);
     gl::DeleteVertexArrays(1, &emptyVao_);
@@ -311,14 +327,40 @@ void Renderer::drawSplats(const glm::mat4& view, const glm::mat4& proj, int fbWi
     gl::BindTexture(GL_TEXTURE_BUFFER, 0);
 }
 
+// Signed curvature per vertex: how far the neighbour average sits above (crease, > 0) or below
+// (ridge, < 0) the surface, relative to the local edge length.
+void Renderer::updateCurvature(const Mesh& mesh, uint32_t begin, uint32_t end) {
+    curvature_.resize(mesh.vertexCount(), 0.0f);
+    for (uint32_t v = begin; v < end && v < mesh.vertexCount(); ++v) {
+        const auto ring = mesh.neighbors(v);
+        if (ring.empty()) {
+            curvature_[v] = 0.0f;
+            continue;
+        }
+        glm::vec3 avg(0.0f);
+        float edge = 0.0f;
+        const glm::vec3 p = mesh.positions[v];
+        for (uint32_t n : ring) {
+            avg += mesh.positions[n];
+            edge += glm::distance(mesh.positions[n], p);
+        }
+        avg /= float(ring.size());
+        edge /= float(ring.size());
+        curvature_[v] = edge > 0.0f ? glm::dot(mesh.normals[v], avg - p) / edge : 0.0f;
+    }
+}
+
 void Renderer::sync(Mesh& mesh) {
     const size_t nv = mesh.vertexCount();
     if (mesh.topologyDirty || nv != vertexCapacity_) {
+        updateCurvature(mesh, 0, uint32_t(nv));
         gl::BindVertexArray(vao_);
         gl::BindBuffer(GL_ARRAY_BUFFER, posBuffer_);
         gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(glm::vec3)), mesh.positions.data(), GL_DYNAMIC_DRAW);
         gl::BindBuffer(GL_ARRAY_BUFFER, nrmBuffer_);
         gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(glm::vec3)), mesh.normals.data(), GL_DYNAMIC_DRAW);
+        gl::BindBuffer(GL_ARRAY_BUFFER, curvBuffer_);
+        gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(float)), curvature_.data(), GL_DYNAMIC_DRAW);
         gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(mesh.triangleCount() * sizeof(glm::uvec3)),
                        mesh.triangles.data(), GL_STATIC_DRAW);
         gl::BindVertexArray(0);
@@ -331,6 +373,10 @@ void Renderer::sync(Mesh& mesh) {
         gl::BufferSubData(GL_ARRAY_BUFFER, offset, size, mesh.positions.data() + mesh.dirtyBegin);
         gl::BindBuffer(GL_ARRAY_BUFFER, nrmBuffer_);
         gl::BufferSubData(GL_ARRAY_BUFFER, offset, size, mesh.normals.data() + mesh.dirtyBegin);
+        updateCurvature(mesh, mesh.dirtyBegin, mesh.dirtyEnd);
+        gl::BindBuffer(GL_ARRAY_BUFFER, curvBuffer_);
+        gl::BufferSubData(GL_ARRAY_BUFFER, GLintptr(mesh.dirtyBegin * sizeof(float)),
+                          GLsizeiptr((mesh.dirtyEnd - mesh.dirtyBegin) * sizeof(float)), curvature_.data() + mesh.dirtyBegin);
     }
     gl::BindBuffer(GL_ARRAY_BUFFER, 0);
     mesh.clearDirty();

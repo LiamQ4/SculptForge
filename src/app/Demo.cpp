@@ -78,10 +78,11 @@ bool Demo::findItem(const std::string& label, ImVec2& center) const {
     return true;
 }
 
-std::vector<std::string> Demo::names() { return {"sculpt", "image-to-3d", "brush-lab", "game-ready", "splats"}; }
+std::vector<std::string> Demo::names() { return {"showcase", "sculpt", "image-to-3d", "brush-lab", "game-ready", "splats"}; }
 
 bool Demo::load(const std::string& name, std::string& error) {
-    if (name == "sculpt") buildSculpt();
+    if (name == "showcase") buildShowcase();
+    else if (name == "sculpt") buildSculpt();
     else if (name == "image-to-3d") buildImageTo3D();
     else if (name == "brush-lab") buildBrushLab();
     else if (name == "game-ready") buildGameReady();
@@ -144,6 +145,25 @@ ImVec2 Demo::project(const glm::vec3& p) const {
     const glm::vec4 c = app_.camera_.projection() * app_.camera_.view() * glm::vec4(p, 1.0f);
     const glm::vec2 ndc = glm::vec2(c) / c.w;
     return ImVec2((ndc.x * 0.5f + 0.5f) * float(w), (0.5f - ndc.y * 0.5f) * float(h));
+}
+
+ImVec2 Demo::onModel(float u, float v) const {
+    const AABB b = app_.doc_.mesh.bounds();
+    ImVec2 lo(1e9f, 1e9f), hi(-1e9f, -1e9f);
+    for (int i = 0; i < 8; ++i) {
+        const glm::vec3 c((i & 1) ? b.max.x : b.min.x, (i & 2) ? b.max.y : b.min.y, (i & 4) ? b.max.z : b.min.z);
+        const ImVec2 p = project(c);
+        lo = ImVec2(std::min(lo.x, p.x), std::min(lo.y, p.y));
+        hi = ImVec2(std::max(hi.x, p.x), std::max(hi.y, p.y));
+    }
+    ImVec2 p(lo.x + (hi.x - lo.x) * u, lo.y + (hi.y - lo.y) * v);
+    const ImVec2 centre((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);
+    for (int i = 0; i < 20; ++i) { // walk towards the centre until the ray hits the sculpt
+        RayHit hit;
+        if (app_.pick(p.x, p.y, hit)) break;
+        p = ImVec2(p.x + (centre.x - p.x) * 0.15f, p.y + (centre.y - p.y) * 0.15f);
+    }
+    return p;
 }
 
 // ---------------------------------------------------------------- building blocks
@@ -323,6 +343,73 @@ void Demo::drawOverlay() {
 }
 
 // ---------------------------------------------------------------- demos
+
+void Demo::buildShowcase() {
+    const float k = float(app_.options_.height) / 1080.0f;
+    run([this] {
+        app_.openPath(app_.options_.demoAsset);
+        app_.runCommand("subdivide");
+        app_.symmetry_.x = true;
+        app_.showBrushLab_ = false;
+        app_.hideUi_ = true;
+        app_.camera_.frame(app_.doc_.mesh.bounds());
+        app_.camera_.yaw = glm::radians(85.0f); // profile
+        app_.camera_.pitch = glm::radians(-6.0f);
+        app_.camera_.distance *= 0.86f;
+        mouse_ = ImVec2(-50.0f, -50.0f); // cursor off screen for the beauty shot
+    });
+    caption("SculptForge", "The free, open-source alternative to ZBrush", 4.2f);
+    // Orbiting turns 0.008 rad per pixel: 240 px glides from profile to a three-quarter front view.
+    orbit(240.0f, 0.0f, 4.5f);
+    run([this] { app_.hideUi_ = false; });
+    caption("Sculpt the way you already do", "Move, Clay and custom brushes, with symmetry", 4.0f);
+    run([this, k] {
+        app_.radiusPx_ = 85.0f * k;
+        app_.strength_ = 0.85f;
+    });
+    click("4  Move");
+    // Horns rising out of the mane (mirrored by symmetry).
+    stroke([this, k](float u) {
+        const ImVec2 p = onModel(0.36f, 0.14f);
+        return ImVec2(p.x - 70.0f * k * smooth(u), p.y - 190.0f * k * smooth(u));
+    }, 1.5f);
+    run([this, k] { app_.radiusPx_ = 55.0f * k; });
+    stroke([this, k](float u) {
+        const ImVec2 p = onModel(0.33f, 0.1f);
+        return ImVec2(p.x - 60.0f * k * smooth(u), p.y - 120.0f * k * smooth(u));
+    }, 1.0f);
+    run([this, k] {
+        app_.radiusPx_ = 40.0f * k;
+        app_.strength_ = 0.7f;
+    });
+    click("2  Clay");
+    for (int i = 0; i < 2; ++i)
+        stroke([this](float u) {
+            const ImVec2 a = onModel(0.40f, 0.36f), b = onModel(0.49f, 0.33f);
+            return ImVec2(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u);
+        }, 0.8f);
+    run([this, k] {
+        app_.radiusPx_ = 60.0f * k;
+        app_.strength_ = 0.8f;
+    });
+    click("Dragon Scales");
+    stroke([this](float u) {
+        const ImVec2 a = onModel(0.22f, 0.55f), b = onModel(0.3f, 0.82f);
+        return ImVec2(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u);
+    }, 1.3f);
+    caption("Game-ready in one click", "LOD chains, blend shapes and Send to Unreal", 4.0f);
+    click("Generate LOD chain");
+    click("LOD2");
+    wait(1.2f);
+    click("Sculpt");
+    run([this] {
+        app_.renderSettings_.wireframe = false;
+        app_.hideUi_ = true;
+        mouse_ = ImVec2(-50.0f, -50.0f);
+    });
+    caption("Free and open source", "Windows · macOS · Linux", 4.0f);
+    orbit(785.0f, 0.0f, 6.0f); // a full turn
+}
 
 void Demo::buildSculpt() {
     run([this] {
