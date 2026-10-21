@@ -10,6 +10,8 @@ namespace sf {
 Mesh makeIcosphere(int subdivisions, float radius = 1.0f);
 Mesh makePlane(int resolution, float size = 2.0f);
 // Loop subdivision (smooth; boundaries follow the cubic B-spline rule).
+// Layers are subdivided with the same stencils; mask/colours/UVs are
+// interpolated linearly and polygroups/hidden flags are inherited.
 Mesh loopSubdivide(const Mesh& mesh);
 
 } // namespace sf

@@ -11,7 +11,9 @@ namespace sf {
 // Quadric-error-metric edge-collapse decimation (Garland & Heckbert), with
 // boundary preservation, normal-flip and manifold (link condition) checks.
 // Collapses keep one endpoint, so output vertices are a subset of the input's
-// and sculpt layers / blend shapes carry over exactly.
+// and sculpt layers / blend shapes, mask and colours carry over exactly;
+// surviving triangles keep their polygroup and hidden flag, and corner UVs
+// follow the kept vertex.
 Mesh decimate(const Mesh& src, size_t targetTriangles);
 
 // LOD chain: lods[0] is a copy of `src`, each following level has

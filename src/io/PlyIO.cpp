@@ -252,6 +252,10 @@ bool loadPly(const std::string& path, Mesh& mesh, SplatCloud& splats, PlyContent
                 const glm::vec3 pos{float(row[size_t(px)]), float(row[size_t(py)]), float(row[size_t(pz)])};
                 if (isMesh) {
                     m.positions.push_back(pos);
+                    if (rgb[0] >= 0 && rgb[1] >= 0 && rgb[2] >= 0) {
+                        const glm::vec3 c{float(row[size_t(rgb[0])]), float(row[size_t(rgb[1])]), float(row[size_t(rgb[2])])};
+                        m.colors.push_back(srgbToLinear(rgbIsByte ? c / 255.0f : c));
+                    }
                     continue;
                 }
                 cloud.positions[r] = pos;
@@ -286,7 +290,7 @@ bool loadPly(const std::string& path, Mesh& mesh, SplatCloud& splats, PlyContent
                 error = "PLY face index out of range";
                 return false;
             }
-        mesh = weldImported(m);
+        mesh = weldImported(m); // keeps vertex colours (scans, photogrammetry)
         if (mesh.triangleCount() == 0) {
             error = "The PLY mesh has no usable faces";
             return false;

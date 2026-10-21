@@ -16,11 +16,22 @@ namespace sf {
 struct RenderSettings {
     bool wireframe = false;
     glm::vec3 baseColor{0.80f, 0.55f, 0.45f}; // clay
+    bool showPolypaint = true;   // vertex colours replace baseColor when the mesh has them
+    bool showMask = true;        // masked areas render darker (ZBrush style)
+    bool showPolygroups = false; // colour each polygroup (see polygroupColor)
     bool showMesh = true;
     bool showSplats = true;
     float splatOpacity = 1.0f; // global fade for using a capture as reference
 };
 
+// Display colour of a polygroup id (linear RGB): a stable hash spread over
+// pleasant hues. The mesh shader uses the same formula.
+glm::vec3 polygroupColor(uint32_t id);
+
+// Mesh drawing honours the optional Mesh attributes: colours (polypaint), mask
+// (darkening), polygroups (group colours) and hidden triangles (not drawn).
+// Mark changed vertices dirty for colour/mask edits and set Mesh::facesDirty
+// after changing `hidden` or `polygroups`.
 class Renderer {
 public:
     bool init(std::string& error);
@@ -53,8 +64,14 @@ private:
     int captureW_ = 0, captureH_ = 0;
     GLuint vao_ = 0, emptyVao_ = 0;
     void updateCurvature(const Mesh& mesh, uint32_t begin, uint32_t end);
+    void uploadFaces(const Mesh& mesh);
     GLuint posBuffer_ = 0, nrmBuffer_ = 0, curvBuffer_ = 0, indexBuffer_ = 0;
+    GLuint colorBuffer_ = 0, maskBuffer_ = 0;
+    GLuint groupData_ = 0, groupTexture_ = 0; // polygroup id per drawn triangle (texture buffer)
+    bool hasColors_ = false, hasMask_ = false, hasGroups_ = false;
     std::vector<float> curvature_;
+    std::vector<glm::uvec3> visibleTris_;
+    std::vector<uint32_t> visibleGroups_;
     GLsizei indexCount_ = 0;
     size_t vertexCapacity_ = 0;
 };

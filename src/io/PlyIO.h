@@ -15,7 +15,7 @@ namespace sf {
 
 enum class PlyContent { Mesh, Splats };
 
-// Reads a mesh (if the file has faces), Gaussian splats (if it has splat
+// Reads a mesh (if the file has faces; vertex colours kept), Gaussian splats (if it has splat
 // properties), or turns a plain point cloud into small round splats so it can
 // be converted to a mesh. `content` says which output was filled.
 bool loadPly(const std::string& path, Mesh& mesh, SplatCloud& splats, PlyContent& content, std::string& error);

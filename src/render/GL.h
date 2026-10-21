@@ -75,10 +75,12 @@ constexpr GLenum GL_RENDERBUFFER = 0x8D41;
 constexpr GLenum GL_ONE = 1;
 constexpr GLenum GL_TRIANGLE_STRIP = 0x0005;
 constexpr GLenum GL_TEXTURE0 = 0x84C0;
+constexpr GLenum GL_TEXTURE1 = 0x84C1;
 constexpr GLenum GL_RGBA32F = 0x8814;
 constexpr GLenum GL_STREAM_DRAW = 0x88E0;
 constexpr GLenum GL_TEXTURE_BUFFER = 0x8C2A;
 constexpr GLenum GL_MAX_TEXTURE_BUFFER_SIZE = 0x8C2B;
+constexpr GLenum GL_R32UI = 0x8236;
 constexpr GLbitfield GL_DEPTH_BUFFER_BIT = 0x0100;
 constexpr GLbitfield GL_COLOR_BUFFER_BIT = 0x4000;
 
@@ -149,7 +151,10 @@ constexpr GLbitfield GL_COLOR_BUFFER_BIT = 0x4000;
     X(void, GetIntegerv, GLenum, GLint*)                                                     \
     X(void, Uniform1i, GLint, GLint)                                                         \
     X(void, Uniform1f, GLint, GLfloat)                                                       \
-    X(void, Uniform2f, GLint, GLfloat, GLfloat)
+    X(void, Uniform2f, GLint, GLfloat, GLfloat)                                              \
+    X(void, DisableVertexAttribArray, GLuint)                                                \
+    X(void, VertexAttrib1f, GLuint, GLfloat)                                                 \
+    X(void, VertexAttrib3f, GLuint, GLfloat, GLfloat, GLfloat)
 
 namespace gl {
 

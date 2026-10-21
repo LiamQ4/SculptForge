@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <numbers>
+#include <type_traits>
 #include <unordered_map>
 
 namespace sf {
@@ -146,8 +147,22 @@ Mesh loopSubdivide(const Mesh& src) {
         for (const auto& l : src.layers) out.layers.push_back({l.name, subdivideAttribute(l.delta), l.weight});
     }
 
-    out.triangles.reserve(src.triangles.size() * 4);
-    for (const auto& t : src.triangles) {
+    // Mask and polypaint are interpolated linearly (old vertices keep their
+    // value, edge vertices take the average) so painted borders stay crisp.
+    auto interpolateLinear = [&](const auto& A) {
+        std::remove_cvref_t<decltype(A)> result(next);
+        for (uint32_t v = 0; v < nv; ++v) result[v] = A[v];
+        for (const auto& [key, e] : edges) result[e.index] = (A[uint32_t(key >> 32)] + A[uint32_t(key & 0xffffffffu)]) * 0.5f;
+        return result;
+    };
+    if (src.mask.size() == nv) out.mask = interpolateLinear(src.mask);
+    if (src.colors.size() == nv) out.colors = interpolateLinear(src.colors);
+
+    const size_t nt = src.triangles.size();
+    const bool groups = src.polygroups.size() == nt, hidden = src.hidden.size() == nt, uvs = src.uvs.size() == nt * 3;
+    out.triangles.reserve(nt * 4);
+    for (size_t ti = 0; ti < nt; ++ti) {
+        const auto& t = src.triangles[ti];
         uint32_t ab = edges.at(edgeKey(t.x, t.y)).index;
         uint32_t bc = edges.at(edgeKey(t.y, t.z)).index;
         uint32_t ca = edges.at(edgeKey(t.z, t.x)).index;
@@ -155,6 +170,14 @@ Mesh loopSubdivide(const Mesh& src) {
         out.triangles.push_back({t.y, bc, ab});
         out.triangles.push_back({t.z, ca, bc});
         out.triangles.push_back({ab, bc, ca});
+        // Children inherit their parent's group and visibility.
+        if (groups) out.polygroups.insert(out.polygroups.end(), 4, src.polygroups[ti]);
+        if (hidden) out.hidden.insert(out.hidden.end(), 4, src.hidden[ti]);
+        if (uvs) {
+            const glm::vec2 ua = src.uvs[ti * 3], ub = src.uvs[ti * 3 + 1], uc = src.uvs[ti * 3 + 2];
+            const glm::vec2 uab = (ua + ub) * 0.5f, ubc = (ub + uc) * 0.5f, uca = (uc + ua) * 0.5f;
+            out.uvs.insert(out.uvs.end(), {ua, uab, uca, ub, ubc, uab, uc, uca, ubc, uab, ubc, uca});
+        }
     }
     finalize(out);
     return out;

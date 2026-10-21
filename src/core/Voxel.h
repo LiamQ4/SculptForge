@@ -47,6 +47,8 @@ void rasterizeMeshShell(const Mesh& mesh, VoxelGrid& grid);
 
 // Rebuilds the mesh as an even, watertight surface (`resolution` cells across
 // its longest side). Overlapping parts are merged. Sculpt layers are baked.
+// Mask and colours transfer from the nearest original vertex; polygroups,
+// hidden flags and UVs reset (all visible, group 0, no UVs).
 Mesh voxelRemesh(const Mesh& mesh, int resolution, std::string* error = nullptr);
 
 } // namespace sf

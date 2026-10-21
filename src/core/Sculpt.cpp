@@ -21,12 +21,17 @@ const char* brushName(BrushType type) {
     }
 }
 
-namespace {
-
-float falloff(float dist, float radius) {
+float brushFalloff(float dist, float radius) {
     float t = std::clamp(1.0f - dist / radius, 0.0f, 1.0f);
     return t * t * (3.0f - 2.0f * t);
 }
+
+void brushVertices(const Mesh& mesh, const BVH& bvh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) {
+    bvh.queryVertices(mesh, center, radius, out);
+    if (mesh.hasHidden()) std::erase_if(out, [&](uint32_t v) { return mesh.vertexHidden(v); });
+}
+
+namespace {
 
 glm::vec3 projectOnPlane(const glm::vec3& v, const glm::vec3& n) { return v - n * glm::dot(v, n); }
 
@@ -127,10 +132,14 @@ bool Sculptor::beginStroke(const Mesh& mesh, std::string label, int layer) {
     record_.layer = layer;
     if (touchStamp_.size() != mesh.vertexCount()) {
         touchStamp_.assign(mesh.vertexCount(), 0);
+        maskStamp_.assign(mesh.vertexCount(), 0);
+        colorStamp_.assign(mesh.vertexCount(), 0);
         stamp_ = 0;
     }
     if (++stamp_ == 0) {
         std::fill(touchStamp_.begin(), touchStamp_.end(), 0);
+        std::fill(maskStamp_.begin(), maskStamp_.end(), 0);
+        std::fill(colorStamp_.begin(), colorStamp_.end(), 0);
         stamp_ = 1;
     }
     active_ = true;
@@ -140,15 +149,30 @@ bool Sculptor::beginStroke(const Mesh& mesh, std::string label, int layer) {
 void Sculptor::touch(Mesh& mesh, uint32_t v) {
     if (touchStamp_[v] == stamp_) return;
     touchStamp_[v] = stamp_;
-    record_.indices.push_back(v);
-    record_.positions.push_back(mesh.layerTarget(layer_)[v]);
+    record_.positions.add(v, mesh.layerTarget(layer_)[v]);
 }
 
-// Moves a vertex and attributes the offset to the active layer.
+void Sculptor::recordMask(const Mesh& mesh, uint32_t v) {
+    if (!active_ || maskStamp_[v] == stamp_) return;
+    maskStamp_[v] = stamp_;
+    record_.mask.add(v, mesh.maskAt(v));
+}
+
+void Sculptor::recordColor(const Mesh& mesh, uint32_t v) {
+    if (!active_ || colorStamp_[v] == stamp_) return;
+    colorStamp_[v] = stamp_;
+    record_.colors.add(v, mesh.colorAt(v));
+}
+
+// Moves a vertex and attributes the offset to the active layer. Masked and
+// hidden vertices are attenuated here, once, for every brush.
 void Sculptor::displace(Mesh& mesh, uint32_t v, const glm::vec3& d) {
+    const float k = vertexInfluence(mesh, v);
+    if (k <= 0.0f) return;
     touch(mesh, v);
-    mesh.positions[v] += d;
-    if (!mesh.layers.empty()) mesh.layerTarget(layer_)[v] += d / mesh.layerTargetWeight(layer_);
+    const glm::vec3 dk = d * k;
+    mesh.positions[v] += dk;
+    if (!mesh.layers.empty()) mesh.layerTarget(layer_)[v] += dk / mesh.layerTargetWeight(layer_);
 }
 
 UndoRecord Sculptor::endStroke() {
@@ -168,7 +192,7 @@ void Sculptor::dab(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p, Sym
 }
 
 void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p) {
-    bvh.queryVertices(mesh, p.center, p.radius, verts_);
+    brushVertices(mesh, bvh, p.center, p.radius, verts_);
     if (verts_.empty()) return;
 
     auto& pos = mesh.positions;
@@ -183,7 +207,7 @@ void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& 
     glm::vec3 areaNormal(0.0f), areaCenter(0.0f);
     float wsum = 0.0f;
     for (uint32_t v : verts_) {
-        float w = falloff(glm::distance(pos[v], p.center), p.radius);
+        float w = brushFalloff(glm::distance(pos[v], p.center), p.radius);
         areaNormal += nrm[v] * w;
         areaCenter += pos[v] * w;
         wsum += w;
@@ -201,7 +225,7 @@ void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& 
     for (size_t i = 0; i < verts_.size(); ++i) {
         const uint32_t v = verts_[i];
         const glm::vec3& x = pos[v];
-        const float f = falloff(glm::distance(x, p.center), r);
+        const float f = brushFalloff(glm::distance(x, p.center), r);
         glm::vec3 d(0.0f);
 
         switch (type) {
@@ -268,7 +292,7 @@ void Sculptor::dabRecipe(Mesh& mesh, BVH& bvh, const BrushRecipe& recipe, const 
 }
 
 void Sculptor::dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const DabParams& p) {
-    bvh.queryVertices(mesh, p.center, p.radius, verts_);
+    brushVertices(mesh, bvh, p.center, p.radius, verts_);
     if (verts_.empty()) return;
     const auto& pos = mesh.positions;
     const auto& nrm = mesh.normals;
@@ -387,9 +411,9 @@ void Sculptor::beginGrab(Mesh& mesh, BVH& bvh, const DabParams& p, Symmetry sym)
     if (!active_) return;
     for (const glm::vec3& m : mirrors(sym)) {
         glm::vec3 c = p.center * m;
-        bvh.queryVertices(mesh, c, p.radius, verts_);
+        brushVertices(mesh, bvh, c, p.radius, verts_);
         for (uint32_t v : verts_) {
-            float w = falloff(glm::distance(mesh.positions[v], c), p.radius) *
+            float w = brushFalloff(glm::distance(mesh.positions[v], c), p.radius) *
                       std::clamp(p.strength * 2.0f, 0.0f, 1.0f);
             if (w <= 0.0f) continue;
             grab_.push_back({v, w, m});

@@ -921,6 +921,9 @@ void App::drawMenuBar() {
     if (ImGui::BeginMenu("View")) {
         ImGui::MenuItem("Wireframe", "W", &renderSettings_.wireframe);
         ImGui::MenuItem("Show Mesh", nullptr, &renderSettings_.showMesh);
+        ImGui::MenuItem("Show Polypaint", nullptr, &renderSettings_.showPolypaint);
+        ImGui::MenuItem("Show Mask", nullptr, &renderSettings_.showMask);
+        ImGui::MenuItem("Show Polygroups", nullptr, &renderSettings_.showPolygroups);
         ImGui::Separator();
         ImGui::MenuItem("Layers Panel", nullptr, &showLayersPanel_);
         ImGui::MenuItem("Game Ready Panel", nullptr, &showGamePanel_);

@@ -11,6 +11,25 @@ verts, tris = doc.vertices, doc.triangles
 assert verts.shape == (642, 3) and str(verts.dtype) == "float32", verts.shape
 assert tris.shape == (1280, 3) and str(tris.dtype) == "uint32", tris.shape
 
+# Optional attributes: None until set, then NumPy copies; they survive subdivision.
+assert doc.mask is None and doc.colors is None and doc.polygroups is None and doc.hidden is None
+doc.mask = [1.0 if v[1] > 0 else 0.0 for v in verts]
+doc.colors = [[1.0, 0.0, 0.0]] * len(verts)
+doc.polygroups = [i % 3 for i in range(len(tris))]
+assert doc.mask.shape == (642,) and str(doc.mask.dtype) == "float32" and doc.colors.shape == (642, 3)
+assert doc.polygroups.shape == (1280,) and str(doc.polygroups.dtype) == "uint32"
+sf.run(doc, "subdivide")
+assert doc.mask.shape == (doc.vertices.shape[0],) and doc.polygroups.shape == (doc.triangles.shape[0],)
+try:
+    doc.mask = [0.0, 1.0]
+    raise AssertionError("expected ValueError")
+except ValueError:
+    pass
+doc.colors = None
+assert doc.colors is None
+sf.run(doc, "new_sphere", subdivisions=3)
+verts = doc.vertices
+
 sf.run(doc, "layer_add", name="Smile")
 assert doc.layers == [("Smile", 1.0)], doc.layers
 assert doc.layer_delta(0).shape == (642, 3)

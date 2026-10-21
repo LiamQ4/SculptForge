@@ -128,6 +128,8 @@ bool saveGlb(const std::string& path, const Mesh& mesh, const std::string& name,
 
     int posAcc = addVec3(baseMesh.positions, true);
     int nrmAcc = addVec3(baseMesh.normals, false);
+    const bool colors = mesh.hasColors() && mesh.colors.size() == mesh.vertexCount();
+    int colorAcc = colors ? addVec3(mesh.colors, false) : -1; // polypaint as COLOR_0 (linear)
 
     size_t idxOff = bin.append(mesh.triangles.data(), mesh.triangleCount() * sizeof(glm::uvec3));
     views.push_back({idxOff, mesh.triangleCount() * sizeof(glm::uvec3), true});
@@ -142,7 +144,9 @@ bool saveGlb(const std::string& path, const Mesh& mesh, const std::string& name,
     json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"SculptForge\"},\"scene\":0,"
          << "\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0,\"name\":\"" << jsonEscape(name) << "\"}],"
          << "\"meshes\":[{\"name\":\"" << jsonEscape(name) << "\",\"primitives\":[{\"attributes\":{\"POSITION\":"
-         << posAcc << ",\"NORMAL\":" << nrmAcc << "},\"indices\":" << idxAcc << ",\"mode\":4";
+         << posAcc << ",\"NORMAL\":" << nrmAcc;
+    if (colors) json << ",\"COLOR_0\":" << colorAcc;
+    json << "},\"indices\":" << idxAcc << ",\"mode\":4";
     if (!mesh.layers.empty()) {
         json << ",\"targets\":[";
         for (size_t i = 0; i < targetAccs.size(); ++i) json << (i ? "," : "") << "{\"POSITION\":" << targetAccs[i] << "}";
@@ -542,6 +546,21 @@ bool loadGltf(const std::string& path, Mesh& out, std::string& error, SplatCloud
                 }
                 const uint32_t baseIndex = uint32_t(m.positions.size());
                 for (const auto& p : pos) m.positions.push_back(glm::vec3(world * glm::vec4(p, 1.0f)));
+                // Vertex colours (COLOR_0 is linear RGB or RGBA); primitives without them are white.
+                const Json& colorAcc = prim["attributes"]["COLOR_0"];
+                if (colorAcc.isNumber()) {
+                    const int ci = int(colorAcc.asNumber());
+                    const int comps = r.doc["accessors"][size_t(ci)]["type"].asString() == "VEC4" ? 4 : 3;
+                    std::vector<float> c;
+                    if (!r.readFloats(ci, comps, c)) return false;
+                    m.colors.resize(baseIndex, glm::vec3(1.0f));
+                    for (size_t i = 0; i < pos.size(); ++i)
+                        m.colors.push_back(i * size_t(comps) + 2 < c.size()
+                                               ? glm::vec3(c[i * size_t(comps)], c[i * size_t(comps) + 1], c[i * size_t(comps) + 2])
+                                               : glm::vec3(1.0f));
+                } else if (!m.colors.empty()) {
+                    m.colors.resize(m.positions.size(), glm::vec3(1.0f));
+                }
                 for (size_t t = 0; t + 2 < idx.size(); t += 3) {
                     if (idx[t] >= pos.size() || idx[t + 1] >= pos.size() || idx[t + 2] >= pos.size())
                         return r.fail("Index out of range");
@@ -609,6 +628,7 @@ bool loadGltf(const std::string& path, Mesh& out, std::string& error, SplatCloud
     if (targetsConsistent)
         for (size_t k = 0; k < targetDeltas.size(); ++k)
             layers.push_back({targetNames[k], std::move(targetDeltas[k]), targetWeights[k]});
+    if (!m.colors.empty()) m.colors.resize(m.positions.size(), glm::vec3(1.0f));
     Mesh welded = weldImported(m, layers);
     out = std::move(welded);
     return true;

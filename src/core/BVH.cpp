@@ -127,6 +127,7 @@ uint32_t BVH::nextStamp(std::vector<uint32_t>& stamps, uint32_t& stamp) const {
 
 bool BVH::raycast(const Mesh& mesh, const glm::vec3& origin, const glm::vec3& dir, RayHit& hit) const {
     if (nodes_.empty()) return false;
+    const bool skipHidden = mesh.hasHidden();
     // Avoid 0 * inf = NaN in the slab test for axis-aligned rays.
     glm::vec3 safeDir = dir;
     for (int i = 0; i < 3; ++i)
@@ -144,6 +145,7 @@ bool BVH::raycast(const Mesh& mesh, const glm::vec3& origin, const glm::vec3& di
         if (!rayBox(n.box, origin, invDir, best)) continue;
         if (n.count > 0) {
             for (uint32_t i = n.first; i < n.first + n.count; ++i) {
+                if (skipHidden && mesh.triangleHidden(triIndices_[i])) continue;
                 const auto& t = mesh.triangles[triIndices_[i]];
                 float tt;
                 if (rayTriangle(origin, dir, mesh.positions[t.x], mesh.positions[t.y], mesh.positions[t.z], tt) &&

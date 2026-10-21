@@ -21,8 +21,10 @@ struct RayHit {
 class BVH {
 public:
     void build(const Mesh& mesh);
+    // Nearest hit along the ray; hidden triangles (Mesh::hidden) are skipped.
     bool raycast(const Mesh& mesh, const glm::vec3& origin, const glm::vec3& dir, RayHit& hit) const;
     // Appends every vertex within `radius` of `center` to `out` (cleared first).
+    // Ignores visibility; brushes use sf::brushVertices, which filters hidden ones.
     void queryVertices(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const;
     // Updates bounds after the given vertices moved. Bounds only ever grow
     // conservatively for ancestors, which keeps queries correct.

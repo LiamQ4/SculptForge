@@ -283,6 +283,9 @@ Mesh voxelRemesh(const Mesh& mesh, int resolution, std::string* error) {
     // Voxels touched by the surface count as solid, which puts the result half a voxel outside.
     for (size_t v = 0; v < out.vertexCount(); ++v) out.positions[v] -= out.normals[v] * (0.5f * grid.cell);
     out.recomputeAllNormals();
+    // Mask and polypaint follow the nearest original vertex; polygroups, hidden
+    // flags and UVs don't survive a rebuild (everything becomes visible group 0).
+    transferVertexAttributes(mesh, out);
     return out;
 }
 

@@ -9,6 +9,7 @@
 //   sf.run(doc, "new_sphere", subdivisions=5)
 //   sf.run(doc, "export_usd", path="/tmp/head.usdz")
 //   verts, tris = doc.vertices, doc.triangles      # (N, 3) float32, (M, 3) uint32
+//   doc.mask, doc.colors, doc.polygroups           # optional attributes, None when absent
 #include "ai/AiCommands.h"
 #include "core/Commands.h"
 #include "core/Script.h"
@@ -66,6 +67,28 @@ py::array_t<float> vec3Array(const std::vector<glm::vec3>& v) {
     return a;
 }
 
+// Optional mesh attributes: None while absent, otherwise a copy.
+template <class T>
+py::object attributeArray(const std::vector<T>& v) {
+    if (v.empty()) return py::none();
+    py::array_t<T> a(py::ssize_t(v.size()));
+    std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(T));
+    return a;
+}
+
+// Replaces an optional attribute from a 1-D array of `count` values (None clears it).
+template <class T>
+void setAttribute(std::vector<T>& dst, const py::object& value, size_t count, const char* what) {
+    if (value.is_none()) {
+        std::vector<T>().swap(dst);
+        return;
+    }
+    auto a = py::array_t<T, py::array::c_style | py::array::forcecast>::ensure(value);
+    if (!a || a.ndim() != 1 || size_t(a.shape(0)) != count)
+        throw py::value_error(std::string(what) + ": expected " + std::to_string(count) + " values or None");
+    dst.assign(a.data(), a.data() + count);
+}
+
 } // namespace
 
 PYBIND11_MODULE(sculptforge, m) {
@@ -80,6 +103,47 @@ PYBIND11_MODULE(sculptforge, m) {
         .def_property_readonly("base_vertices", [](const Document& d) { return vec3Array(d.mesh.basePositions()); },
                                "Vertex positions with every layer at zero, (N, 3) float32.")
         .def_property_readonly("normals", [](const Document& d) { return vec3Array(d.mesh.normals); })
+        .def_property(
+            "mask", [](const Document& d) { return attributeArray(d.mesh.mask); },
+            [](Document& d, const py::object& v) {
+                setAttribute(d.mesh.mask, v, d.mesh.vertexCount(), "mask");
+                d.mesh.markAllDirty();
+                d.modified = true;
+            },
+            "Per-vertex mask, (N,) float32 with 0 = free and 1 = fully masked; None if the mesh has no mask.")
+        .def_property(
+            "colors",
+            [](const Document& d) -> py::object { return d.mesh.colors.empty() ? py::object(py::none()) : vec3Array(d.mesh.colors); },
+            [](Document& d, const py::object& v) {
+                if (v.is_none()) {
+                    d.mesh.clearColors();
+                } else {
+                    auto a = py::array_t<float, py::array::c_style | py::array::forcecast>::ensure(v);
+                    if (!a || a.ndim() != 2 || a.shape(1) != 3 || size_t(a.shape(0)) != d.mesh.vertexCount())
+                        throw py::value_error("colors: expected (N, 3) linear RGB or None");
+                    d.mesh.colors.resize(d.mesh.vertexCount());
+                    std::memcpy(d.mesh.colors.data(), a.data(), d.mesh.colors.size() * sizeof(glm::vec3));
+                }
+                d.mesh.markAllDirty();
+                d.modified = true;
+            },
+            "Per-vertex polypaint, (N, 3) float32 linear RGB in 0..1; None if unpainted.")
+        .def_property(
+            "polygroups", [](const Document& d) { return attributeArray(d.mesh.polygroups); },
+            [](Document& d, const py::object& v) {
+                setAttribute(d.mesh.polygroups, v, d.mesh.triangleCount(), "polygroups");
+                d.mesh.facesDirty = true;
+                d.modified = true;
+            },
+            "Per-triangle polygroup ids, (M,) uint32; None means every triangle is in group 0.")
+        .def_property(
+            "hidden", [](const Document& d) { return attributeArray(d.mesh.hidden); },
+            [](Document& d, const py::object& v) {
+                setAttribute(d.mesh.hidden, v, d.mesh.triangleCount(), "hidden");
+                d.mesh.facesDirty = true;
+                d.modified = true;
+            },
+            "Per-triangle hidden flags, (M,) uint8 (nonzero = hidden); None means all visible.")
         .def_property_readonly(
             "triangles",
             [](const Document& d) {

@@ -3,6 +3,7 @@
 #include "core/Mesh.h"
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
 
 namespace sf {
@@ -12,7 +13,45 @@ static glm::vec3 faceNormal(const std::vector<glm::vec3>& p, const glm::uvec3& t
     return glm::cross(p[t.y] - p[t.x], p[t.z] - p[t.x]);
 }
 
+bool Mesh::vertexHidden(uint32_t v) const {
+    if (hidden.empty()) return false;
+    auto tris = vertexTriangles(v);
+    if (tris.empty()) return false;
+    for (uint32_t t : tris)
+        if (!hidden[t]) return false;
+    return true;
+}
+
+std::vector<float>& Mesh::ensureMask(float fill) {
+    if (mask.size() != positions.size()) mask.assign(positions.size(), fill);
+    return mask;
+}
+
+std::vector<glm::vec3>& Mesh::ensureColors(const glm::vec3& fill) {
+    if (colors.size() != positions.size()) colors.assign(positions.size(), fill);
+    return colors;
+}
+
+std::vector<uint32_t>& Mesh::ensurePolygroups(uint32_t fill) {
+    if (polygroups.size() != triangles.size()) polygroups.assign(triangles.size(), fill);
+    return polygroups;
+}
+
+std::vector<uint8_t>& Mesh::ensureHidden() {
+    if (hidden.size() != triangles.size()) hidden.assign(triangles.size(), 0);
+    return hidden;
+}
+
+void Mesh::sanitizeAttributes() {
+    if (!mask.empty() && mask.size() != positions.size()) clearMask();
+    if (!colors.empty() && colors.size() != positions.size()) clearColors();
+    if (!polygroups.empty() && polygroups.size() != triangles.size()) clearPolygroups();
+    if (!hidden.empty() && hidden.size() != triangles.size()) clearHidden();
+    if (!uvs.empty() && uvs.size() != triangles.size() * 3) std::vector<glm::vec2>().swap(uvs);
+}
+
 void Mesh::rebuildTopology() {
+    sanitizeAttributes();
     const size_t nv = positions.size();
 
     vtOffsets_.assign(nv + 1, 0);
@@ -47,6 +86,7 @@ void Mesh::rebuildTopology() {
     stamp_ = 0;
     normals.resize(nv);
     topologyDirty = true;
+    facesDirty = true;
 }
 
 uint32_t Mesh::nextStamp() {
@@ -212,9 +252,21 @@ Mesh weldImported(const Mesh& m, const std::vector<SculptLayer>& layers) {
     }
     Mesh welded;
     for (uint32_t v : kept) welded.positions.push_back(m.positions[v]);
-    for (const auto& t : m.triangles) {
-        glm::uvec3 nt(remap[t.x], remap[t.y], remap[t.z]);
-        if (nt.x != nt.y && nt.y != nt.z && nt.x != nt.z) welded.triangles.push_back(nt);
+    const bool vMask = m.mask.size() == m.positions.size(), vColors = m.colors.size() == m.positions.size();
+    for (uint32_t v : kept) {
+        if (vMask) welded.mask.push_back(m.mask[v]);
+        if (vColors) welded.colors.push_back(m.colors[v]);
+    }
+    const size_t nt = m.triangles.size();
+    const bool tGroups = m.polygroups.size() == nt, tHidden = m.hidden.size() == nt, tUvs = m.uvs.size() == nt * 3;
+    for (size_t ti = 0; ti < nt; ++ti) {
+        const auto& t = m.triangles[ti];
+        glm::uvec3 nt3(remap[t.x], remap[t.y], remap[t.z]);
+        if (nt3.x == nt3.y || nt3.y == nt3.z || nt3.x == nt3.z) continue;
+        welded.triangles.push_back(nt3);
+        if (tGroups) welded.polygroups.push_back(m.polygroups[ti]);
+        if (tHidden) welded.hidden.push_back(m.hidden[ti]);
+        if (tUvs) welded.uvs.insert(welded.uvs.end(), m.uvs.begin() + std::ptrdiff_t(ti * 3), m.uvs.begin() + std::ptrdiff_t(ti * 3 + 3));
     }
     if (!layers.empty()) {
         welded.base = welded.positions;
@@ -229,6 +281,79 @@ Mesh weldImported(const Mesh& m, const std::vector<SculptLayer>& layers) {
     welded.rebuildTopology();
     welded.recomputeAllNormals();
     return welded;
+}
+
+glm::vec3 srgbToLinear(const glm::vec3& c) {
+    glm::vec3 out;
+    for (int i = 0; i < 3; ++i) {
+        const float x = std::clamp(c[i], 0.0f, 1.0f);
+        out[i] = x <= 0.04045f ? x / 12.92f : std::pow((x + 0.055f) / 1.055f, 2.4f);
+    }
+    return out;
+}
+
+glm::vec3 linearToSrgb(const glm::vec3& c) {
+    glm::vec3 out;
+    for (int i = 0; i < 3; ++i) {
+        const float x = std::clamp(c[i], 0.0f, 1.0f);
+        out[i] = x <= 0.0031308f ? x * 12.92f : 1.055f * std::pow(x, 1.0f / 2.4f) - 0.055f;
+    }
+    return out;
+}
+
+void transferVertexAttributes(const Mesh& src, Mesh& dst) {
+    const bool wantMask = src.mask.size() == src.positions.size() && !src.mask.empty();
+    const bool wantColors = src.colors.size() == src.positions.size() && !src.colors.empty();
+    if ((!wantMask && !wantColors) || dst.positions.empty()) return;
+
+    // Uniform hash grid with about one source vertex per cell.
+    const AABB box = src.bounds();
+    const glm::vec3 ext = box.extent();
+    const float longest = std::max({ext.x, ext.y, ext.z, 1e-12f});
+    const float cell = std::max(longest / std::max(1.0f, std::cbrt(float(src.positions.size()))), longest * 1e-4f);
+    constexpr int kOffset = 1 << 20;
+    auto cellOf = [&](const glm::vec3& p) { return glm::ivec3(glm::floor((p - box.min) / cell)); };
+    auto key = [](const glm::ivec3& c) {
+        return (uint64_t(uint32_t(c.x + kOffset) & 0x1fffffu) << 42) | (uint64_t(uint32_t(c.y + kOffset) & 0x1fffffu) << 21) |
+               uint64_t(uint32_t(c.z + kOffset) & 0x1fffffu);
+    };
+    std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+    grid.reserve(src.positions.size());
+    for (uint32_t v = 0; v < src.positions.size(); ++v) grid[key(cellOf(src.positions[v]))].push_back(v);
+    const int gridCells = int(std::ceil(longest / cell)) + 2;
+
+    if (wantMask) dst.mask.assign(dst.positions.size(), 0.0f);
+    if (wantColors) dst.colors.assign(dst.positions.size(), glm::vec3(1.0f));
+    for (size_t i = 0; i < dst.positions.size(); ++i) {
+        const glm::vec3 p = dst.positions[i];
+        const glm::ivec3 c = cellOf(p);
+        const glm::vec3 outside = glm::max(glm::max(box.min - p, p - box.max), glm::vec3(0.0f));
+        const int maxRing = gridCells + int(std::ceil(glm::length(outside) / cell));
+        float best = std::numeric_limits<float>::max();
+        uint32_t bestV = 0;
+        // Search shells of growing Chebyshev radius; stop once nothing closer can remain.
+        for (int r = 0; r <= maxRing; ++r) {
+            for (int dz = -r; dz <= r; ++dz)
+                for (int dy = -r; dy <= r; ++dy)
+                    for (int dx = -r; dx <= r; ++dx) {
+                        if (std::max({std::abs(dx), std::abs(dy), std::abs(dz)}) != r) continue;
+                        auto it = grid.find(key(c + glm::ivec3(dx, dy, dz)));
+                        if (it == grid.end()) continue;
+                        for (uint32_t v : it->second) {
+                            const glm::vec3 d = src.positions[v] - p;
+                            const float d2 = glm::dot(d, d);
+                            if (d2 < best) {
+                                best = d2;
+                                bestV = v;
+                            }
+                        }
+                    }
+            if (best < std::numeric_limits<float>::max() && std::sqrt(best) <= float(r) * cell) break;
+        }
+        if (wantMask) dst.mask[i] = src.mask[bestV];
+        if (wantColors) dst.colors[i] = src.colors[bestV];
+    }
+    dst.markAllDirty();
 }
 
 } // namespace sf

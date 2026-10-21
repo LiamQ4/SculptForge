@@ -16,15 +16,21 @@ const char* kMeshVS = R"(#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in float aCurvature;
+layout(location = 3) in vec3 aColor; // polypaint (constant white when the mesh has none)
+layout(location = 4) in float aMask; // constant 0 when the mesh has no mask
 uniform mat4 uView;
 uniform mat4 uProj;
 out vec3 vNormal;
 out vec3 vPos;
 out float vCurvature;
+out vec3 vColor;
+out float vMask;
 void main() {
     vec4 p = uView * vec4(aPos, 1.0);
     vPos = p.xyz;
     vCurvature = aCurvature;
+    vColor = aColor;
+    vMask = aMask;
     vNormal = mat3(uView) * aNormal;
     gl_Position = uProj * p;
 }
@@ -36,9 +42,31 @@ const char* kMeshFS = R"(#version 330 core
 in vec3 vNormal;
 in vec3 vPos;
 in float vCurvature;
-uniform vec3 uColor;
+in vec3 vColor;
+in float vMask;
+uniform vec3 uBaseColor;
+uniform int uPaint;      // 1: vertex colours replace the base colour
+uniform int uShowMask;   // 1: darken masked areas
+uniform int uGroups;     // 0: off, 1: per-triangle ids from uGroupIds, 2: everything is group 0
+uniform usamplerBuffer uGroupIds;
 out vec4 fragColor;
+// Keep in sync with sf::polygroupColor.
+vec3 groupColor(uint id) {
+    uint h = id * 0x9E3779B1u;
+    h ^= h >> 15;
+    h *= 0x85EBCA77u;
+    h ^= h >> 13;
+    float hue = float(h & 0xFFFFu) / 65536.0;
+    float sat = 0.45 + 0.25 * float((h >> 16) & 0xFFu) / 255.0;
+    float val = 0.70 + 0.25 * float((h >> 24) & 0xFFu) / 255.0;
+    vec3 rgb = clamp(abs(fract(hue + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+    return val * mix(vec3(1.0), rgb, sat);
+}
 void main() {
+    vec3 albedo = uBaseColor;
+    if (uGroups == 1) albedo = groupColor(texelFetch(uGroupIds, gl_PrimitiveID).r);
+    else if (uGroups == 2) albedo = groupColor(0u);
+    else if (uPaint == 1) albedo = vColor;
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
     vec3 v = normalize(-vPos);
@@ -55,10 +83,11 @@ void main() {
     float crease = smoothstep(0.0, 0.16, vCurvature);
     float ridge = smoothstep(0.0, 0.2, -vCurvature);
     float cavity = 1.0 - 0.62 * crease;
-    vec3 c = uColor * (0.12 * hemi + 0.95 * diff * diff + fillL * vec3(0.7, 0.8, 1.0)) * mix(0.7, 1.0, facing) * cavity;
+    vec3 c = albedo * (0.12 * hemi + 0.95 * diff * diff + fillL * vec3(0.7, 0.8, 1.0)) * mix(0.7, 1.0, facing) * cavity;
     c *= mix(vec3(1.0), vec3(0.72, 0.55, 0.5), crease * 0.7); // warm, deeper colour in the cracks
-    c += uColor * ridge * 0.3 * diff;                           // ridges catch the key light
+    c += albedo * ridge * 0.3 * diff;                           // ridges catch the key light
     c += vec3(spec) * (1.0 - crease) + rim * vec3(0.8, 0.85, 1.0);
+    if (uShowMask == 1) c *= 1.0 - 0.75 * clamp(vMask, 0.0, 1.0);
     fragColor = vec4(pow(c, vec3(1.0 / 2.2)), 1.0);
 }
 )";
@@ -189,6 +218,19 @@ GLuint link(const char* vs, const char* fs, std::string& error) {
 
 } // namespace
 
+glm::vec3 polygroupColor(uint32_t id) {
+    uint32_t h = id * 0x9E3779B1u;
+    h ^= h >> 15;
+    h *= 0x85EBCA77u;
+    h ^= h >> 13;
+    const float hue = float(h & 0xFFFFu) / 65536.0f;
+    const float sat = 0.45f + 0.25f * float((h >> 16) & 0xFFu) / 255.0f;
+    const float val = 0.70f + 0.25f * float((h >> 24) & 0xFFu) / 255.0f;
+    const glm::vec3 rgb = glm::clamp(glm::abs(glm::fract(hue + glm::vec3(0.0f, 2.0f / 3.0f, 1.0f / 3.0f)) * 6.0f - 3.0f) - 1.0f,
+                                     0.0f, 1.0f);
+    return val * glm::mix(glm::vec3(1.0f), rgb, sat);
+}
+
 bool Renderer::init(std::string& error) {
     meshProgram_ = link(kMeshVS, kMeshFS, error);
     if (!meshProgram_) return false;
@@ -227,8 +269,18 @@ bool Renderer::init(std::string& error) {
     gl::BindBuffer(GL_ARRAY_BUFFER, curvBuffer_);
     gl::EnableVertexAttribArray(2);
     gl::VertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
+    // Colour (3) and mask (4) arrays are only enabled while the mesh has them.
+    gl::GenBuffers(1, &colorBuffer_);
+    gl::BindBuffer(GL_ARRAY_BUFFER, colorBuffer_);
+    gl::VertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), nullptr);
+    gl::GenBuffers(1, &maskBuffer_);
+    gl::BindBuffer(GL_ARRAY_BUFFER, maskBuffer_);
+    gl::VertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
     gl::BindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer_);
     gl::BindVertexArray(0);
+    gl::BindBuffer(GL_ARRAY_BUFFER, 0);
+    gl::GenBuffers(1, &groupData_);
+    gl::GenTextures(1, &groupTexture_);
     return true;
 }
 
@@ -236,6 +288,10 @@ void Renderer::shutdown() {
     gl::DeleteBuffers(1, &posBuffer_);
     gl::DeleteBuffers(1, &nrmBuffer_);
     gl::DeleteBuffers(1, &curvBuffer_);
+    gl::DeleteBuffers(1, &colorBuffer_);
+    gl::DeleteBuffers(1, &maskBuffer_);
+    gl::DeleteBuffers(1, &groupData_);
+    gl::DeleteTextures(1, &groupTexture_);
     gl::DeleteBuffers(1, &indexBuffer_);
     gl::DeleteVertexArrays(1, &vao_);
     gl::DeleteVertexArrays(1, &emptyVao_);
@@ -350,34 +406,99 @@ void Renderer::updateCurvature(const Mesh& mesh, uint32_t begin, uint32_t end) {
     }
 }
 
+// Index buffer without hidden triangles, plus the polygroup id of every drawn
+// triangle in draw order (looked up by gl_PrimitiveID).
+void Renderer::uploadFaces(const Mesh& mesh) {
+    const size_t nt = mesh.triangleCount();
+    const bool hidden = mesh.hidden.size() == nt && nt > 0;
+    const bool groups = mesh.polygroups.size() == nt && nt > 0;
+    const glm::uvec3* tris = mesh.triangles.data();
+    size_t drawn = nt;
+    visibleGroups_.clear();
+    if (hidden) {
+        visibleTris_.clear();
+        for (size_t t = 0; t < nt; ++t) {
+            if (mesh.hidden[t]) continue;
+            visibleTris_.push_back(mesh.triangles[t]);
+            if (groups) visibleGroups_.push_back(mesh.polygroups[t]);
+        }
+        tris = visibleTris_.data();
+        drawn = visibleTris_.size();
+    } else {
+        std::vector<glm::uvec3>().swap(visibleTris_);
+        if (groups) visibleGroups_ = mesh.polygroups;
+    }
+    gl::BindVertexArray(vao_);
+    gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(drawn * sizeof(glm::uvec3)), tris, GL_STATIC_DRAW);
+    gl::BindVertexArray(0);
+    indexCount_ = GLsizei(drawn * 3);
+
+    GLint maxTexels = 0;
+    gl::GetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxTexels);
+    hasGroups_ = groups && !visibleGroups_.empty() && visibleGroups_.size() <= size_t(std::max(maxTexels, 0));
+    if (hasGroups_) {
+        gl::BindBuffer(GL_TEXTURE_BUFFER, groupData_);
+        gl::BufferData(GL_TEXTURE_BUFFER, GLsizeiptr(visibleGroups_.size() * sizeof(uint32_t)), visibleGroups_.data(),
+                       GL_STATIC_DRAW);
+        gl::BindTexture(GL_TEXTURE_BUFFER, groupTexture_);
+        gl::TexBuffer(GL_TEXTURE_BUFFER, GL_R32UI, groupData_);
+        gl::BindTexture(GL_TEXTURE_BUFFER, 0);
+        gl::BindBuffer(GL_TEXTURE_BUFFER, 0);
+    }
+}
+
 void Renderer::sync(Mesh& mesh) {
     const size_t nv = mesh.vertexCount();
-    if (mesh.topologyDirty || nv != vertexCapacity_) {
+    const bool full = mesh.topologyDirty || nv != vertexCapacity_;
+    const bool ranged = !full && mesh.dirtyBegin < mesh.dirtyEnd && mesh.dirtyEnd <= nv;
+    const GLintptr off3 = ranged ? GLintptr(mesh.dirtyBegin * sizeof(glm::vec3)) : 0;
+    const GLsizeiptr size3 = ranged ? GLsizeiptr((mesh.dirtyEnd - mesh.dirtyBegin) * sizeof(glm::vec3)) : 0;
+    const GLintptr off1 = ranged ? GLintptr(mesh.dirtyBegin * sizeof(float)) : 0;
+    const GLsizeiptr size1 = ranged ? GLsizeiptr((mesh.dirtyEnd - mesh.dirtyBegin) * sizeof(float)) : 0;
+    if (full) {
         updateCurvature(mesh, 0, uint32_t(nv));
-        gl::BindVertexArray(vao_);
         gl::BindBuffer(GL_ARRAY_BUFFER, posBuffer_);
         gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(glm::vec3)), mesh.positions.data(), GL_DYNAMIC_DRAW);
         gl::BindBuffer(GL_ARRAY_BUFFER, nrmBuffer_);
         gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(glm::vec3)), mesh.normals.data(), GL_DYNAMIC_DRAW);
         gl::BindBuffer(GL_ARRAY_BUFFER, curvBuffer_);
         gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(float)), curvature_.data(), GL_DYNAMIC_DRAW);
-        gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(mesh.triangleCount() * sizeof(glm::uvec3)),
-                       mesh.triangles.data(), GL_STATIC_DRAW);
-        gl::BindVertexArray(0);
-        indexCount_ = GLsizei(mesh.triangleCount() * 3);
+        uploadFaces(mesh);
         vertexCapacity_ = nv;
-    } else if (mesh.dirtyBegin < mesh.dirtyEnd) {
-        const GLintptr offset = GLintptr(mesh.dirtyBegin * sizeof(glm::vec3));
-        const GLsizeiptr size = GLsizeiptr((mesh.dirtyEnd - mesh.dirtyBegin) * sizeof(glm::vec3));
+    } else if (ranged) {
         gl::BindBuffer(GL_ARRAY_BUFFER, posBuffer_);
-        gl::BufferSubData(GL_ARRAY_BUFFER, offset, size, mesh.positions.data() + mesh.dirtyBegin);
+        gl::BufferSubData(GL_ARRAY_BUFFER, off3, size3, mesh.positions.data() + mesh.dirtyBegin);
         gl::BindBuffer(GL_ARRAY_BUFFER, nrmBuffer_);
-        gl::BufferSubData(GL_ARRAY_BUFFER, offset, size, mesh.normals.data() + mesh.dirtyBegin);
+        gl::BufferSubData(GL_ARRAY_BUFFER, off3, size3, mesh.normals.data() + mesh.dirtyBegin);
         updateCurvature(mesh, mesh.dirtyBegin, mesh.dirtyEnd);
         gl::BindBuffer(GL_ARRAY_BUFFER, curvBuffer_);
-        gl::BufferSubData(GL_ARRAY_BUFFER, GLintptr(mesh.dirtyBegin * sizeof(float)),
-                          GLsizeiptr((mesh.dirtyEnd - mesh.dirtyBegin) * sizeof(float)), curvature_.data() + mesh.dirtyBegin);
+        gl::BufferSubData(GL_ARRAY_BUFFER, off1, size1, curvature_.data() + mesh.dirtyBegin);
     }
+    if (!full && mesh.facesDirty) uploadFaces(mesh);
+
+    // Optional per-vertex attributes: a full upload when they appear (or the
+    // mesh changed), the dirty range otherwise, and a disabled array when absent.
+    auto syncAttribute = [&](GLuint buffer, GLuint location, bool& uploaded, const void* data, size_t elementSize,
+                             bool present, GLintptr offset, GLsizeiptr size) {
+        gl::BindBuffer(GL_ARRAY_BUFFER, buffer);
+        if (present && (full || !uploaded)) {
+            gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * elementSize), data, GL_DYNAMIC_DRAW);
+        } else if (present && ranged) {
+            gl::BufferSubData(GL_ARRAY_BUFFER, offset, size, static_cast<const uint8_t*>(data) + size_t(offset));
+        } else if (!present && uploaded) {
+            gl::BufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+        }
+        if (present != uploaded) {
+            gl::BindVertexArray(vao_);
+            if (present) gl::EnableVertexAttribArray(location);
+            else gl::DisableVertexAttribArray(location);
+            gl::BindVertexArray(0);
+        }
+        uploaded = present;
+    };
+    syncAttribute(colorBuffer_, 3, hasColors_, mesh.colors.data(), sizeof(glm::vec3), nv > 0 && mesh.colors.size() == nv,
+                  off3, size3);
+    syncAttribute(maskBuffer_, 4, hasMask_, mesh.mask.data(), sizeof(float), nv > 0 && mesh.mask.size() == nv, off1, size1);
     gl::BindBuffer(GL_ARRAY_BUFFER, 0);
     mesh.clearDirty();
 }
@@ -506,11 +627,24 @@ void Renderer::draw(const Camera& camera, int fbWidth, int fbHeight, const Rende
     };
 
     setMatrices(meshProgram_);
-    gl::Uniform3fv(gl::GetUniformLocation(meshProgram_, "uColor"), 1, glm::value_ptr(settings.baseColor));
+    gl::Uniform3fv(gl::GetUniformLocation(meshProgram_, "uBaseColor"), 1, glm::value_ptr(settings.baseColor));
+    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uPaint"), settings.showPolypaint && hasColors_ ? 1 : 0);
+    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uShowMask"), settings.showMask && hasMask_ ? 1 : 0);
+    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uGroups"), settings.showPolygroups ? (hasGroups_ ? 1 : 2) : 0);
+    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uGroupIds"), 1);
+    // Constant values for the attribute arrays that are disabled.
+    if (!hasColors_) gl::VertexAttrib3f(3, 1.0f, 1.0f, 1.0f);
+    if (!hasMask_) gl::VertexAttrib1f(4, 0.0f);
+    gl::ActiveTexture(GL_TEXTURE1);
+    gl::BindTexture(GL_TEXTURE_BUFFER, hasGroups_ ? groupTexture_ : 0);
+    gl::ActiveTexture(GL_TEXTURE0);
     gl::Enable(GL_POLYGON_OFFSET_FILL);
     gl::PolygonOffset(1.0f, 1.0f);
     gl::DrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr);
     gl::Disable(GL_POLYGON_OFFSET_FILL);
+    gl::ActiveTexture(GL_TEXTURE1);
+    gl::BindTexture(GL_TEXTURE_BUFFER, 0);
+    gl::ActiveTexture(GL_TEXTURE0);
 
     if (settings.wireframe) {
         setMatrices(wireProgram_);

@@ -3,6 +3,7 @@
 #include "core/ImageTo3D.h"
 
 #include "core/Primitives.h"
+#include "core/Sculpt.h"
 
 #include <algorithm>
 #include <cmath>
@@ -74,7 +75,7 @@ size_t projectImage(Mesh& mesh, int layer, const Image& image, const glm::mat4& 
         if (u < 0.0f || u > 1.0f || t < 0.0f || t > 1.0f) continue;
         float facing = glm::dot(mesh.normals[v], glm::normalize(cameraPos - p));
         float f = std::clamp((facing - 0.05f) / 0.25f, 0.0f, 1.0f); // fade at grazing angles
-        float h = heightAt(image, u, t, o.invert) * f;
+        float h = heightAt(image, u, t, o.invert) * f * vertexInfluence(mesh, v); // respects mask/hidden like brushes
         if (h <= 0.0f) continue;
         glm::vec3 d = mesh.normals[v] * (o.depth * h);
         mesh.positions[v] += d;

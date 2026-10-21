@@ -258,7 +258,10 @@ endif()
 
 # --- Tests ---
 if(SCULPTFORGE_BUILD_TESTS)
-  add_executable(sculptforge_tests tests/test_main.cpp src/cli/McpServer.cpp)
+  # tests/test_main.cpp plus every tests/test_*.cpp (add a file to add tests; see tests/TestHarness.h).
+  file(GLOB SCULPTFORGE_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.cpp)
+  add_executable(sculptforge_tests ${SCULPTFORGE_TEST_SOURCES} src/cli/McpServer.cpp)
+  target_include_directories(sculptforge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(sculptforge_tests PRIVATE sculptforge_core sculptforge_ai)
   if(MSVC)
     target_compile_options(sculptforge_tests PRIVATE /utf-8)

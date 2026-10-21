@@ -60,6 +60,7 @@ Mesh decimate(const Mesh& src, size_t targetTriangles) {
 
     const auto& P = src.positions;
     std::vector<glm::uvec3> F = src.triangles;
+    std::vector<glm::vec2> FUV = src.uvs.size() == nt * 3 ? src.uvs : std::vector<glm::vec2>(); // per corner
     std::vector<char> faceAlive(nt, 1);
     std::vector<std::vector<uint32_t>> vFaces(nv);
     for (uint32_t f = 0; f < nt; ++f)
@@ -170,6 +171,12 @@ Mesh decimate(const Mesh& src, size_t targetTriangles) {
         }
         if (!ok) continue;
 
+        // Corners that move from u to v take v's UV from a collapsed face
+        // (approximate across UV seams).
+        glm::vec2 uvOfV(0.0f);
+        if (!FUV.empty())
+            for (int k = 0; k < 3; ++k)
+                if (F[shared[0]][k] == v) uvOfV = FUV[size_t(shared[0]) * 3 + size_t(k)];
         for (uint32_t f : shared) {
             faceAlive[f] = 0;
             --liveFaces;
@@ -177,7 +184,10 @@ Mesh decimate(const Mesh& src, size_t targetTriangles) {
         for (uint32_t f : vFaces[u]) {
             if (!faceAlive[f]) continue;
             for (int k = 0; k < 3; ++k)
-                if (F[f][k] == u) F[f][k] = v;
+                if (F[f][k] == u) {
+                    F[f][k] = v;
+                    if (!FUV.empty()) FUV[size_t(f) * 3 + size_t(k)] = uvOfV;
+                }
             vFaces[v].push_back(f);
         }
         vFaces[u].clear();
@@ -208,9 +218,17 @@ Mesh decimate(const Mesh& src, size_t targetTriangles) {
             t[k] = r;
         }
         out.triangles.push_back(t);
+        // Surviving faces keep their group, visibility and (updated) corner UVs.
+        if (src.polygroups.size() == nt) out.polygroups.push_back(src.polygroups[f]);
+        if (src.hidden.size() == nt) out.hidden.push_back(src.hidden[f]);
+        if (!FUV.empty()) out.uvs.insert(out.uvs.end(), FUV.begin() + std::ptrdiff_t(f) * 3, FUV.begin() + std::ptrdiff_t(f) * 3 + 3);
     }
     out.positions.reserve(kept.size());
     for (uint32_t v : kept) out.positions.push_back(src.positions[v]);
+    if (src.mask.size() == nv)
+        for (uint32_t v : kept) out.mask.push_back(src.mask[v]);
+    if (src.colors.size() == nv)
+        for (uint32_t v : kept) out.colors.push_back(src.colors[v]);
     if (!src.layers.empty()) {
         for (uint32_t v : kept) out.base.push_back(src.base[v]);
         for (const auto& l : src.layers) {
