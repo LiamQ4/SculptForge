@@ -243,6 +243,14 @@ private:
     int maskGroup_ = 0;
     float maskCanvasX_ = 0.0f, maskCanvasY_ = 0.0f;
     bool maskCanvasMoved_ = false;
+    // Polygroups & visibility (PanelPolygroups.cpp): Ctrl+Shift click/drag.
+    bool polygroupMouseDown(float x, float y, SDL_Keymod mod); // true if it took the click
+    void polygroupMouseUp();
+    void drawPolygroupsSection();
+    void drawPolygroupOverlay();
+    bool hideRectActive_ = false;
+    float hideRectX_ = 0.0f, hideRectY_ = 0.0f;
+    float polygroupAngle_ = 30.0f;
 };
 
 } // namespace sf

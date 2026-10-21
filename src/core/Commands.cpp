@@ -6,6 +6,7 @@
 #include "core/EnginePresets.h"
 #include "core/ImageTo3D.h"
 #include "core/Masking.h"
+#include "core/Polygroups.h"
 #include "core/Primitives.h"
 #include "core/Splats.h"
 #include "core/Voxel.h"
@@ -599,6 +600,7 @@ CommandRegistry::CommandRegistry() {
          }});
 
     registerMaskingCommands(*this);
+    registerPolygroupCommands(*this);
 }
 
 void CommandRegistry::add(Command cmd) { commands_.push_back(std::move(cmd)); }
