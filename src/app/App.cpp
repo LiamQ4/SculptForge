@@ -970,7 +970,7 @@ void App::drawUi() {
                 "Frame model       F\n"
                 "Subdivide         Ctrl+D\n"
                 "Undo / Redo       Ctrl+Z / Ctrl+Shift+Z\n"
-                "Open / Save       Ctrl+O / Ctrl+S\n"
+                "Open / Save       Ctrl+O / Ctrl+S (project; Shift: Save As)\n"
                 "Tablet pressure is used automatically when a pen is detected.\n"
                 "Drop a model (.obj/.glb), brush (.sfbrush) or image onto the window.");
         }
@@ -1822,8 +1822,8 @@ void App::drawBrushCursor() {
                 : inverted                         ? IM_COL32(255, 110, 110, 200)
                                                    : IM_COL32(255, 190, 120, 200);
     if (!masking && paintMode_ && activeBrush() != BrushType::Smooth) { // Paint brush: ring in the paint colour
-        const glm::vec3 c = linearToSrgb(inverted ? glm::vec3(1.0f) : doc_.paintColor);
-        col = ImGui::GetColorU32(ImVec4(c.x, c.y, c.z, 0.9f));
+        const glm::vec3 pc = linearToSrgb(inverted ? glm::vec3(1.0f) : doc_.paintColor);
+        col = ImGui::GetColorU32(ImVec4(pc.x, pc.y, pc.z, 0.9f));
     }
     dl->AddCircle(c, r, col, 64, 1.5f);
     dl->AddCircle(c, r * (0.25f + 0.75f * (1.0f - strength_)), IM_COL32(255, 255, 255, 60), 48, 1.0f);

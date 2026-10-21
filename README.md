@@ -48,19 +48,30 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 | Image or text → sculptable 3D model | **Built in** (free models) | No |
 | Gaussian splats, OpenUSD / USDZ | **Built in** | No |
 | AI agents (MCP), headless scripting | **Built in** | ZScript |
-| Multiresolution (subdivision levels), ZRemesher-class retopology, polypaint, UVs | Not yet ([roadmap](ROADMAP.md)) | Yes |
+| Masking, polygroups, visibility (Ctrl / Ctrl+Shift), polypaint, MatCaps | **Yes** (development version) | Yes |
+| GoZ exchange with ZBrush | **Yes** (development version; not yet tested against a live ZBrush) | Yes |
+| Multiresolution (subdivision levels), dynamic topology, ZRemesher-class retopology, UV unwrapping | Not yet ([roadmap](ROADMAP.md)) | Yes |
 
-SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models over as OBJ, FBX or GLB.
+SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models over with GoZ (`.GoZ` files
+keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 
 > **Status: early release (v0.1).** The core sculpting, pipeline and AI features work and are tested on every
-> commit. Multiresolution sculpting, masking, retopology, UVs and texture painting are still on the
-> [roadmap](ROADMAP.md).
+> commit. The development version on `main` adds masking, polygroups, polypaint, project files and GoZ (see the
+> [changelog](CHANGELOG.md)). Multiresolution sculpting, dynamic topology, retopology, UV unwrapping and texture
+> painting are still on the [roadmap](ROADMAP.md).
 
 ## Features
 
 **Sculpting**
-- Standard, Clay, Smooth, Move, Inflate, Crease, Flatten and Pinch brushes; X/Y/Z symmetry; tablet pressure;
-  ZBrush-style modifiers and navigation.
+- Standard, Clay, Smooth, Move, Inflate, Crease, Flatten, Pinch, Dam Standard, Clay Buildup, Snake Hook, Trim,
+  Layer and Nudge brushes; X/Y/Z symmetry; tablet pressure; ZBrush-style modifiers and navigation.
+- Stroke types (dots, drag-rect, spray, lazy mouse) and brush alphas (built-in or any grayscale image).
+- **Masking** (Ctrl to paint, invert, blur, sharpen, grow/shrink, mask by cavity or polygroup) that every brush
+  respects.
+- **Polygroups and visibility** the ZBrush way: auto groups, Ctrl+Shift isolate / hide, rectangle hide, delete
+  hidden.
+- **Polypaint** (Paint brush, RGB while sculpting, fills, cavity paint) and six MatCap materials.
+- **Project files** (`.sfproj`) that keep everything, with an unsaved-changes prompt, recent files and autosave.
 - Unlimited undo, Loop subdivision, **voxel remesh** (DynaMesh-style) and quadric decimation.
 - **Sculpt layers** that work as blend shapes, with live weights and playback.
 
@@ -84,7 +95,11 @@ SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models 
   another one on your network, with no plugin to install. Static meshes come with LODs, skeletal meshes with
   morph targets. See [docs/unreal.md](docs/unreal.md).
 - **FBX** (binary 7.4, LOD groups, blend shapes), **glTF/GLB** (morph targets), **OpenUSD** USDA/USDZ (UsdSkel
-  blend shapes), OBJ and PLY. Exports are checked with the Khronos glTF validator and OpenUSD's `usdchecker`.
+  blend shapes), OBJ, PLY and STL. Exports are checked with the Khronos glTF validator and OpenUSD's `usdchecker`.
+
+**ZBrush interchange**
+- `.GoZ` import/export with polygroups, mask, polypaint and UVs, and a GoZ bridge (Send / Receive) on Windows and
+  macOS. See [docs/goz.md](docs/goz.md); the live bridge hasn't been tested against a running ZBrush yet.
 
 **Gaussian splats**
 - Open phone captures (Polycam, Luma, Postshot, Scaniverse and others) as a sculpting reference, convert them
@@ -196,14 +211,20 @@ argument `--mcp`. The agent gets every command as a tool and works on one live s
 | Smooth | Hold **Shift** |
 | Rotate | Left-drag background, or right-drag |
 | Pan | Alt + left-drag background, or middle-drag |
-| Zoom | Mouse wheel, or Ctrl + left-drag background |
+| Zoom | Mouse wheel, Ctrl + middle-drag, or Ctrl + left-drag background when nothing is masked |
+| Paint / erase mask | Hold **Ctrl** / **Ctrl+Alt** while stroking |
+| Invert / clear mask | Ctrl + click / Ctrl + drag on the background |
+| Isolate / hide polygroup | Ctrl+Shift + click / Ctrl+Shift+Alt + click |
+| Show all | Ctrl+Shift + click on the background |
+| Hide outside / inside a rectangle | Ctrl+Shift + drag / Ctrl+Shift+Alt + drag |
 | Brush size | `[` / `]` |
-| Select brush | `1`–`8` |
+| Select brush | `1`–`9`, `0` |
+| Paint brush / pick colour | `P` / `C` |
 | Toggle X symmetry / wireframe | `X` / `W` |
 | Frame model | `F` |
 | Subdivide | Ctrl+D |
 | Undo / Redo | Ctrl+Z / Ctrl+Shift+Z |
-| Open / Save | Ctrl+O / Ctrl+S |
+| Open / Save project / Save as | Ctrl+O / Ctrl+S / Ctrl+Shift+S |
 | Export GLB | Ctrl+E |
 | Send to Unreal | Ctrl+U |
 

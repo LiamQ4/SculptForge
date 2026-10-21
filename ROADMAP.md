@@ -17,7 +17,7 @@
 | Unreal Engine | FBX export / GoZ-style bridges | FBX export | No | No | **Send to Unreal (live, no plugin), LODs + morph targets in one FBX** |
 | Agent control (MCP) | No | Add-ons only | No | No | **Built in: `sculptforge-cli --mcp`** |
 | Blend shapes / LODs / GLB | Via export plugins | Yes (general 3D) | Partial | No | **Built in, one click** |
-| Open file formats | Proprietary .ZTL | .blend | Proprietary | OBJ | **OBJ, FBX, glTF, PLY, USD/USDZ** |
+| Open file formats | Proprietary .ZTL | .blend | Proprietary | OBJ | **OBJ, FBX, glTF, PLY, STL, USD/USDZ, GoZ** |
 
 Where SculptForge aims to win:
 
@@ -74,13 +74,22 @@ retopology, a full ZBrush feature list, rendering/animation (use Blender).
 
 ## Phase 2 — Detail & workflow (v0.2–0.3)
 
-- 📋 Masking (paint, invert, blur, mask-by-cavity) with brushes respecting masks
+- ✅ Masking: Ctrl paints / Ctrl+Alt erases the mask, invert, clear, blur, sharpen, grow, shrink,
+  mask by cavity and by polygroup; every brush and polypaint respect the mask
+- ✅ Polygroups (auto by normals, by connectivity, from mask, merge visible) and ZBrush-style visibility:
+  Ctrl+Shift isolate / hide a group, rectangle hide, show all, invert, delete hidden
 - 📋 Multiresolution: subdivision levels you can step up/down while keeping detail
 - 📋 Dynamic topology (local remeshing under the brush)
-- 📋 Alphas / stencils and stroke types (drag-rect, spray, lazy mouse)
-- 📋 More brushes: Clay Buildup, Dam Standard, Snake Hook, Trim, Layer, Nudge
-- 📋 MatCap materials, cavity/AO shading
-- 📋 Quit-with-unsaved-changes prompt, recent files, project file format
+- ✅ Alphas (round, square, noise or any grayscale image) and stroke types (dots, drag-rect, spray, lazy mouse)
+- 📋 Stencils; marquee / lasso masking and lasso hiding
+- ✅ More brushes: Clay Buildup, Dam Standard, Snake Hook, Trim (dynamic), Layer, Nudge
+- ✅ MatCap materials (six built in), with the existing cavity shading on top
+- 📋 Ambient occlusion shading
+- ✅ Project file format (`.sfproj`: mesh, layers, mask, polypaint, polygroups, visibility, UVs, splats, brushes,
+  view settings), quit-with-unsaved-changes prompt, recent files, autosave with restore
+- ✅ ZBrush GoZ interchange: `.GoZ` import/export with polygroups, mask, polypaint and UVs, plus the GoZ bridge
+  (Send / Receive) on Windows and macOS. The format follows the GoB add-on; the live bridge has not yet been
+  tested against a running ZBrush
 - 📋 Multithreaded brush evaluation, partial GPU uploads per BVH node
 - 📋 Benchmarks: brush latency at 1M / 5M / 20M triangles in CI
 
@@ -101,8 +110,11 @@ retopology, a full ZBrush feature list, rendering/animation (use Blender).
 - 📋 Boolean merge/subtract on the voxel pipeline; sharper voxel remesh (signed distance instead of occupancy)
 - 📋 Retopology tools and quad remeshing
 - 📋 Multiple subtools/objects, layers
-- 📋 Vertex painting (polypaint), UVs, texture baking (normal/displacement)
-- 📋 STL, binary USD (usdc), SPZ-compressed splats, USD references/payloads
+- ✅ Polypaint: Paint brush, RGB while sculpting, colour pick, fill (respecting the mask), cavity paint;
+  exported to PLY, glTF, OBJ, USD and GoZ
+- 📋 UV unwrapping and editing, texture baking (normal/displacement)
+- ✅ STL import/export (binary and ASCII)
+- 📋 Binary USD (usdc), SPZ-compressed splats, USD references/payloads
 - 📋 Splat editing: crop box, paint-select, sculpt deforming nearby splats
 
 ## Phase 5 — Ecosystem (v1.0)
