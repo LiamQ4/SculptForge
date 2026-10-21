@@ -14,8 +14,11 @@
 #include "core/Voxel.h"
 #include "io/FbxIO.h"
 #include "io/GltfIO.h"
+#include "io/GozCommands.h"
+#include "io/GozIO.h"
 #include "io/ObjIO.h"
 #include "io/PlyIO.h"
+#include "io/StlIO.h"
 #include "io/UsdIO.h"
 
 #include <algorithm>
@@ -110,7 +113,7 @@ CommandRegistry::CommandRegistry() {
          }});
 
     add({"open",
-         "Open a file: models (.obj, .fbx, .glb, .gltf, .ply, .usda, .usdz) replace the scene; Gaussian splats "
+         "Open a file: models (.obj, .fbx, .glb, .gltf, .ply, .stl, .usda, .usdz, ZBrush .GoZ) replace the scene; Gaussian splats "
          "(.ply/.splat captures, KHR_gaussian_splatting .glb, USD ParticleField) load as a reference next to the sculpt. "
          "glTF morph targets and FBX/USD blend shapes become sculpt layers.",
          {{"path", T::String, "File path (UTF-8).", true}},
@@ -120,11 +123,15 @@ CommandRegistry::CommandRegistry() {
              Mesh m;
              SplatCloud splats;
              std::string err;
+             GozInfo goz;
              bool ok;
              if (ext == ".glb" || ext == ".gltf") ok = loadGltf(path, m, err, &splats);
              else if (ext == ".usda" || ext == ".usd" || ext == ".usdz") ok = loadUsd(path, m, splats, err);
              else if (ext == ".splat") ok = loadDotSplat(path, splats, err);
              else if (ext == ".fbx") ok = loadFbx(path, m, err);
+             else if (ext == ".goz") ok = loadGoz(path, m, err, &goz);
+             else if (ext == ".stl") ok = loadStl(path, m, err);
+             else if (ext == ".ztl" || ext == ".zpr" || ext == ".zbr") return {false, zbrushProprietaryMessage(ext)};
              else if (ext == ".ply") {
                  PlyContent content;
                  ok = loadPly(path, m, splats, content, err);
@@ -134,6 +141,7 @@ CommandRegistry::CommandRegistry() {
              if (m.triangleCount()) {
                  doc.setMesh(std::move(m));
                  doc.path = ext == ".obj" ? path : std::string(); // other formats are exported explicitly
+                 if (ext == ".goz") doc.gozName = goz.name;
                  msg += " (" + std::to_string(doc.mesh.triangleCount()) + " triangles" +
                         (doc.mesh.layers.empty() ? "" : ", " + std::to_string(doc.mesh.layers.size()) + " layers") + ")";
              }
@@ -605,6 +613,7 @@ CommandRegistry::CommandRegistry() {
     registerMaskingCommands(*this);
     registerPolygroupCommands(*this);
     registerPaintCommands(*this); // core/Polypaint.cpp
+    registerGozCommands(*this); // goz_import/export/send/receive, export_stl (io/GozCommands.cpp)
 }
 
 void CommandRegistry::add(Command cmd) { commands_.push_back(std::move(cmd)); }

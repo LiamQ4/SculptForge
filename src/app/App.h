@@ -282,6 +282,23 @@ private:
     void beginPaintStroke();
     void finishPaintStroke(UndoRecord& record);
     const BrushRecipe* strokeRecipe() const; // recipe the current stroke sculpts with (none for Smooth / paint only)
+    // ZBrush GoZ bridge and GoZ/STL files (PanelGoz.cpp).
+    void drawGozMenu();
+    void pollGoz();
+    void runGozCommand(const std::string& name, const Args& args = {});
+    static void SDLCALL onGozFileChosen(void* userdata, const char* const* files, int filter);
+    enum class GozFile { Import, Export, ExportStl, Count };
+    struct GozDialog {
+        App* app;
+        GozFile kind;
+    };
+    GozDialog gozDialogs_[int(GozFile::Count)];
+    std::vector<std::pair<GozFile, std::string>> gozPendingFiles_; // guarded by pendingMutex_
+    char gozFolder_[512] = "";   // custom GoZ root (empty = the platform default)
+    bool gozAutoReceive_ = false; // import whenever ZBrush rewrites GoZ_ObjectList.txt
+    long long gozListTime_ = 0;   // last seen modification time of the object list
+    Uint64 gozLastPollNs_ = 0;
+    bool gozInitialised_ = false;
 };
 
 } // namespace sf

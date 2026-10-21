@@ -38,6 +38,8 @@ struct Document {
     uint64_t splatsVersion = 0; // bump after editing `splats` so views re-upload
     void splatsChanged() { ++splatsVersion; }
     bool bvhDirty = false; // set after whole-mesh deformations (e.g. layer weights)
+    // SubTool name of a mesh that came from ZBrush (GoZ), so sending it back updates that SubTool.
+    std::string gozName;
 
     void syncBvh() {
         if (bvhDirty) bvh.build(mesh);

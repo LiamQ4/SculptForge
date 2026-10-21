@@ -15,6 +15,7 @@ void Document::setMesh(Mesh m) {
     modified = false;
     activeLayer = -1;
     bvhDirty = false;
+    gozName.clear();
 }
 
 int Document::addBrush(BrushRecipe recipe) {

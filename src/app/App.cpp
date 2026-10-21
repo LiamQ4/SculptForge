@@ -42,7 +42,7 @@ namespace {
 const SDL_DialogFileFilter kObjFilters[] = {{"Wavefront OBJ", "obj"}, {"All files", "*"}};
 const SDL_DialogFileFilter kGlbFilters[] = {{"glTF binary", "glb"}, {"All files", "*"}};
 const SDL_DialogFileFilter kBrushFilters[] = {{"SculptForge brush", "sfbrush"}, {"All files", "*"}};
-const SDL_DialogFileFilter kModelFilters[] = {{"Models and splats", "obj;fbx;glb;gltf;ply;splat;usda;usd;usdz"}, {"All files", "*"}};
+const SDL_DialogFileFilter kModelFilters[] = {{"Models and splats", "obj;fbx;glb;gltf;ply;stl;GoZ;goz;splat;usda;usd;usdz"}, {"All files", "*"}};
 const SDL_DialogFileFilter kFbxFilters[] = {{"FBX", "fbx"}, {"All files", "*"}};
 const SDL_DialogFileFilter kUsdFilters[] = {{"USDZ package", "usdz"}, {"USD text", "usda"}};
 const SDL_DialogFileFilter kSplatFilters[] = {{"Gaussian splats (PLY)", "ply"}, {"glTF splats", "glb"}, {"OpenUSD", "usda;usdz"}};
@@ -366,6 +366,7 @@ int App::run() {
         pollBrushRequest();
         pollGenerator();
         pollUnreal();
+        pollGoz();
 
         int fbW = 0, fbH = 0, winW = 0, winH = 0;
         SDL_GetWindowSizeInPixels(window_, &fbW, &fbH);
@@ -988,6 +989,8 @@ void App::drawMenuBar() {
         if (ImGui::MenuItem("Export FBX for Unreal...")) saveFileDialog(FileAction::ExportUnreal);
         if (ImGui::MenuItem("Send to Unreal", "Ctrl+U", false, !pendingUnreal_.valid())) sendToUnreal();
         if (ImGui::MenuItem("Save Splats...", nullptr, false, !doc_.splats.empty())) saveFileDialog(FileAction::SaveSplats);
+        ImGui::Separator();
+        drawGozMenu();
         ImGui::Separator();
         if (ImGui::MenuItem("Quit")) running_ = false;
         ImGui::EndMenu();

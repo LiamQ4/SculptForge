@@ -54,6 +54,9 @@ add_library(sculptforge_core STATIC
   src/io/PlyIO.cpp
   src/io/UsdIO.cpp
   src/io/Zip.cpp
+  src/io/GozIO.cpp
+  src/io/GozCommands.cpp
+  src/io/StlIO.cpp
 )
 target_include_directories(sculptforge_core PUBLIC src PRIVATE third_party/stb third_party/ufbx)
 # Third-party C code: compile quietly.
@@ -113,6 +116,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelPolygroups.cpp
     src/app/PanelBrushes.cpp
     src/app/PanelPolypaint.cpp
+    src/app/PanelGoz.cpp
     src/render/GL.cpp
     src/render/Camera.cpp
     src/render/Renderer.cpp
