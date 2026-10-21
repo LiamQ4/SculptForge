@@ -27,16 +27,54 @@ jobs:
           - { name: Windows, os: windows-2022 }
     steps:
       - uses: actions/checkout@v4
-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: sudo ./packaging/linux/install-build-deps.sh
-
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF
-
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF
+          -DSCULPTFORGE_BUILD_PYTHON=ON -DPython_EXECUTABLE="${{ env.pythonLocation }}/${{ runner.os == 'Windows' && 'python.exe' || 'bin/python3' }}"
       - name: Build
         run: cmake --build build --config Release --parallel
-
-      - name: Test
+      - name: Test (C++ and Python API)
         run: ctest --test-dir build -C Release --output-on-failure
+
+  # VFX Reference Platform (vfxplatform.com): GCC 14.2 with glibc 2.28 (CY2026, EL8)
+  # or glibc 2.34 (CY2027, EL9), C++20, Python 3.13.
+  vfx-platform:
+    name: VFX Reference Platform ${{ matrix.cy }} (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { cy: CY2026, image: 'rockylinux:8', glibc: '2.28' }
+          - { cy: CY2027, image: 'rockylinux:9', glibc: '2.34' }
+    steps:
+      - run: dnf -y install git
+      - uses: actions/checkout@v4
+      - run: ./packaging/linux/install-build-deps.sh
+      - name: Python 3.13 (python-build-standalone via uv)
+        run: |
+          curl -LsSf https://astral.sh/uv/0.9.5/install.sh | sh
+          ~/.local/bin/uv python install 3.13
+          echo "PYTHON313=$(~/.local/bin/uv python find 3.13)" >> "$GITHUB_ENV"
+      - name: Build and test with GCC 14
+        run: |
+          source /opt/rh/gcc-toolset-14/enable
+          gcc --version | head -1
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF \
+            -DSCULPTFORGE_BUILD_PYTHON=ON -DPython_EXECUTABLE="$PYTHON313"
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+      - name: Check binary compatibility (glibc <= ${{ matrix.glibc }})
+        run: |
+          for f in build/sculptforge build/sculptforge-cli build/sculptforge*.so; do
+            max=$(objdump -T "$f" | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)
+            echo "$f needs $max"
+            [ "$(printf '%s\n' "GLIBC_${{ matrix.glibc }}" "$max" | sort -V | tail -1)" = "GLIBC_${{ matrix.glibc }}" ]
+          done

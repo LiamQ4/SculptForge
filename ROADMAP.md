@@ -69,6 +69,7 @@ retopology, a full ZBrush feature list, rendering/animation (use Blender).
 - ✅ PLY mesh / point cloud import
 - ✅ Unreal Engine: binary FBX 7.4 export (LOD groups, blend shapes), FBX import (ufbx), Unreal preset,
   Send to Unreal over Python remote execution (same machine or LAN)
+- ✅ Studio pipelines: VFX Reference Platform CY2026/CY2027 builds, Python 3.13 API, Rez package
 - ✅ MCP server (`sculptforge-cli --mcp`): every command as a tool for Claude Code / Claude Desktop / any MCP client
 
 ## Phase 2 — Detail & workflow (v0.2–0.3)
@@ -106,6 +107,7 @@ retopology, a full ZBrush feature list, rendering/animation (use Blender).
 
 ## Phase 5 — Ecosystem (v1.0)
 
-- 📋 Python scripting & plugin API built on the command registry
+- 📋 OpenColorIO viewport, Alembic export, USD layers/variants/references and `.usdc`
+- 📋 Plugin API on top of the Python module
 - 📋 Installers: AppImage/Flatpak, signed macOS .dmg, Windows MSI
 - 📋 Documentation site and tutorials

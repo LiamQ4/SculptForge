@@ -23,6 +23,7 @@
       <nav aria-label="Main">
         <a href="#features">Features</a>
         <a href="#demos">Demos</a>
+        <a href="#studios">Studios</a>
         <a href="#download">Download</a>
         <a href="https://github.com/islandmed/SculptForge#readme">Docs</a>
         <a class="gh" href="https://github.com/islandmed/SculptForge">GitHub</a>
@@ -185,11 +186,45 @@
                 <tr><td>Image / text to 3D</td><td class="yes">Built in</td><td>No</td><td>Add-ons</td><td>No</td></tr>
                 <tr><td>Gaussian splats</td><td class="yes">Built in</td><td>No</td><td>Add-ons</td><td>No</td></tr>
                 <tr><td>AI agent control (MCP)</td><td class="yes">Built in</td><td>No</td><td>Add-ons</td><td>No</td></tr>
+                <tr><td>VFX Reference Platform builds</td><td class="yes">CY2026/27</td><td>No</td><td class="yes">Yes</td><td>No</td></tr>
               </tbody>
             </table>
           </div>
           <p class="fine">SculptForge is young. It doesn't yet have retopology, UVs or texture painting.
             <a href="https://github.com/islandmed/SculptForge/blob/main/ROADMAP.md">See the roadmap</a>.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="studios" class="section">
+      <div class="wrap two-col">
+        <div>
+          <h2>Built for studio pipelines</h2>
+          <p>Animation, VFX and game studios run their own pipelines. SculptForge fits into them instead of
+            asking them to fit around it.</p>
+          <ul class="checks">
+            <li><strong>VFX Reference Platform CY2026 &amp; CY2027.</strong> Built and tested on Rocky Linux 8 and 9
+              with GCC 14.2, C++20 and Python 3.13.</li>
+            <li><strong>Python API</strong> (<code>import sculptforge</code>) with NumPy mesh access, plus a
+              <strong>Rez</strong> package for deployment.</li>
+            <li><strong>Native Linux</strong>, a headless CLI, farm rendering, and <strong>no licence server</strong>,
+              seats or accounts.</li>
+            <li><strong>OpenUSD, FBX and glTF</strong> in and out, with blend shapes and LODs.</li>
+          </ul>
+          <p><a href="https://github.com/islandmed/SculptForge/blob/main/docs/studios.md">Read the studio guide →</a></p>
+        </div>
+        <div>
+          <h2>Make it yours</h2>
+          <p>SculptForge is GPL-3.0. Fork it and wire it into your asset system. The GPL only asks you to share
+            source if you <em>distribute</em> a modified version outside your organisation, so in-house changes can
+            stay in-house.</p>
+          <pre class="code"><code>import sculptforge as sf
+
+doc = sf.Document()
+sf.run(doc, "open", path="troll_base.fbx")
+sf.run(doc, "remesh", resolution=320)
+sf.run(doc, "export_usd", path="troll.usda")
+verts = doc.vertices   # NumPy (N, 3)</code></pre>
         </div>
       </div>
     </section>

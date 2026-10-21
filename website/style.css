@@ -132,3 +132,7 @@ p { margin: 0 0 1em; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
 }
+
+.code { background: #0b0b0e; border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; overflow-x: auto;
+        font: 0.88rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #e4e4ea; }
+.code code { background: none; padding: 0; }

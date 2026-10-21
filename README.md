@@ -109,6 +109,13 @@ SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models 
   </tr>
 </table>
 
+## For studios and pipelines
+
+Built for studios with their own pipelines: **[VFX Reference Platform](https://vfxplatform.com) CY2026/CY2027
+builds** (GCC 14, glibc 2.28/2.34, C++20, Python 3.13), a **Python API** (`import sculptforge`), a **Rez**
+package, headless CLI and farm rendering, OpenUSD/FBX/glTF, native Linux, and no licence server. The GPL lets
+you modify it in-house without publishing your changes. See **[docs/studios.md](docs/studios.md)**.
+
 ## Install
 
 Download the latest build for your system from the
@@ -119,7 +126,8 @@ Download the latest build for your system from the
 | Windows 10/11 | Installer (`.exe`) or portable `.zip` |
 | macOS 11+ (Apple Silicon & Intel) | `.dmg` |
 | Ubuntu / Debian / Mint / Pop!_OS | `.deb` (x86_64, ARM64): `sudo apt install ./sculptforge_*.deb` |
-| Fedora / RHEL 9+ / Rocky / Alma | `.rpm` (x86_64, ARM64): `sudo dnf install ./sculptforge-*.rpm` |
+| Fedora / RHEL / Rocky / Alma 8+ | `.rpm` (x86_64, ARM64): `sudo dnf install ./sculptforge-*.rpm` |
+| Studio pipelines | VFX Reference Platform `…-vfx2026.tar.gz` / `…-vfx2027.tar.gz`, or the [Rez package](packaging/rez/package.py) |
 | Any Linux | `.AppImage` (x86_64, ARM64) |
 | Arch Linux | AUR: `yay -S sculptforge` ([PKGBUILD](packaging/arch/PKGBUILD)) |
 
@@ -210,7 +218,8 @@ src/link     Live links to game engines (Unreal Python remote execution)
 src/cli      sculptforge-cli and its MCP server
 src/render   OpenGL 3.3 renderer, splat renderer, offscreen capture
 src/app      SDL3 + Dear ImGui application, scripted demo recorder
-packaging    Linux desktop/AppStream files, Windows resources, Arch PKGBUILD
+src/python   Python module (import sculptforge)
+packaging    Linux desktop/AppStream files, Windows resources, Arch PKGBUILD, Rez package
 website      Project website (GitHub Pages)
 tests        Unit tests
 ```

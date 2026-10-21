@@ -30,6 +30,11 @@ First public release.
 - Game-ready presets: one-click LOD chains; Unreal Engine preset and **Send to Unreal** over Python remote
   execution (same machine or local network).
 - `sculptforge-cli` for scripting and pipelines, with an MCP server (`--mcp`) for AI agents.
+
+### Studios
+- VFX Reference Platform CY2026 / CY2027 builds (Rocky Linux 8/9, GCC 14, C++20), verified in CI.
+- Python 3.13 module (`import sculptforge`): every command, NumPy mesh access, layers, scripts.
+- Rez package (`packaging/rez`).
 - Headless thumbnail/turntable rendering and scripted demo recording.
 
 [0.1.0]: https://github.com/islandmed/SculptForge/releases/tag/v0.1.0

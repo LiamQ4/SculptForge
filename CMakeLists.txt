@@ -11,8 +11,15 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(SCULPTFORGE_BUILD_APP "Build the SculptForge desktop application" ON)
+option(SCULPTFORGE_BUILD_PYTHON "Build the Python module (import sculptforge)" OFF)
+set(SCULPTFORGE_PACKAGE_SUFFIX "" CACHE STRING "Extra tag in package file names, e.g. vfx2026")
 option(SCULPTFORGE_BUILD_TESTS "Build unit tests" ON)
 option(SCULPTFORGE_USE_SYSTEM_SDL "Use an installed SDL3 if one is found" ON)
+if(SCULPTFORGE_BUILD_TESTS)
+  enable_testing()
+endif()
+# Position-independent code so the core libraries can also go into the Python module.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include(cmake/Dependencies.cmake)
 
@@ -191,6 +198,9 @@ if(APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES ";")
   set(SF_ARCH universal)
 endif()
 set(CPACK_PACKAGE_FILE_NAME "SculptForge-${PROJECT_VERSION}-${SF_OS}-${SF_ARCH}")
+if(SCULPTFORGE_PACKAGE_SUFFIX)
+  string(APPEND CPACK_PACKAGE_FILE_NAME "-${SCULPTFORGE_PACKAGE_SUFFIX}")
+endif()
 set(CPACK_STRIP_FILES ON)
 # Debian / Ubuntu
 set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
@@ -225,10 +235,32 @@ else()
 endif()
 include(CPack)
 
+# --- Python module ---
+if(SCULPTFORGE_BUILD_PYTHON)
+  find_package(Python 3.9 REQUIRED COMPONENTS Interpreter Development.Module)
+  FetchContent_Declare(pybind11
+    URL https://github.com/pybind/pybind11/archive/refs/tags/v3.0.4.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  FetchContent_MakeAvailable(pybind11)
+  pybind11_add_module(sculptforge_python MODULE src/python/module.cpp)
+  set_target_properties(sculptforge_python PROPERTIES OUTPUT_NAME sculptforge)
+  target_link_libraries(sculptforge_python PRIVATE sculptforge_core sculptforge_ai)
+  target_compile_definitions(sculptforge_python PRIVATE SCULPTFORGE_VERSION="${PROJECT_VERSION}")
+  set(SCULPTFORGE_PYTHON_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}/python${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}/site-packages"
+      CACHE STRING "Where to install the Python module")
+  install(TARGETS sculptforge_python LIBRARY DESTINATION ${SCULPTFORGE_PYTHON_INSTALL_DIR})
+  if(SCULPTFORGE_BUILD_TESTS)
+    add_test(NAME python_api COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=$<TARGET_FILE_DIR:sculptforge_python>
+             ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_python.py)
+  endif()
+endif()
+
 # --- Tests ---
 if(SCULPTFORGE_BUILD_TESTS)
-  enable_testing()
   add_executable(sculptforge_tests tests/test_main.cpp src/cli/McpServer.cpp)
   target_link_libraries(sculptforge_tests PRIVATE sculptforge_core sculptforge_ai)
+  if(MSVC)
+    target_compile_options(sculptforge_tests PRIVATE /utf-8)
+  endif()
   add_test(NAME sculptforge_tests COMMAND sculptforge_tests)
 endif()

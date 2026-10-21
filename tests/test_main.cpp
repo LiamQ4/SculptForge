@@ -379,7 +379,8 @@ TEST(script_parser_and_pipeline) {
 TEST(json_roundtrip) {
     Json j;
     std::string err;
-    CHECK(Json::parse(R"({"a":[1,2.5,-3e2],"b":{"c":"x\"yé\n"},"d":true,"e":null})", j, err));
+    const std::string text = "{\"a\":[1,2.5,-3e2],\"b\":{\"c\":\"x\\\"y\xc3\xa9\\n\"},\"d\":true,\"e\":null}";
+    CHECK(Json::parse(text, j, err));
     CHECK(j["a"].size() == 3 && j["a"][1].asNumber() == 2.5 && j["a"][2].asNumber() == -300.0);
     CHECK(j["b"]["c"].asString() == "x\"y\xc3\xa9\n");
     CHECK(j["d"].asBool() && j["e"].isNull() && j["missing"].isNull());
