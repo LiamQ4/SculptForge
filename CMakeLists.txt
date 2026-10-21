@@ -32,6 +32,7 @@ add_library(sculptforge_core STATIC
   src/core/Primitives.cpp
   src/core/Document.cpp
   src/core/Commands.cpp
+  src/core/Polygroups.cpp
   src/core/Decimate.cpp
   src/core/Script.cpp
   src/core/Json.cpp
@@ -103,6 +104,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/main.cpp
     src/app/App.cpp
     src/app/Demo.cpp
+    src/app/PanelPolygroups.cpp
     src/render/GL.cpp
     src/render/Camera.cpp
     src/render/Renderer.cpp

@@ -459,6 +459,7 @@ void App::onMouseDown(float x, float y, Uint8 button) {
     const SDL_Keymod mod = SDL_GetModState();
     doc_.syncBvh();
     if (button == SDL_BUTTON_LEFT) {
+        if (polygroupMouseDown(x, y, mod)) return;
         RayHit hit;
         if (previewLod_ < 0 && pick(x, y, hit)) {
             beginStroke(x, y, hit);
@@ -489,6 +490,7 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
 }
 
 void App::onMouseUp() {
+    if (hideRectActive_) polygroupMouseUp();
     if (drag_ == Drag::Stroke) endStroke();
     drag_ = Drag::None;
 }
@@ -831,6 +833,7 @@ void App::drawUi() {
             IM_COL32(255, 190, 120, 255), banner.c_str());
     }
     if (!ImGui::GetIO().WantCaptureMouse || drag_ == Drag::Stroke) drawBrushCursor();
+    drawPolygroupOverlay();
 
     if (showAbout_) {
         ImGui::SetNextWindowSize(ImVec2(460 * uiScale_, 0), ImGuiCond_Always);
@@ -867,6 +870,10 @@ void App::drawUi() {
                 "Rotate            Left drag on background / right drag\n"
                 "Pan               Alt + left drag background / middle drag\n"
                 "Zoom              Mouse wheel / Ctrl + left drag background\n"
+                "Isolate polygroup Ctrl+Shift+click (again: invert)\n"
+                "Hide polygroup    Ctrl+Shift+Alt+click\n"
+                "Show all          Ctrl+Shift+click background\n"
+                "Hide outside rect Ctrl+Shift+drag (Alt: inside)\n"
                 "Brush size        [ and ]\n"
                 "Brushes           1-8\n"
                 "Symmetry X        X\n"
@@ -1639,6 +1646,7 @@ void App::drawToolPanel() {
     ImGui::SliderInt("##voxres", &voxelResolution_, 64, 400, "res %d");
     ImGui::Checkbox("Wireframe", &renderSettings_.wireframe);
     ImGui::ColorEdit3("Material", &renderSettings_.baseColor.x, ImGuiColorEditFlags_NoInputs);
+    drawPolygroupsSection();
 
     ImGui::Separator();
     ImGui::Text("%zu verts  %zu tris", doc_.mesh.vertexCount(), doc_.mesh.triangleCount());

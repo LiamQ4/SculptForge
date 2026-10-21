@@ -229,6 +229,15 @@ private:
     const Mesh* lastDisplayed_ = nullptr;
     std::mutex pendingMutex_;
     std::vector<PendingFile> pendingFiles_;
+
+    // Polygroups & visibility (PanelPolygroups.cpp): Ctrl+Shift click/drag.
+    bool polygroupMouseDown(float x, float y, SDL_Keymod mod); // true if it took the click
+    void polygroupMouseUp();
+    void drawPolygroupsSection();
+    void drawPolygroupOverlay();
+    bool hideRectActive_ = false;
+    float hideRectX_ = 0.0f, hideRectY_ = 0.0f;
+    float polygroupAngle_ = 30.0f;
 };
 
 } // namespace sf
