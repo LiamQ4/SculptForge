@@ -12,7 +12,7 @@ void Document::setMesh(Mesh m) {
     mesh.topologyDirty = true;
     bvh.build(mesh);
     undo.clear();
-    modified = false;
+    markClean();
     activeLayer = -1;
     bvhDirty = false;
     gozName.clear();

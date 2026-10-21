@@ -5,6 +5,7 @@
 #include "core/BVH.h"
 #include "core/BrushAlpha.h"
 #include "core/BrushRecipe.h"
+#include "core/Json.h"
 #include "core/Mesh.h"
 #include "core/Sculpt.h"
 #include "core/Splats.h"
@@ -23,7 +24,7 @@ struct Document {
     UndoStack undo;
     Sculptor sculptor;
     std::string path; // empty until saved/loaded
-    bool modified = false;
+    bool modified = false; // set by edits the undo stack doesn't see (e.g. layer weights)
     int activeLayer = -1; // sculpt layer strokes write into (-1 = base)
     // Recipe brush library (built-ins, loaded .sfbrush files, AI-made brushes).
     std::vector<BrushRecipe> brushes = builtinBrushRecipes();
@@ -48,10 +49,29 @@ struct Document {
     // Asset name derived from the document path (for exports).
     std::string assetName() const;
 
+    // App-owned state saved in projects (camera, render, brush, symmetry, ...):
+    // the app fills it before saving and applies it after opening; the core
+    // keeps it as loaded so CLI and scripts round-trip it unchanged.
+    Json projectSettings = Json::object();
+
+    // Unsaved changes: any undoable edit, splat edit or `modified` since the
+    // last markClean() (save, open, new scene).
+    bool dirty() const {
+        return modified || undo.revision() != cleanRevision_ || splatsVersion != cleanSplatsVersion_;
+    }
+    void markClean() {
+        modified = false;
+        cleanRevision_ = undo.revision();
+        cleanSplatsVersion_ = splatsVersion;
+    }
+
     // Replaces the mesh and clears the edit history.
     void setMesh(Mesh m);
     // Replaces the mesh as an undoable topology change.
     void replaceMeshUndoable(Mesh m, std::string label);
+
+private:
+    uint64_t cleanRevision_ = 0, cleanSplatsVersion_ = 0;
 };
 
 } // namespace sf

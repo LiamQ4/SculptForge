@@ -11,6 +11,7 @@
 #include "link/UnrealLink.h"
 #include "core/Decimate.h"
 #include "core/ImageTo3D.h"
+#include "core/Project.h"
 #include "core/Script.h"
 #include "render/GL.h"
 
@@ -42,7 +43,7 @@ namespace {
 const SDL_DialogFileFilter kObjFilters[] = {{"Wavefront OBJ", "obj"}, {"All files", "*"}};
 const SDL_DialogFileFilter kGlbFilters[] = {{"glTF binary", "glb"}, {"All files", "*"}};
 const SDL_DialogFileFilter kBrushFilters[] = {{"SculptForge brush", "sfbrush"}, {"All files", "*"}};
-const SDL_DialogFileFilter kModelFilters[] = {{"Models and splats", "obj;fbx;glb;gltf;ply;stl;GoZ;goz;splat;usda;usd;usdz"}, {"All files", "*"}};
+const SDL_DialogFileFilter kModelFilters[] = {{"Projects, models and splats", "sfproj;obj;fbx;glb;gltf;ply;stl;GoZ;goz;splat;usda;usd;usdz"}, {"All files", "*"}};
 const SDL_DialogFileFilter kFbxFilters[] = {{"FBX", "fbx"}, {"All files", "*"}};
 const SDL_DialogFileFilter kUsdFilters[] = {{"USDZ package", "usdz"}, {"USD text", "usda"}};
 const SDL_DialogFileFilter kSplatFilters[] = {{"Gaussian splats (PLY)", "ply"}, {"glTF splats", "glb"}, {"OpenUSD", "usda;usdz"}};
@@ -196,6 +197,7 @@ bool App::init(const AppOptions& options) {
     ImGui_ImplOpenGL3_Init("#version 330 core");
 
     for (int i = 0; i < int(FileAction::Count); ++i) dialogRequests_[i] = {this, FileAction(i)};
+    initProject(); // before opening anything, so it lands in the recent files
     runCommand("new_sphere");
     if (!options.openPath.empty()) openPath(options.openPath);
     if (!options.script.empty()) {
@@ -391,7 +393,9 @@ int App::run() {
         renderer_.draw(camera_, fbW, fbH, renderSettings_);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(window_);
+        tickProject(dt);
     }
+    finishProject();
     return 0;
 }
 
@@ -405,10 +409,10 @@ void App::handleEvent(const SDL_Event& e) {
 
     switch (e.type) {
     case SDL_EVENT_QUIT:
-        running_ = false;
+        requestQuit();
         break;
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-        if (e.window.windowID == SDL_GetWindowID(window_)) running_ = false;
+        if (e.window.windowID == SDL_GetWindowID(window_)) requestQuit();
         break;
     case SDL_EVENT_PEN_PROXIMITY_IN:
         penSeen_ = true;
@@ -435,7 +439,7 @@ void App::handleEvent(const SDL_Event& e) {
             onKey(e.key.key, e.key.mod);
         break;
     case SDL_EVENT_DROP_FILE:
-        if (e.drop.data) openPath(e.drop.data);
+        if (e.drop.data) openPathConfirmed(e.drop.data);
         break;
     default:
         break;
@@ -514,12 +518,9 @@ void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
         case SDLK_Z: runCommand(shift ? "redo" : "undo"); break;
         case SDLK_Y: runCommand("redo"); break;
         case SDLK_D: runCommand("subdivide"); break;
-        case SDLK_O: openFileDialog(); break;
-        case SDLK_S:
-            if (shift || doc_.path.empty()) saveFileDialog(FileAction::SaveObj);
-            else runCommand("save_obj");
-            break;
-        case SDLK_N: runCommand("new_sphere"); break;
+        case SDLK_O: confirmDiscard([this] { openFileDialog(); }); break;
+        case SDLK_S: saveProjectAs(shift); break;
+        case SDLK_N: confirmDiscard([this] { runCommand("new_sphere"); }); break;
         case SDLK_E: saveFileDialog(FileAction::ExportGlb); break;
         case SDLK_U: sendToUnreal(); break;
         default: break;
@@ -723,10 +724,11 @@ void App::endStroke() {
 
 void App::runCommand(const std::string& name, const Args& args) {
     if (doc_.sculptor.strokeActive()) endStroke();
+    if (name == "save_project") storeProjectSettings();
     CommandResult r = commands_.execute(doc_, name, args);
     status_ = r.message;
     if (r.ok && name != "export_glb" && name != "export_lods" && name != "export_usd" && name != "export_fbx" &&
-        name != "export_unreal" && name.rfind("unreal_", 0) != 0 && name != "save_obj" &&
+        name != "export_unreal" && name.rfind("unreal_", 0) != 0 && name != "save_obj" && name != "save_project" &&
         name != "mesh_info" && name.rfind("brush_", 0) != 0 && name.rfind("splat_", 0) != 0 && name != "mesh_to_splats" &&
         name != "set_color" && name != "set_material" && name != "export_ply") {
         clearLods();
@@ -739,6 +741,7 @@ void App::runCommand(const std::string& name, const Args& args) {
                  name == "image_relief" || name == "image_inflate" || name == "splat_to_mesh" ||
                  (name == "splat_transform" && args.contains("fit"))))
         camera_.frame(sceneBounds());
+    afterCommand(name, args, r);
     updateTitle();
 }
 
@@ -754,12 +757,13 @@ void SDLCALL onFileChosen(void* userdata, const char* const* files, int) {
 
 void App::queueFile(FileAction action, std::string path) {
     if (action != FileAction::OpenObj && action != FileAction::LoadBrush && action != FileAction::OpenImage &&
-        std::filesystem::path(std::u8string(path.begin(), path.end())).extension().empty())
+        !path.empty() && std::filesystem::path(std::u8string(path.begin(), path.end())).extension().empty())
         path += action == FileAction::SaveObj      ? ".obj"
                 : action == FileAction::SaveBrush  ? ".sfbrush"
                 : action == FileAction::ExportUsd  ? ".usdz"
                 : action == FileAction::SaveSplats ? ".ply"
                 : action == FileAction::ExportUnreal ? ".fbx"
+                : action == FileAction::SaveProject ? ".sfproj"
                                                    : ".glb";
     std::lock_guard lock(pendingMutex_);
     pendingFiles_.push_back({action, std::move(path)});
@@ -832,6 +836,7 @@ void App::processPendingFiles() {
                                          {"ratio", double(lodRatio_)}});
             break;
         }
+        case FileAction::SaveProject: saveProjectTo(f.path); break;
         case FileAction::Count: break;
         }
     }
@@ -880,7 +885,9 @@ void App::updateTitle() {
     std::string name = doc_.path.empty()
                            ? std::string("Untitled")
                            : std::filesystem::path(std::u8string(doc_.path.begin(), doc_.path.end())).filename().string();
-    std::string title = (doc_.modified ? "* " : "") + name + " - SculptForge";
+    std::string title = (doc_.dirty() ? "* " : "") + name + " - SculptForge";
+    if (title == windowTitle_) return; // called every frame
+    windowTitle_ = title;
     SDL_SetWindowTitle(window_, title.c_str());
 }
 
@@ -889,6 +896,7 @@ void App::updateTitle() {
 // ---------------------------------------------------------------------------
 
 void App::drawUi() {
+    drawProjectPopups();
     if (hideUi_) return; // demos: clean beauty shots
     drawMenuBar();
     drawToolPanel();
@@ -973,16 +981,16 @@ void App::drawUi() {
 void App::drawMenuBar() {
     if (!ImGui::BeginMainMenuBar()) return;
     if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("New Sphere", "Ctrl+N")) runCommand("new_sphere");
-        if (ImGui::MenuItem("New Plane")) runCommand("new_plane");
+        if (ImGui::MenuItem("New Sphere", "Ctrl+N")) confirmDiscard([this] { runCommand("new_sphere"); });
+        if (ImGui::MenuItem("New Plane")) confirmDiscard([this] { runCommand("new_plane"); });
         ImGui::Separator();
-        if (ImGui::MenuItem("Open Model...", "Ctrl+O")) openFileDialog();
+        if (ImGui::MenuItem("Open...", "Ctrl+O")) confirmDiscard([this] { openFileDialog(); });
         if (ImGui::MenuItem("Generate 3D..."))
             SDL_ShowOpenFileDialog(onFileChosen, &dialogRequests_[int(FileAction::OpenImage)], window_, kImageFilters, 2,
                                    nullptr, false);
-        if (ImGui::MenuItem("Save", "Ctrl+S", false, !doc_.path.empty())) runCommand("save_obj");
-        if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) saveFileDialog(FileAction::SaveObj);
+        drawFileMenuProjectItems(); // Open Recent, Save, Save As, autosave
         ImGui::Separator();
+        if (ImGui::MenuItem("Export OBJ...")) saveFileDialog(FileAction::SaveObj);
         if (ImGui::MenuItem("Export GLB (blend shapes)...", "Ctrl+E")) saveFileDialog(FileAction::ExportGlb);
         if (ImGui::MenuItem("Export LOD Chain...")) saveFileDialog(FileAction::ExportLods);
         if (ImGui::MenuItem("Export USD / USDZ...")) saveFileDialog(FileAction::ExportUsd);
@@ -992,7 +1000,7 @@ void App::drawMenuBar() {
         ImGui::Separator();
         drawGozMenu();
         ImGui::Separator();
-        if (ImGui::MenuItem("Quit")) running_ = false;
+        if (ImGui::MenuItem("Quit")) requestQuit();
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Edit")) {

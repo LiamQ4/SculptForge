@@ -68,6 +68,7 @@ void UndoStack::push(UndoRecord record) {
     if (record.empty()) return;
     undo_.push_back(std::move(record));
     redo_.clear();
+    ++revision_;
     enforceBudget();
 }
 
@@ -110,6 +111,7 @@ bool UndoStack::undo(Mesh& mesh, BVH& bvh) {
     undo_.pop_back();
     apply(r, mesh, bvh);
     redo_.push_back(std::move(r));
+    ++revision_;
     return true;
 }
 
@@ -119,6 +121,7 @@ bool UndoStack::redo(Mesh& mesh, BVH& bvh) {
     redo_.pop_back();
     apply(r, mesh, bvh);
     undo_.push_back(std::move(r));
+    ++revision_;
     return true;
 }
 

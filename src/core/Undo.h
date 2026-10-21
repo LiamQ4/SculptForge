@@ -74,6 +74,8 @@ public:
     bool undo(Mesh& mesh, BVH& bvh);
     bool redo(Mesh& mesh, BVH& bvh);
     void clear();
+    // Bumped by every push, undo and redo (unsaved-changes tracking).
+    uint64_t revision() const { return revision_; }
 
     size_t byteBudget = size_t(1) << 30; // 1 GiB
 
@@ -82,6 +84,7 @@ private:
     void enforceBudget();
 
     std::deque<UndoRecord> undo_, redo_;
+    uint64_t revision_ = 0;
 };
 
 } // namespace sf

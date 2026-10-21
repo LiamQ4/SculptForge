@@ -14,6 +14,7 @@
 #include <SDL3/SDL.h>
 #include <imgui.h>
 
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -50,7 +51,7 @@ public:
     int run(); // returns the process exit code
     void shutdown();
 
-    enum class FileAction { OpenObj, SaveObj, ExportGlb, ExportLods, SaveBrush, LoadBrush, OpenImage, ExportUsd, SaveSplats, ExportUnreal, Count };
+    enum class FileAction { OpenObj, SaveObj, ExportGlb, ExportLods, SaveBrush, LoadBrush, OpenImage, ExportUsd, SaveSplats, ExportUnreal, SaveProject, Count };
     struct DialogRequest {
         App* app;
         FileAction action;
@@ -299,6 +300,35 @@ private:
     long long gozListTime_ = 0;   // last seen modification time of the object list
     Uint64 gozLastPollNs_ = 0;
     bool gozInitialised_ = false;
+    // Projects, unsaved-changes safety, recent files and autosave (PanelProject.cpp).
+    bool interactive() const; // false for --render, --record and demos: never prompt
+    void initProject();       // end of init(): recent files, autosave restore offer
+    void finishProject();     // clean exit: marks the session closed normally
+    void tickProject(float dt);
+    void saveProjectAs(bool forceDialog); // Ctrl+S (dialog only when needed) / Ctrl+Shift+S
+    void saveProjectTo(const std::string& path);
+    void storeProjectSettings(); // camera, render, brush and symmetry -> doc_.projectSettings
+    void applyProjectSettings(); // and back, after opening a project
+    void afterCommand(const std::string& name, const Args& args, const CommandResult& r);
+    // Runs `action` now, or after the Save / Don't Save / Cancel prompt if there are unsaved changes.
+    void confirmDiscard(std::function<void()> action);
+    void requestQuit();
+    void openPathConfirmed(const std::string& path); // prompts first if the file replaces the scene
+    void drawProjectPopups();
+    void drawFileMenuProjectItems();
+    void rememberRecent(const std::string& path);
+    void saveProjectPrefs();
+    std::string prefDir_;
+    std::vector<std::string> recentFiles_;
+    std::function<void()> discardAction_;
+    bool openUnsavedPopup_ = false;
+    bool continueAfterSave_ = false; // run discardAction_ once the Save As dialog saved
+    bool offerRestore_ = false;
+    int autosaveMinutes_ = 5; // 0 = off
+    float autosaveTimer_ = 0.0f;
+    uint64_t autosaveRevision_ = ~uint64_t(0);
+    bool autosaveWritten_ = false;
+    std::string windowTitle_;
 };
 
 } // namespace sf
