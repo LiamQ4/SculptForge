@@ -125,14 +125,78 @@ p { margin: 0 0 1em; }
   .downloads { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 620px) {
-  .nav nav a:not(.gh) { display: none; }
-  .grid, .downloads, .footer-grid { grid-template-columns: 1fr; }
+  .nav nav a:not(.gh):not(.nav-dl) { display: none; }
+  .footer-grid { grid-template-columns: 1fr; }
   .footer .links { align-items: flex-start; }
   .section { padding: 64px 0; }
   .hero { padding-top: 40px; }
 }
+/* Grid children may shrink below their content (wide tables and code scroll inside instead of widening the page). */
+.hero-grid > *, .two-col > *, .demo > * { min-width: 0; }
+.lede-short { display: none; }
+.demo video { cursor: pointer; }
+.demo video:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.card { transition: border-color 0.2s, transform 0.2s; }
+.card:hover { border-color: #3a3a44; transform: translateY(-2px); }
+
+/* Scroll reveal (added by script, so content stays visible without JS). */
+.reveal { opacity: 0; transform: translateY(14px); transition: opacity 0.6s ease, transform 0.6s ease; }
+.reveal.shown { opacity: 1; transform: none; }
+
+@media (max-width: 620px) {
+  body { font-size: 16px; }
+  .wrap { padding: 0 16px; }
+  .nav-inner { height: 56px; }
+  .nav nav { gap: 8px; }
+  .nav nav a.nav-dl { display: inline-block; color: #1a0d04; background: linear-gradient(180deg, #f6994d, #e2742a);
+                      padding: 6px 14px; border-radius: 999px; font-weight: 600; }
+
+  /* Hero: headline, one-line pitch, then the video edge to edge. */
+  .hero { padding: 28px 0 44px; }
+  .hero-grid { gap: 0; }
+  .hero-copy { display: contents; }
+  .eyebrow { order: 1; font-size: 0.72rem; margin-bottom: 0.7em; }
+  .hero h1 { order: 2; font-size: 2.6rem; margin-bottom: 0.35em; }
+  .lede { display: none; }
+  .lede-short { display: block; order: 3; color: #cfcfd6; font-size: 1.05rem; margin-bottom: 1.2em; }
+  .hero-video { order: 4; margin: 0 -16px; }
+  .hero-video video { border-radius: 0; border-left: 0; border-right: 0; aspect-ratio: 720 / 866; object-fit: cover;
+                      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5); }
+  .hero-video figcaption { display: none; }
+  .ctas { order: 5; margin: 22px 0 16px; }
+  .ctas .btn { flex: 1; text-align: center; padding: 14px 18px; }
+  .pills { order: 6; justify-content: center; }
+
+  h2 { font-size: 1.7rem; }
+  .section-lede { font-size: 0.98rem; margin-bottom: 28px; }
+
+  /* Feature cards become a swipeable row with the next card peeking in. */
+  .grid { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding: 0 16px; gap: 12px;
+          margin: 0 -16px; padding: 4px 16px 14px; scrollbar-width: none; }
+  .grid::-webkit-scrollbar { display: none; }
+  .card { flex: 0 0 82%; scroll-snap-align: start; }
+  .card:hover { transform: none; }
+
+  .demo { gap: 18px; margin-bottom: 48px; }
+  .demo h3 { font-size: 1.1rem; }
+  .pair { padding: 12px; gap: 10px; }
+
+  /* Comparison: the feature column stays put while the table scrolls sideways. */
+  .table-wrap { margin: 0 -16px; padding: 0 16px; }
+  .compare { font-size: 0.86rem; }
+  .compare th:first-child, .compare td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg);
+                                                     box-shadow: 1px 0 0 var(--border); }
+  .two-col { gap: 48px; }
+  .code { font-size: 0.76rem; padding: 14px 16px; }
+
+  .downloads { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .dl { padding: 14px 16px; }
+  .dl span { font-size: 0.82rem; }
+  .faq details { padding: 14px 16px; }
+}
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
+  .reveal { opacity: 1; transform: none; transition: none; }
 }
 
 .code { background: #0b0b0e; border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; overflow-x: auto;

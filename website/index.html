@@ -15,7 +15,7 @@
   <meta property="og:image" content="https://islandmed.github.io/SculptForge/img/social-preview.png">
   <meta property="og:url" content="https://islandmed.github.io/SculptForge/">
   <meta name="twitter:card" content="summary_large_image">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
   <header class="nav">
@@ -25,7 +25,7 @@
         <a href="#features">Features</a>
         <a href="#demos">Demos</a>
         <a href="#studios">Studios</a>
-        <a href="#download">Download</a>
+        <a class="nav-dl" href="#download">Download</a>
         <a href="https://github.com/islandmed/SculptForge#readme">Docs</a>
         <a class="gh" href="https://github.com/islandmed/SculptForge">GitHub</a>
       </nav>
@@ -43,6 +43,8 @@
             game-ready LODs, <strong>Send to Unreal</strong>, Gaussian splats and OpenUSD, plus <strong>free built-in
             AI</strong>: turn a sketch or a sentence into a model you can sculpt. No account needed, or bring
             your own AI.</p>
+          <p class="lede-short">ZBrush-style sculpting for Linux, macOS and Windows. Free, open source, with
+            game-ready export and free built-in AI.</p>
           <div class="ctas">
             <a class="btn primary" href="#download">Download</a>
             <a class="btn" href="https://github.com/islandmed/SculptForge">View on GitHub</a>
@@ -52,8 +54,15 @@
           </ul>
         </div>
         <figure class="hero-video">
-          <video src="media/showcase.mp4?v=2" poster="media/poster-showcase.jpg?v=2" autoplay muted loop playsinline preload="metadata"
-                 aria-label="Weathering a detailed lion head and turning it to stone in SculptForge"></video>
+          <video id="hero-video" poster="media/poster-showcase.jpg?v=2" autoplay muted loop playsinline preload="metadata"
+                 aria-label="Weathering a detailed lion head and turning it to stone in SculptForge">
+            <source src="media/showcase-mobile.mp4?v=2" type="video/mp4" media="(max-width: 620px)">
+            <source src="media/showcase.mp4?v=2" type="video/mp4">
+          </video>
+          <script>
+            if (matchMedia("(max-width: 620px)").matches)
+              document.getElementById("hero-video").poster = "media/poster-showcase-mobile.jpg?v=2";
+          </script>
           <figcaption>Real recording of SculptForge, scripted demo at 1080p.</figcaption>
         </figure>
       </div>
@@ -116,7 +125,7 @@
           recorder. Waits for AI models are sped up and labelled on screen.</p>
 
         <div class="demo">
-          <video src="media/brush-lab.mp4" poster="media/poster-brush-lab.jpg" controls muted playsinline preload="none"></video>
+          <video aria-label="Brush Lab designing a dry cracked mud brush from a text prompt" src="media/brush-lab.mp4" poster="media/poster-brush-lab.jpg" muted loop playsinline preload="none" data-inview tabindex="0"></video>
           <div>
             <h3>Brush Lab, powered by a local AI</h3>
             <p>Type "dry cracked mud", and a small open model running on the same machine designs the brush. Then
@@ -139,7 +148,7 @@
         </div>
 
         <div class="demo">
-          <video src="media/game-ready.mp4" poster="media/poster-game-ready.jpg" controls muted playsinline preload="none"></video>
+          <video aria-label="Sculpting a blend shape, generating LODs and sending to Unreal" src="media/game-ready.mp4" poster="media/poster-game-ready.jpg" muted loop playsinline preload="none" data-inview tabindex="0"></video>
           <div>
             <h3>Blend shapes, LODs and Unreal</h3>
             <p>Sculpt an expression on its own layer and play it back. Generate a LOD chain and inspect each
@@ -148,7 +157,7 @@
         </div>
 
         <div class="demo reverse">
-          <video src="media/splats.mp4" poster="media/poster-splats.jpg" controls muted playsinline preload="none"></video>
+          <video aria-label="Converting between a sculpt and Gaussian splats" src="media/splats.mp4" poster="media/poster-splats.jpg" muted loop playsinline preload="none" data-inview tabindex="0"></video>
           <div>
             <h3>Gaussian splats, both ways</h3>
             <p>Turn a sculpt into Gaussian splats for web viewers and engines, and turn splat captures into
@@ -307,5 +316,35 @@ verts = doc.vertices   # NumPy (N, 3)</code></pre>
         with no trackers and no cookies.</p>
     </div>
   </footer>
+  <script>
+    // Demo clips play silently while on screen (tap, click or Enter/Space to pause), and sections fade in.
+    (() => {
+      const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const clips = document.querySelectorAll("video[data-inview]");
+      const io = new IntersectionObserver((entries) => {
+        for (const e of entries) {
+          const v = e.target;
+          if (e.isIntersecting && !v.dataset.paused && !still) v.play().catch(() => {});
+          else v.pause();
+        }
+      }, { threshold: 0.5 });
+      for (const v of clips) {
+        io.observe(v);
+        const toggle = () => {
+          if (v.paused) { delete v.dataset.paused; v.play().catch(() => {}); }
+          else { v.dataset.paused = "1"; v.pause(); }
+        };
+        v.addEventListener("click", toggle);
+        v.addEventListener("keydown", (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(); } });
+        if (still) v.controls = true;
+      }
+      if (still) return;
+      const items = document.querySelectorAll(".section h2, .section-lede, .card, .demo, .two-col > div, .dl, .faq details");
+      const reveal = new IntersectionObserver((entries) => {
+        for (const e of entries) if (e.isIntersecting) { e.target.classList.add("shown"); reveal.unobserve(e.target); }
+      }, { rootMargin: "0px 0px -8% 0px" });
+      for (const el of items) { el.classList.add("reveal"); reveal.observe(el); }
+    })();
+  </script>
 </body>
 </html>
