@@ -64,6 +64,11 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 
 ## Features
 
+**A ZBrush-style interface**
+- Shelves around the canvas, alphabetical palettes holding every tool, a LightBox (`,`) of thumbnails, the
+  brush picker (`B`, type letters to pick), hold-Ctrl help on every button, a command palette (F3) and a script
+  console (`` ` ``), and a fully customizable layout with Store Config. See [docs/ui-design.md](docs/ui-design.md).
+
 **Sculpting**
 - Standard, Clay, Smooth, Move, Inflate, Crease, Flatten, Pinch, Dam Standard, Clay Buildup, Snake Hook, Trim,
   Layer and Nudge brushes; X/Y/Z symmetry; tablet pressure; ZBrush-style modifiers and navigation.

@@ -6,6 +6,24 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### A ZBrush-style interface
+- The canvas is framed by shelves, as in ZBrush: a top shelf (LightBox, Sculpt/Paint, Zadd/Zsub, Draw Size,
+  Strength, symmetry, pressure), a left shelf of Brush / Stroke / Alpha / Material pickers with the colour picker,
+  a right shelf of navigation (drag Move / Zoom / Rotate) and display toggles, and a bottom shelf of your most-used
+  brushes. 16 alphabetical palettes hold every tool; the Tool palette (SubTool, Layers, Geometry, Remesh,
+  Masking, Polygroups, Visibility, Export, Display) sits in the right tray, and any palette can move into a tray.
+- LightBox (`,`): projects, models, brushes, alphas, materials, images, splats, QuickSaves and recent files as
+  thumbnails across the top of the canvas; brush thumbnails are sculpted for real; projects save a thumbnail.
+- Pop-up pickers: Brush (`B`, then type letters: B S T = Standard), Material (`M`, previews on the model as you
+  hover), Draw Size / Strength at the cursor (`S` / `I`).
+- Hold Ctrl over any button for what it does, its shortcut and its command (Ctrl+Alt for scripting parameters).
+- Command palette (F3 / Ctrl+Shift+P) finds and runs anything; the console (`` ` ``) shows every command as a
+  script line, with completion and history, and copies the session as a macro.
+- Customize: Preferences > Config > Enable Customize, then Ctrl+Alt+drag to add, move or remove shelf items;
+  Store Config (Ctrl+Shift+I), Restore Standard UI, Save / Load UI, three layout presets, and reassignable
+  shortcuts (Ctrl+Alt+click a button, then press a key). Tab hides the shelves.
+- Lucide icons (ISC/MIT). Brush Lab now opens from the "AI Brush" button instead of covering the model at start.
+
 ### ComfyUI
 - Generate 3D can run on your own ComfyUI (local or a studio GPU server): any API-format workflow, with
   ready-made Hunyuan3D 2.1 image-to-3D and FLUX + Hunyuan3D text-to-3D workflows, a connection test, queue
