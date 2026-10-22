@@ -10,8 +10,13 @@
     "_meta": {"title": "SculptForge Inflate Image"}
   },
   "3": {
+    "class_type": "SculptForgeVoxelRemesh",
+    "inputs": {"mesh": ["2", 0], "resolution": 256},
+    "_meta": {"title": "SculptForge Voxel Remesh"}
+  },
+  "4": {
     "class_type": "SculptForgeExport",
-    "inputs": {"mesh": ["2", 0], "format": "glb", "filename_prefix": "3d/sculptforge_inflate"},
+    "inputs": {"mesh": ["3", 0], "format": "glb", "filename_prefix": "3d/sculptforge_inflate"},
     "_meta": {"title": "SculptForge Export"}
   }
 }

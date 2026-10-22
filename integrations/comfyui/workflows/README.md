@@ -6,7 +6,7 @@ queue them yourself with `POST /prompt`, or drag one onto the ComfyUI canvas to 
 
 | Workflow | Input | What it does | Needs | Runs on |
 |---|---|---|---|---|
-| [`sculptforge-inflate.json`](sculptforge-inflate.json) | image | Inflates a sketch or silhouette into a rounded, closed base mesh with SculptForge, then exports a GLB. | The [ComfyUI-SculptForge](../ComfyUI-SculptForge/) node pack and SculptForge installed. No models. | Any CPU, 1 to 2 seconds |
+| [`sculptforge-inflate.json`](sculptforge-inflate.json) | image | Inflates a sketch or silhouette into a rounded, closed base mesh with SculptForge, voxel-remeshes it into an even, watertight sculpting surface (removing the crease where the front and back halves meet), then exports a GLB. | The [ComfyUI-SculptForge](../ComfyUI-SculptForge/) node pack and SculptForge installed. No models. | Any CPU, about a second |
 | [`hunyuan3d-image-to-3d.json`](hunyuan3d-image-to-3d.json) | image | Hunyuan3D 2.1 image-to-3D with ComfyUI's built-in nodes: a detailed, untextured mesh saved as GLB. | `hunyuan_3d_v2.1.safetensors` (7.4 GB). | A GPU (Tencent quotes about 10 GB of VRAM for shape generation) |
 | [`text-to-3d.json`](text-to-3d.json) | text | FLUX.1 [schnell] draws the object on a plain backdrop, BiRefNet cuts it out onto white, Hunyuan3D 2.1 turns it into a mesh. Also saves the concept image. | `flux1-schnell-fp8.safetensors` (17.2 GB), `birefnet.safetensors` (444 MB), `hunyuan_3d_v2.1.safetensors` (7.4 GB). | A GPU; ComfyUI moves each model in and out of VRAM as it is needed |
 
