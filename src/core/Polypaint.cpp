@@ -3,6 +3,7 @@
 #include "core/Polypaint.h"
 
 #include "core/Commands.h"
+#include "core/SubTools.h"
 #include "io/PlyIO.h"
 
 #include <algorithm>
@@ -323,13 +324,16 @@ void registerPaintCommands(CommandRegistry& registry) {
                   }});
 
     registry.add({"export_ply",
-                  "Export the mesh as a binary PLY with vertex colours (polypaint), for scan tools, MeshLab, Blender.",
+                  "Export the visible SubTools as one binary PLY mesh with vertex colours (polypaint), for scan tools, MeshLab, Blender.",
                   {{"path", T::String, "Output .ply path (UTF-8).", true}},
                   [](Document& doc, const Args& a) -> CommandResult {
                       const std::string path = argString(a, "path");
                       std::string err;
-                      if (!savePlyMesh(path, doc.mesh, err)) return {false, err};
-                      return {true, "Exported " + path + (doc.mesh.hasColors() ? " (with polypaint)" : "")};
+                      Mesh merged; // no copy for a single SubTool
+                      const Mesh& mesh = doc.subtoolCount() == 1 ? doc.mesh : (merged = mergedVisibleMesh(doc));
+                      if (mesh.triangleCount() == 0) return {false, "Nothing visible to export"};
+                      if (!savePlyMesh(path, mesh, err)) return {false, err};
+                      return {true, "Exported " + path + (mesh.hasColors() ? " (with polypaint)" : "")};
                   }});
 }
 

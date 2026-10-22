@@ -63,6 +63,16 @@ std::string lowerExtension(const std::string& path) {
     return ext;
 }
 
+std::string fileStem(const std::string& path) {
+    const auto stem = std::filesystem::path(std::u8string(path.begin(), path.end())).stem().u8string();
+    return std::string(stem.begin(), stem.end());
+}
+
+// " (3 SubTools)" for a multi-object export, else nothing.
+std::string objectCountText(const std::vector<MeshObjectRef>& objects) {
+    return objects.size() > 1 ? " (" + std::to_string(objects.size()) + " SubTools)" : std::string();
+}
+
 std::string jsonEscape(const std::string& s) {
     std::string out;
     for (char c : s) {
@@ -106,50 +116,60 @@ CommandRegistry::CommandRegistry() {
          {{"path", T::String, "File path (UTF-8).", true}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path");
-             Mesh m;
+             std::vector<MeshObject> objects;
              std::string err;
-             if (!loadObj(path, m, err)) return {false, err};
-             doc.setMesh(std::move(m));
+             if (!loadObj(path, objects, err)) return {false, err};
+             const size_t count = objects.size();
+             setSceneObjects(doc, std::move(objects), fileStem(path));
              doc.path = path;
-             return {true, "Loaded " + path};
+             return {true, "Loaded " + path + (count > 1 ? " (" + std::to_string(count) + " SubTools)" : "")};
          }});
 
     add({"open",
          "Open a file: models (.obj, .fbx, .glb, .gltf, .ply, .stl, .usda, .usdz, ZBrush .GoZ) replace the scene; Gaussian splats "
          "(.ply/.splat captures, KHR_gaussian_splatting .glb, USD ParticleField) load as a reference next to the sculpt. "
-         "glTF morph targets and FBX/USD blend shapes become sculpt layers. SculptForge projects (.sfproj) "
+         "glTF morph targets and FBX/USD blend shapes become sculpt layers. Files with several objects (OBJ `o`, "
+         "glTF nodes, FBX models, USD meshes) open as one SubTool each. SculptForge projects (.sfproj) "
          "restore the whole scene.",
          {{"path", T::String, "File path (UTF-8).", true}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path");
              if (isProjectPath(path)) return openProjectCommand(doc, path);
              const std::string ext = lowerExtension(path);
+             std::vector<MeshObject> objects; // one per object in the file (OBJ `o`, glTF node, FBX model, USD prim)
              Mesh m;
              SplatCloud splats;
              std::string err;
              GozInfo goz;
              bool ok;
-             if (ext == ".glb" || ext == ".gltf") ok = loadGltf(path, m, err, &splats);
-             else if (ext == ".usda" || ext == ".usd" || ext == ".usdz") ok = loadUsd(path, m, splats, err);
+             if (ext == ".glb" || ext == ".gltf") ok = loadGltf(path, objects, err, &splats);
+             else if (ext == ".usda" || ext == ".usd" || ext == ".usdz") ok = loadUsd(path, objects, splats, err);
              else if (ext == ".splat") ok = loadDotSplat(path, splats, err);
-             else if (ext == ".fbx") ok = loadFbx(path, m, err);
+             else if (ext == ".fbx") ok = loadFbx(path, objects, err);
              else if (ext == ".goz") ok = loadGoz(path, m, err, &goz);
              else if (ext == ".stl") ok = loadStl(path, m, err);
              else if (ext == ".ztl" || ext == ".zpr" || ext == ".zbr") return {false, zbrushProprietaryMessage(ext)};
              else if (ext == ".ply") {
                  PlyContent content;
                  ok = loadPly(path, m, splats, content, err);
-             } else ok = loadObj(path, m, err);
+             } else ok = loadObj(path, objects, err);
              if (!ok) return {false, err};
+             if (m.triangleCount() > 0) objects.push_back({"", std::move(m)});
+             std::erase_if(objects, [](const MeshObject& o) { return o.mesh.triangleCount() == 0; });
              std::string msg = "Opened " + path;
-             const bool hasMesh = m.triangleCount() > 0;
+             const bool hasMesh = !objects.empty();
              if (hasMesh) {
-                 const auto stem = std::filesystem::path(std::u8string(path.begin(), path.end())).stem().u8string();
-                 doc.setMesh(std::move(m), ext == ".goz" && !goz.name.empty() ? goz.name : std::string(stem.begin(), stem.end()));
+                 size_t tris = 0, layers = 0;
+                 for (const auto& o : objects) {
+                     tris += o.mesh.triangleCount();
+                     layers = std::max(layers, o.mesh.layers.size());
+                 }
+                 const size_t count = objects.size();
+                 setSceneObjects(doc, std::move(objects), ext == ".goz" && !goz.name.empty() ? goz.name : fileStem(path));
                  doc.path = ext == ".obj" ? path : std::string(); // other formats are exported explicitly
                  if (ext == ".goz") doc.gozName = goz.name;
-                 msg += " (" + std::to_string(doc.mesh.triangleCount()) + " triangles" +
-                        (doc.mesh.layers.empty() ? "" : ", " + std::to_string(doc.mesh.layers.size()) + " layers") + ")";
+                 msg += " (" + (count > 1 ? std::to_string(count) + " SubTools, " : std::string()) + std::to_string(tris) +
+                        " triangles" + (layers == 0 ? "" : ", " + std::to_string(layers) + " layers") + ")";
              }
              if (!splats.empty()) {
                  doc.splats = std::move(splats);
@@ -245,16 +265,19 @@ CommandRegistry::CommandRegistry() {
          }});
 
     add({"save_obj",
-         "Export the mesh as a Wavefront OBJ file. OBJ cannot hold the mask, polygroups, visibility, sculpt layers "
-         "or splats, so this is an export: the document keeps its path and unsaved-changes state.",
+         "Export the visible SubTools as a Wavefront OBJ file (one `o` object each, polygroups as `g` groups). OBJ "
+         "cannot hold the mask, visibility, sculpt layers or splats, so this is an export: the document keeps its "
+         "path and unsaved-changes state.",
          {{"path", T::String, "File path (UTF-8). Defaults to the current document path unless that is a project.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path", isProjectPath(doc.path) ? std::string() : doc.path);
              if (path.empty()) return {false, "No path given"};
              if (isProjectPath(path)) return {false, "Use save_project for .sfproj files"};
              std::string err;
-             if (!saveObj(path, doc.mesh, err)) return {false, err};
-             return {true, "Saved " + path};
+             const auto objects = visibleSubtoolObjects(doc);
+             if (objects.empty()) return {false, "Nothing visible to export"};
+             if (!saveObj(path, objects, err)) return {false, err};
+             return {true, "Saved " + path + objectCountText(objects)};
          }});
 
     add({"subdivide",
@@ -333,17 +356,21 @@ CommandRegistry::CommandRegistry() {
          }});
 
     add({"export_glb",
-         "Export a game-ready binary glTF (.glb). Sculpt layers become morph targets (blend shapes).",
+         "Export a game-ready binary glTF (.glb), one node and mesh per visible SubTool. Sculpt layers become "
+         "morph targets (blend shapes).",
          {{"path", T::String, "Output .glb path (UTF-8).", true}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path");
              std::string err;
-             if (!saveGlb(path, doc.mesh, doc.assetName(), err)) return {false, err};
-             return {true, "Exported " + path};
+             const auto objects = visibleSubtoolObjects(doc);
+             if (objects.empty()) return {false, "Nothing visible to export"};
+             if (!saveGlb(path, objects, doc.assetName(), err)) return {false, err};
+             return {true, "Exported " + path + objectCountText(objects)};
          }});
 
     add({"export_usd",
-         "Export OpenUSD (.usda text, or .usdz package for AR Quick Look / Vision Pro). Sculpt layers become "
+         "Export OpenUSD (.usda text, or .usdz package for AR Quick Look / Vision Pro), one Mesh prim per visible "
+         "SubTool. Sculpt layers become "
          "UsdSkel blend shapes with their current weights; loaded Gaussian splats are included as a "
          "ParticleField3DGaussianSplat prim.",
          {{"path", T::String, "Output .usda, .usd or .usdz path (UTF-8).", true},
@@ -352,37 +379,47 @@ CommandRegistry::CommandRegistry() {
              std::string path = argString(a, "path");
              std::string err;
              const SplatCloud* splats = argBool(a, "splats", true) && !doc.splats.empty() ? &doc.splats : nullptr;
-             if (!saveUsd(path, &doc.mesh, splats, doc.assetName(), err)) return {false, err};
-             return {true, "Exported " + path + (splats ? " (mesh + " + std::to_string(splats->size()) + " splats)" : "")};
+             const auto objects = visibleSubtoolObjects(doc);
+             if (!saveUsd(path, objects, splats, doc.assetName(), err)) return {false, err};
+             return {true, "Exported " + path + objectCountText(objects) +
+                               (splats ? " (mesh + " + std::to_string(splats->size()) + " splats)" : "")};
          }});
 
     add({"export_fbx",
-         "Export binary FBX: sculpt layers become blend shapes; with lods > 1 the LOD chain is written as an FBX "
-         "LOD group in the same file.",
+         "Export binary FBX, one model per visible SubTool: sculpt layers become blend shapes; with lods > 1 each "
+         "SubTool's LOD chain is written as an FBX LOD group in the same file.",
          {{"path", T::String, "Output .fbx path (UTF-8).", true},
           {"lods", T::Number, "LOD levels including LOD0 (1-8). Default 1.", false},
           {"ratio", T::Number, "Triangle ratio between LODs (0.1-0.9). Default 0.5.", false},
           {"scale", T::Number, "Multiply positions (FBX units are centimetres). Default 100 (1 unit = 1 m).", false}},
          [](Document& doc, const Args& a) -> CommandResult {
              const int levels = std::clamp(int(argNumber(a, "lods", 1)), 1, 8);
-             std::vector<Mesh> lods;
-             std::vector<const Mesh*> meshes = {&doc.mesh};
-             if (levels > 1) {
-                 lods = generateLods(doc.mesh, levels, float(std::clamp(argNumber(a, "ratio", 0.5), 0.1, 0.9)));
-                 meshes.clear();
-                 for (const auto& l : lods) meshes.push_back(&l);
+             const auto objects = visibleSubtoolObjects(doc);
+             if (objects.empty()) return {false, "Nothing visible to export"};
+             // One model per visible SubTool; with lods > 1 each gets its own LOD group (see FbxIO.h).
+             std::vector<std::vector<Mesh>> lods(objects.size());
+             std::vector<FbxObject> fbxObjects;
+             for (size_t i = 0; i < objects.size(); ++i) {
+                 FbxObject fo{objects[i].name, {objects[i].mesh}};
+                 if (levels > 1) {
+                     lods[i] = generateLods(*objects[i].mesh, levels, float(std::clamp(argNumber(a, "ratio", 0.5), 0.1, 0.9)));
+                     fo.lods.clear();
+                     for (const auto& l : lods[i]) fo.lods.push_back(&l);
+                 }
+                 fbxObjects.push_back(std::move(fo));
              }
              FbxExportOptions o;
              o.scale = float(argNumber(a, "scale", 100.0));
              std::string err;
              const std::string path = argString(a, "path");
-             if (!saveFbx(path, doc.assetName(), meshes, o, err)) return {false, err};
-             return {true, "Exported " + path};
+             if (!saveFbx(path, fbxObjects, o, err)) return {false, err};
+             return {true, "Exported " + path + objectCountText(objects)};
          }});
 
     add({"export_unreal",
          "Export an Unreal Engine-ready FBX: centimetres, SM_/SK_ naming, LOD chain packed for automatic LOD "
-         "import; a sculpt with layers becomes a skeletal mesh with morph targets.",
+         "import; a sculpt with layers becomes a skeletal mesh with morph targets. Every visible SubTool is its own "
+         "model (Unreal's Combine Meshes makes them one asset).",
          {{"folder", T::String, "Output folder (UTF-8). The file is named after the asset.", true},
           {"name", T::String, "Asset name (default SM_<document> or SK_<document>).", false},
           {"height_cm", T::Number, "Model height in Unreal, in cm. Default: 1 unit = 1 m.", false},
@@ -398,12 +435,15 @@ CommandRegistry::CommandRegistry() {
              UnrealExportResult r;
              std::string err;
              if (!exportForUnreal(doc, o, r, err)) return {false, err};
-             return {true, "Exported " + r.path + " (" + (r.skeletal ? "skeletal mesh, " + std::to_string(doc.mesh.layers.size()) + " morph targets"
+             size_t morphs = 0;
+             for (const auto& obj : visibleSubtoolObjects(doc)) morphs += obj.mesh->layers.size();
+             return {true, "Exported " + r.path + " (" + (r.skeletal ? "skeletal mesh, " + std::to_string(morphs) + " morph targets"
                                                                      : "static mesh, " + std::to_string(r.lodCount) + " LODs") + ")"};
          }});
 
     add({"export_lods",
-         "Generate a LOD chain and export each level as <name>_LOD<n>.glb next to `path`. Blend shapes are kept on every LOD.",
+         "Generate a LOD chain of every visible SubTool and export each level as <name>_LOD<n>.glb next to `path`. "
+         "Blend shapes are kept on every LOD.",
          {{"path", T::String, "Base output path, e.g. /assets/rock.glb.", true},
           {"levels", T::Number, "Number of LODs including LOD0 (1-8). Default 4.", false},
           {"ratio", T::Number, "Triangle ratio between consecutive LODs (0.1-0.9). Default 0.5.", false}},
@@ -412,18 +452,29 @@ CommandRegistry::CommandRegistry() {
              std::filesystem::path base(std::u8string(pathArg.begin(), pathArg.end()));
              int levels = std::clamp(int(argNumber(a, "levels", 4)), 1, 8);
              float ratio = float(std::clamp(argNumber(a, "ratio", 0.5), 0.1, 0.9));
-             auto lods = generateLods(doc.mesh, levels, ratio);
+             const auto objects = visibleSubtoolObjects(doc);
+             if (objects.empty()) return {false, "Nothing visible to export"};
+             // Every visible SubTool is decimated on its own; LOD n of each goes into <name>_LOD<n>.glb.
+             std::vector<std::vector<Mesh>> lods;
+             for (const auto& o : objects) lods.push_back(generateLods(*o.mesh, levels, ratio));
              auto stemU8 = base.stem().u8string();
              std::string stem(stemU8.begin(), stemU8.end());
              std::ostringstream msg;
              msg << "Exported";
-             for (size_t i = 0; i < lods.size(); ++i) {
+             for (size_t i = 0; i < lods[0].size(); ++i) {
                  std::string fileName = stem + "_LOD" + std::to_string(i) + ".glb";
                  auto out = (base.parent_path() / std::u8string(fileName.begin(), fileName.end())).u8string();
                  std::string outPath(out.begin(), out.end());
                  std::string err;
-                 if (!saveGlb(outPath, lods[i], stem + "_LOD" + std::to_string(i), err)) return {false, err};
-                 msg << " LOD" << i << " (" << lods[i].triangleCount() << " tris)";
+                 std::vector<MeshObjectRef> level;
+                 size_t tris = 0;
+                 for (size_t k = 0; k < objects.size(); ++k) {
+                     const Mesh& l = lods[k][std::min(i, lods[k].size() - 1)];
+                     level.push_back({objects.size() == 1 ? stem + "_LOD" + std::to_string(i) : objects[k].name, &l});
+                     tris += l.triangleCount();
+                 }
+                 if (!saveGlb(outPath, level, stem + "_LOD" + std::to_string(i), err)) return {false, err};
+                 msg << " LOD" << i << " (" << tris << " tris)";
              }
              return {true, msg.str()};
          }});
@@ -570,16 +621,18 @@ CommandRegistry::CommandRegistry() {
          }});
 
     add({"mesh_to_splats",
-         "Turn the sculpt into Gaussian splats (flat oriented surfels with baked clay shading), replacing any "
+         "Turn the visible SubTools into Gaussian splats (flat oriented surfels with baked clay shading), replacing any "
          "loaded splats - for splat viewers, web scenes and engines that render 3DGS.",
          {{"count", T::Number, "Number of splats (1000-5000000). Default 250000.", false},
           {"shading", T::Bool, "Bake soft lighting and cavity darkening into the colour. Default true.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
-             if (doc.mesh.triangleCount() == 0) return {false, "The mesh is empty"};
+             Mesh merged; // no copy for a single SubTool
+             const Mesh& visible = doc.subtoolCount() == 1 ? doc.mesh : (merged = mergedVisibleMesh(doc));
+             if (visible.triangleCount() == 0) return {false, "The mesh is empty"};
              MeshToSplatsOptions o;
              o.count = size_t(std::clamp(argNumber(a, "count", 250000), 1000.0, 5000000.0));
              o.shading = argBool(a, "shading", true);
-             doc.splats = meshToSplats(doc.mesh, o);
+             doc.splats = meshToSplats(visible, o);
              doc.splats.name = doc.assetName();
              doc.splatsChanged();
              return {true, "Made " + std::to_string(doc.splats.size()) + " splats from the sculpt"};

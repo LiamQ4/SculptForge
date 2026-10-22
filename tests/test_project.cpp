@@ -90,6 +90,21 @@ bool editManifest(const std::string& path, const std::function<void(Json&)>& edi
     return writeStoredZip(path, entries, 1, err);
 }
 
+// Applies `edit` to the "mesh" object of the first SubTool in a manifest.
+void editFirstMesh(Json& j, const std::function<void(Json&)>& edit) {
+    Json subtools = Json::array();
+    for (size_t i = 0; i < j["subtools"].size(); ++i) {
+        Json st = j["subtools"][i];
+        if (i == 0) {
+            Json mesh = st["mesh"];
+            edit(mesh);
+            st.set("mesh", std::move(mesh));
+        }
+        subtools.push(std::move(st));
+    }
+    j.set("subtools", std::move(subtools));
+}
+
 } // namespace
 
 TEST(project_round_trip_every_attribute) {
@@ -184,15 +199,13 @@ TEST(project_version_handling) {
     std::string err;
     CHECK(saveProject(path, doc, err));
     const std::string manifest = readManifest(path);
-    CHECK(manifest.find("\"version\": 1") != std::string::npos || manifest.find("\"version\":1") != std::string::npos);
+    CHECK(manifest.find("\"version\": 2") != std::string::npos || manifest.find("\"version\":2") != std::string::npos);
     CHECK(manifest.find("app_version") != std::string::npos);
 
     // Unknown fields (top level and inside the mesh) are ignored.
     CHECK(editManifest(path, [](Json& j) {
         j.set("shiny_new_thing", Json::object());
-        Json mesh = j["mesh"];
-        mesh.set("creases", "future blob");
-        j.set("mesh", std::move(mesh));
+        editFirstMesh(j, [](Json& mesh) { mesh.set("creases", "future blob"); });
     }));
     Document back;
     CHECK(loadProject(path, back, err));
@@ -215,9 +228,7 @@ TEST(project_version_handling) {
     CHECK(!loadProject(path, keep, err));
     CHECK(saveProject(path, doc, err));
     CHECK(editManifest(path, [](Json& j) {
-        Json mesh = j["mesh"];
-        mesh.set("vertex_count", double(j["mesh"]["vertex_count"].asNumber() + 1));
-        j.set("mesh", std::move(mesh));
+        editFirstMesh(j, [](Json& mesh) { mesh.set("vertex_count", mesh["vertex_count"].asNumber() + 1); });
     }));
     err.clear();
     CHECK(!loadProject(path, keep, err) && !err.empty());

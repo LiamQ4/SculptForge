@@ -9,6 +9,7 @@ write an Unreal-ready FBX for you to import by hand.
 |---|---|
 | No sculpt layers | **Static mesh** `SM_<Name>` with LOD0–LODn from **Game Ready → LODs** (one file, imported as LODs automatically) |
 | Sculpt layers | **Skeletal mesh** `SK_<Name>` with one **morph target** per layer (Unreal adds a single root bone) |
+| Several visible SubTools | One FBX model per SubTool, combined into one asset on import (*Combine Meshes*). Static meshes get a LOD group per SubTool, each decimated on its own, and Unreal puts level *n* of every SubTool into LOD *n*; layers on any visible SubTool make the asset skeletal |
 | Any | Material slot `M_Clay`, real-world size from **Height (cm)** |
 
 Sending the same asset again **updates it in place** (same name and folder), so

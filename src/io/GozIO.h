@@ -12,6 +12,7 @@
 #pragma once
 
 #include "core/Mesh.h"
+#include "io/MeshObject.h"
 
 #include <cstdint>
 #include <span>
@@ -75,9 +76,17 @@ bool gozShellSafePath(const std::string& path);
 // With `launch`, a `zbrushPath` must name an existing ZBrush (its file name
 // contains "zbrush") and it and `root` must pass gozShellSafePath.
 bool gozSend(const Mesh& mesh, const GozSendOptions& options, std::string& message);
+// Sends several objects at once (ZBrush gets one SubTool each): every object is
+// written as <name>.GoZ (gozObjectName, made unique with _2, _3...) and listed
+// in GoZ_ObjectList.txt in order; options.name is not used. `sentNames`
+// receives the object names written.
+bool gozSend(const std::vector<MeshObjectRef>& objects, const GozSendOptions& options, std::string& message,
+             std::vector<std::string>* sentNames = nullptr);
 
 // Reads every object in <root>/GoZBrush/GoZ_ObjectList.txt (what ZBrush last
-// sent) into one mesh. Several SubTools are merged.
+// sent), one per listed SubTool, named after it.
+bool gozReceive(const std::string& root, std::vector<MeshObject>& out, std::string& message);
+// The same merged into one mesh.
 bool gozReceive(const std::string& root, Mesh& out, std::string& message, std::vector<std::string>* names = nullptr);
 
 // Path of the object list ZBrush rewrites on every send (for polling).

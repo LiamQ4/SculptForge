@@ -22,10 +22,11 @@ namespace {
 
 constexpr const char* kFormatName = "SculptForge project";
 constexpr const char* kManifestName = "manifest.json";
-// Top-level manifest keys owned by the core; every other key belongs to
+// Top-level manifest keys owned by the core (mesh, layers and active_layer are
+// version 1); every other key belongs to
 // Document::projectSettings (camera, render, brush, symmetry, ...).
 const char* const kCoreKeys[] = {"format", "version", "app_version", "mesh", "layers", "active_layer",
-                                 "brushes", "active_brush", "splats"};
+                                 "subtools", "active_subtool", "brushes", "active_brush", "splats"};
 
 std::filesystem::path fsPath(const std::string& p) { return std::filesystem::path(std::u8string(p.begin(), p.end())); }
 
@@ -138,6 +139,98 @@ size_t countOf(const Json& j) {
     return n >= 0 && n < 4.0e9 ? size_t(n) : size_t(-1);
 }
 
+
+// Writes a mesh's blobs under `prefix` ("subtools/0/") and sets `mesh` and `layers` in `out`.
+void writeMesh(Writer& w, const std::string& prefix, const Mesh& m, Json& out) {
+    Json mesh = Json::object();
+    mesh.set("vertex_count", double(m.vertexCount()));
+    mesh.set("triangle_count", double(m.triangleCount()));
+    mesh.set("positions", w.vec3s(prefix + "mesh/positions.bin", m.positions));
+    mesh.set("triangles", w.uints(prefix + "mesh/triangles.bin", m.triangles.empty() ? nullptr : &m.triangles[0].x,
+                                  m.triangleCount(), 3));
+    if (!m.layers.empty()) mesh.set("base", w.vec3s(prefix + "mesh/base.bin", m.base));
+    if (m.hasMask()) mesh.set("mask", w.floats(prefix + "mesh/mask.bin", m.mask.data(), m.mask.size(), 1));
+    if (m.hasColors()) mesh.set("colors", w.vec3s(prefix + "mesh/colors.bin", m.colors));
+    if (m.hasPolygroups())
+        mesh.set("polygroups", w.uints(prefix + "mesh/polygroups.bin", m.polygroups.data(), m.polygroups.size(), 1));
+    if (m.hasHidden()) mesh.set("hidden", w.bytes(prefix + "mesh/hidden.bin", m.hidden));
+    if (m.hasUvs()) mesh.set("uvs", w.floats(prefix + "mesh/uvs.bin", &m.uvs[0].x, m.uvs.size(), 2));
+    out.set("mesh", std::move(mesh));
+
+    Json layers = Json::array();
+    for (size_t i = 0; i < m.layers.size(); ++i) {
+        Json l = Json::object();
+        l.set("name", m.layers[i].name);
+        l.set("weight", double(m.layers[i].weight));
+        l.set("delta", w.vec3s(prefix + "layers/" + std::to_string(i) + ".bin", m.layers[i].delta));
+        layers.push(std::move(l));
+    }
+    out.set("layers", std::move(layers));
+}
+
+// Reads a mesh from its `mesh` and `layers` manifest entries (size-checked against the blobs).
+bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& error) {
+    const size_t nv = countOf(mj["vertex_count"]), nt = countOf(mj["triangle_count"]);
+    if (nv == size_t(-1) || nt == size_t(-1)) {
+        error = "Project mesh has no valid vertex/triangle count";
+        return false;
+    }
+    m.triangles.resize(nt);
+    if (!r.vec3s(mj["positions"], "positions", nv, m.positions) ||
+        !r.uints(mj["triangles"], "triangles", nt, 3, nt ? &m.triangles[0].x : nullptr)) {
+        error = r.error;
+        return false;
+    }
+    for (const auto& t : m.triangles)
+        if (t.x >= nv || t.y >= nv || t.z >= nv) {
+            error = "Project triangles reference missing vertices";
+            return false;
+        }
+    if (mj.has("mask")) {
+        m.mask.resize(nv);
+        r.floats(mj["mask"], "mask", nv, 1, m.mask.data());
+    }
+    if (mj.has("colors")) r.vec3s(mj["colors"], "colors", nv, m.colors);
+    if (mj.has("polygroups")) {
+        m.polygroups.resize(nt);
+        r.uints(mj["polygroups"], "polygroups", nt, 1, m.polygroups.data());
+    }
+    if (mj.has("hidden")) {
+        if (const uint8_t* p = r.blob(mj["hidden"], "hidden flags", Scalar::U8, 1, nt)) m.hidden.assign(p, p + nt);
+    }
+    if (mj.has("uvs")) {
+        m.uvs.resize(nt * 3);
+        r.floats(mj["uvs"], "uvs", nt * 3, 2, nt ? &m.uvs[0].x : nullptr);
+    }
+    if (lj.size()) {
+        r.vec3s(mj["base"], "base positions", nv, m.base);
+        for (size_t i = 0; i < lj.size() && r.error.empty(); ++i) {
+            SculptLayer layer;
+            layer.name = lj[i]["name"].asString();
+            layer.weight = float(lj[i]["weight"].asNumber(1.0));
+            r.vec3s(lj[i]["delta"], "layer offsets", nv, layer.delta);
+            m.layers.push_back(std::move(layer));
+        }
+    }
+    if (!r.error.empty()) {
+        error = r.error;
+        return false;
+    }
+    m.rebuildTopology();
+    if (!m.layers.empty()) m.evaluateAll();
+    m.recomputeAllNormals();
+    return true;
+}
+
+// A SubTool read from a project, before it joins the document.
+struct LoadedSubtool {
+    std::string name, gozName;
+    bool visible = true;
+    int activeLayer = -1;
+    Mesh mesh;
+};
+
+constexpr size_t kMaxProjectSubtools = 100000;
 } // namespace
 
 bool isProjectPath(const std::string& path) {
@@ -147,37 +240,28 @@ bool isProjectPath(const std::string& path) {
 }
 
 bool saveProject(const std::string& path, const Document& doc, std::string& error) {
-    const Mesh& m = doc.mesh;
     Writer w;
     Json manifest = Json::object();
     manifest.set("format", kFormatName);
     manifest.set("version", kProjectVersion);
     manifest.set("app_version", SCULPTFORGE_VERSION);
 
-    Json mesh = Json::object();
-    mesh.set("vertex_count", double(m.vertexCount()));
-    mesh.set("triangle_count", double(m.triangleCount()));
-    mesh.set("positions", w.vec3s("mesh/positions.bin", m.positions));
-    mesh.set("triangles", w.uints("mesh/triangles.bin", m.triangles.empty() ? nullptr : &m.triangles[0].x,
-                                  m.triangleCount(), 3));
-    if (!m.layers.empty()) mesh.set("base", w.vec3s("mesh/base.bin", m.base));
-    if (m.hasMask()) mesh.set("mask", w.floats("mesh/mask.bin", m.mask.data(), m.mask.size(), 1));
-    if (m.hasColors()) mesh.set("colors", w.vec3s("mesh/colors.bin", m.colors));
-    if (m.hasPolygroups()) mesh.set("polygroups", w.uints("mesh/polygroups.bin", m.polygroups.data(), m.polygroups.size(), 1));
-    if (m.hasHidden()) mesh.set("hidden", w.bytes("mesh/hidden.bin", m.hidden));
-    if (m.hasUvs()) mesh.set("uvs", w.floats("mesh/uvs.bin", &m.uvs[0].x, m.uvs.size(), 2));
-    manifest.set("mesh", std::move(mesh));
-
-    Json layers = Json::array();
-    for (size_t i = 0; i < m.layers.size(); ++i) {
-        Json l = Json::object();
-        l.set("name", m.layers[i].name);
-        l.set("weight", double(m.layers[i].weight));
-        l.set("delta", w.vec3s("layers/" + std::to_string(i) + ".bin", m.layers[i].delta));
-        layers.push(std::move(l));
+    // Every SubTool with its mesh, layers and state; blobs live under subtools/<i>/.
+    Json subtools = Json::array();
+    for (int i = 0; i < doc.subtoolCount(); ++i) {
+        const SubTool& s = doc.subtools[size_t(i)];
+        const bool active = i == doc.activeSubtool;
+        Json st = Json::object();
+        st.set("name", s.name);
+        st.set("visible", s.visible);
+        writeMesh(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i), st);
+        st.set("active_layer", active ? doc.activeLayer : s.activeLayer);
+        const std::string& gozName = active ? doc.gozName : s.gozName;
+        if (!gozName.empty()) st.set("goz_name", gozName);
+        subtools.push(std::move(st));
     }
-    manifest.set("layers", std::move(layers));
-    manifest.set("active_layer", doc.activeLayer);
+    manifest.set("subtools", std::move(subtools));
+    manifest.set("active_subtool", doc.activeSubtool);
 
     Json brushes = Json::array();
     for (const auto& b : doc.brushes) brushes.push(b.toJson());
@@ -255,59 +339,34 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
         return false;
     }
 
-    // Mesh
-    const Json& mj = manifest["mesh"];
-    const size_t nv = countOf(mj["vertex_count"]), nt = countOf(mj["triangle_count"]);
-    if (nv == size_t(-1) || nt == size_t(-1)) {
-        error = "Project mesh has no valid vertex/triangle count";
-        return false;
-    }
-    Mesh m;
-    m.triangles.resize(nt);
-    if (!r.vec3s(mj["positions"], "positions", nv, m.positions) ||
-        !r.uints(mj["triangles"], "triangles", nt, 3, nt ? &m.triangles[0].x : nullptr)) {
-        error = r.error;
-        return false;
-    }
-    for (const auto& t : m.triangles)
-        if (t.x >= nv || t.y >= nv || t.z >= nv) {
-            error = "Project triangles reference missing vertices";
+    // SubTools: version 1 has one mesh at the top level, version 2 a "subtools" list.
+    std::vector<LoadedSubtool> subtools;
+    int activeSubtool = 0;
+    if (version < 2) {
+        LoadedSubtool s;
+        s.name = "Sculpt";
+        if (!readMesh(r, manifest["mesh"], manifest["layers"], s.mesh, error)) return false;
+        s.activeLayer = int(manifest["active_layer"].asNumber(-1));
+        subtools.push_back(std::move(s));
+    } else {
+        const Json& list = manifest["subtools"];
+        if (!list.isArray() || list.size() == 0 || list.size() > kMaxProjectSubtools) {
+            error = "Project has no valid SubTool list";
             return false;
         }
-    if (mj.has("mask")) {
-        m.mask.resize(nv);
-        r.floats(mj["mask"], "mask", nv, 1, m.mask.data());
-    }
-    if (mj.has("colors")) r.vec3s(mj["colors"], "colors", nv, m.colors);
-    if (mj.has("polygroups")) {
-        m.polygroups.resize(nt);
-        r.uints(mj["polygroups"], "polygroups", nt, 1, m.polygroups.data());
-    }
-    if (mj.has("hidden")) {
-        if (const uint8_t* p = r.blob(mj["hidden"], "hidden flags", Scalar::U8, 1, nt)) m.hidden.assign(p, p + nt);
-    }
-    if (mj.has("uvs")) {
-        m.uvs.resize(nt * 3);
-        r.floats(mj["uvs"], "uvs", nt * 3, 2, nt ? &m.uvs[0].x : nullptr);
-    }
-    const Json& lj = manifest["layers"];
-    if (lj.size()) {
-        r.vec3s(mj["base"], "base positions", nv, m.base);
-        for (size_t i = 0; i < lj.size(); ++i) {
-            SculptLayer layer;
-            layer.name = lj[i]["name"].asString();
-            layer.weight = float(lj[i]["weight"].asNumber(1.0));
-            r.vec3s(lj[i]["delta"], "layer offsets", nv, layer.delta);
-            m.layers.push_back(std::move(layer));
+        for (const Json& sj : list.items()) {
+            LoadedSubtool s;
+            s.name = sj["name"].asString();
+            if (s.name.empty()) s.name = "SubTool";
+            s.visible = sj["visible"].asBool(true);
+            s.gozName = sj["goz_name"].asString();
+            if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error)) return false;
+            s.activeLayer = int(sj["active_layer"].asNumber(-1));
+            subtools.push_back(std::move(s));
         }
+        const double active = manifest["active_subtool"].asNumber(0);
+        activeSubtool = active >= 0 && active < double(subtools.size()) ? int(active) : 0;
     }
-    if (!r.error.empty()) {
-        error = r.error;
-        return false;
-    }
-    m.rebuildTopology();
-    if (!m.layers.empty()) m.evaluateAll();
-    m.recomputeAllNormals();
 
     // Splats
     SplatCloud splats;
@@ -334,12 +393,23 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
         for (size_t i = 0; i < n; ++i) splats.rotations[i] = glm::quat(rot[i * 4 + 3], rot[i * 4], rot[i * 4 + 1], rot[i * 4 + 2]);
     }
 
-    // Everything parsed: replace the scene.
-    doc.setMesh(std::move(m));
+    // Everything parsed: replace the scene. SubTool 0 is checked out first; the others are added
+    // behind it, given their layer and GoZ name, and the saved active SubTool is selected last.
+    auto validLayer = [](int layer, const Mesh& m) { return layer >= 0 && layer < int(m.layers.size()) ? layer : -1; };
+    doc.setMesh(std::move(subtools[0].mesh), subtools[0].name);
+    doc.activeLayer = validLayer(subtools[0].activeLayer, doc.mesh);
+    doc.gozName = subtools[0].gozName;
+    doc.subtools[0].visible = subtools[0].visible;
+    for (size_t i = 1; i < subtools.size(); ++i) {
+        const int at = doc.addSubtool(std::move(subtools[i].mesh), subtools[i].name, false);
+        SubTool& s = doc.subtools[size_t(at)];
+        s.visible = subtools[i].visible;
+        s.activeLayer = validLayer(subtools[i].activeLayer, s.mesh);
+        s.gozName = subtools[i].gozName;
+    }
+    doc.selectSubtool(activeSubtool);
     doc.splats = std::move(splats);
     doc.splatsChanged();
-    const int active = int(manifest["active_layer"].asNumber(-1));
-    doc.activeLayer = active >= 0 && active < int(doc.mesh.layers.size()) ? active : -1;
     for (const auto& b : manifest["brushes"].items())
         if (b.isObject()) doc.addBrush(BrushRecipe::fromJson(b));
     doc.activeBrush = -1;
@@ -357,11 +427,19 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
 CommandResult openProjectCommand(Document& doc, const std::string& path) {
     std::string err;
     if (!loadProject(path, doc, err)) return {false, err};
-    std::string msg = "Opened project " + path + " (" + std::to_string(doc.mesh.triangleCount()) + " triangles";
-    if (!doc.mesh.layers.empty()) msg += ", " + std::to_string(doc.mesh.layers.size()) + " layers";
+    std::string msg = "Opened project " + path + " (";
+    if (doc.subtoolCount() > 1) msg += std::to_string(doc.subtoolCount()) + " SubTools, ";
+    size_t tris = 0, layers = 0;
+    for (int i = 0; i < doc.subtoolCount(); ++i) {
+        tris += doc.subtoolMesh(i).triangleCount();
+        layers += doc.subtoolMesh(i).layers.size();
+    }
+    msg += std::to_string(tris) + " triangles";
+    if (layers) msg += ", " + std::to_string(layers) + " layers";
     if (!doc.splats.empty()) msg += ", " + std::to_string(doc.splats.size()) + " splats";
     return {true, msg + ")"};
 }
+
 
 void registerProjectCommands(CommandRegistry& registry) {
     using T = ParamSpec::Type;

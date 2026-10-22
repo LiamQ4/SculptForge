@@ -15,6 +15,7 @@
 
 #include "core/Mesh.h"
 #include "core/Splats.h"
+#include "io/MeshObject.h"
 
 #include <string>
 
@@ -23,10 +24,17 @@ namespace sf {
 // Either pointer may be null (or empty) but not both. Format by extension.
 bool saveUsd(const std::string& path, const Mesh* mesh, const SplatCloud* splats, const std::string& name,
              std::string& error);
+// One Mesh prim per object (SubTool) under the root Xform `name`, each with its
+// own blend shapes: a single object is the prim "Sculpt" as above, several are
+// named after the objects (made valid and unique).
+bool saveUsd(const std::string& path, const std::vector<MeshObjectRef>& meshes, const SplatCloud* splats,
+             const std::string& name, std::string& error);
 
 // Fills whichever of `mesh` / `splats` the file contains (the other is left
-// empty). Fails if it contains neither.
+// empty; every Mesh prim is merged). Fails if it contains neither.
 bool loadUsd(const std::string& path, Mesh& mesh, SplatCloud& splats, std::string& error);
+// The same with one object per Mesh prim, named after the prim (or its SkelRoot).
+bool loadUsd(const std::string& path, std::vector<MeshObject>& meshes, SplatCloud& splats, std::string& error);
 
 // A valid USD prim name from arbitrary text ("Smile 2" -> "Smile_2").
 std::string usdIdentifier(const std::string& text);

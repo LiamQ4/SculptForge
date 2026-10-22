@@ -18,10 +18,10 @@ Code: `src/io/GozIO.h/.cpp` (format + bridge), `src/io/StlIO.h/.cpp`, `src/io/Go
 | Command | What it does |
 |---------|--------------|
 | `goz_import path=` | Open a `.GoZ` file (`open` does the same for `.GoZ`) |
-| `goz_export path= [name=] [quads=true]` | Write a `.GoZ` file |
-| `goz_send [name=] [folder=] [launch=true] [zbrush=]` | Send the mesh to ZBrush through the bridge |
-| `goz_receive [folder=]` | Load what ZBrush last sent (undoable; several SubTools are merged) |
-| `export_stl path=` | Binary STL (`open` reads binary and ASCII `.stl`) |
+| `goz_export path= [name=] [quads=true]` | Write a `.GoZ` file; with several visible SubTools, one `<stem>_<SubTool>.GoZ` each beside `path` |
+| `goz_send [name=] [folder=] [launch=true] [zbrush=]` | Send every visible SubTool to ZBrush through the bridge (`name=` only for a single one) |
+| `goz_receive [folder=]` | Load what ZBrush last sent: each object updates its SubTool (undoable) or becomes a new one |
+| `export_stl path=` | Binary STL of the visible SubTools merged (`open` reads binary and ASCII `.stl`) |
 
 All of them are available in `sculptforge-cli`, the MCP server and Python, like every other command.
 
@@ -68,8 +68,9 @@ faces with out-of-range indices are dropped, so a broken file cannot read past i
 - **Polygroups.** The 16-bit ids are stored as they are in `Mesh::polygroups`. On export, ids above 65535
   keep only their low 16 bits.
 - **Hidden faces.** GoZ has no hidden flag, so hidden triangles are exported like any others.
-- The object name (`GozInfo::name`) is remembered in `Document::gozName`, so `goz_send` updates the
-  SubTool the mesh came from.
+- The object name (`GozInfo::name`) is remembered per SubTool (`Document::gozName` for the active one,
+  `SubTool::gozName` for the others, saved in projects), so `goz_send` updates the ZBrush SubTool the
+  mesh came from and `goz_receive` updates the SculptForge SubTool it was sent from.
 
 ## The bridge (Windows, macOS)
 
@@ -82,10 +83,14 @@ GoZ apps exchange files through a shared folder:
   field in File > ZBrush (GoZ)), such as a Wine prefix's `drive_c/users/Public/Pixologic`, makes the
   bridge work anyway.
 
-**Send** (`goz_send`), following GoB's `GoB_OT_export.execute`:
+**Send** (`goz_send`), following GoB's `GoB_OT_export.execute`. Every visible SubTool is one GoZ object,
+named after the GoZ name it came with, else its SubTool name (`gozObjectName`; duplicates get `_2`,
+`_3`...), so ZBrush gets them as separate SubTools:
 
-1. Write `GoZProjects/Default/<Name>.GoZ`, plus `<Name>.ztn`, which holds the object path without its extension.
-2. Write that path (forward slashes, no extension) as the only line of `GoZBrush/GoZ_ObjectList.txt`.
+1. Write `GoZProjects/Default/<Name>.GoZ` for each object, plus `<Name>.ztn`, which holds the object path
+   without its extension.
+2. Write those paths (forward slashes, no extension), one line per object in SubTool order, to
+   `GoZBrush/GoZ_ObjectList.txt`.
 3. Write `GoZBrush/GoZ_Application.txt` = `SculptForge` and `GoZBrush/GoZ_ProjectPath.txt`.
 4. Register SculptForge as a GoZ application: `GoZApps/SculptForge/GoZ_Info.txt` (same keys as GoB's
    `Blender/GoZ_Info.txt`) and `GoZ_Config.txt` (`PATH = "<sculptforge executable>"`, written by the app).
@@ -96,8 +101,15 @@ GoZ apps exchange files through a shared folder:
    ZScript, so after a fresh start you press GoZ in ZBrush.
 
 **Receive** (`goz_receive`), following GoB's `GoB_OT_import.execute`: read `GoZ_ObjectList.txt`, append
-`.GoZ` to each line and load every object. The objects are merged into one mesh, and the result replaces the
-current mesh as an undoable step.
+`.GoZ` to each line and load every object. Each object then:
+
+- replaces the mesh of the SubTool whose GoZ name matches (an undoable step in that SubTool's history),
+- or, for the first object when the scene is a single SubTool that didn't come from ZBrush (e.g. a new
+  scene), replaces that SubTool, as receiving did before SubTools,
+- or else is added as a new SubTool named after the object.
+
+The active SubTool stays selected. `gozReceive(root, Mesh&)` still offers the objects merged into one
+mesh for callers that want that.
 
 In the app, **Receive automatically** checks the object list's modification time once a second and
 receives when ZBrush rewrites it, which is what GoB's auto-import timer does. Sending turns it on and
