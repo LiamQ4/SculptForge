@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <thread>
 
 namespace sf {
 
@@ -84,6 +85,27 @@ void blurAxis(std::vector<float>& f, const glm::ivec3& dims, int axis) {
                 f[start + size_t(i) * size_t(step[axis])] = s;
             }
         }
+}
+
+// Closest point to `p` on triangle abc (Ericson, Real-Time Collision Detection 5.1.5).
+glm::vec3 closestOnTriangle(const glm::vec3& p, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c) {
+    const glm::vec3 ab = b - a, ac = c - a, ap = p - a;
+    const float d1 = glm::dot(ab, ap), d2 = glm::dot(ac, ap);
+    if (d1 <= 0.0f && d2 <= 0.0f) return a;
+    const glm::vec3 bp = p - b;
+    const float d3 = glm::dot(ab, bp), d4 = glm::dot(ac, bp);
+    if (d3 >= 0.0f && d4 <= d3) return b;
+    const float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) return a + ab * (d1 / (d1 - d3));
+    const glm::vec3 cp = p - c;
+    const float d5 = glm::dot(ab, cp), d6 = glm::dot(ac, cp);
+    if (d6 >= 0.0f && d5 <= d6) return c;
+    const float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) return a + ac * (d2 / (d2 - d6));
+    const float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f) return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+    const float denom = 1.0f / (va + vb + vc);
+    return a + ab * (vb * denom) + ac * (vc * denom);
 }
 
 } // namespace
@@ -168,10 +190,13 @@ std::vector<uint8_t> solidifyShell(const VoxelGrid& shell, float threshold, int 
 }
 
 Mesh meshFromSolid(const VoxelGrid& grid, const std::vector<uint8_t>& solid, int smoothIterations) {
-    const glm::ivec3 dims = grid.dims;
     std::vector<float> f(solid.begin(), solid.end());
-    for (int axis = 0; axis < 3; ++axis) blurAxis(f, dims, axis);
-    constexpr float iso = 0.5f;
+    for (int axis = 0; axis < 3; ++axis) blurAxis(f, grid.dims, axis);
+    return meshFromField(grid, f, 0.5f, smoothIterations);
+}
+
+Mesh meshFromField(const VoxelGrid& grid, const std::vector<float>& f, float iso, int smoothIterations) {
+    const glm::ivec3 dims = grid.dims;
 
     // One vertex per cell that the surface passes through (surface nets).
     const glm::ivec3 cells = dims - 1;
@@ -270,6 +295,99 @@ void rasterizeMeshShell(const Mesh& mesh, VoxelGrid& grid) {
     }
 }
 
+std::vector<float> insideDistanceField(const Mesh& mesh, const VoxelGrid& grid, const std::vector<uint8_t>& solid, float band) {
+    // Exact distance (in cells) to the nearest triangle for every sample within `band` cells of the surface, found by
+    // visiting the samples around each triangle. z-slabs run on separate threads, so no two threads write a sample.
+    const glm::ivec3 dims = grid.dims;
+    const size_t n = grid.size();
+    std::vector<float> dist2(n, band * band);
+    std::vector<int32_t> nearest(n, -1);
+    const auto& P = mesh.positions;
+    const float inv = 1.0f / grid.cell;
+    auto work = [&](int z0, int z1) {
+        for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
+            const glm::uvec3 tri = mesh.triangles[t];
+            const glm::vec3 a = (P[tri.x] - grid.origin) * inv, b = (P[tri.y] - grid.origin) * inv,
+                            c = (P[tri.z] - grid.origin) * inv;
+            const glm::ivec3 lo = glm::max(glm::ivec3(glm::floor(glm::min(a, glm::min(b, c)) - band)), glm::ivec3(0));
+            const glm::ivec3 hi = glm::min(glm::ivec3(glm::ceil(glm::max(a, glm::max(b, c)) + band)), dims - 1);
+            const int za = std::max(lo.z, z0), zb = std::min(hi.z, z1 - 1);
+            for (int z = za; z <= zb; ++z)
+                for (int y = lo.y; y <= hi.y; ++y)
+                    for (int x = lo.x; x <= hi.x; ++x) {
+                        const glm::vec3 p(x, y, z);
+                        const glm::vec3 d = p - closestOnTriangle(p, a, b, c);
+                        const float d2 = glm::dot(d, d);
+                        const size_t i = grid.index(x, y, z);
+                        if (d2 < dist2[i]) {
+                            dist2[i] = d2;
+                            nearest[i] = int32_t(t);
+                        }
+                    }
+        }
+    };
+    const int threads = int(std::clamp(std::thread::hardware_concurrency(), 1u, 16u));
+    const int slab = (dims.z + threads - 1) / threads;
+    std::vector<std::thread> pool;
+    for (int k = 1; k < threads; ++k)
+        if (k * slab < dims.z) pool.emplace_back(work, k * slab, std::min(dims.z, (k + 1) * slab));
+    work(0, std::min(dims.z, slab));
+    for (auto& th : pool) th.join();
+
+    // Sign: the flood fill is certain about the outside and about the deep inside; next to the surface the
+    // nearest triangle's side decides, which keeps sub-voxel detail instead of voxel stair-steps.
+    std::vector<uint8_t> nearOutside(n, 0);
+    for (int z = 0; z < dims.z; ++z)
+        for (int y = 0; y < dims.y; ++y)
+            for (int x = 0; x < dims.x; ++x) {
+                if (solid[grid.index(x, y, z)]) continue;
+                for (int dz = -2; dz <= 2; ++dz)
+                    for (int dy = -2; dy <= 2; ++dy)
+                        for (int dx = -2; dx <= 2; ++dx) {
+                            const glm::ivec3 q(x + dx, y + dy, z + dz);
+                            if (glm::all(glm::greaterThanEqual(q, glm::ivec3(0))) && glm::all(glm::lessThan(q, dims)))
+                                nearOutside[grid.index(q.x, q.y, q.z)] = 1;
+                        }
+            }
+    std::vector<uint8_t> inside(n);
+    for (int z = 0; z < dims.z; ++z)
+        for (int y = 0; y < dims.y; ++y)
+            for (int x = 0; x < dims.x; ++x) {
+                const size_t i = grid.index(x, y, z);
+                if (!solid[i]) inside[i] = 0;
+                else if (!nearOutside[i] || nearest[i] < 0) inside[i] = 1;
+                else {
+                    const glm::uvec3 tri = mesh.triangles[size_t(nearest[i])];
+                    const glm::vec3 nrm = glm::cross(P[tri.y] - P[tri.x], P[tri.z] - P[tri.x]);
+                    const glm::vec3 p = grid.position(x, y, z);
+                    const glm::vec3 onSurface = closestOnTriangle(p, P[tri.x], P[tri.y], P[tri.z]);
+                    // A surface buried inside another part (solid just outside it too) doesn't bound the solid.
+                    const float len = glm::length(nrm);
+                    const glm::ivec3 probe(glm::round((onSurface + nrm * (2.5f * grid.cell / std::max(len, 1e-20f)) -
+                                                       grid.origin) / grid.cell));
+                    const bool buried = len > 0.0f && glm::all(glm::greaterThanEqual(probe, glm::ivec3(0))) &&
+                                        glm::all(glm::lessThan(probe, dims)) && solid[grid.index(probe.x, probe.y, probe.z)];
+                    inside[i] = buried || glm::dot(p - onSurface, nrm) < 0.0f;
+                }
+            }
+    // Surfaces buried inside the solid (overlapping parts) make small "outside" pockets: anything outside that
+    // can't reach the real outside is inside, so merged parts stay one closed surface.
+    std::vector<uint8_t> reached(n, 0);
+    std::vector<uint32_t> stack;
+    for (size_t i = 0; i < n; ++i)
+        if (!solid[i]) {
+            reached[i] = 1;
+            stack.push_back(uint32_t(i));
+        }
+    floodFill(inside, 0, dims, stack, reached);
+    std::vector<float> f(n);
+    for (size_t i = 0; i < n; ++i) {
+        const float d = std::sqrt(dist2[i]);
+        f[i] = inside[i] || !reached[i] ? d : -d;
+    }
+    return f;
+}
+
 Mesh voxelRemesh(const Mesh& mesh, int resolution, std::string* error) {
     VoxelGrid grid;
     if (mesh.triangleCount() == 0 || !makeVoxelGrid(mesh.bounds(), resolution, 4, grid)) {
@@ -278,11 +396,10 @@ Mesh voxelRemesh(const Mesh& mesh, int resolution, std::string* error) {
     }
     rasterizeMeshShell(mesh, grid);
     std::vector<uint8_t> solid = solidifyShell(grid, 0.5f, 1, true);
-    Mesh out = meshFromSolid(grid, solid, 4);
+    // Mesh the signed distance to the original surface (positive inside), not the blocky occupancy: the result
+    // lands on the original surface with no voxel terracing.
+    Mesh out = meshFromField(grid, insideDistanceField(mesh, grid, solid, 3.0f), 0.0f, 2);
     if (out.triangleCount() == 0 && error) *error = "Remesh produced no surface";
-    // Voxels touched by the surface count as solid, which puts the result half a voxel outside.
-    for (size_t v = 0; v < out.vertexCount(); ++v) out.positions[v] -= out.normals[v] * (0.5f * grid.cell);
-    out.recomputeAllNormals();
     // Mask and polypaint follow the nearest original vertex; polygroups, hidden
     // flags and UVs don't survive a rebuild (everything becomes visible group 0).
     transferVertexAttributes(mesh, out);

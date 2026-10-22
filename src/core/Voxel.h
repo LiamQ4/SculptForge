@@ -42,6 +42,14 @@ std::vector<uint8_t> solidifyShell(const VoxelGrid& shell, float threshold, int 
 // followed by `smoothIterations` of Taubin smoothing. Triangles face outwards.
 Mesh meshFromSolid(const VoxelGrid& grid, const std::vector<uint8_t>& solid, int smoothIterations);
 
+// Surface where `field` crosses `iso` (samples above it are inside), surface nets,
+// then `smoothIterations` of Taubin smoothing. Triangles face outwards.
+Mesh meshFromField(const VoxelGrid& grid, const std::vector<float>& field, float iso, int smoothIterations);
+
+// Signed distance in cells from each sample to `mesh` (positive inside, by `solid`; exact within `band` cells of the
+// surface, +-band beyond).
+std::vector<float> insideDistanceField(const Mesh& mesh, const VoxelGrid& grid, const std::vector<uint8_t>& solid, float band);
+
 // Marks the shell of a triangle mesh in `grid` (value 1 where the surface passes).
 void rasterizeMeshShell(const Mesh& mesh, VoxelGrid& grid);
 
