@@ -53,6 +53,7 @@ add_library(sculptforge_core STATIC
   src/core/Polypaint.cpp
   src/core/Matcap.cpp
   src/core/Project.cpp
+  src/core/Tablet.cpp
   src/io/ObjIO.cpp
   src/io/FbxIO.cpp
   third_party/ufbx/ufbx.c
@@ -148,6 +149,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelGoz.cpp
     src/app/PanelProject.cpp
     src/app/PanelSubTools.cpp
+    src/app/Tablet.cpp
     src/render/GL.cpp
     src/render/Camera.cpp
     src/render/Renderer.cpp

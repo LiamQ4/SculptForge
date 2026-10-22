@@ -24,7 +24,9 @@ bool anyMasked(const Mesh& mesh) {
 
 void App::beginMaskStroke(float x, float y) {
     // Masks are not layered, so the stroke always targets the base (its weight is never 0).
-    strokeInvert_ = (SDL_GetModState() & SDL_KMOD_ALT) != 0; // Ctrl+Alt erases
+    // Ctrl+Alt erases, and so does the pen's eraser end (set to Invert or Erase mask).
+    strokeInvert_ = (inputMods() & SDL_KMOD_ALT) != 0 ||
+                    (erasing() && (eraserAction() == PenAction::Invert || eraserAction() == PenAction::EraseMask));
     if (!doc_.sculptor.beginStroke(doc_.mesh, strokeInvert_ ? "Unmask" : "Mask", -1)) return;
     strokeMask_ = true;
     strokePaint_ = false; // mask strokes never paint or sculpt
@@ -37,7 +39,7 @@ void App::beginMaskStroke(float x, float y) {
     lastY_ = y;
     residual_ = 0.0f;
     lazyMouse_.reset(glm::vec2(x, y));
-    dabAt(x, y);
+    firstDab(x, y);
 }
 
 // ZBrush convention: Ctrl+drag on the background clears the mask. With

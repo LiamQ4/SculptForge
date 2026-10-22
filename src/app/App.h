@@ -19,6 +19,7 @@
 #include "core/Image.h"
 #include "core/Document.h"
 #include "core/Stroke.h"
+#include "core/Tablet.h"
 #include "render/Camera.h"
 #include "render/Renderer.h"
 
@@ -100,7 +101,7 @@ private:
     BrushType activeBrush() const;
     void beginStroke(float x, float y, const RayHit& hit);
     void strokeTo(float x, float y);
-    void dabAt(float x, float y);
+    void dabAt(float x, float y, float pressure = -1.0f); // pressure < 0: strokePressure()
     void endStroke();
 
     void runCommand(const std::string& name, const Args& args = {});
@@ -170,8 +171,7 @@ private:
     Drag drag_ = Drag::None;
     float mouseX_ = 0.0f, mouseY_ = 0.0f;
     float lastX_ = 0.0f, lastY_ = 0.0f, residual_ = 0.0f;
-    float penPressure_ = 1.0f;
-    bool lastInputPen_ = false;
+    bool lastInputPen_ = false; // the last mouse event came from a pen (SDL_PEN_MOUSEID)
     bool penSeen_ = false;
     BrushType strokeBrush_ = BrushType::Standard;
     bool strokeInvert_ = false;
@@ -595,6 +595,38 @@ private:
     std::mutex uiFileMutex_;
     std::vector<std::pair<int, std::string>> uiFiles_; // (kind, path) from file dialogs
     // ---- end Help/Console/Config (C) ----
+
+    // ---- Tablet (Tablet.cpp, core/Tablet.h, docs/tablet.md) ----
+    // SDL turns pen tip contact into left mouse button events (SDL_PEN_MOUSEID); the pen's own events
+    // add pressure, tilt, the eraser end and the side buttons, which are mapped in Preferences > Tablet.
+    bool dropPenMouseEvent(const SDL_Event& e) const; // SDL's version-dependent clicks for pen buttons
+    void handlePenEvent(const SDL_Event& e);
+    void penButton(int button, bool down, float x, float y);
+    void penLeft(); // out of proximity: ends what the pen was doing
+    float strokePressure() const; // pressure after the global curve; 1 for the mouse
+    SDL_Keymod inputMods() const; // the keyboard's modifiers plus those a pen button holds (Alt, Shift)
+    bool erasing() const;         // the pen's eraser end is drawing
+    PenAction eraserAction() const { return uiPrefs_.tablet.eraser; }
+    void firstDab(float x, float y); // the stroke's first dab, once the pen reports a real pressure
+    void drawTabletSection();         // Preferences > Tablet
+    void detectPenName();
+    PenPressureTracker penTracker_;
+    bool penInProximity_ = false, penTouching_ = false, penEraser_ = false;
+    uint32_t penButtons_ = 0; // bit N: pen button N is held
+    int penNavButton_ = 0;    // the pen button driving a view drag (0: none)
+    bool dragFromPen_ = false;
+    bool firstDabPending_ = false;
+    float lastStrokePressure_ = 1.0f; // pressure at the previous stroke sample (dabs in between interpolate)
+    float penTiltX_ = 0.0f, penTiltY_ = 0.0f;
+    bool penTiltSeen_ = false;
+    SDL_PenID penId_ = 0;
+    std::string penName_; // best guess at the device's name (empty: unknown)
+    struct TabletTestSample {
+        ImVec2 at; // relative to the test area
+        float raw, pressure;
+    };
+    std::vector<TabletTestSample> tabletTest_; // Preferences > Tablet draw-test area
+    // ---- end Tablet ----
 };
 
 } // namespace sf

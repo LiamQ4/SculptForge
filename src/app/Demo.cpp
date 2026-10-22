@@ -195,10 +195,11 @@ void Demo::update(float dt) {
 
 // ---------------------------------------------------------------- input
 
-void Demo::mouseMotion(float x, float y) {
+void Demo::mouseMotion(float x, float y, SDL_MouseID which) {
     SDL_Event e{};
     e.type = SDL_EVENT_MOUSE_MOTION;
     e.motion.windowID = SDL_GetWindowID(app_.window_);
+    e.motion.which = which;
     e.motion.x = x;
     e.motion.y = y;
     e.motion.xrel = x - mouse_.x;
@@ -208,16 +209,17 @@ void Demo::mouseMotion(float x, float y) {
     app_.handleEvent(e);
 }
 
-void Demo::mouseButton(bool down, int button) {
+void Demo::mouseButton(bool down, int button, SDL_MouseID which) {
     SDL_Event e{};
     e.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
     e.button.windowID = SDL_GetWindowID(app_.window_);
+    e.button.which = which;
     e.button.button = Uint8(button);
     e.button.down = down;
     e.button.clicks = 1;
     e.button.x = mouse_.x;
     e.button.y = mouse_.y;
-    buttonDown_ = down && button == SDL_BUTTON_LEFT;
+    if (button == SDL_BUTTON_LEFT) buttonDown_ = down;
     app_.handleEvent(e);
 }
 

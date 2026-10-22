@@ -88,7 +88,7 @@ void App::snakeHookTo(float x, float y) {
     if (std::abs(denom) < 1e-6f) return;
     const glm::vec3 target = origin + dir * (glm::dot(grabLast_ - origin, n) / denom);
 
-    const float pressure = lastInputPen_ ? std::clamp(penPressure_, 0.0f, 1.0f) : 1.0f;
+    const float pressure = strokePressure();
     DabParams p;
     p.viewDir = n;
     p.radius = radiusPx_ * (pressureSize_ ? std::max(pressure, 0.05f) : 1.0f) * camera_.worldPerPixel(grabLast_, h);
@@ -115,7 +115,7 @@ void App::dragRectTo(float x, float y) {
     const float len = glm::length(drag);
     if (len < 2.0f) return;
     const glm::quat q = camera_.orientation();
-    const float pressure = lastInputPen_ ? std::clamp(penPressure_, 0.0f, 1.0f) : 1.0f;
+    const float pressure = strokePressure();
 
     DabParams p;
     p.center = dragAnchorHit_;
