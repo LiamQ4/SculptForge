@@ -74,6 +74,33 @@ Mesh makePlane(int resolution, float size) {
     return m;
 }
 
+Mesh makeCube(int resolution, float size) {
+    const int n = std::max(resolution, 1);
+    const float h = size * 0.5f;
+    Mesh raw;
+    // Each side: a grid spanned by axes u, v from its corner, wound to face outwards.
+    const glm::vec3 axes[6][3] = {{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}},  {{-1, 0, 0}, {0, 1, 0}, {0, 0, -1}},
+                                  {{0, 1, 0}, {0, 0, 1}, {1, 0, 0}},  {{0, -1, 0}, {0, 0, 1}, {-1, 0, 0}},
+                                  {{0, 0, 1}, {1, 0, 0}, {0, 1, 0}},  {{0, 0, -1}, {1, 0, 0}, {0, -1, 0}}};
+    for (int f = 0; f < 6; ++f) {
+        const glm::vec3 normal = axes[f][0], u = axes[f][2], v = axes[f][1];
+        const uint32_t first = uint32_t(raw.positions.size());
+        for (int j = 0; j <= n; ++j)
+            for (int i = 0; i <= n; ++i)
+                raw.positions.push_back(h * (normal + (2.0f * float(i) / float(n) - 1.0f) * u +
+                                             (2.0f * float(j) / float(n) - 1.0f) * v));
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                const uint32_t a = first + uint32_t(j * (n + 1) + i), b = a + 1, c = a + uint32_t(n + 1), d = c + 1;
+                raw.triangles.push_back({a, c, b}); // (v x u) = outward normal on every side
+                raw.triangles.push_back({b, c, d});
+                raw.polygroups.push_back(uint32_t(f + 1));
+                raw.polygroups.push_back(uint32_t(f + 1));
+            }
+    }
+    return weldImported(raw);
+}
+
 Mesh loopSubdivide(const Mesh& src) {
     const uint32_t nv = static_cast<uint32_t>(src.vertexCount());
 

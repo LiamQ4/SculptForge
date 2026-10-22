@@ -1,0 +1,358 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "core/SubTools.h"
+
+#include "core/Commands.h"
+#include "core/Polygroups.h"
+#include "core/Primitives.h"
+
+#include <algorithm>
+#include <filesystem>
+#include <map>
+#include <numeric>
+
+namespace sf {
+
+Mesh mergeMeshes(const std::vector<const Mesh*>& meshes) {
+    Mesh out;
+    bool mask = false, colors = false, hidden = false, uvs = false;
+    std::vector<std::string> layerNames;
+    std::map<std::string, float> layerWeights;
+    for (const Mesh* m : meshes) {
+        mask |= m->hasMask();
+        colors |= m->hasColors();
+        hidden |= m->hasHidden();
+        uvs |= m->hasUvs();
+        for (const auto& l : m->layers)
+            if (layerWeights.emplace(l.name, l.weight).second) layerNames.push_back(l.name);
+    }
+    for (const auto& name : layerNames) out.layers.push_back({name, {}, layerWeights[name]});
+
+    uint32_t groupOffset = 0;
+    for (const Mesh* m : meshes) {
+        const uint32_t first = uint32_t(out.positions.size());
+        const size_t nv = m->vertexCount(), nt = m->triangleCount();
+        out.positions.insert(out.positions.end(), m->positions.begin(), m->positions.end());
+        for (const auto& t : m->triangles) out.triangles.push_back(t + glm::uvec3(first));
+        if (mask) {
+            if (m->hasMask()) out.mask.insert(out.mask.end(), m->mask.begin(), m->mask.end());
+            else out.mask.resize(out.mask.size() + nv, 0.0f);
+        }
+        if (colors) {
+            if (m->hasColors()) out.colors.insert(out.colors.end(), m->colors.begin(), m->colors.end());
+            else out.colors.resize(out.colors.size() + nv, glm::vec3(1.0f));
+        }
+        if (hidden) {
+            if (m->hasHidden()) out.hidden.insert(out.hidden.end(), m->hidden.begin(), m->hidden.end());
+            else out.hidden.resize(out.hidden.size() + nt, 0);
+        }
+        if (uvs) {
+            if (m->hasUvs()) out.uvs.insert(out.uvs.end(), m->uvs.begin(), m->uvs.end());
+            else out.uvs.resize(out.uvs.size() + nt * 3, glm::vec2(0.0f));
+        }
+        // Groups stay distinct per input, so "split by groups" gives the pieces back.
+        uint32_t maxGroup = 0;
+        for (uint32_t t = 0; t < nt; ++t) {
+            const uint32_t g = m->polygroupAt(t);
+            out.polygroups.push_back(groupOffset + g);
+            maxGroup = std::max(maxGroup, g);
+        }
+        groupOffset += maxGroup + 1;
+        if (!layerNames.empty()) {
+            const auto& base = m->basePositions();
+            out.base.insert(out.base.end(), base.begin(), base.end());
+            for (auto& ol : out.layers) {
+                auto it = std::find_if(m->layers.begin(), m->layers.end(), [&](const SculptLayer& l) { return l.name == ol.name; });
+                if (it != m->layers.end()) ol.delta.insert(ol.delta.end(), it->delta.begin(), it->delta.end());
+                else ol.delta.resize(ol.delta.size() + nv, glm::vec3(0.0f));
+            }
+        }
+    }
+    // Group ids start at 0 in the first input; shift so ids are 1-based like new groups elsewhere.
+    for (auto& g : out.polygroups) ++g;
+    out.rebuildTopology();
+    if (!out.layers.empty()) out.evaluateAll(); // weights of same-named layers may have differed
+    out.recomputeAllNormals();
+    return out;
+}
+
+Mesh mergedVisibleMesh(const Document& doc) {
+    if (doc.subtoolCount() == 1) return doc.mesh;
+    std::vector<const Mesh*> meshes;
+    for (int i = 0; i < doc.subtoolCount(); ++i)
+        if (doc.subtools[size_t(i)].visible && doc.subtoolMesh(i).triangleCount()) meshes.push_back(&doc.subtoolMesh(i));
+    if (meshes.empty()) return Mesh();
+    if (meshes.size() == 1) return *meshes.front();
+    return mergeMeshes(meshes);
+}
+
+std::vector<Mesh> splitByPolygroups(const Mesh& mesh) {
+    std::vector<uint32_t> ids;
+    for (uint32_t t = 0; t < mesh.triangleCount(); ++t) ids.push_back(mesh.polygroupAt(t));
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    std::vector<Mesh> out;
+    if (ids.size() < 2) return out;
+    for (uint32_t id : ids) {
+        std::vector<uint8_t> keep(mesh.triangleCount());
+        for (uint32_t t = 0; t < keep.size(); ++t) keep[t] = mesh.polygroupAt(t) == id;
+        out.push_back(extractTriangles(mesh, keep));
+    }
+    return out;
+}
+
+std::vector<Mesh> splitIntoParts(const Mesh& mesh) {
+    // Union-find over vertices joined by triangles.
+    std::vector<uint32_t> parent(mesh.vertexCount());
+    std::iota(parent.begin(), parent.end(), 0u);
+    auto find = [&](uint32_t v) {
+        while (parent[v] != v) v = parent[v] = parent[parent[v]];
+        return v;
+    };
+    for (const auto& t : mesh.triangles) {
+        parent[find(t.y)] = find(t.x);
+        parent[find(t.z)] = find(t.x);
+    }
+    std::map<uint32_t, std::vector<uint8_t>> pieces;
+    for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
+        auto& keep = pieces[find(mesh.triangles[t].x)];
+        if (keep.empty()) keep.resize(mesh.triangleCount());
+        keep[t] = 1;
+    }
+    std::vector<Mesh> out;
+    if (pieces.size() < 2) return out;
+    for (const auto& [root, keep] : pieces) out.push_back(extractTriangles(mesh, keep));
+    std::stable_sort(out.begin(), out.end(), [](const Mesh& a, const Mesh& b) { return a.triangleCount() > b.triangleCount(); });
+    return out;
+}
+
+namespace {
+
+std::string fileStem(const std::string& path) {
+    const auto stem = std::filesystem::path(std::u8string(path.begin(), path.end())).stem().u8string();
+    return std::string(stem.begin(), stem.end());
+}
+
+std::string countText(size_t tris) { return std::to_string(tris) + " triangles"; }
+
+// The SubTool an argument names: index= (0-based) or name=, else the active one. -1 if not found.
+int targetSubtool(const Document& doc, const Args& a) {
+    if (a.contains("name")) return doc.findSubtool(argString(a, "name"));
+    if (a.contains("index")) {
+        const int i = int(argNumber(a, "index", -1));
+        return i >= 0 && i < doc.subtoolCount() ? i : -1;
+    }
+    return doc.activeSubtool;
+}
+
+CommandResult notFound(const Args& a) {
+    return {false, a.contains("name") ? "No SubTool named '" + argString(a, "name") + "'" : std::string("No such SubTool")};
+}
+
+// Replaces SubTool `index` by `pieces`, named after it ("Body 1", "Body 2", ...); the first piece is selected.
+void replaceWithPieces(Document& doc, int index, std::vector<Mesh> pieces) {
+    const std::string base = doc.subtools[size_t(index)].name;
+    const bool visible = doc.subtools[size_t(index)].visible;
+    for (size_t k = 0; k < pieces.size(); ++k) {
+        const int at = doc.addSubtool(std::move(pieces[k]), base + " " + std::to_string(k + 1), false, index + 1 + int(k));
+        doc.subtools[size_t(at)].visible = visible;
+    }
+    doc.selectSubtool(index + 1);
+    doc.removeSubtool(index);
+}
+
+} // namespace
+
+void registerSubToolCommands(CommandRegistry& reg) {
+    using T = ParamSpec::Type;
+    const ParamSpec indexParam{"index", T::Number, "SubTool index (0 = top of the list). Default: the active one.", false};
+    const ParamSpec nameParam{"name", T::String, "SubTool name (instead of index).", false};
+
+    reg.add({"subtool_list", "List the SubTools (separate meshes) in the scene.", {},
+             [](Document& doc, const Args&) -> CommandResult {
+                 std::string out = std::to_string(doc.subtoolCount()) + " SubTool" + (doc.subtoolCount() == 1 ? "" : "s") + ":";
+                 for (int i = 0; i < doc.subtoolCount(); ++i) {
+                     const SubTool& s = doc.subtools[size_t(i)];
+                     out += "\n" + std::to_string(i) + ". " + s.name + " (" + countText(doc.subtoolMesh(i).triangleCount());
+                     if (i == doc.activeSubtool) out += ", active";
+                     if (!s.visible) out += ", hidden";
+                     out += ")";
+                 }
+                 return {true, out};
+             }});
+
+    reg.add({"subtool_select", "Make a SubTool the active one: brushes and commands work on it.", {indexParam, nameParam},
+             [](Document& doc, const Args& a) -> CommandResult {
+                 if (!a.contains("index") && !a.contains("name")) return {false, "Give index= or name="};
+                 const int i = targetSubtool(doc, a);
+                 if (i < 0) return notFound(a);
+                 doc.selectSubtool(i);
+                 doc.subtools[size_t(i)].visible = true; // you can't sculpt what you can't see
+                 return {true, "Active SubTool: " + doc.subtools[size_t(i)].name};
+             }});
+
+    reg.add({"subtool_append",
+             "Add a new SubTool: a primitive (sphere, cube, plane) placed beside the visible model, or a model file. "
+             "It becomes the active SubTool.",
+             {{"type", T::String, "'sphere' (default), 'cube' or 'plane'.", false},
+              {"path", T::String, "Model file to append instead of a primitive (.obj, .glb, .fbx, .ply, .stl, .usd...).", false},
+              {"name", T::String, "Name for the new SubTool.", false},
+              {"size", T::Number, "Primitive size relative to the visible model (0.05-2). Default 0.35.", false}},
+             [](Document& doc, const Args& a) -> CommandResult {
+                 Mesh m;
+                 std::string name;
+                 if (a.contains("path")) {
+                     // Load through `open` into a scratch document, so every format and its attributes work.
+                     Document scratch;
+                     const std::string path = argString(a, "path");
+                     CommandResult r = CommandRegistry().execute(scratch, "open", {{"path", path}});
+                     if (!r.ok) return r;
+                     if (scratch.mesh.triangleCount() == 0) return {false, path + " has no mesh to append"};
+                     m = mergedVisibleMesh(scratch);
+                     name = fileStem(path);
+                 } else {
+                     const std::string type = argString(a, "type", "sphere");
+                     const AABB scene = doc.visibleBounds();
+                     const float extent = scene.valid() ? std::max({scene.extent().x, scene.extent().y, scene.extent().z}) : 2.0f;
+                     const float size = extent * float(std::clamp(argNumber(a, "size", 0.35), 0.05, 2.0));
+                     if (type == "sphere") m = makeIcosphere(5, size * 0.5f);
+                     else if (type == "cube") m = makeCube(48, size);
+                     else if (type == "plane") m = makePlane(128, size);
+                     else return {false, "Unknown primitive '" + type + "' (sphere, cube or plane)"};
+                     // Beside the model on +X, at its middle height.
+                     const glm::vec3 at = scene.valid() ? glm::vec3(scene.max.x + size * 0.6f, scene.center().y, scene.center().z)
+                                                        : glm::vec3(0.0f);
+                     for (auto& p : m.positions) p += at;
+                     m.recomputeAllNormals();
+                     name = type == "sphere" ? "Sphere" : type == "cube" ? "Cube" : "Plane";
+                 }
+                 if (a.contains("name")) name = argString(a, "name");
+                 const size_t tris = m.triangleCount();
+                 const int i = doc.addSubtool(std::move(m), name);
+                 return {true, "Appended SubTool " + doc.subtools[size_t(i)].name + " (" + countText(tris) + ")"};
+             }});
+
+    reg.add({"subtool_duplicate", "Copy a SubTool (with its layers and attributes) and make the copy active.",
+             {indexParam, nameParam},
+             [](Document& doc, const Args& a) -> CommandResult {
+                 const int i = targetSubtool(doc, a);
+                 if (i < 0) return notFound(a);
+                 Mesh copy = doc.subtoolMesh(i);
+                 const int added = doc.addSubtool(std::move(copy), doc.subtools[size_t(i)].name + " copy", true, i + 1);
+                 return {true, "Duplicated as " + doc.subtools[size_t(added)].name};
+             }});
+
+    reg.add({"subtool_delete", "Delete a SubTool (not undoable). The last SubTool can't be deleted.",
+             {indexParam, nameParam},
+             [](Document& doc, const Args& a) -> CommandResult {
+                 const int i = targetSubtool(doc, a);
+                 if (i < 0) return notFound(a);
+                 if (doc.subtoolCount() == 1) return {false, "The scene needs at least one SubTool"};
+                 const std::string name = doc.subtools[size_t(i)].name;
+                 doc.removeSubtool(i);
+                 return {true, "Deleted SubTool " + name};
+             }});
+
+    reg.add({"subtool_rename", "Rename a SubTool.",
+             {{"to", T::String, "The new name.", true}, indexParam, nameParam},
+             [](Document& doc, const Args& a) -> CommandResult {
+                 const int i = targetSubtool(doc, a);
+                 if (i < 0) return notFound(a);
+                 std::string to = argString(a, "to");
+                 if (to.empty()) return {false, "The name can't be empty"};
+                 if (doc.subtools[size_t(i)].name != to) to = doc.uniqueSubtoolName(to);
+                 doc.subtools[size_t(i)].name = to;
+                 doc.modified = true;
+                 return {true, "Renamed to " + to};
+             }});
+
+    reg.add({"subtool_visibility", "Show or hide a SubTool. Hidden SubTools aren't drawn, picked or exported.",
+             {{"visible", T::Bool, "true to show, false to hide. Default: toggle.", false}, indexParam, nameParam},
+             [](Document& doc, const Args& a) -> CommandResult {
+                 const int i = targetSubtool(doc, a);
+                 if (i < 0) return notFound(a);
+                 SubTool& s = doc.subtools[size_t(i)];
+                 s.visible = argBool(a, "visible", !s.visible);
+                 doc.modified = true;
+                 return {true, s.name + (s.visible ? " shown" : " hidden")};
+             }});
+
+    reg.add({"subtool_solo", "Show only the active SubTool, or (when it already is the only one shown) show all again.", {},
+             [](Document& doc, const Args&) -> CommandResult {
+                 bool othersShown = false;
+                 for (int i = 0; i < doc.subtoolCount(); ++i)
+                     othersShown |= i != doc.activeSubtool && doc.subtools[size_t(i)].visible;
+                 for (int i = 0; i < doc.subtoolCount(); ++i)
+                     doc.subtools[size_t(i)].visible = i == doc.activeSubtool || !othersShown;
+                 doc.modified = true;
+                 return {true, othersShown ? "Solo: " + doc.activeSubtoolInfo().name : std::string("All SubTools shown")};
+             }});
+
+    reg.add({"subtool_show_all", "Show every SubTool.", {},
+             [](Document& doc, const Args&) -> CommandResult {
+                 for (auto& s : doc.subtools) s.visible = true;
+                 doc.modified = true;
+                 return {true, "All SubTools shown"};
+             }});
+
+    reg.add({"subtool_move", "Move a SubTool up or down the list.",
+             {{"direction", T::String, "'up' or 'down'.", true}, indexParam, nameParam},
+             [](Document& doc, const Args& a) -> CommandResult {
+                 const int i = targetSubtool(doc, a);
+                 if (i < 0) return notFound(a);
+                 const int dir = argString(a, "direction") == "up" ? -1 : 1;
+                 if (i + dir < 0 || i + dir >= doc.subtoolCount()) return {false, "Already at the " + std::string(dir < 0 ? "top" : "bottom")};
+                 doc.moveSubtool(i, dir);
+                 return {true, "Moved " + doc.subtools[size_t(i + dir)].name + (dir < 0 ? " up" : " down")};
+             }});
+
+    reg.add({"subtool_merge_down",
+             "Merge the active SubTool with the one below it into one mesh (not undoable). Each keeps its own "
+             "polygroups, so subtool_split_groups can separate them again.", {},
+             [](Document& doc, const Args&) -> CommandResult {
+                 const int i = doc.activeSubtool;
+                 if (i + 1 >= doc.subtoolCount()) return {false, "There's no SubTool below " + doc.activeSubtoolInfo().name};
+                 Mesh merged = mergeMeshes({&doc.subtoolMesh(i), &doc.subtoolMesh(i + 1)});
+                 const std::string name = doc.subtools[size_t(i)].name, below = doc.subtools[size_t(i + 1)].name;
+                 doc.removeSubtool(i + 1);
+                 doc.replaceActiveMesh(std::move(merged));
+                 return {true, "Merged " + below + " into " + name + " (" + countText(doc.mesh.triangleCount()) + ")"};
+             }});
+
+    reg.add({"subtool_merge_visible",
+             "Merge every visible SubTool into one new SubTool, replacing them (not undoable). Hidden SubTools stay "
+             "as they are.", {},
+             [](Document& doc, const Args&) -> CommandResult {
+                 std::vector<int> visible;
+                 for (int i = 0; i < doc.subtoolCount(); ++i)
+                     if (doc.subtools[size_t(i)].visible) visible.push_back(i);
+                 if (visible.size() < 2) return {false, "Show at least two SubTools to merge"};
+                 Mesh merged = mergedVisibleMesh(doc);
+                 const size_t tris = merged.triangleCount();
+                 const int at = visible.front();
+                 doc.addSubtool(std::move(merged), "Merged", true, at);
+                 for (auto it = visible.rbegin(); it != visible.rend(); ++it) doc.removeSubtool(*it + 1);
+                 return {true, "Merged " + std::to_string(visible.size()) + " SubTools into " +
+                                   doc.activeSubtoolInfo().name + " (" + countText(tris) + ")"};
+             }});
+
+    reg.add({"subtool_split_groups", "Split the active SubTool into one SubTool per polygroup (not undoable).", {},
+             [](Document& doc, const Args&) -> CommandResult {
+                 auto pieces = splitByPolygroups(doc.mesh);
+                 if (pieces.empty()) return {false, doc.activeSubtoolInfo().name + " has only one polygroup"};
+                 const size_t n = pieces.size();
+                 replaceWithPieces(doc, doc.activeSubtool, std::move(pieces));
+                 return {true, "Split into " + std::to_string(n) + " SubTools"};
+             }});
+
+    reg.add({"subtool_split_parts", "Split the active SubTool into one SubTool per disconnected piece (not undoable).", {},
+             [](Document& doc, const Args&) -> CommandResult {
+                 auto pieces = splitIntoParts(doc.mesh);
+                 if (pieces.empty()) return {false, doc.activeSubtoolInfo().name + " is a single piece"};
+                 const size_t n = pieces.size();
+                 replaceWithPieces(doc, doc.activeSubtool, std::move(pieces));
+                 return {true, "Split into " + std::to_string(n) + " SubTools"};
+             }});
+}
+
+} // namespace sf

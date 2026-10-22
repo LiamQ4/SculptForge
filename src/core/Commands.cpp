@@ -8,6 +8,7 @@
 #include "core/ImageTo3D.h"
 #include "core/Masking.h"
 #include "core/Polygroups.h"
+#include "core/SubTools.h"
 #include "core/Polypaint.h"
 #include "core/Primitives.h"
 #include "core/Project.h"
@@ -85,7 +86,7 @@ CommandRegistry::CommandRegistry() {
          {{"subdivisions", T::Number, "Icosphere subdivision level (0-8). Default 6.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
              int level = std::clamp(int(argNumber(a, "subdivisions", 6)), 0, 8);
-             doc.setMesh(makeIcosphere(level));
+             doc.setMesh(makeIcosphere(level), "Sphere");
              doc.path.clear();
              return {true, "Created sphere with " + std::to_string(doc.mesh.triangleCount()) + " triangles"};
          }});
@@ -95,7 +96,7 @@ CommandRegistry::CommandRegistry() {
          {{"resolution", T::Number, "Grid cells per side (1-2000). Default 128.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
              int res = std::clamp(int(argNumber(a, "resolution", 128)), 1, 2000);
-             doc.setMesh(makePlane(res));
+             doc.setMesh(makePlane(res), "Plane");
              doc.path.clear();
              return {true, "Created plane with " + std::to_string(doc.mesh.triangleCount()) + " triangles"};
          }});
@@ -143,7 +144,8 @@ CommandRegistry::CommandRegistry() {
              std::string msg = "Opened " + path;
              const bool hasMesh = m.triangleCount() > 0;
              if (hasMesh) {
-                 doc.setMesh(std::move(m));
+                 const auto stem = std::filesystem::path(std::u8string(path.begin(), path.end())).stem().u8string();
+                 doc.setMesh(std::move(m), ext == ".goz" && !goz.name.empty() ? goz.name : std::string(stem.begin(), stem.end()));
                  doc.path = ext == ".obj" ? path : std::string(); // other formats are exported explicitly
                  if (ext == ".goz") doc.gozName = goz.name;
                  msg += " (" + std::to_string(doc.mesh.triangleCount()) + " triangles" +
@@ -617,6 +619,7 @@ CommandRegistry::CommandRegistry() {
 
     registerMaskingCommands(*this);
     registerPolygroupCommands(*this);
+    registerSubToolCommands(*this);
     registerPaintCommands(*this); // core/Polypaint.cpp
     registerGozCommands(*this); // goz_import/export/send/receive, export_stl (io/GozCommands.cpp)
     registerProjectCommands(*this); // keep last (core/Project.cpp)

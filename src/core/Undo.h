@@ -64,6 +64,11 @@ struct UndoRecord {
 
 class UndoStack {
 public:
+    UndoStack() = default;
+    UndoStack(UndoStack&&) = default; // move-only (records own mesh snapshots)
+    UndoStack& operator=(UndoStack&&) = default;
+    UndoStack(const UndoStack&) = delete;
+    UndoStack& operator=(const UndoStack&) = delete;
     void push(UndoRecord record);
     bool canUndo() const { return !undo_.empty(); }
     bool canRedo() const { return !redo_.empty(); }

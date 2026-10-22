@@ -57,6 +57,8 @@ bool polygroupIsolated(const Mesh& mesh, uint32_t group);
 // Copy of `mesh` without its hidden triangles: unused vertices are removed and
 // every attribute (mask, colours, polygroups, UVs, sculpt layers) compacted.
 Mesh deleteHiddenTriangles(const Mesh& mesh);
+// Copy of the triangles with keep[t] != 0, compacted the same way (hidden flags are kept).
+Mesh extractTriangles(const Mesh& mesh, const std::vector<uint8_t>& keep);
 
 // Adds the polygroup and visibility commands (polygroup_*, hide_polygroup,
 // isolate_polygroup, show_all, invert_visibility, hide_rect, delete_hidden).

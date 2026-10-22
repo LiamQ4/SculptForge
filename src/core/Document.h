@@ -15,10 +15,30 @@
 
 namespace sf {
 
+// One object in the scene, like a ZBrush SubTool: a body, the eyes, the
+// teeth, a sword. Each keeps its own mesh, attributes, layers and undo
+// history. The active SubTool is "checked out" into Document::mesh / bvh /
+// undo, so every tool and command keeps working on the active one; its slot
+// here holds only the name and flags until another SubTool is selected.
+struct SubTool {
+    uint32_t id = 0; // stable for the session (renderer slots, UI selection)
+    std::string name;
+    bool visible = true;
+    // Inactive SubTools only (empty while active).
+    Mesh mesh;
+    BVH bvh;
+    UndoStack undo;
+    int activeLayer = -1;
+    std::string gozName;
+    bool bvhDirty = false;
+    uint64_t cleanRevision = 0;
+};
+
 // Everything that makes up the open scene: the mesh, its acceleration
 // structure and edit history. UI-independent so it can be driven by tests,
 // scripts or an AI assistant through the command registry.
 struct Document {
+    // The active SubTool's working data (see SubTool).
     Mesh mesh;
     BVH bvh;
     UndoStack undo;
@@ -54,24 +74,49 @@ struct Document {
     // keeps it as loaded so CLI and scripts round-trip it unchanged.
     Json projectSettings = Json::object();
 
-    // Unsaved changes: any undoable edit, splat edit or `modified` since the
-    // last markClean() (save, open, new scene).
-    bool dirty() const {
-        return modified || undo.revision() != cleanRevision_ || splatsVersion != cleanSplatsVersion_;
-    }
-    void markClean() {
-        modified = false;
-        cleanRevision_ = undo.revision();
-        cleanSplatsVersion_ = splatsVersion;
-    }
+    // Unsaved changes: any undoable edit (in any SubTool), splat edit or
+    // `modified` since the last markClean() (save, open, new scene).
+    bool dirty() const;
+    void markClean();
 
-    // Replaces the mesh and clears the edit history.
-    void setMesh(Mesh m);
+    // --- SubTools. There is always at least one; `subtools[activeSubtool]` is the
+    // active one (its data lives in mesh / bvh / undo above). Adding, removing,
+    // reordering and merging SubTools is not undoable (as in ZBrush); it sets
+    // `modified`.
+    std::vector<SubTool> subtools; // one "Sculpt" SubTool to start with
+    Document();
+    int activeSubtool = 0;
+    int subtoolCount() const { return int(subtools.size()); }
+    SubTool& activeSubtoolInfo() { return subtools[size_t(activeSubtool)]; }
+    const SubTool& activeSubtoolInfo() const { return subtools[size_t(activeSubtool)]; }
+    // The mesh of SubTool `i`, active or not.
+    Mesh& subtoolMesh(int i) { return i == activeSubtool ? mesh : subtools[size_t(i)].mesh; }
+    const Mesh& subtoolMesh(int i) const { return i == activeSubtool ? mesh : subtools[size_t(i)].mesh; }
+    // Makes SubTool `i` the one tools and commands edit.
+    void selectSubtool(int i);
+    // Inserts a SubTool at `at` (-1 = end of the list), made active when `select`; returns its index.
+    int addSubtool(Mesh m, std::string name, bool select = true, int at = -1);
+    // Replaces the active SubTool's mesh outside undo (its history is cleared), e.g. after a merge.
+    void replaceActiveMesh(Mesh m);
+    // Removes SubTool `i` (never the last one); the active one moves to a neighbour if needed.
+    bool removeSubtool(int i);
+    // Moves SubTool `i` one place up (-1) or down (+1) in the list.
+    void moveSubtool(int i, int direction);
+    // Index of the SubTool called `name` (exact match, first one), or -1.
+    int findSubtool(const std::string& name) const;
+    // A name not used by any SubTool yet ("Eye", "Eye 2", ...).
+    std::string uniqueSubtoolName(const std::string& wanted) const;
+    // Bounds of every visible SubTool.
+    AABB visibleBounds() const;
+
+    // Replaces the whole scene with one SubTool holding `m` and clears the edit history.
+    void setMesh(Mesh m, std::string name = "Sculpt");
     // Replaces the mesh as an undoable topology change.
     void replaceMeshUndoable(Mesh m, std::string label);
 
 private:
     uint64_t cleanRevision_ = 0, cleanSplatsVersion_ = 0;
+    uint32_t nextSubtoolId_ = 2;
 };
 
 } // namespace sf

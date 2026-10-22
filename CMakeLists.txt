@@ -33,6 +33,7 @@ add_library(sculptforge_core STATIC
   src/core/Document.cpp
   src/core/Commands.cpp
   src/core/Polygroups.cpp
+  src/core/SubTools.cpp
   src/core/Decimate.cpp
   src/core/Script.cpp
   src/core/Json.cpp

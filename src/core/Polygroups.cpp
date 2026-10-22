@@ -267,12 +267,19 @@ bool polygroupIsolated(const Mesh& mesh, uint32_t group) {
 
 Mesh deleteHiddenTriangles(const Mesh& mesh) {
     if (!mesh.hasHidden()) return mesh;
+    std::vector<uint8_t> keep(mesh.triangleCount());
+    for (uint32_t t = 0; t < keep.size(); ++t) keep[t] = !mesh.triangleHidden(t);
+    return extractTriangles(mesh, keep);
+}
+
+Mesh extractTriangles(const Mesh& mesh, const std::vector<uint8_t>& keep) {
     const size_t nv = mesh.vertexCount(), nt = mesh.triangleCount();
     std::vector<uint32_t> remap(nv, kUnassigned);
     std::vector<uint32_t> kept;
     Mesh out;
+    bool anyHidden = false;
     for (uint32_t t = 0; t < nt; ++t) {
-        if (mesh.triangleHidden(t)) continue;
+        if (t >= keep.size() || !keep[t]) continue;
         glm::uvec3 tri;
         for (int k = 0; k < 3; ++k) {
             uint32_t& r = remap[mesh.triangles[t][k]];
@@ -283,6 +290,8 @@ Mesh deleteHiddenTriangles(const Mesh& mesh) {
             tri[k] = r;
         }
         out.triangles.push_back(tri);
+        out.hidden.push_back(mesh.triangleHidden(t) ? 1 : 0);
+        anyHidden |= mesh.triangleHidden(t);
         if (mesh.hasPolygroups()) out.polygroups.push_back(mesh.polygroups[t]);
         if (mesh.hasUvs()) out.uvs.insert(out.uvs.end(), mesh.uvs.begin() + std::ptrdiff_t(t) * 3,
                                           mesh.uvs.begin() + std::ptrdiff_t(t) * 3 + 3);
@@ -302,6 +311,7 @@ Mesh deleteHiddenTriangles(const Mesh& mesh) {
             out.layers.push_back(std::move(nl));
         }
     }
+    if (!anyHidden) out.clearHidden();
     out.rebuildTopology();
     out.recomputeAllNormals();
     return out;
