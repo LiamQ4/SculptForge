@@ -782,8 +782,18 @@ void App::drawPaletteBar(const ShellGeometry& g) {
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
     int count = 0;
     const PaletteDef* list = palettes(count);
-    for (int i = 0; i < count; ++i) {
-        const PaletteDef& p = list[i];
+    // File and Edit first, where every other desktop app has them, then the rest A to Z. ZBrush purists can
+    // switch to strict alphabetical order in Preferences > Interface.
+    std::vector<int> order;
+    if (!uiPrefs_.alphabeticalPalettes)
+        for (const char* first : {"file", "edit"})
+            for (int i = 0; i < count; ++i)
+                if (std::string_view(list[i].id) == first) order.push_back(i);
+    for (int i = 0; i < count; ++i)
+        if (std::find(order.begin(), order.end(), i) == order.end()) order.push_back(i);
+    for (size_t k = 0; k < order.size(); ++k) {
+        const int i = int(k);
+        const PaletteDef& p = list[order[k]];
         const bool inTray = std::count(layout_.leftTray.begin(), layout_.leftTray.end(), p.id) +
                                 std::count(layout_.rightTray.begin(), layout_.rightTray.end(), p.id) >
                             0;
@@ -792,7 +802,7 @@ void App::drawPaletteBar(const ShellGeometry& g) {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::headerHover);
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::header);
         ImGui::PushStyleColor(ImGuiCol_Text, inTray ? theme::accent : open ? theme::textOnAccent : theme::text);
-        if (i) ImGui::SameLine();
+        if (i) ImGui::SameLine(0.0f, k == 2 && !uiPrefs_.alphabeticalPalettes ? 10.0f * s : -1.0f); // gap after File, Edit
         const std::string label = std::string(p.name) + "##palette." + p.id;
         // While a drop-down is open, the click that closes it (ImGui swallows that one) opens another palette
         // when it lands on that palette's name, as in a menu bar; on the open palette's own name it just closes.

@@ -43,6 +43,7 @@ Json toJson(const UiPrefs& p) {
     j.set("lightboxAtStartup", p.lightboxAtStartup);
     j.set("libraryFolder", p.libraryFolder);
     j.set("cameraNotch", double(p.cameraNotch));
+    j.set("alphabeticalPalettes", p.alphabeticalPalettes);
     return j;
 }
 
@@ -58,6 +59,7 @@ void fromJson(const Json& j, UiPrefs& p) {
     p.lightboxAtStartup = j["lightboxAtStartup"].asBool(p.lightboxAtStartup);
     if (j["libraryFolder"].isString()) p.libraryFolder = j["libraryFolder"].asString();
     p.cameraNotch = std::clamp(int(j["cameraNotch"].asNumber(p.cameraNotch)), 0, 2);
+    p.alphabeticalPalettes = j["alphabeticalPalettes"].asBool(p.alphabeticalPalettes);
 }
 
 namespace {
@@ -688,6 +690,11 @@ void drawInterfaceSection(App& app) {
     ImGui::Checkbox("Auto collapse right tray", &p.autoCollapseRight);
     ui::HelpText("Auto collapse right tray", nullptr,
                  "Opening a palette in the right tray collapses the others when they would not fit.", "Preferences > Interface");
+    ImGui::Checkbox("Palettes strictly A-Z (ZBrush order)", &p.alphabeticalPalettes);
+    ui::HelpText("Palettes strictly A-Z", nullptr,
+                 "Off: File and Edit come first in the palette bar, then the rest A to Z. On: every palette A to Z, as in "
+                 "ZBrush.",
+                 "Preferences > Interface");
     ImGui::Checkbox("Left-handed layout", &app.layout().leftHanded);
     ui::HelpText("Left-handed layout", nullptr, "Mirror the shelves and trays: tools on the left, navigation on the right.",
                  "Preferences > Interface");

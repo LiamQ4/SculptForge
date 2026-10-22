@@ -25,6 +25,7 @@ struct UiPrefs {
     float uiScale = 0.0f;       // 0 = follow the display; otherwise applied at the next start
     bool lightboxAtStartup = true;
     std::string libraryFolder;  // "" = Documents/SculptForge
+    bool alphabeticalPalettes = false; // strict A-Z palette bar like ZBrush (default: File, Edit first)
     int cameraNotch = 0;        // keep the UI out of a laptop's camera notch: 0 automatic, 1 always, 2 never
 };
 
