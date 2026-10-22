@@ -38,6 +38,7 @@ add_library(sculptforge_core STATIC
   src/core/Script.cpp
   src/core/Json.cpp
   src/core/BrushRecipe.cpp
+  src/core/BrushLibrary.cpp
   src/core/Image.cpp
   src/core/ImageTo3D.cpp
   src/core/Splats.cpp
@@ -120,6 +121,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelMasking.cpp
     src/app/PanelPolygroups.cpp
     src/app/PanelBrushes.cpp
+    src/app/PanelBrushLibrary.cpp
     src/app/PanelPolypaint.cpp
     src/app/PanelGoz.cpp
     src/app/PanelProject.cpp

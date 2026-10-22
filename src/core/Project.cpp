@@ -410,8 +410,18 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     doc.selectSubtool(activeSubtool);
     doc.splats = std::move(splats);
     doc.splatsChanged();
-    for (const auto& b : manifest["brushes"].items())
-        if (b.isObject()) doc.addBrush(BrushRecipe::fromJson(b));
+    for (const auto& b : manifest["brushes"].items()) {
+        if (!b.isObject()) continue;
+        // Brushes the library already has, unchanged, stay library brushes; the rest are the project's own.
+        BrushRecipe recipe = BrushRecipe::fromJson(b);
+        const std::string json = recipe.toJson().dump();
+        const bool known = std::any_of(doc.brushes.begin(), doc.brushes.end(), [&](const BrushRecipe& have) {
+            return have.name == recipe.name && have.toJson().dump() == json;
+        });
+        if (known) continue;
+        recipe.origin.source = BrushSource::Project;
+        doc.addBrush(std::move(recipe));
+    }
     doc.activeBrush = -1;
     const std::string& activeBrush = manifest["active_brush"].asString();
     for (size_t i = 0; i < doc.brushes.size() && !activeBrush.empty(); ++i)

@@ -24,3 +24,7 @@ def commands():
     env.PATH.prepend("{root}/bin")
     env.PYTHONPATH.prepend("{root}/python")
     env.SCULPTFORGE_ROOT = "{root}"
+    # Optional studio brush library (read-only, see docs/studios.md): set SCULPTFORGE_STUDIO_BRUSHES to a shared
+    # folder of .sfbrush files and every artist gets those brushes.
+    if defined("SCULPTFORGE_STUDIO_BRUSHES"):
+        env.SCULPTFORGE_BRUSH_PATH.append(getenv("SCULPTFORGE_STUDIO_BRUSHES"))

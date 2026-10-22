@@ -3,6 +3,7 @@
 #include "core/Commands.h"
 
 #include "core/BrushAlpha.h"
+#include "core/BrushLibrary.h"
 #include "core/Decimate.h"
 #include "core/EnginePresets.h"
 #include "core/ImageTo3D.h"
@@ -504,12 +505,12 @@ CommandRegistry::CommandRegistry() {
              }});
     }
 
-    add({"brush_list", "List the custom brushes in the library.", {},
+    add({"brush_list", "List the custom brushes in the library (brush_library also shows their files).", {},
          [](Document& doc, const Args&) -> CommandResult {
              std::string out;
              for (size_t i = 0; i < doc.brushes.size(); ++i)
-                 out += (i ? "\n" : "") + std::to_string(i) + ": " + doc.brushes[i].name + " - " +
-                        doc.brushes[i].description;
+                 out += (i ? "\n" : "") + std::to_string(i) + ": " + doc.brushes[i].name + " [" +
+                        brushSourceName(doc.brushes[i].origin.source) + "] - " + doc.brushes[i].description;
              return {true, out};
          }});
 
@@ -528,7 +529,7 @@ CommandRegistry::CommandRegistry() {
              return {true, "Saved brush '" + r->name + "'"};
          }});
 
-    add({"brush_load", "Load a .sfbrush file into the library and make it active.",
+    add({"brush_load", "Load a .sfbrush file for this session and make it active (brush_install keeps it in your library).",
          {{"path", T::String, ".sfbrush path.", true}},
          [](Document& doc, const Args& a) -> CommandResult {
              BrushRecipe r;
@@ -537,6 +538,7 @@ CommandRegistry::CommandRegistry() {
              doc.activeBrush = doc.addBrush(std::move(r));
              return {true, "Loaded brush '" + doc.brushes[doc.activeBrush].name + "'"};
          }});
+    registerBrushLibraryCommands(*this); // brush_install, brush_code, brush_delete, ... (BrushLibrary.cpp)
     registerBrushCommands(*this); // brush_set_alpha (BrushAlpha.cpp)
 
     add({"splat_info", "Report the loaded Gaussian splats.", {},

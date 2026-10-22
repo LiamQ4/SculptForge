@@ -289,6 +289,31 @@ private:
     bool alphaInvert_ = false;
     std::mutex alphaMutex_;
     std::string pendingAlphaPath_; // set by the file dialog thread
+    // Persistent brush library (PanelBrushLibrary.cpp, core/BrushLibrary.h): the Custom brushes list
+    // with its right-click menu, paste (Ctrl+V), and saving Brush Lab edits a moment after the last change.
+    void initBrushLibrary();
+    void drawCustomBrushes();
+    void drawBrushLibraryPopups();
+    void pasteBrush();
+    void installBrushFile(const std::string& path); // opened, dropped or chosen .sfbrush files
+    void copyBrushCode(int index);
+    void revealBrushFile(int index);
+    void watchActiveBrush(); // the active brush as it is now counts as saved
+    void flushBrushEdits();  // save recipe edits that are still waiting
+    void autosaveBrush();    // per frame: saves recipe edits once they settle
+    void saveBrushEdits(int index);
+    struct BrushWatch {
+        int index = -1;
+        std::string name, json;
+        bool pending = false;
+        double changedAt = 0.0;
+    } brushWatch_;
+    enum class BrushPopup { None, Rename, Delete } brushPopup_ = BrushPopup::None;
+    std::string brushPopupName_;   // the brush the popup is about
+    char brushRenameBuf_[64] = "";
+    std::string brushPopupError_; // why the last rename failed
+    int listedBrush_ = -1;        // active brush when the list was last drawn (to scroll to a new one)
+    std::string pendingRename_;    // new name typed in the recipe editor, applied after the panel is drawn
     // Polypaint and MatCap materials (PanelPolypaint.cpp)
     bool paintMode_ = false;  // Paint brush: colour only, no sculpting (ZBrush Rgb on, Zadd off)
     bool paintRgb_ = false;   // also paint the colour while sculpting (ZBrush Rgb + Zadd)

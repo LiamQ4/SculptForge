@@ -18,17 +18,22 @@
 //   expect LABEL / expect_not LABEL
 //   expect_text TEXT / expect_no_text TEXT   any text drawn this frame contains TEXT
 //   expect_status TEXT       the status bar message contains TEXT
+//   clipboard TEXT           put TEXT on the clipboard (to test pasting, e.g. a brush code)
+//   expect_clipboard TEXT    the clipboard contains TEXT (after a copy)
 //   click_subtool NAME [U V] left-click SubTool NAME in the viewport (with the held modifiers, e.g.
 //                            hold alt to select it); U V: fractions of its on-screen bounds
 //   expect_value NAME OP N   triangles, vertices, layers, brushes, masked, hidden, groups, colored,
 //                            can_undo, dirty, splats, show_polygroups, show_mask, wireframe,
 //                            subtools (count), active_subtool (index, 0 = top), visible_subtools,
-//                            edited_subtools (SubTools with undo history); OP is == != < <= > >=
+//                            edited_subtools (SubTools with undo history), user_brushes (brushes in the
+//                            user library), library_files (.sfbrush files in it; UI tests get an empty
+//                            one in --ui-out/brush-library); OP is == != < <= > >=
 //   (mesh values are the active SubTool's)
 //   shot NAME                save a screenshot NAME.png (to --ui-out)
 #include "app/App.h"
 #include "app/Demo.h"
 
+#include "core/BrushLibrary.h"
 #include "core/Script.h"
 
 #include <imgui_internal.h>
@@ -164,6 +169,18 @@ double Demo::query(const std::string& name, bool& known) const {
         int n = 0;
         for (int i = 0; i < doc.subtoolCount(); ++i)
             n += (i == doc.activeSubtool ? doc.undo.canUndo() : doc.subtools[size_t(i)].undo.canUndo()) ? 1 : 0;
+        return double(n);
+    }
+    if (name == "user_brushes")
+        return double(std::count_if(doc.brushes.begin(), doc.brushes.end(), [](const BrushRecipe& b) { return isUserLibraryBrush(b); }));
+    if (name == "library_files") {
+        const std::string& dir = brushLibraryPaths().userDir;
+        std::error_code ec;
+        size_t n = 0;
+        if (!dir.empty())
+            for (std::filesystem::directory_iterator it(std::filesystem::path(std::u8string(dir.begin(), dir.end())), ec), end;
+                 !ec && it != end; it.increment(ec))
+                n += it->path().extension() == ".sfbrush";
         return double(n);
     }
     if (name == "masked") {
@@ -475,6 +492,22 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
         run([this, line, text] {
             if (app_.status_.find(text) == std::string::npos)
                 fail(line, "status is \"" + app_.status_ + "\", expected it to contain \"" + text + "\"");
+        });
+    } else if (verb == "clipboard") {
+        if (!need(1)) return false;
+        const std::string text = restOf(lineText_, 1);
+        run([this, line, text] {
+            if (!SDL_SetClipboardText(text.c_str())) fail(line, std::string("can't set the clipboard: ") + SDL_GetError());
+        });
+    } else if (verb == "expect_clipboard") {
+        if (!need(1)) return false;
+        const std::string text = restOf(lineText_, 1);
+        run([this, line, text] {
+            char* clip = SDL_GetClipboardText();
+            const std::string have = clip ? clip : "";
+            SDL_free(clip);
+            if (have.find(text) == std::string::npos)
+                fail(line, "clipboard is \"" + have.substr(0, 80) + "\", expected it to contain \"" + text + "\"");
         });
     } else if (verb == "expect_value") {
         if (!need(3)) return false;

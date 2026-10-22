@@ -14,6 +14,25 @@
 
 namespace sf {
 
+// Where a brush in the library came from (see core/BrushLibrary.h). Precedence
+// for brushes of the same name: user library > studio folders > built-in.
+enum class BrushSource {
+    Session, // made this session and not in the library (brush_create, brush_load, an AI reply not yet saved)
+    Builtin, // ships with SculptForge
+    User,    // the artist's own library (<app data>/brushes), saved automatically
+    Studio,  // a read-only shared folder from SCULPTFORGE_BRUSH_PATH
+    Gallery, // installed from the community gallery (lives in the user library)
+    Project, // came with an opened .sfproj and differs from (or is not in) the library
+};
+const char* brushSourceName(BrushSource source); // "session", "built-in", "user", "studio", "gallery", "project"
+
+struct BrushOrigin {
+    BrushSource source = BrushSource::Session;
+    std::string path; // the .sfbrush file it was loaded from or is saved to (user, gallery, studio)
+    // A built-in or studio brush of the same name this user/gallery brush hides (Session = none).
+    BrushSource overrides = BrushSource::Session;
+};
+
 struct BrushRecipe {
     enum class Direction { Normal, Inflate, View, Stroke };
     enum class Plane { None, Clay, Flatten, Fill, Scrape };
@@ -48,6 +67,9 @@ struct BrushRecipe {
     // Masking
     bool frontFacesOnly = false;
     float cavityMask = 0.0f; // -1..1: >0 only affects cavities, <0 only ridges/peaks
+
+    // Library bookkeeping, not part of the recipe: never written by toJson().
+    BrushOrigin origin;
 
     void clamp();
     // Numeric parameter by key (see recipeParams()), or nullptr.

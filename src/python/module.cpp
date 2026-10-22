@@ -11,6 +11,7 @@
 //   verts, tris = doc.vertices, doc.triangles      # (N, 3) float32, (M, 3) uint32
 //   doc.mask, doc.colors, doc.polygroups           # optional attributes, None when absent
 #include "ai/AiCommands.h"
+#include "core/BrushLibrary.h"
 #include "core/Commands.h"
 #include "core/Script.h"
 
@@ -19,6 +20,7 @@
 #include <pybind11/stl.h>
 
 #include <cstring>
+#include <memory>
 
 namespace py = pybind11;
 using namespace sf;
@@ -97,7 +99,13 @@ PYBIND11_MODULE(sculptforge, m) {
     py::register_exception<CommandError>(m, "CommandError", PyExc_RuntimeError);
 
     py::class_<Document>(m, "Document", "A scene: the sculpt mesh (with layers), Gaussian splats and edit history.")
-        .def(py::init<>())
+        .def(py::init([] {
+            // With the user's brush library and SCULPTFORGE_BRUSH_PATH studio brushes, like the app.
+            auto doc = std::make_unique<Document>();
+            for (const auto& message : loadBrushLibrary(*doc))
+                if (PyErr_WarnEx(PyExc_RuntimeWarning, message.c_str(), 1) < 0) throw py::error_already_set();
+            return doc;
+        }))
         .def_property_readonly("vertices", [](const Document& d) { return vec3Array(d.mesh.positions); },
                                "Current vertex positions, (N, 3) float32 (a copy).")
         .def_property_readonly("base_vertices", [](const Document& d) { return vec3Array(d.mesh.basePositions()); },

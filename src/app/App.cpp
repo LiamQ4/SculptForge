@@ -9,6 +9,7 @@
 #include "ai/Generator3D.h"
 #include "core/EnginePresets.h"
 #include "link/UnrealLink.h"
+#include "core/BrushLibrary.h"
 #include "core/Decimate.h"
 #include "core/ImageTo3D.h"
 #include "core/Project.h"
@@ -197,6 +198,7 @@ bool App::init(const AppOptions& options) {
     ImGui_ImplOpenGL3_Init("#version 330 core");
 
     for (int i = 0; i < int(FileAction::Count); ++i) dialogRequests_[i] = {this, FileAction(i)};
+    initBrushLibrary(); // before a project can bring its own brushes
     initProject(); // before opening anything, so it lands in the recent files
     runCommand("new_sphere");
     if (!options.openPath.empty()) openPath(options.openPath);
@@ -230,6 +232,7 @@ bool App::init(const AppOptions& options) {
 }
 
 void App::shutdown() {
+    flushBrushEdits();
     if (refTexture_) gl::DeleteTextures(1, &refTexture_);
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
@@ -595,6 +598,7 @@ void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
         case SDLK_N: confirmDiscard([this] { runCommand("new_sphere"); }); break;
         case SDLK_E: saveFileDialog(FileAction::ExportGlb); break;
         case SDLK_U: sendToUnreal(); break;
+        case SDLK_V: pasteBrush(); break; // a brush code or .sfbrush text
         default: break;
         }
         return;
@@ -797,6 +801,7 @@ void App::endStroke() {
 void App::runCommand(const std::string& name, const Args& args) {
     if (doc_.sculptor.strokeActive()) endStroke();
     if (name == "save_project") storeProjectSettings();
+    flushBrushEdits(); // commands may replace brushes: save edits first, then watch what's there afterwards
     CommandResult r = commands_.execute(doc_, name, args);
     status_ = r.message;
     lastCommandOk_ = r.ok;
@@ -818,6 +823,7 @@ void App::runCommand(const std::string& name, const Args& args) {
     if (r.ok && (name == "subtool_append" || name == "subtool_duplicate") && !onScreen(doc_.mesh.bounds()))
         camera_.frame(sceneBounds());
     afterCommand(name, args, r);
+    watchActiveBrush();
     updateTitle();
 }
 
@@ -860,7 +866,7 @@ void App::openPath(const std::string& path) {
     if (Image::isImagePath(path)) {
         if (loadReferenceImage(path)) showImageTo3D_ = true;
     } else if (ext == ".sfbrush") {
-        runCommand("brush_load", {{"path", path}});
+        installBrushFile(path);
     } else {
         runCommand("open", {{"path", path}});
     }
@@ -921,7 +927,7 @@ void App::processPendingFiles() {
             runCommand("export_lods", {{"path", f.path}, {"levels", double(lodLevels_)}, {"ratio", double(lodRatio_)}});
             break;
         case FileAction::SaveBrush: runCommand("brush_save", {{"path", f.path}}); break;
-        case FileAction::LoadBrush: runCommand("brush_load", {{"path", f.path}}); break;
+        case FileAction::LoadBrush: installBrushFile(f.path); break;
         case FileAction::ExportUsd: runCommand("export_usd", {{"path", f.path}}); break;
         case FileAction::SaveSplats: runCommand("splat_save", {{"path", f.path}}); break;
         case FileAction::ExportUnreal: {
@@ -1038,6 +1044,8 @@ void App::drawUi() {
     }
     if (!ImGui::GetIO().WantCaptureMouse || drag_ == Drag::Stroke) drawBrushCursor();
     drawPolygroupOverlay();
+    drawBrushLibraryPopups();
+    autosaveBrush();
 
     if (showAbout_) {
         ImGui::SetNextWindowSize(ImVec2(460 * uiScale_, 0), ImGuiCond_Always);
@@ -1369,17 +1377,20 @@ void App::pollBrushRequest() {
         return;
     }
     chat_.push_back({ai::ChatMessage::Role::Assistant, reply.raw, reply.suggestion.reply});
+    flushBrushEdits();
     doc_.activeBrush = doc_.addBrush(reply.suggestion.recipe);
     chatLog_.push_back({ChatLine::Kind::Assistant, "[" + reply.suggestion.recipe.name + "]  " + reply.suggestion.reply});
     status_ = "Brush '" + reply.suggestion.recipe.name + "' is ready - try it on the model";
+    saveBrushEdits(doc_.activeBrush); // Brush Lab brushes go straight into the library (status says if that fails)
+    watchActiveBrush();
 }
 
 void App::drawRecipeEditor(BrushRecipe& recipe) {
     char name[64];
     std::snprintf(name, sizeof name, "%s", recipe.name.c_str());
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::InputText("##name", name, sizeof name, ImGuiInputTextFlags_EnterReturnsTrue) && name[0])
-        recipe.name = name;
+    if (ImGui::InputText("##name", name, sizeof name, ImGuiInputTextFlags_EnterReturnsTrue) && name[0] && recipe.name != name)
+        pendingRename_ = name; // brush_rename after the panel: it renames the file and may add a brush
     ImGui::PushItemWidth(-ImGui::CalcTextSize("Pressure curve").x - ImGui::GetStyle().ItemInnerSpacing.x);
     for (const auto& p : recipeParams()) {
         switch (p.kind) {
@@ -1399,7 +1410,7 @@ void App::drawRecipeEditor(BrushRecipe& recipe) {
     const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
     if (ImGui::Button("Save .sfbrush...", ImVec2(half, 0))) saveFileDialog(FileAction::SaveBrush);
     ImGui::SameLine();
-    if (ImGui::Button("Load .sfbrush...", ImVec2(half, 0)))
+    if (ImGui::Button("Install .sfbrush...", ImVec2(half, 0)))
         SDL_ShowOpenFileDialog(onFileChosen, &dialogRequests_[int(FileAction::LoadBrush)], window_, kBrushFilters, 2,
                                nullptr, false);
 }
@@ -1622,12 +1633,21 @@ void App::drawBrushLab() {
         chat_.clear();
         chatLog_.clear();
     }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Paste brush")) pasteBrush();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        ImGui::SetTooltip("Install a brush someone shared: a brush code (sfbrush1:...) or .sfbrush text on the "
+                          "clipboard (Ctrl+V in the viewport)");
 
     if (BrushRecipe* recipe = doc_.activeBrush >= 0 ? &doc_.brushes[doc_.activeBrush] : nullptr) {
         if (ImGui::CollapsingHeader(("Recipe: " + recipe->name + "###recipe").c_str())) drawRecipeEditor(*recipe);
     }
     if (ImGui::CollapsingHeader("AI provider")) drawAiSettings();
     ImGui::End();
+    if (!pendingRename_.empty()) {
+        runCommand("brush_rename", {{"to", pendingRename_}});
+        pendingRename_.clear();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1920,18 +1940,7 @@ void App::drawToolPanel() {
         if (i % 2 == 0) ImGui::SameLine();
     }
 
-    ImGui::SeparatorText("Custom brushes");
-    if (ImGui::BeginListBox("##custom", ImVec2(-1, ImGui::GetTextLineHeightWithSpacing() * 5.5f))) {
-        for (int i = 0; i < int(doc_.brushes.size()); ++i) {
-            if (ImGui::Selectable(doc_.brushes[i].name.c_str(), doc_.activeBrush == i)) {
-                doc_.activeBrush = i;
-                paintMode_ = false;
-            }
-            if (ImGui::IsItemHovered() && !doc_.brushes[i].description.empty())
-                ImGui::SetTooltip("%s", doc_.brushes[i].description.c_str());
-        }
-        ImGui::EndListBox();
-    }
+    drawCustomBrushes(); // PanelBrushLibrary.cpp
     if (ImGui::Button(showBrushLab_ ? "Hide Brush Lab" : "Brush Lab (AI)...", ImVec2(-1, 0)))
         showBrushLab_ = !showBrushLab_;
     if (ImGui::Button(showImageTo3D_ ? "Hide Generate 3D" : "Generate 3D...", ImVec2(-1, 0)))

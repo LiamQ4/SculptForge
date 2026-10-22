@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "cli/McpServer.h"
 
+#include "core/BrushLibrary.h"
 #include "core/Json.h"
 
 #include <iostream>
@@ -120,6 +121,8 @@ std::string handleMcpMessage(const CommandRegistry& registry, Document& doc, con
 
 int runMcpServer(const CommandRegistry& registry, std::istream& in, std::ostream& out) {
     Document doc;
+    // stdout is the protocol: library messages go to stderr.
+    for (const auto& message : loadBrushLibrary(doc)) std::cerr << "sculptforge: " << message << "\n";
     std::string line;
     while (std::getline(in, line)) {
         if (line.find_first_not_of(" \t\r") == std::string::npos) continue;
