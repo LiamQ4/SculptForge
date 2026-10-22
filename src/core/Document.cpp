@@ -22,7 +22,9 @@ void Document::setMesh(Mesh m, std::string name) {
     bvhDirty = false;
     gozName.clear();
     subtools.clear();
-    subtools.push_back(SubTool{nextSubtoolId_++, name.empty() ? "Sculpt" : std::move(name)});
+    subtools.emplace_back();
+    subtools.back().id = nextSubtoolId_++;
+    subtools.back().name = name.empty() ? "Sculpt" : std::move(name);
     activeSubtool = 0;
     markClean();
 }
