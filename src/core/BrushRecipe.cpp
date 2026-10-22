@@ -97,6 +97,18 @@ const std::vector<RecipeParam>& recipeParams() {
     return params;
 }
 
+const char* brushSourceName(BrushSource source) {
+    switch (source) {
+    case BrushSource::Session: return "session";
+    case BrushSource::Builtin: return "built-in";
+    case BrushSource::User: return "user";
+    case BrushSource::Studio: return "studio";
+    case BrushSource::Gallery: return "gallery";
+    case BrushSource::Project: return "project";
+    }
+    return "session";
+}
+
 float* BrushRecipe::field(const std::string& key) { return floatField(*this, key); }
 
 int BrushRecipe::enumIndex(const std::string& key) const {
@@ -242,6 +254,7 @@ std::vector<BrushRecipe> builtinBrushRecipes() {
     std::vector<BrushRecipe> out;
     auto add = [&](BrushRecipe r) {
         r.clamp();
+        r.origin.source = BrushSource::Builtin;
         out.push_back(std::move(r));
     };
     {

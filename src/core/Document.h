@@ -46,12 +46,14 @@ struct Document {
     std::string path; // empty until saved/loaded
     bool modified = false; // set by edits the undo stack doesn't see (e.g. layer weights)
     int activeLayer = -1; // sculpt layer strokes write into (-1 = base)
-    // Recipe brush library (built-ins, loaded .sfbrush files, AI-made brushes).
+    // Recipe brush library (built-ins, studio and user library brushes, loaded .sfbrush files,
+    // AI-made brushes; see core/BrushLibrary.h). Each recipe records its origin.
     std::vector<BrushRecipe> brushes = builtinBrushRecipes();
     int activeBrush = -1; // index into `brushes`, -1 = use a built-in brush type
     BrushAlpha brushAlpha; // stamp shaping every brush's falloff (empty = round); brush_set_alpha
     glm::vec3 paintColor{0.6f, 0.03f, 0.02f}; // current polypaint colour (linear RGB; see set_color)
-    // Adds or replaces (by name) a recipe and returns its index.
+    // Adds or replaces (by name) a recipe and returns its index. Replacing with a
+    // BrushSource::Session recipe keeps the existing brush's origin.
     int addBrush(BrushRecipe recipe);
     // Gaussian splats shown alongside the mesh (a capture used as reference or
     // source, or the sculpt converted for splat viewers). Not part of undo.

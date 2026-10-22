@@ -131,6 +131,8 @@ int Document::addBrush(BrushRecipe recipe) {
     recipe.clamp();
     for (size_t i = 0; i < brushes.size(); ++i) {
         if (brushes[i].name == recipe.name) {
+            // A session recipe with a library brush's name is an edit of that brush: it keeps its origin.
+            if (recipe.origin.source == BrushSource::Session) recipe.origin = brushes[i].origin;
             brushes[i] = std::move(recipe);
             return int(i);
         }

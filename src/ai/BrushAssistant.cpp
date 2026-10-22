@@ -3,6 +3,7 @@
 #include "ai/BrushAssistant.h"
 
 #include "ai/Http.h"
+#include "core/BrushLibrary.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -214,18 +215,11 @@ AiSettings AiSettings::load(const std::string& path) {
 }
 
 std::string defaultAiSettingsPath() {
-    auto env = [](const char* name) -> std::string {
-        const char* v = std::getenv(name);
-        return v ? v : "";
-    };
+    const std::string dir = appDataDir(); // shared with the brush library (core/BrushLibrary.h)
 #if defined(_WIN32)
-    const std::string base = env("APPDATA");
-    return base.empty() ? "ai.json" : base + "\\SculptForge\\SculptForge\\ai.json";
-#elif defined(__APPLE__)
-    return env("HOME") + "/Library/Application Support/SculptForge/SculptForge/ai.json";
+    return dir.empty() ? "ai.json" : dir + "\\ai.json";
 #else
-    const std::string xdg = env("XDG_DATA_HOME");
-    return (xdg.empty() ? env("HOME") + "/.local/share" : xdg) + "/SculptForge/SculptForge/ai.json";
+    return dir + "/ai.json";
 #endif
 }
 

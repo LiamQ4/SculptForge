@@ -38,6 +38,46 @@ rez-env sculptforge python-3.13 -- python -c "import sculptforge"
 ```
 
 The package puts `bin/` on `PATH`, puts the Python module on `PYTHONPATH`, and sets `SCULPTFORGE_ROOT`.
+If `SCULPTFORGE_STUDIO_BRUSHES` is set when the package resolves (in a site package, your rezconfig or the
+launcher), it is appended to `SCULPTFORGE_BRUSH_PATH` (see below).
+
+## Studio brush libraries
+
+Artists' own brushes live in their user library, one `.sfbrush` file per brush: Brush Lab saves every brush
+made or refined there automatically, and brushes installed from a file, a pasted brush code
+(`sfbrush1:...`) or the community gallery go there too.
+
+| OS | User library |
+|---|---|
+| Linux | `$XDG_DATA_HOME/SculptForge/SculptForge/brushes` (`~/.local/share/...` by default) |
+| macOS | `~/Library/Application Support/SculptForge/SculptForge/brushes` |
+| Windows | `%APPDATA%\SculptForge\SculptForge\brushes` |
+
+To share a set of brushes across a team, put them on a share and list it in `SCULPTFORGE_BRUSH_PATH`
+(`:`-separated, `;` on Windows). The app, `sculptforge-cli` and the Python module load these folders at start-up,
+read-only: SculptForge never writes into them, so the share can be mounted read-only. Each brush shows where it
+comes from (a `studio` tag in the Custom brushes list, `brush_library` from scripts).
+
+```sh
+export SCULPTFORGE_BRUSH_PATH=/studio/brushes:/show/troll/brushes
+sculptforge-cli -c 'brush_library'        # every brush, its source and file, plus the library folders
+```
+
+When brushes share a name, the artist's own wins over a studio one, which wins over a built-in; among studio
+folders, the first one listed wins. Refining a studio brush in Brush Lab saves the artist's version (tagged
+`yours`) without touching the share; deleting it brings the studio version back. Files that aren't valid
+brushes are skipped with a message in the log.
+
+Publishing to the share is copying `.sfbrush` files into it: save one from the app (right-click a brush >
+Save .sfbrush...), take it from the user library, or turn a brush code into a file with
+`sculptforge-cli -c 'brush_install code=sfbrush1:...'` on a machine whose user library you then copy from.
+
+With Rez, set the share once for everyone:
+
+```sh
+export SCULPTFORGE_STUDIO_BRUSHES=/studio/brushes     # e.g. in the studio's launcher environment
+rez-env sculptforge -- sculptforge                    # SCULPTFORGE_BRUSH_PATH now includes /studio/brushes
+```
 
 ## Python API
 

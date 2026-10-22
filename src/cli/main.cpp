@@ -5,6 +5,7 @@
 // pipelines and AI agents.
 #include "ai/AiCommands.h"
 #include "cli/McpServer.h"
+#include "core/BrushLibrary.h"
 #include "core/Commands.h"
 #include "core/Script.h"
 
@@ -125,6 +126,7 @@ int main(int argc, char** argv) {
     }
 
     sf::Document doc;
+    for (const auto& message : sf::loadBrushLibrary(doc)) std::fprintf(stderr, "warning: %s\n", message.c_str());
     for (const auto& st : statements) {
         sf::CommandResult r = registry.execute(doc, st.command, st.args);
         if (!r.ok) {

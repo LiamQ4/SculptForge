@@ -28,6 +28,20 @@ All notable changes to SculptForge are listed here. The format follows
 - OBJ import: `g` groups now become polygroups (as ZBrush writes them) and `o` objects become SubTools.
 - New cube primitive.
 
+### Brush library and sharing
+- Custom brushes persist: Brush Lab saves every brush made or refined there to your brush library (a moment
+  after the last change), and it loads at every start in the app, `sculptforge-cli` and Python.
+- Brush codes: right-click a brush > Copy brush code gives one line of text (`sfbrush1:...`) to share in chat
+  or a forum. Ctrl+V in the viewport, or Paste brush in Brush Lab, installs a pasted code or `.sfbrush` text.
+  Dropping or opening a `.sfbrush` file installs it too.
+- The Custom brushes list shows where each brush comes from (studio, gallery, project, unsaved, or `yours` when
+  your version replaces a built-in or studio brush) and has a right-click menu: copy code, save, rename,
+  delete (with confirmation), reveal in folder.
+- Studio brush folders: list read-only shared folders in `SCULPTFORGE_BRUSH_PATH`; the Rez package adds
+  `SCULPTFORGE_STUDIO_BRUSHES` when set. Precedence: yours > studio > built-in.
+- New commands `brush_install`, `brush_code`, `brush_delete`, `brush_rename` and `brush_library`;
+  `brush_list` shows each brush's source.
+
 ### Fixed
 - Voxel remesh no longer leaves concentric voxel rings on curved surfaces and lands exactly on the original
   surface (it meshes the signed distance instead of blurred voxels).
