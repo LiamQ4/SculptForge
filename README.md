@@ -6,7 +6,8 @@
 
 <p align="center">
   <strong>The free, open-source alternative to ZBrush.</strong><br>
-  Digital sculpting for Linux, macOS and Windows, with game-ready pipelines and free built-in AI.
+  Digital sculpting for VFX, animation and games on Linux, macOS and Windows, with free built-in AI:<br>
+  an AI brush creator and image/text to 3D.
 </p>
 
 <p align="center">
@@ -32,8 +33,8 @@ SculptForge is a free, open-source alternative to ZBrush: a focused sculpting ap
 navigation ZBrush artists already know. It costs nothing, has no subscription, runs natively on Linux as well as
 Windows and macOS, and comes with source code you can change. It starts instantly, works offline,
 and fits into game and animation pipelines: sculpt a character, generate its LODs, sculpt blend shapes, and
-send it straight into Unreal Engine. **AI comes built in and free**: turn a sketch, concept art or a description
-into a sculptable model, or describe a brush and get it. No account or key is needed. Prefer your own?
+send it straight into Unreal Engine. **AI comes built in and free**: describe a brush and the AI brush creator
+(Brush Lab) builds it, or turn a sketch, concept art or a description into a sculptable model. No account or key is needed. Prefer your own?
 Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 
 ## Coming from ZBrush?
