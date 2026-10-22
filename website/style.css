@@ -223,6 +223,7 @@ p { margin: 0 0 1em; }
 .strip-items span { white-space: nowrap; padding: 3px 11px; border: 1px solid #34343c; border-radius: 999px;
                     background: rgba(15, 15, 18, 0.55); }
 .strip-items b { color: #fff; font-weight: 600; }
+.strip-items .key { border-color: rgba(242, 140, 60, 0.6); background: rgba(242, 140, 60, 0.14); color: #fff; }
 .strip-more { flex: none; margin-left: auto; color: var(--accent-2); font-size: 0.9rem; font-weight: 600; }
 
 .vfx { background: radial-gradient(900px 420px at 85% 0%, rgba(242, 140, 60, 0.10), transparent 65%), var(--bg-alt);
@@ -257,6 +258,7 @@ p { margin: 0 0 1em; }
   .spec span { font-size: 0.8rem; }
   .vfx-points { grid-template-columns: 1fr; gap: 20px; }
   .vfx-links { flex-direction: column; }
+  .hide-sm { display: none; }
   .vfx-links .btn { text-align: center; }
 }
 
