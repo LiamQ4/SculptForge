@@ -380,6 +380,75 @@ int App::runUiTest(int w, int h, int fps) {
     return demo_->failures().empty() ? 0 : 1;
 }
 
+namespace {
+
+// Area-weighted resample of the rectangle (x0, y0, cw, ch) of `src` (w x h RGBA) to dw x dh: a box filter when
+// shrinking (supersampled frames come out anti-aliased), linear interpolation when enlarging.
+struct Taps {
+    std::vector<int> first, count;
+    std::vector<float> weights; // count[i] weights per output pixel, packed
+};
+Taps makeTaps(float origin, float extent, int out) {
+    Taps t;
+    const float step = extent / float(out), width = std::max(step, 1.0f);
+    for (int i = 0; i < out; ++i) {
+        const float c = origin + (float(i) + 0.5f) * step, a = c - width * 0.5f, b = c + width * 0.5f;
+        const int lo = int(std::floor(a)), hi = int(std::ceil(b));
+        t.first.push_back(lo);
+        t.count.push_back(hi - lo);
+        float sum = 0.0f;
+        const size_t at = t.weights.size();
+        for (int j = lo; j < hi; ++j) {
+            const float wgt = std::max(0.0f, std::min(b, float(j + 1)) - std::max(a, float(j)));
+            t.weights.push_back(wgt);
+            sum += wgt;
+        }
+        for (size_t j = at; j < t.weights.size(); ++j) t.weights[j] /= sum > 0.0f ? sum : 1.0f;
+    }
+    return t;
+}
+
+void cropResample(const std::vector<uint8_t>& src, int w, int h, float x0, float y0, float cw, float ch, int dw, int dh,
+                  std::vector<uint8_t>& dst) {
+    const Taps tx = makeTaps(x0, cw, dw), ty = makeTaps(y0, ch, dh);
+    const int rowLo = std::clamp(ty.first.front(), 0, h - 1);
+    const int rowHi = std::clamp(ty.first.back() + ty.count.back(), 1, h);
+    std::vector<float> rows(size_t(rowHi - rowLo) * size_t(dw) * 3);
+    for (int y = rowLo; y < rowHi; ++y) { // horizontal pass over the rows the output needs
+        const uint8_t* in = src.data() + size_t(y) * size_t(w) * 4;
+        float* out = rows.data() + size_t(y - rowLo) * size_t(dw) * 3;
+        size_t k = 0;
+        for (int x = 0; x < dw; ++x) {
+            float r = 0, g = 0, b = 0;
+            for (int j = 0; j < tx.count[x]; ++j, ++k) {
+                const int sx = std::clamp(tx.first[x] + j, 0, w - 1);
+                const float wgt = tx.weights[k];
+                r += wgt * in[sx * 4 + 0];
+                g += wgt * in[sx * 4 + 1];
+                b += wgt * in[sx * 4 + 2];
+            }
+            out[x * 3 + 0] = r, out[x * 3 + 1] = g, out[x * 3 + 2] = b;
+        }
+    }
+    dst.assign(size_t(dw) * size_t(dh) * 4, 255);
+    std::vector<float> acc(size_t(dw) * 3);
+    size_t k = 0;
+    for (int y = 0; y < dh; ++y) { // vertical pass
+        uint8_t* out = dst.data() + size_t(y) * size_t(dw) * 4;
+        std::fill(acc.begin(), acc.end(), 0.0f);
+        for (int j = 0; j < ty.count[y]; ++j, ++k) {
+            const int sy = std::clamp(ty.first[y] + j, rowLo, rowHi - 1);
+            const float wgt = ty.weights[k];
+            const float* in = rows.data() + size_t(sy - rowLo) * size_t(dw) * 3;
+            for (int i = 0; i < dw * 3; ++i) acc[i] += wgt * in[i];
+        }
+        for (int x = 0; x < dw; ++x)
+            for (int c = 0; c < 3; ++c) out[x * 4 + c] = uint8_t(std::clamp(acc[x * 3 + c] + 0.5f, 0.0f, 255.0f));
+    }
+}
+
+} // namespace
+
 int App::runRecording() {
     demo_ = std::make_unique<Demo>(*this);
     std::string err;
@@ -391,10 +460,13 @@ int App::runRecording() {
     }
     const int w = options_.width, h = options_.height, fps = std::max(options_.fps, 1);
     if (testing) return runUiTest(w, h, fps);
+    // The video is --size; with --supersample the window renders larger and each frame is cropped to the demo's
+    // virtual camera and downsampled.
+    const int ss = std::max(options_.supersample, 1), ow = w / ss, oh = h / ss;
     // Frames go straight to ffmpeg as raw RGBA.
-    std::string cmd = "ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s " + std::to_string(w) + "x" + std::to_string(h) +
+    std::string cmd = "ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s " + std::to_string(ow) + "x" + std::to_string(oh) +
                       " -r " + std::to_string(fps) +
-                      " -i - -c:v libx264 -preset slow -crf 20 -pix_fmt yuv420p -movflags +faststart \"" +
+                      " -i - -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -movflags +faststart \"" +
                       options_.recordPath + "\"";
 #if defined(_WIN32)
     FILE* ff = _popen(cmd.c_str(), "wb");
@@ -405,7 +477,7 @@ int App::runRecording() {
         SDL_Log("Cannot start ffmpeg");
         return 1;
     }
-    std::vector<uint8_t> rgba;
+    std::vector<uint8_t> rgba, frame;
     const float dt = 1.0f / float(fps);
     int frames = 0, written = 0;
     while (!demo_->finished() && frames < fps * 60 * 30) {
@@ -442,7 +514,16 @@ int App::runRecording() {
         renderer_.draw(camera_, w, h, renderSettings_, canvasViewport(w, h));
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         renderer_.endCapture(rgba);
-        fwrite(rgba.data(), 1, rgba.size(), ff);
+        ImVec2 vc;
+        float vz;
+        demo_->view(vc, vz);
+        if (ss == 1 && vz <= 1.0f) {
+            fwrite(rgba.data(), 1, rgba.size(), ff);
+        } else {
+            const float cw = float(w) / vz, ch = float(h) / vz;
+            cropResample(rgba, w, h, vc.x - cw * 0.5f, vc.y - ch * 0.5f, cw, ch, ow, oh, frame);
+            fwrite(frame.data(), 1, frame.size(), ff);
+        }
         ++written;
     }
 #if defined(_WIN32)

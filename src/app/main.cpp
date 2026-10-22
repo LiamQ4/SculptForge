@@ -31,6 +31,7 @@ void usage() {
         "  --demo-asset FILE        Image or model the demo opens\n"
         "  --demo-output FILE       Save the demo's result (e.g. creature.glb)\n"
         "  --fps N                  Recording frame rate (default 30)\n"
+        "  --supersample N          Render recordings N times larger and downsample (sharper, allows zoom-ins)\n"
         "  --ui-test FILE.sfui      Run a UI test script headless and exit (0 = pass); settings are isolated\n"
         "  --ui-out DIR             Where UI tests save screenshots\n"
         "  --fullscreen             Start filling the screen (F11 toggles)");
@@ -84,6 +85,7 @@ int main(int argc, char** argv) {
         else if (a == "--demo-asset") options.demoAsset = next();
         else if (a == "--demo-output") options.demoOutput = next();
         else if (a == "--fps") options.fps = std::atoi(next().c_str());
+        else if (a == "--supersample") options.supersample = std::clamp(std::atoi(next().c_str()), 1, 4);
         else if (a == "--ui-test") options.uiTest = next();
         else if (a == "--fullscreen") options.fullscreen = true;
         else if (a == "--ui-out") options.uiOutDir = next();
@@ -100,6 +102,10 @@ int main(int argc, char** argv) {
     if (!options.uiTest.empty()) {
         if (!sizeGiven) options.width = 1600, options.height = 960;
         isolateSettings();
+    }
+    if (!options.recordPath.empty() && options.supersample > 1) { // the app renders large; the video keeps --size
+        options.width *= options.supersample;
+        options.height *= options.supersample;
     }
     sf::App app;
     if (!app.init(options)) {

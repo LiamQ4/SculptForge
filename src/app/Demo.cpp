@@ -247,15 +247,85 @@ ImVec2 Demo::onModel(float u, float v) const {
     return p;
 }
 
+// ---------------------------------------------------------------- virtual camera
+
+namespace {
+float smoother(float u) { // ease in and out with zero acceleration at both ends
+    u = std::clamp(u, 0.0f, 1.0f);
+    return u * u * u * (u * (u * 6.0f - 15.0f) + 10.0f);
+}
+} // namespace
+
+ImVec2 Demo::viewCenter(const View& v) const {
+    const ImVec2 size(float(app_.options_.width), float(app_.options_.height));
+    ImVec2 c = v.center.x < 0 ? ImVec2(size.x * 0.5f, size.y * 0.5f) : v.center;
+    // Keep the shown rectangle inside the window.
+    const float hw = size.x * 0.5f / v.zoom, hh = size.y * 0.5f / v.zoom;
+    return ImVec2(std::clamp(c.x, hw, size.x - hw), std::clamp(c.y, hh, size.y - hh));
+}
+
+void Demo::view(ImVec2& center, float& zoom) const {
+    const float u = view_.duration > 0.0f ? smoother((clock_ - view_.start) / view_.duration) : 1.0f;
+    const float z0 = std::max(view_.from.zoom, 1.0f), z1 = std::max(view_.to.zoom, 1.0f);
+    // Zoom in log space so pushing in and pulling out feel equally even; the centre follows the shown rectangle.
+    zoom = z0 * std::pow(z1 / z0, u);
+    const ImVec2 a = viewCenter(view_.from), b = viewCenter(view_.to);
+    const float w = std::abs(1.0f / z1 - 1.0f / z0) > 1e-4f ? (1.0f / zoom - 1.0f / z0) / (1.0f / z1 - 1.0f / z0) : u;
+    center = ImVec2(a.x + (b.x - a.x) * w, a.y + (b.y - a.y) * w);
+}
+
+void Demo::zoomTo(ImVec2 center, float zoom, float seconds) {
+    zoomTo([center] { return center; }, zoom, seconds);
+}
+
+void Demo::zoomTo(std::function<ImVec2()> where, float zoom, float seconds) {
+    steps_.push_back([this, where, zoom, seconds](float) {
+        View now;
+        view(now.center, now.zoom);
+        view_ = {now, {where(), std::max(zoom, 1.0f)}, clock_, seconds};
+        return true;
+    });
+}
+
+void Demo::zoomToItem(const std::string& label, float zoom, float seconds, ImVec2 offset) {
+    steps_.push_back([this, label, zoom, seconds, offset](float t) {
+        ImVec2 c;
+        if (!findItem(label, c)) {
+            if (t > 3.0f) SDL_Log("Demo: no UI item \"%s\" to zoom to", label.c_str());
+            return t > 3.0f;
+        }
+        const float k = float(app_.options_.height) / 1080.0f;
+        View now;
+        view(now.center, now.zoom);
+        view_ = {now, {ImVec2(c.x + offset.x * k, c.y + offset.y * k), std::max(zoom, 1.0f)}, clock_, seconds};
+        return true;
+    });
+}
+
+void Demo::fadeTo(float black, float seconds) {
+    steps_.push_back([this, black, seconds](float) {
+        fadeFrom_ = fade();
+        fadeTo_ = black;
+        fadeStart_ = clock_;
+        fadeDuration_ = seconds;
+        return true;
+    });
+}
+
+float Demo::fade() const {
+    const float u = fadeDuration_ > 0.0f ? smooth((clock_ - fadeStart_) / fadeDuration_) : 1.0f;
+    return fadeFrom_ + (fadeTo_ - fadeFrom_) * u;
+}
+
 // ---------------------------------------------------------------- building blocks
 
 void Demo::wait(float seconds) {
     steps_.push_back([seconds](float t) { return t >= seconds; });
 }
 
-void Demo::caption(const std::string& title, const std::string& subtitle, float seconds) {
-    steps_.push_back([this, title, subtitle, seconds](float) {
-        captions_.push_back({title, subtitle, clock_, seconds});
+void Demo::caption(const std::string& title, const std::string& subtitle, float seconds, bool top) {
+    steps_.push_back([this, title, subtitle, seconds, top](float) {
+        captions_.push_back({title, subtitle, clock_, seconds, top});
         return true;
     });
 }
@@ -378,6 +448,13 @@ void Demo::waitUntil(std::function<bool()> done, float timeout, int stride) {
 void Demo::drawOverlay() {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const ImVec2 size = ImGui::GetIO().DisplaySize;
+    // Captions and markers are laid out on the video frame; map them into the window through the virtual camera so
+    // they keep their size while the view zooms.
+    ImVec2 vc;
+    float vz;
+    view(vc, vz);
+    const float iz = 1.0f / vz;
+    auto P = [&](float x, float y) { return ImVec2(vc.x + (x - size.x * 0.5f) * iz, vc.y + (y - size.y * 0.5f) * iz); };
 
     // Lower-third captions (SF_DEMO_NO_CAPTIONS=1 records a clean take for posters).
     static const bool noCaptions = std::getenv("SF_DEMO_NO_CAPTIONS") != nullptr;
@@ -386,22 +463,23 @@ void Demo::drawOverlay() {
         const float t = clock_ - c.start;
         if (t < 0.0f || t > c.duration) continue;
         const float a = std::min({1.0f, t / 0.35f, (c.duration - t) / 0.35f});
+        const float rise = (1.0f - smooth(std::min(t, c.duration - t) / 0.45f)) * size.y * 0.012f; // drifts up in, down out
         ImFont* big = app_.fontCaption_ ? app_.fontCaption_ : ImGui::GetFont();
         ImFont* small = app_.fontCaptionSub_ ? app_.fontCaptionSub_ : ImGui::GetFont();
         const float bigSize = size.y * 0.042f, smallSize = size.y * 0.024f;
         const ImVec2 tsz = big->CalcTextSizeA(bigSize, FLT_MAX, 0.0f, c.title.c_str());
         const ImVec2 ssz = small->CalcTextSizeA(smallSize, FLT_MAX, 0.0f, c.subtitle.c_str());
         const float pad = size.y * 0.022f;
-        const ImVec2 p0(size.x * 0.5f - std::max(tsz.x, ssz.x) * 0.5f - pad * 1.5f, size.y * 0.80f);
-        const ImVec2 p1(size.x * 0.5f + std::max(tsz.x, ssz.x) * 0.5f + pad * 1.5f,
-                        p0.y + tsz.y + (c.subtitle.empty() ? 0.0f : ssz.y + pad * 0.3f) + pad * 2.0f);
-        dl->AddRectFilled(p0, p1, IM_COL32(12, 12, 14, int(215 * a)), pad * 0.6f);
-        dl->AddRectFilled(ImVec2(p0.x, p1.y - 4.0f), ImVec2(p1.x, p1.y), IM_COL32(242, 140, 60, int(255 * a)), pad * 0.6f,
+        const float x0 = size.x * 0.5f - std::max(tsz.x, ssz.x) * 0.5f - pad * 1.5f, y0 = size.y * (c.top ? 0.08f : 0.80f) + rise;
+        const float x1 = size.x * 0.5f + std::max(tsz.x, ssz.x) * 0.5f + pad * 1.5f,
+                    y1 = y0 + tsz.y + (c.subtitle.empty() ? 0.0f : ssz.y + pad * 0.3f) + pad * 2.0f;
+        dl->AddRectFilled(P(x0, y0), P(x1, y1), IM_COL32(12, 12, 14, int(215 * a)), pad * 0.6f * iz);
+        dl->AddRectFilled(P(x0, y1 - 4.0f), P(x1, y1), IM_COL32(242, 140, 60, int(255 * a)), pad * 0.6f * iz,
                           ImDrawFlags_RoundCornersBottom);
-        dl->AddText(big, bigSize, ImVec2(size.x * 0.5f - tsz.x * 0.5f, p0.y + pad), IM_COL32(255, 255, 255, int(255 * a)),
+        dl->AddText(big, bigSize * iz, P(size.x * 0.5f - tsz.x * 0.5f, y0 + pad), IM_COL32(255, 255, 255, int(255 * a)),
                     c.title.c_str());
         if (!c.subtitle.empty())
-            dl->AddText(small, smallSize, ImVec2(size.x * 0.5f - ssz.x * 0.5f, p0.y + pad + tsz.y + pad * 0.3f),
+            dl->AddText(small, smallSize * iz, P(size.x * 0.5f - ssz.x * 0.5f, y0 + pad + tsz.y + pad * 0.3f),
                         IM_COL32(205, 205, 210, int(255 * a)), c.subtitle.c_str());
     }
 
@@ -412,13 +490,14 @@ void Demo::drawOverlay() {
         ImFont* f = app_.fontCaptionSub_ ? app_.fontCaptionSub_ : ImGui::GetFont();
         const float fs = size.y * 0.022f;
         const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, text);
-        const ImVec2 p(size.x - ts.x - 40.0f, 60.0f);
-        dl->AddRectFilled(ImVec2(p.x - 14, p.y - 8), ImVec2(p.x + ts.x + 14, p.y + ts.y + 8), IM_COL32(12, 12, 14, 200), 8.0f);
-        dl->AddText(f, fs, p, IM_COL32(255, 200, 150, 255), text);
+        const ImVec2 p(size.x - ts.x - size.y * 0.037f, size.y * 0.056f);
+        dl->AddRectFilled(P(p.x - fs * 0.6f, p.y - fs * 0.35f), P(p.x + ts.x + fs * 0.6f, p.y + ts.y + fs * 0.35f),
+                          IM_COL32(12, 12, 14, 200), fs * 0.35f * iz);
+        dl->AddText(f, fs * iz, P(p.x, p.y), IM_COL32(255, 200, 150, 255), text);
     }
 
-    // Cursor arrow.
-    const float s = size.y / 1080.0f * 1.15f;
+    // Cursor arrow (it zooms with the picture, but less, so it never looms).
+    const float s = size.y / 1080.0f * 1.15f / std::sqrt(vz);
     const ImVec2 m = mouse_;
     const ImVec2 pts[] = {ImVec2(m.x, m.y), ImVec2(m.x, m.y + 22 * s), ImVec2(m.x + 5.5f * s, m.y + 16.5f * s),
                           ImVec2(m.x + 9.5f * s, m.y + 25 * s), ImVec2(m.x + 13 * s, m.y + 23.5f * s),
@@ -426,6 +505,10 @@ void Demo::drawOverlay() {
     dl->AddConcavePolyFilled(pts, 7, IM_COL32(255, 255, 255, 255));
     dl->AddPolyline(pts, 7, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.5f * s);
     if (buttonDown_) dl->AddCircle(m, 14.0f * s, IM_COL32(255, 160, 80, 220), 32, 2.5f * s);
+
+    // Fade to and from black (seamless loops on the website).
+    if (const float f = fade(); f > 0.001f)
+        dl->AddRectFilled(ImVec2(0, 0), size, IM_COL32(9, 9, 11, int(255 * std::min(f, 1.0f))));
 }
 
 // ---------------------------------------------------------------- demos
@@ -567,39 +650,79 @@ void Demo::buildSculpt() {
 }
 
 void Demo::buildImageTo3D() {
+    const float k = float(app_.options_.height) / 1080.0f;
+    // SF_DEMO_REHEARSE_MODEL=file.glb stands in for the generator (camera and timing rehearsals without spending
+    // Hugging Face GPU time). Never publish a rehearsal: the real take generates the model.
+    static const char* rehearse = std::getenv("SF_DEMO_REHEARSE_MODEL");
     run([this] {
         app_.runCommand("new_sphere", {{"subdivisions", 4.0}});
+        app_.renderSettings_.showMesh = false; // an empty stage until the model arrives
         app_.showBrushLab_ = false;
         app_.aiSettings_.generatorService = "huggingface";
         app_.aiSettings_.hfModel = "hunyuan3d-2.1";
         app_.remeshGenerated_ = true;
         app_.remeshResolution_ = 256;
+        app_.openPath(app_.options_.demoAsset); // opens the Generate 3D panel with the drawing
+        fadeFrom_ = fadeTo_ = 1.0f;
+        mouse_ = ImVec2(1000.0f * float(app_.options_.height) / 1080.0f, 760.0f * float(app_.options_.height) / 1080.0f);
     });
-    caption("Image to 3D", "Drop in a drawing or concept - get a sculptable model", 4.0f);
-    wait(1.0f);
+    wait(0.15f);
+    // Open on the drawing in the panel, then take in the Generate button below it.
+    zoomToItem("Generate 3D/Generate 3D model", 2.5f, 0.0f, ImVec2(10.0f, -470.0f));
+    fadeTo(0.0f, 0.8f);
+    caption("From a sketch to a 3D model", "Drop in a drawing, and free AI builds the whole thing", 3.0f);
+    wait(2.3f);
+    zoomToItem("Generate 3D/Generate 3D model", 1.75f, 1.3f, ImVec2(0.0f, -270.0f));
+    if (rehearse) {
+        moveToItem("Generate 3D/Generate 3D model"); // no click: a rehearsal never calls the service
+        wait(2.0f);
+        run([this] {
+            app_.openPath(rehearse);
+            app_.status_ = "Rehearsal model loaded";
+        });
+    } else {
+        click("Generate 3D/Generate 3D model");
+        waitUntil([this] { return ready(app_.pendingGenerator_); }, 600.0f, 10);
+        run([this] {
+            app_.pollGenerator();
+            if (!app_.options_.demoOutput.empty()) app_.runCommand("export_glb", {{"path", app_.options_.demoOutput}});
+        });
+    }
     run([this] {
-        app_.openPath(app_.options_.demoAsset);
-        SDL_Log("demo: opened %s -> %s", app_.options_.demoAsset.c_str(), app_.status_.c_str());
-    });
-    wait(1.5f);
-    caption("Free models, no account needed", "Hunyuan3D, TRELLIS.2 and Stable Fast 3D via Hugging Face", 4.0f);
-    click("Generate 3D model");
-    waitUntil([this] { return ready(app_.pendingGenerator_); }, 600.0f, 10);
-    run([this] {
-        app_.pollGenerator();
+        app_.renderSettings_.showMesh = true;
         app_.showImageTo3D_ = false;
         app_.camera_.frame(app_.doc_.mesh.bounds());
-        app_.camera_.yaw = glm::radians(-25.0f);
+        app_.camera_.yaw = glm::radians(-200.0f); // starts from the back and turns to the front
+        app_.camera_.pitch = glm::radians(-8.0f);
+        app_.camera_.distance *= 0.82f;
+        mouse_ = ImVec2(-80.0f, -80.0f);
     });
-    caption("Ready to sculpt", "Remeshed into one clean, watertight surface", 4.0f);
-    orbit(520.0f, 0.0f, 4.0f);
-    run([this] {
-        app_.radiusPx_ = 55.0f;
+    zoomOut(1.4f);
+    caption("A full 3D model in about 20 seconds", "Hunyuan3D 2.1 on Hugging Face: free, no account", 3.8f);
+    // Orbiting turns 0.008 rad per pixel: 3/4 of a turn, ending on a three-quarter front view.
+    orbit(-590.0f, 0.0f, 6.0f);
+    caption("Remeshed into one clean surface", "Watertight and ready to sculpt", 3.2f);
+    zoomTo([this] { return onModel(0.5f, 0.45f); }, 1.5f, 1.2f);
+    run([this, k] {
+        app_.radiusPx_ = 22.0f * k;
+        app_.strength_ = 0.8f;
         app_.symmetry_.x = true;
     });
-    click("Clay##brush.clay");
-    stroke([this](float u) { return project(glm::vec3(-0.25f + 0.15f * u, 0.15f - 0.3f * u, 0.38f)); }, 1.2f);
-    orbit(-260.0f, 30.0f, 2.5f);
+    click("Crease##brush.crease");
+    auto line = [this](float u0, float v0, float u1, float v1) {
+        return [this, u0, v0, u1, v1](float t) {
+            const ImVec2 a = onModel(u0, v0), b = onModel(u1, v1);
+            return ImVec2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+        };
+    };
+    stroke(line(0.38f, 0.40f, 0.46f, 0.52f), 0.8f);
+    stroke(line(0.40f, 0.55f, 0.47f, 0.62f), 0.7f);
+    wait(0.4f);
+    zoomOut(1.3f);
+    run([this] { mouse_ = ImVec2(-80.0f, -80.0f); });
+    orbit(160.0f, 0.0f, 2.4f);
+    fadeTo(1.0f, 0.8f);
+    wait(0.8f);
 }
 
 void Demo::buildBrushLab() {
@@ -640,53 +763,108 @@ void Demo::buildBrushLab() {
 }
 
 void Demo::buildGameReady() {
+    const float k = float(app_.options_.height) / 1080.0f; // offsets authored at 1080p
     run([this] {
         app_.openPath(app_.options_.demoAsset);
+        app_.runCommand("subdivide"); // 190k triangles: smooth strokes and a deep LOD chain
         app_.symmetry_.x = true;
-        app_.strength_ = 0.8f;
+        app_.strength_ = 0.9f;
         app_.showBrushLab_ = false;
         app_.camera_.frame(app_.doc_.mesh.bounds());
-        app_.camera_.yaw = glm::radians(-20.0f);
-        app_.camera_.pitch = glm::radians(-6.0f);
-        app_.camera_.distance *= 0.85f;
-        std::snprintf(app_.newLayerName_, sizeof app_.newLayerName_, "Grin");
+        app_.camera_.yaw = glm::radians(-14.0f);
+        app_.camera_.pitch = glm::radians(-4.0f);
+        app_.camera_.distance *= 0.80f;
+        app_.lodLevels_ = 4;
+        app_.lodRatio_ = 0.3f; // 190k -> 57k -> 17k -> 5k triangles
+        std::snprintf(app_.newLayerName_, sizeof app_.newLayerName_, "Snarl");
         app_.layout_.openSubpalettes = {"tool.layers", "tool.export"}; // the Tool palette's Layers and Export
+        fadeFrom_ = fadeTo_ = 1.0f;
     });
-    caption("Built for game & animation pipelines", "Sculpt layers become blend shapes / morph targets", 4.0f);
+    // Medium shot: the sculpt and the Tool tray together; the face for close-ups.
+    const ImVec2 medium(1180.0f * k, 560.0f * k);
+    auto face = [this] { return onModel(0.5f, 0.33f); };
+    auto at = [this](float u, float v) { return [this, u, v] { return onModel(u, v); }; };
+
+    fadeTo(0.0f, 0.9f);
+    caption("Blend shapes", "Sculpt an expression on its own layer", 3.6f);
+    wait(1.4f);
+    zoomToItem("+ Add", 2.3f, 1.1f, ImVec2(-90.0f, -60.0f));
+    wait(0.5f);
     click("+ Add");
-    const float k = float(app_.options_.height) / 1080.0f;
-    run([this, k] { app_.radiusPx_ = 70.0f * k; });
+    wait(0.3f);
+
+    // The snarl: brows pulled down and in, wrinkles across the muzzle, puffed whisker pads (mirrored by symmetry).
+    zoomTo(face, 2.1f, 1.3f);
+    run([this, k] {
+        app_.radiusPx_ = 46.0f * k;
+        app_.strength_ = 1.0f;
+    });
     click("Move##brush.move");
-    // Pull the mouth corners up and back into a grin, on the new layer only.
-    stroke([this, k](float u) {
-        const ImVec2 p = project(onSphere(-32.0f, -28.0f));
-        return ImVec2(p.x - 40.0f * k * smooth(u), p.y - 70.0f * k * smooth(u));
-    }, 1.2f);
-    stroke([this, k](float u) {
-        const ImVec2 p = project(onSphere(-20.0f, -45.0f));
-        return ImVec2(p.x - 30.0f * k * smooth(u), p.y - 55.0f * k * smooth(u));
-    }, 1.0f);
-    caption("Animate the expression", "Weights export as glTF morph targets and UsdSkel blend shapes", 4.0f);
+    auto pull = [this, k](float u, float v, float dx, float dy) {
+        return [this, k, u, v, dx, dy](float t) {
+            const ImVec2 p = onModel(u, v);
+            const float e = smooth(t);
+            return ImVec2(p.x + dx * k * e, p.y + dy * k * e);
+        };
+    };
+    stroke(pull(0.405f, 0.272f, 16.0f, 40.0f), 1.0f);
+    stroke(pull(0.452f, 0.284f, 10.0f, 26.0f), 0.8f);
+    run([this, k] {
+        app_.radiusPx_ = 18.0f * k;
+        app_.strength_ = 0.7f;
+    });
+    click("Standard##brush.standard");
+    auto line = [this](float u0, float v0, float u1, float v1) {
+        return [this, u0, v0, u1, v1](float t) {
+            const ImVec2 a = onModel(u0, v0), b = onModel(u1, v1);
+            return ImVec2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+        };
+    };
+    for (int pass = 0; pass < 2; ++pass) {
+        stroke(line(0.45f, 0.35f, 0.50f, 0.342f), 0.45f);
+        stroke(line(0.445f, 0.372f, 0.50f, 0.365f), 0.45f);
+        stroke(line(0.45f, 0.394f, 0.50f, 0.389f), 0.45f);
+    }
+    run([this, k] {
+        app_.radiusPx_ = 40.0f * k;
+        app_.strength_ = 0.7f;
+    });
+    click("Inflate##brush.inflate");
+    stroke(line(0.41f, 0.47f, 0.46f, 0.455f), 0.6f);
+    stroke(line(0.41f, 0.49f, 0.46f, 0.475f), 0.6f);
+
+    // Play it back.
+    zoomToItem("Play", 2.3f, 1.1f, ImVec2(-90.0f, 20.0f));
+    wait(0.3f);
     click("Play");
-    wait(4.0f);
-    click("Stop");
-    caption("One-click LOD chain", "Blend shapes survive on every level", 4.0f);
+    zoomTo(face, 1.8f, 1.2f);
+    caption("Plays back as a morph target", "glTF morph targets, UsdSkel blend shapes, FBX for Unreal", 3.8f);
+    wait(3.6f);
+
+    // LODs.
+    zoomToItem("Generate LOD chain", 2.0f, 1.1f, ImVec2(-40.0f, 70.0f));
+    wait(0.3f);
     click("Generate LOD chain");
-    click("LOD1");
-    wait(1.0f);
-    click("LOD2");
-    wait(1.0f);
+    wait(0.4f);
     click("LOD3");
-    wait(1.5f);
+    caption("One-click LOD chain", "5k triangles at LOD3, and it still snarls", 4.0f);
+    zoomTo(face, 1.9f, 1.3f);
+    wait(3.2f);
+    zoomTo(medium, 1.25f, 1.1f);
+    wait(0.6f);
     click("Game Ready/Sculpt");
     run([this] { app_.renderSettings_.wireframe = false; });
-    caption("Send to Unreal Engine", "FBX with LODs and morph targets, straight into the editor", 4.5f);
-    moveToItem("Game Ready/Send to Unreal", 0.8f);
-    wait(1.5f);
-    moveToItem("Game Ready/Export FBX for Unreal...", 0.6f);
-    wait(1.0f);
-    caption("Plus glTF, USD/USDZ and OBJ", "Validated with the Khronos and OpenUSD tools", 3.5f);
-    orbit(500.0f * k, 0.0f, 3.5f);
+
+    // Unreal.
+    zoomToItem("Game Ready/Send to Unreal", 2.1f, 1.1f, ImVec2(-150.0f, 0.0f));
+    caption("Send to Unreal Engine", "A skeletal mesh with LODs and morph targets, straight into the editor", 3.8f, true);
+    moveToItem("Game Ready/Send to Unreal", 0.9f);
+    wait(2.6f);
+    zoomOut(1.4f);
+    run([this] { mouse_ = ImVec2(-80.0f, -80.0f); });
+    orbit(260.0f * k, 0.0f, 3.2f);
+    fadeTo(1.0f, 0.8f);
+    wait(0.8f);
 }
 
 void Demo::buildSplats() {

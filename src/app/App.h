@@ -53,6 +53,7 @@ struct AppOptions {
     std::string demoAsset;  // file the demo opens (image or model)
     std::string demoOutput; // where the demo saves its result (optional)
     int fps = 30;
+    int supersample = 1; // recording: render this many times larger, then downsample (crisp text, room to zoom)
     std::string uiTest;   // run this .sfui UI test script headless and exit (see UiTest.cpp)
     std::string uiOutDir; // where UI tests save screenshots
     bool fullscreen = false; // start fullscreen (F11 toggles)

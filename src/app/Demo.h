@@ -40,6 +40,9 @@ public:
     void drawOverlay();      // inside the ImGui frame: captions and cursor
     bool finished() const { return step_ >= steps_.size(); }
     int frameStride() const { return stride_; } // >1 while fast-forwarding through waits
+    // The recording's virtual camera: the part of the window the video shows (its centre and zoom, 1 = all of it),
+    // eased between the targets set by zoomTo/zoomToItem. Captions and the fade stay the same size on screen.
+    void view(ImVec2& center, float& zoom) const;
 
     // Screen rect of the most recent UI item with this label (text before "##" also matches;
     // "Window/label" picks the item in one window).
@@ -67,7 +70,7 @@ private:
 
     // Timeline building blocks.
     void wait(float seconds);
-    void caption(const std::string& title, const std::string& subtitle, float seconds);
+    void caption(const std::string& title, const std::string& subtitle, float seconds, bool top = false);
     void moveTo(float x, float y, float seconds);
     void moveToItem(const std::string& label, float seconds = 0.6f);
     void click(const std::string& label);  // move to the item and click it
@@ -76,6 +79,12 @@ private:
     void type(char* buffer, size_t size, const std::string& text, float seconds);
     void run(std::function<void()> action);
     void waitUntil(std::function<bool()> done, float timeout, int stride);
+    // Camera moves for the video (they start and the timeline carries on; `seconds` is the ease).
+    void zoomTo(ImVec2 center, float zoom, float seconds);
+    void zoomToItem(const std::string& label, float zoom, float seconds, ImVec2 offset = ImVec2(0, 0));
+    void zoomTo(std::function<ImVec2()> where, float zoom, float seconds); // centre found when the move starts
+    void zoomOut(float seconds) { zoomTo(ImVec2(-1, -1), 1.0f, seconds); }
+    void fadeTo(float black, float seconds); // 1 = black (fade out), 0 = clear (fade in)
 
     // UI test steps.
     void fail(int line, const std::string& message);
@@ -112,9 +121,22 @@ private:
     struct Caption {
         std::string title, subtitle;
         float start = 0.0f, duration = 0.0f;
+        bool top = false; // upper third (when the lower one has UI to show)
     };
     std::vector<Caption> captions_;
     float clock_ = 0.0f;
+
+    struct View {
+        ImVec2 center{-1, -1}; // -1: the middle of the window
+        float zoom = 1.0f;
+    };
+    struct Tween {
+        View from, to;
+        float start = 0.0f, duration = 0.0f;
+    } view_;
+    float fadeFrom_ = 0.0f, fadeTo_ = 0.0f, fadeStart_ = 0.0f, fadeDuration_ = 0.0f;
+    float fade() const;
+    ImVec2 viewCenter(const View& v) const;
 
     bool testing_ = false;
     std::vector<std::string> failures_;
