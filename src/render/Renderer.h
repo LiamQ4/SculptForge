@@ -34,6 +34,13 @@ struct SceneMesh {
     bool visible = true; // hidden meshes keep their GPU slot but aren't drawn (or uploaded)
 };
 
+// Part of the target the 3D view is drawn into (framebuffer pixels, origin bottom-left); the rest is
+// cleared to `surround`. w == 0: the whole target.
+struct RenderViewport {
+    int x = 0, y = 0, w = 0, h = 0;
+    glm::vec3 surround{0.118f, 0.118f, 0.125f};
+};
+
 // Display colour of a polygroup id (linear RGB): a stable hash spread over
 // pleasant hues. The mesh shader uses the same formula.
 glm::vec3 polygroupColor(uint32_t id);
@@ -54,7 +61,8 @@ public:
     void syncScene(const std::vector<SceneMesh>& scene);
     // Re-uploads the splats when `version` differs from the last upload.
     void syncSplats(const SplatCloud& splats, uint64_t version);
-    void draw(const Camera& camera, int fbWidth, int fbHeight, const RenderSettings& settings);
+    using Viewport = RenderViewport;
+    void draw(const Camera& camera, int fbWidth, int fbHeight, const RenderSettings& settings, const Viewport& viewport = {});
     // Offscreen render (4x MSAA) into top-down RGBA8 pixels.
     bool renderToImage(const Camera& camera, int width, int height, const RenderSettings& settings,
                        std::vector<uint8_t>& rgba, std::string& error);

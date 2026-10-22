@@ -6,6 +6,7 @@
 #include "app/Actions.h"
 #include "app/LightBox.h"
 #include "app/Pickers.h"
+#include "app/ShellGeometry.h"
 #include "app/Thumbnails.h"
 #include "app/UiLayout.h"
 #include "ai/ComfyUI.h"
@@ -102,7 +103,6 @@ private:
     void saveFileDialog(FileAction action);
     AABB sceneBounds() const; // mesh plus the main body of any splats
     bool onScreen(const AABB& box) const; // whole box inside the viewport
-    void drawSplatSection();
     void processPendingFiles();
 
     void setLayerWeight(int index, float weight);
@@ -113,10 +113,6 @@ private:
     void syncScene(); // uploads every SubTool (the active one as displayedMesh()) and the splats to the renderer
 
     void drawUi();
-    void drawToolPanel();
-    void drawMenuBar();
-    void drawLayersPanel();
-    void drawGameExportPanel();
     void drawBrushLab();
     void drawImageTo3D();
     void drawComfyUi();
@@ -189,10 +185,7 @@ private:
     DialogRequest dialogRequests_[int(FileAction::Count)];
 
     // Brush Lab (AI brush designer)
-    bool showBrushLab_ = true;
-    bool showLayersPanel_ = true;
-    bool showGamePanel_ = true;
-    bool showSplatsPanel_ = false;
+    bool showBrushLab_ = false; // floating; opened from the top shelf's AI Brush or the Brush palette
     bool hideUi_ = false;
     uint64_t seenSplatsVersion_ = 0;
     ai::AiSettings aiSettings_;
@@ -307,7 +300,6 @@ private:
     size_t visibleGroups_ = 0;
     std::array<uint64_t, 6> visibleGroupsKey_{};
     // Stroke types, alphas and the extra brushes (PanelBrushes.cpp).
-    void drawBrushOptions();
     void snakeHookTo(float x, float y);
     void dragRectTo(float x, float y);
     glm::vec3 screenUpVector(float angle) const; // camera up rotated by `angle` around the view axis
@@ -351,9 +343,7 @@ private:
     bool paintMode_ = false;  // Paint brush: colour only, no sculpting (ZBrush Rgb on, Zadd off)
     bool paintRgb_ = false;   // also paint the colour while sculpting (ZBrush Rgb + Zadd)
     bool strokePaint_ = false, strokeSculpt_ = true;
-    bool showPolypaintPanel_ = false; // off by default (keeps the viewport and demo videos clear)
     void registerPaintUiCommands();
-    void drawPolypaintPanel();
     void paintAt(const DabParams& p);
     void pickColorUnderCursor();
     // First paint stroke on a mesh without polypaint: undo restores this snapshot so the attribute goes away again.
@@ -408,13 +398,11 @@ private:
     bool autosaveWritten_ = false;
     std::string windowTitle_;
     // SubTools (PanelSubTools.cpp): the panel, and Alt+click in the viewport to select one.
-    void drawSubToolsPanel();
     void drawSubToolPopups();
     // Index of the nearest visible SubTool under the cursor (-1: none); builds stale BVHs on the way.
     int pickSubtool(float x, float y, RayHit* hit = nullptr);
     void subtoolClickMove(float x, float y); // Alt press on another SubTool: dragging turns it into a stroke
     void subtoolClickRelease();              // ... and releasing without dragging selects it
-    bool showSubToolsPanel_ = true;
     int subtoolClickTarget_ = -1;
     float subtoolClickX_ = 0.0f, subtoolClickY_ = 0.0f;
     uint32_t renamingSubtool_ = 0; // SubTool id being renamed inline (0: none)
@@ -440,7 +428,97 @@ private:
     std::unique_ptr<struct BrushGalleryState, void (*)(struct BrushGalleryState*)> gallery_{nullptr, &destroyBrushGallery};
 
     // ---- Shell (A): layout, shelves, palettes, trays, theme ----
+public:
+    // The part of the window the 3D view uses (logical px); the whole window while the UI is hidden.
+    CanvasRect canvasRect() const;
+    ShellGeometry shellGeometry() const; // every shell region for the current window (console rect, trays...)
+    ImFont* smallFont() const { return fontSmall_; } // 12 px captions (shelf labels, tiles)
+    ImFont* boldFont() const { return fontBold_; }   // SemiBold 15 (help titles)
+
+private:
     UiLayout layout_ = standardLayout();
+    friend bool drawActionLook(App&, const Action&, ImVec2, int);
+    friend const struct PaletteDef* palettes(int&);
+    // Shell.cpp: title strip, palette bar, shelves, trays, dividers, drop-downs, customize drag and drop.
+    void registerShellActions();
+    void drawShell();
+    void drawTitleStrip(const ShellGeometry& g);
+    void drawPaletteBar(const ShellGeometry& g);
+    void drawShelf(int shelf, const CanvasRect& rect);
+    void drawShelfItem(int shelf, int index, const std::string& item, bool vertical);
+    void drawTray(bool right, const CanvasRect& rect);
+    void drawDivider(bool right, const CanvasRect& rect);
+    void drawPaletteDropdown();
+    bool paletteHeader(const char* id, bool inTray, bool right); // false: collapsed
+    void drawPaletteBody(const std::string& id);
+    void movePaletteToTray(const std::string& id, bool right);
+    void removePaletteFromTrays(const std::string& id);
+    void finishShelfDrag();
+    void noteLayoutChanged();
+    void applyPreset(int preset);
+    void updateCameraAspect(); // camera_.aspect from the canvas
+    // Ray through window point (x, y) of the canvas, and the canvas height for screen-size conversions.
+    void canvasRay(float x, float y, glm::vec3& origin, glm::vec3& dir) const;
+    float canvasHeight() const { return canvasRect().h; }
+    Renderer::Viewport canvasViewport(int fbWidth, int fbHeight) const; // the canvas in framebuffer pixels
+    void drawCanvasFrame();
+    bool canvasNavButton(const char* id, const char* icon, const char* label, int mode); // right-shelf Move/Zoom/Rotate
+    void drawBrushTile(const char* id, ImVec2 size);
+    void drawStrokeTile(const char* id, ImVec2 size);
+    void drawAlphaTile(const char* id, ImVec2 size);
+    void drawMaterialTile(const char* id, ImVec2 size);
+    void drawColorWidget(float width);
+    void drawAddToShelfPopup();
+    // Palettes.cpp: every palette body, also used by the trays and drop-downs.
+    bool subpalette(const char* id, const char* title); // Tool sub-palette header; true while open
+    void drawPalette_Alpha();
+    void drawPalette_Brush();
+    void drawPalette_Color();
+    void drawPalette_Draw();
+    void drawPalette_Edit();
+    void drawPalette_File();
+    void drawPalette_Generate();
+    void drawPalette_Help();
+    void drawPalette_Material();
+    void drawPalette_Preferences();
+    void drawPalette_Render();
+    void drawPalette_Script();
+    void drawPalette_Splats();
+    void drawPalette_Stroke();
+    void drawPalette_Tool();
+    void drawPalette_Transform();
+    void drawStrokeSection();
+    void drawAlphaSection();
+    void drawMaterialGrid(float tile);
+    void drawLayersContents();
+    void drawGameExportContents();
+    void drawVisibilitySection();
+    void drawSubToolsContents();
+    void pollAlphaFile();
+    ShellGeometry shell_;      // this frame's regions (drawShell)
+    ImFont* fontSmall_ = nullptr, *fontTiny_ = nullptr, *fontIcons_ = nullptr, *fontBold_ = nullptr;
+    std::string dropdown_;     // palette open as a drop-down ("" = none)
+    float dropdownX_ = 0.0f;
+    bool openDropdown_ = false;
+    float decimateRatio_ = 0.5f;
+    std::string flashPalette_; // a tray palette that was clicked in the bar: scrolled to and flashed
+    double flashStart_ = 0.0;
+    std::vector<std::string> collapsedPalettes_; // tray palettes showing only their header
+    bool oneSubpalette_ = true; // ZBrush: opening a sub-palette closes the others (Shift+click keeps them)
+    bool autoCollapse_[2] = {true, false}; // left, right tray: opening a palette there collapses the others (ZBrush)
+    void autoCollapseTray(bool right, const std::string& keep);
+    bool layoutHintShown_ = false;
+    glm::vec3 secondaryColor_{1.0f, 1.0f, 1.0f}; // the left shelf's second swatch (click swaps, "Alternate")
+    uint64_t activeTrisKey_ = ~uint64_t(0); // the top shelf's ActiveTris, recounted when the scene changes
+    size_t activeTris_ = 0;
+    float bottomTileW_ = 58.0f; // bottom shelf tiles shrink (down to 44 px) before the shelf scrolls
+    int navDrag_ = -1;          // right-shelf drag button being dragged (0 move, 1 zoom, 2 rotate)
+    std::string statusShown_;   // for colouring fresh errors in the title strip
+    double statusSince_ = 0.0;
+    struct ShelfDrag {
+        bool active = false, accepted = false;
+        int shelf = -1, index = -1;
+    } shelfDrag_;
     // ---- end Shell (A) ----
 
     // ---- LightBox (B): LightBox, thumbnails, pickers ----

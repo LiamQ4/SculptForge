@@ -129,6 +129,10 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/Ui.cpp
     src/app/UiLayout.cpp
     src/app/LightBoxStubs.cpp
+    src/app/Shell.cpp
+    src/app/ShellGeometry.cpp
+    src/app/Palettes.cpp
+    src/app/Theme.cpp
     src/app/PanelMasking.cpp
     src/app/PanelPolygroups.cpp
     src/app/PanelBrushes.cpp
@@ -305,7 +309,8 @@ endif()
 if(SCULPTFORGE_BUILD_TESTS)
   # tests/test_main.cpp plus every tests/test_*.cpp (add a file to add tests; see tests/TestHarness.h).
   file(GLOB SCULPTFORGE_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.cpp)
-  add_executable(sculptforge_tests ${SCULPTFORGE_TEST_SOURCES} src/cli/McpServer.cpp)
+  add_executable(sculptforge_tests ${SCULPTFORGE_TEST_SOURCES} src/cli/McpServer.cpp src/app/UiLayout.cpp
+                                   src/app/ShellGeometry.cpp)
   target_include_directories(sculptforge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(sculptforge_tests PRIVATE sculptforge_core sculptforge_ai)
   if(MSVC)
@@ -331,5 +336,9 @@ if(SCULPTFORGE_BUILD_TESTS)
       add_test(NAME ui_${name} COMMAND sculptforge --ui-test ${script} --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/${name})
       set_tests_properties(ui_${name} PROPERTIES LABELS ui TIMEOUT 300)
     endforeach()
+    # The shell layout again on a 1920x1080 window (docs/ui-design.md §2.3).
+    add_test(NAME ui_shell_layout_1080 COMMAND sculptforge --ui-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/shell_layout.sfui
+             --size 1920x1080 --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/shell_layout_1080)
+    set_tests_properties(ui_shell_layout_1080 PROPERTIES LABELS ui TIMEOUT 300)
   endif()
 endif()

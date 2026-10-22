@@ -3,6 +3,10 @@
 # UI tests get an empty library of their own in --ui-out/brush-library.
 expect_value user_brushes == 0
 expect_value library_files == 0
+# The Brush palette (with the custom brushes) goes into the right tray; Brush Lab opens from the top shelf.
+click "Brush##palette.brush"
+click "Brush/##totray"
+click "AI Brush"
 
 # A brush made this session is marked unsaved until it's refined in Brush Lab.
 run brush_create name="Bark Ridges" depth=0.3 pattern=ridges patternAmount=0.6

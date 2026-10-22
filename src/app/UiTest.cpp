@@ -29,7 +29,8 @@
 //                            subtools (count), active_subtool (index, 0 = top), visible_subtools,
 //                            edited_subtools (SubTools with undo history), user_brushes (brushes in the
 //                            user library), library_files (.sfbrush files in it; UI tests get an empty
-//                            one in --ui-out/brush-library); OP is == != < <= > >=
+//                            one in --ui-out/brush-library), shelves (1 shown), left_tray / right_tray
+//                            (palettes in the tray, -1 when closed); OP is == != < <= > >=
 //   (mesh values are the active SubTool's)
 //   shot NAME                save a screenshot NAME.png (to --ui-out)
 #include "app/App.h"
@@ -163,6 +164,9 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "show_polygroups") return app_.renderSettings_.showPolygroups ? 1.0 : 0.0;
     if (name == "show_mask") return app_.renderSettings_.showMask ? 1.0 : 0.0;
     if (name == "wireframe") return app_.renderSettings_.wireframe ? 1.0 : 0.0;
+    if (name == "shelves") return app_.layout_.shelvesVisible ? 1.0 : 0.0;
+    if (name == "left_tray") return app_.layout_.leftTrayOpen ? double(app_.layout_.leftTray.size()) : -1.0;
+    if (name == "right_tray") return app_.layout_.rightTrayOpen ? double(app_.layout_.rightTray.size()) : -1.0;
     const Document& doc = app_.doc_;
     if (name == "subtools") return double(doc.subtoolCount());
     if (name == "active_subtool") return double(doc.activeSubtool);

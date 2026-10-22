@@ -682,11 +682,27 @@ void Renderer::endCapture(std::vector<uint8_t>& rgba) {
     gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void Renderer::draw(const Camera& camera, int fbWidth, int fbHeight, const RenderSettings& settings) {
-    gl::Viewport(0, 0, fbWidth, fbHeight);
+void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, const RenderSettings& settings,
+                    const Viewport& viewport) {
+    gl::Viewport(0, 0, targetWidth, targetHeight);
+    const bool inset = viewport.w > 0 && viewport.h > 0;
+    if (inset) {
+        gl::ClearColor(viewport.surround.x, viewport.surround.y, viewport.surround.z, 1.0f);
+        gl::Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        gl::Viewport(viewport.x, viewport.y, viewport.w, viewport.h);
+        gl::Scissor(viewport.x, viewport.y, viewport.w, viewport.h);
+        gl::Enable(GL_SCISSOR_TEST);
+    }
+    const int fbWidth = inset ? viewport.w : targetWidth, fbHeight = inset ? viewport.h : targetHeight;
     gl::ClearColor(0.1f, 0.1f, 0.11f, 1.0f);
     gl::Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     gl::Enable(GL_MULTISAMPLE);
+    struct ScissorOff {
+        bool on;
+        ~ScissorOff() {
+            if (on) gl::Disable(GL_SCISSOR_TEST);
+        }
+    } scissorOff{inset};
 
     // Background gradient.
     gl::Disable(GL_DEPTH_TEST);

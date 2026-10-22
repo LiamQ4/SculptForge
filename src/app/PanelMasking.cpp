@@ -5,6 +5,7 @@
 // "Masking" section of the Tools panel. The operations themselves are the
 // mask_* commands (core/Masking.cpp).
 #include "app/App.h"
+#include "app/Ui.h"
 
 #include <algorithm>
 #include <cmath>
@@ -54,12 +55,11 @@ void App::maskCanvasRelease() {
 }
 
 void App::drawMaskingSection() {
-    ImGui::SeparatorText("Masking");
     ImGui::Checkbox("Show mask", &renderSettings_.showMask);
     ImGui::SameLine();
     ImGui::TextDisabled("(Ctrl paints, Ctrl+Alt erases)");
     ImGui::SetNextItemWidth(-1);
-    ImGui::SliderFloat("##maskstrength", &maskStrength_, 0.01f, 1.0f, "mask strength %.2f");
+    ui::SliderInside("##maskstrength", &maskStrength_, 0.01f, 1.0f, "Mask Strength %.2f");
 
     const ImGuiStyle& style = ImGui::GetStyle();
     const float third = (ImGui::GetContentRegionAvail().x - 2 * style.ItemSpacing.x) / 3.0f;

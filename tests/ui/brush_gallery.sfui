@@ -3,8 +3,8 @@
 # gallery that can't be reached shows a clear error instead of an empty window.
 env SCULPTFORGE_BRUSH_GALLERY $SCRIPT_DIR/../../tools/brush-gallery/repo
 expect_value brushes == 7
-click View
-click "Community brushes"
+click "Brush##palette.brush"
+click "Community brushes##ui.brush_gallery"
 wait_idle 30
 expect_text 21 brushes
 expect "Community brushes/Share yours"

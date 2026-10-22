@@ -22,10 +22,23 @@ void readStrings(const Json& j, std::vector<std::string>& out) {
 } // namespace
 
 UiLayout standardLayout() {
-    // Phase 0 placeholder; the shell workstream fills in the shelf contents (ui-spec section 3).
+    // docs/ui-design.md §3: what a ZBrush user expects to find around the canvas.
     UiLayout l;
     l.rightTray = {"tool"};
     l.openSubpalettes = {"tool.subtool"};
+    l.topShelf = {"ui.lightbox",       "sep",           "draw.sculpt",          "draw.paint",          "sep",
+                  "draw.zadd",         "draw.zsub",     "draw.rgb",             "sep",                 "widget.draw_size",
+                  "widget.strength",   "row",           "ui.brush_lab",         "draw.front_faces",    "sep",
+                  "transform.sym_x",   "transform.sym_y", "transform.sym_z",    "sep",                 "draw.pressure_strength",
+                  "draw.pressure_size", "widget.points"};
+    l.leftShelf = {"widget.tile.brush", "widget.tile.stroke", "widget.tile.alpha", "widget.tile.material", "widget.color"};
+    l.rightShelf = {"view.frame", "widget.nav.move", "widget.nav.zoom", "widget.nav.rotate", "sep",
+                    "view.polyf", "view.polygroups", "view.mask",       "view.polypaint",    "sep",
+                    "subtool.solo", "view.splats"};
+    l.bottomShelf = {"brush.standard", "brush.clay",    "brush.claybuildup", "brush.damstandard", "brush.move",
+                     "brush.smooth",   "brush.inflate", "brush.pinch",       "brush.flatten",     "brush.crease",
+                     "brush.trim",     "brush.snakehook", "brush.layer",     "brush.nudge",       "draw.paint",
+                     "widget.add_brush"};
     return l;
 }
 

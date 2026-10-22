@@ -4,6 +4,9 @@
 
 #include "ai/AiCommands.h"
 #include "app/Demo.h"
+#include "app/Shell.h"
+#include "app/Theme.h"
+#include "app/Ui.h"
 
 #include <IconsLucide.h>
 
@@ -64,28 +67,6 @@ const char* kExamplePrompts[] = {
 };
 
 bool ctrlDown(SDL_Keymod mod) { return (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0; }
-
-void applyStyle() {
-    ImGui::StyleColorsDark();
-    ImGuiStyle& s = ImGui::GetStyle();
-    s.WindowRounding = 6.0f;
-    s.FrameRounding = 4.0f;
-    s.GrabRounding = 4.0f;
-    s.WindowBorderSize = 0.0f;
-    s.FramePadding = ImVec2(8, 5);
-    s.ItemSpacing = ImVec2(8, 6);
-    ImVec4* c = s.Colors;
-    c[ImGuiCol_WindowBg] = ImVec4(0.11f, 0.11f, 0.12f, 0.94f);
-    c[ImGuiCol_Button] = ImVec4(0.22f, 0.22f, 0.25f, 1.0f);
-    c[ImGuiCol_ButtonHovered] = ImVec4(0.85f, 0.50f, 0.25f, 0.85f);
-    c[ImGuiCol_ButtonActive] = ImVec4(0.95f, 0.55f, 0.25f, 1.0f);
-    c[ImGuiCol_SliderGrab] = ImVec4(0.90f, 0.55f, 0.25f, 1.0f);
-    c[ImGuiCol_SliderGrabActive] = ImVec4(1.00f, 0.62f, 0.30f, 1.0f);
-    c[ImGuiCol_CheckMark] = ImVec4(1.00f, 0.62f, 0.30f, 1.0f);
-    c[ImGuiCol_Header] = ImVec4(0.85f, 0.50f, 0.25f, 0.45f);
-    c[ImGuiCol_HeaderHovered] = ImVec4(0.85f, 0.50f, 0.25f, 0.70f);
-    c[ImGuiCol_FrameBg] = ImVec4(0.18f, 0.18f, 0.20f, 1.0f);
-}
 
 } // namespace
 
@@ -170,6 +151,7 @@ bool App::init(const AppOptions& options) {
     }
     ai::registerAiCommands(commands_, [this] { return aiSettings_; });
     registerPaintUiCommands();
+    registerShellActions();
     std::snprintf(falKey_, sizeof falKey_, "%s", aiSettings_.falKey.c_str());
     std::snprintf(falModel_, sizeof falModel_, "%s", aiSettings_.falModel.c_str());
     std::snprintf(meshyKey_, sizeof meshyKey_, "%s", aiSettings_.meshyKey.c_str());
@@ -182,7 +164,7 @@ bool App::init(const AppOptions& options) {
     if (scale <= 0.0f) scale = 1.0f;
     if (recording) scale = float(options.height) / 900.0f; // UI sized for the video, not this screen
     uiScale_ = scale;
-    applyStyle();
+    theme::applyStyle();
     ImGui::GetStyle().ScaleAllSizes(scale);
     // Inter (SIL OFL), embedded in the binary. Rasterised at the final size for crisp text.
     ImFontConfig fontConfig;
@@ -201,6 +183,34 @@ bool App::init(const AppOptions& options) {
         icons.GlyphOffset = ImVec2(0, 2.0f * scale);
         io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontLucide), int(assets::fontLucide_size),
                                        15.0f * scale, &icons, kIconRanges);
+    }
+    // Shell fonts: 12 px captions and 10 px right-shelf labels (with icons), large shelf icons, SemiBold titles.
+    {
+        auto addIcons = [&](float size) {
+            static const ImWchar kIconRanges[] = {ICON_MIN_LC, ICON_MAX_LC, 0};
+            ImFontConfig icons;
+            icons.MergeMode = true;
+            icons.PixelSnapH = true;
+            icons.FontDataOwnedByAtlas = false;
+            icons.GlyphMinAdvanceX = size * scale;
+            icons.GlyphOffset = ImVec2(0, size * 0.13f * scale);
+            io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontLucide), int(assets::fontLucide_size),
+                                           size * scale, &icons, kIconRanges);
+        };
+        fontSmall_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontRegular),
+                                                    int(assets::fontRegular_size), 12.0f * scale, &fontConfig);
+        addIcons(12.0f);
+        fontTiny_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontRegular),
+                                                   int(assets::fontRegular_size), 10.5f * scale, &fontConfig);
+        fontBold_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontSemiBold),
+                                                   int(assets::fontSemiBold_size), 15.0f * scale, &fontConfig);
+        addIcons(15.0f);
+        static const ImWchar kIconRanges[] = {ICON_MIN_LC, ICON_MAX_LC, 0};
+        ImFontConfig big;
+        big.PixelSnapH = true;
+        big.FontDataOwnedByAtlas = false;
+        fontIcons_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontLucide), int(assets::fontLucide_size),
+                                                    20.0f * scale, &big, kIconRanges);
     }
     if (recording) {
         fontCaption_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontSemiBold),
@@ -322,7 +332,7 @@ int App::runUiTest(int w, int h, int fps) {
         pollBrushRequest();
         pollUnreal();
         pollGenerator();
-        camera_.aspect = float(w) / float(h);
+        updateCameraAspect();
 
         Demo::beginFrame();
         ImGui_ImplOpenGL3_NewFrame();
@@ -346,7 +356,7 @@ int App::runUiTest(int w, int h, int fps) {
             SDL_Log("%s", err.c_str());
             return 1;
         }
-        renderer_.draw(camera_, w, h, renderSettings_);
+        renderer_.draw(camera_, w, h, renderSettings_, canvasViewport(w, h));
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         renderer_.endCapture(rgba);
         Image img;
@@ -400,7 +410,7 @@ int App::runRecording() {
         animateLayers(dt);
         pollBrushRequest();
         pollUnreal();
-        camera_.aspect = float(w) / float(h);
+        updateCameraAspect();
 
         Demo::beginFrame();
         ImGui_ImplOpenGL3_NewFrame();
@@ -422,7 +432,7 @@ int App::runRecording() {
             SDL_Log("%s", err.c_str());
             break;
         }
-        renderer_.draw(camera_, w, h, renderSettings_);
+        renderer_.draw(camera_, w, h, renderSettings_, canvasViewport(w, h));
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         renderer_.endCapture(rgba);
         fwrite(rgba.data(), 1, rgba.size(), ff);
@@ -462,7 +472,7 @@ int App::run() {
             SDL_Delay(16);
             continue;
         }
-        camera_.aspect = float(fbW) / float(fbH);
+        updateCameraAspect();
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
@@ -471,7 +481,7 @@ int App::run() {
         ImGui::Render();
 
         syncScene();
-        renderer_.draw(camera_, fbW, fbH, renderSettings_);
+        renderer_.draw(camera_, fbW, fbH, renderSettings_, canvasViewport(fbW, fbH));
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(window_);
         tickProject(dt);
@@ -503,7 +513,9 @@ void App::handleEvent(const SDL_Event& e) {
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         lastInputPen_ = e.button.which == SDL_PEN_MOUSEID;
-        if (!io.WantCaptureMouse) onMouseDown(e.button.x, e.button.y, e.button.button);
+        // Strokes and navigation start only on the canvas, never on the shell around it.
+        if (!io.WantCaptureMouse && canvasRect().contains(e.button.x, e.button.y))
+            onMouseDown(e.button.x, e.button.y, e.button.button);
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
         onMouseUp();
@@ -512,7 +524,7 @@ void App::handleEvent(const SDL_Event& e) {
         onMouseMove(e.motion.x, e.motion.y, e.motion.xrel, e.motion.yrel, e.motion.which == SDL_PEN_MOUSEID);
         break;
     case SDL_EVENT_MOUSE_WHEEL:
-        if (!io.WantCaptureMouse) camera_.zoom(e.wheel.y);
+        if (!io.WantCaptureMouse && canvasRect().contains(e.wheel.mouse_x, e.wheel.mouse_y)) camera_.zoom(e.wheel.y);
         break;
     case SDL_EVENT_KEY_DOWN:
         if (!io.WantCaptureKeyboard && !e.key.repeat) onKey(e.key.key, e.key.mod);
@@ -529,10 +541,8 @@ void App::handleEvent(const SDL_Event& e) {
 
 bool App::pick(float x, float y, RayHit& hit) const {
     if (!doc_.activeSubtoolInfo().visible) return false; // you can't sculpt what you can't see
-    int w = 0, h = 0;
-    SDL_GetWindowSize(window_, &w, &h);
     glm::vec3 origin, dir;
-    camera_.screenRay(x, y, float(w), float(h), origin, dir);
+    canvasRay(x, y, origin, dir);
     return doc_.bvh.raycast(doc_.mesh, origin, dir, hit);
 }
 
@@ -584,12 +594,10 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     mouseX_ = x;
     mouseY_ = y;
     lastInputPen_ = fromPen;
-    int w = 0, h = 0;
-    SDL_GetWindowSize(window_, &w, &h);
     switch (drag_) {
     case Drag::Stroke: strokeTo(x, y); break;
     case Drag::Orbit: camera_.orbit(dx, dy); break;
-    case Drag::Pan: camera_.pan(dx, dy, float(h)); break;
+    case Drag::Pan: camera_.pan(dx, dy, canvasHeight()); break;
     case Drag::Zoom: camera_.zoom(-dy * 0.05f); break;
     case Drag::MaskCanvas: maskCanvasMove(x, y); break;
     case Drag::SubToolClick: subtoolClickMove(x, y); break;
@@ -606,6 +614,7 @@ void App::onMouseUp() {
 }
 
 void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
+    if (actions_.handleKey(key, mod)) return;
     const bool ctrl = ctrlDown(mod);
     const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
     if (ctrl) {
@@ -628,12 +637,15 @@ void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
     case SDLK_RIGHTBRACKET: radiusPx_ = std::min(800.0f, radiusPx_ * 1.1f); break;
     case SDLK_X: symmetry_.x = !symmetry_.x; break;
     case SDLK_W: renderSettings_.wireframe = !renderSettings_.wireframe; break;
-    case SDLK_F: camera_.frame(sceneBounds()); break;
-    case SDLK_F1: showHelp_ = !showHelp_; break;
-    case SDLK_P:
-        paintMode_ = !paintMode_;
-        if (paintMode_) showPolypaintPanel_ = true; // colour picker at hand
+    case SDLK_F:
+        if (shift) renderSettings_.wireframe = !renderSettings_.wireframe; // ZBrush PolyF
+        else camera_.frame(sceneBounds());
         break;
+    case SDLK_TAB:
+        if (const Action* a = actions_.find("ui.toggle_shelves")) a->run();
+        break;
+    case SDLK_F1: showHelp_ = !showHelp_; break;
+    case SDLK_P: paintMode_ = !paintMode_; break; // the colour picker is on the left shelf
     case SDLK_C: pickColorUnderCursor(); break;
     default:
         // 1-9 pick the first nine brushes, 0 the tenth.
@@ -676,13 +688,11 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
     residual_ = 0.0f;
 
     if (strokeBrush_ == BrushType::Move && !recipe && strokeSculpt_) {
-        int w = 0, h = 0;
-        SDL_GetWindowSize(window_, &w, &h);
         float pressure = lastInputPen_ && pressureSize_ ? penPressure_ : 1.0f;
         DabParams p;
         p.center = hit.position;
         p.viewDir = camera_.forward();
-        p.radius = radiusPx_ * pressure * camera_.worldPerPixel(hit.position, float(h));
+        p.radius = radiusPx_ * pressure * camera_.worldPerPixel(hit.position, canvasHeight());
         p.strength = strength_;
         doc_.sculptor.beginGrab(doc_.mesh, doc_.bvh, p, symmetry_);
         grabPlanePoint_ = grabLast_ = hit.position;
@@ -704,10 +714,8 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
 void App::strokeTo(float x, float y) {
     const BrushRecipe* recipe = strokeRecipe();
     if (strokeBrush_ == BrushType::Move && !recipe && strokeSculpt_) {
-        int w = 0, h = 0;
-        SDL_GetWindowSize(window_, &w, &h);
         glm::vec3 origin, dir;
-        camera_.screenRay(x, y, float(w), float(h), origin, dir);
+        canvasRay(x, y, origin, dir);
         glm::vec3 n = camera_.forward();
         float denom = glm::dot(dir, n);
         if (std::abs(denom) < 1e-6f) return;
@@ -771,15 +779,13 @@ void App::dabAt(float x, float y) {
     }
     RayHit hit;
     if (!pick(x, y, hit)) return;
-    int w = 0, h = 0;
-    SDL_GetWindowSize(window_, &w, &h);
     const float pressure = lastInputPen_ ? std::clamp(penPressure_, 0.0f, 1.0f) : 1.0f;
 
     DabParams p;
     p.center = hit.position;
     p.viewDir = camera_.forward();
     p.radius = radiusPx_ * (pressureSize_ ? std::max(pressure, 0.05f) : 1.0f) *
-               camera_.worldPerPixel(hit.position, float(h)) * dabRadiusScale_;
+               camera_.worldPerPixel(hit.position, canvasHeight()) * dabRadiusScale_;
     p.strength = strength_ * dabStrengthScale_;
     p.pressure = pressureStrength_ ? pressure : 1.0f;
     p.invert = strokeInvert_;
@@ -1044,29 +1050,28 @@ void App::updateTitle() {
 void App::drawUi() {
     drawProjectPopups();
     if (hideUi_) return; // demos: clean beauty shots
-    drawMenuBar();
-    drawToolPanel();
-    if (showSubToolsPanel_) drawSubToolsPanel();
+    // Draw order (ui-spec §12): shells, LightBox, floating windows, then pop-ups and help.
+    drawShell();
+    lightbox_.draw(*this, canvasRect());
     drawSubToolPopups();
-    if (showLayersPanel_) drawLayersPanel();
-    if (showGamePanel_) drawGameExportPanel();
-    drawSplatSection();
     if (showBrushLab_) drawBrushLab();
     drawBrushGallery();
     if (showImageTo3D_) drawImageTo3D();
-    if (showPolypaintPanel_) drawPolypaintPanel();
+    pollAlphaFile();
     if (previewLod_ >= 0) {
-        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        const CanvasRect c = canvasRect();
         std::string banner = "Previewing LOD" + std::to_string(previewLod_) + "  -  " +
                              std::to_string(lods_[previewLod_].triangleCount()) + " tris  (sculpting paused)";
         ImVec2 size = ImGui::CalcTextSize(banner.c_str());
-        ImGui::GetForegroundDrawList()->AddText(
-            ImVec2(vp->Pos.x + (vp->Size.x - size.x) * 0.5f, vp->Pos.y + vp->Size.y - size.y - 16.0f),
-            IM_COL32(255, 190, 120, 255), banner.c_str());
+        ImGui::GetForegroundDrawList()->AddText(ImVec2(c.x + (c.w - size.x) * 0.5f, c.y + c.h - size.y - 16.0f * uiScale_),
+                                                IM_COL32(255, 190, 120, 255), banner.c_str());
     }
-    if (!ImGui::GetIO().WantCaptureMouse || drag_ == Drag::Stroke) drawBrushCursor();
+    const ImVec2 mouse(mouseX_, mouseY_);
+    if ((!ImGui::GetIO().WantCaptureMouse && canvasRect().contains(mouse.x, mouse.y)) || drag_ == Drag::Stroke)
+        drawBrushCursor();
     drawPolygroupOverlay();
     drawBrushLibraryPopups();
+    drawPickers(*this);
     autosaveBrush();
 
     if (showAbout_) {
@@ -1130,81 +1135,8 @@ void App::drawUi() {
     }
 }
 
-void App::drawMenuBar() {
-    if (!ImGui::BeginMainMenuBar()) return;
-    if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("New Sphere", "Ctrl+N")) confirmDiscard([this] { runCommand("new_sphere"); });
-        if (ImGui::MenuItem("New Plane")) confirmDiscard([this] { runCommand("new_plane"); });
-        ImGui::Separator();
-        if (ImGui::MenuItem("Open...", "Ctrl+O")) confirmDiscard([this] { openFileDialog(); });
-        if (ImGui::MenuItem("Generate 3D..."))
-            SDL_ShowOpenFileDialog(onFileChosen, &dialogRequests_[int(FileAction::OpenImage)], window_, kImageFilters, 2,
-                                   nullptr, false);
-        drawFileMenuProjectItems(); // Open Recent, Save, Save As, autosave
-        ImGui::Separator();
-        if (ImGui::MenuItem("Export OBJ...")) saveFileDialog(FileAction::SaveObj);
-        if (ImGui::MenuItem("Export GLB (blend shapes)...", "Ctrl+E")) saveFileDialog(FileAction::ExportGlb);
-        if (ImGui::MenuItem("Export LOD Chain...")) saveFileDialog(FileAction::ExportLods);
-        if (ImGui::MenuItem("Export USD / USDZ...")) saveFileDialog(FileAction::ExportUsd);
-        if (ImGui::MenuItem("Export FBX for Unreal...")) saveFileDialog(FileAction::ExportUnreal);
-        if (ImGui::MenuItem("Send to Unreal", "Ctrl+U", false, !pendingUnreal_.valid())) sendToUnreal();
-        if (ImGui::MenuItem("Save Splats...", nullptr, false, !doc_.splats.empty())) saveFileDialog(FileAction::SaveSplats);
-        ImGui::Separator();
-        drawGozMenu();
-        ImGui::Separator();
-        if (ImGui::MenuItem("Quit")) requestQuit();
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Edit")) {
-        std::string undoText = doc_.undo.canUndo() ? "Undo " + doc_.undo.undoLabel() : "Undo";
-        std::string redoText = doc_.undo.canRedo() ? "Redo " + doc_.undo.redoLabel() : "Redo";
-        if (ImGui::MenuItem(undoText.c_str(), "Ctrl+Z", false, doc_.undo.canUndo())) runCommand("undo");
-        if (ImGui::MenuItem(redoText.c_str(), "Ctrl+Shift+Z", false, doc_.undo.canRedo())) runCommand("redo");
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Mesh")) {
-        if (ImGui::MenuItem("Subdivide", "Ctrl+D")) runCommand("subdivide");
-        if (ImGui::MenuItem("Voxel Remesh")) runCommand("remesh", {{"resolution", double(voxelResolution_)}});
-        if (ImGui::MenuItem("Sculpt to Splats")) runCommand("mesh_to_splats");
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("View")) {
-        ImGui::MenuItem("Wireframe", "W", &renderSettings_.wireframe);
-        ImGui::MenuItem("Show Mesh", nullptr, &renderSettings_.showMesh);
-        ImGui::MenuItem("Show Polypaint", nullptr, &renderSettings_.showPolypaint);
-        ImGui::MenuItem("Show Mask", nullptr, &renderSettings_.showMask);
-        ImGui::MenuItem("Show Polygroups", nullptr, &renderSettings_.showPolygroups);
-        ImGui::Separator();
-        ImGui::MenuItem("SubTools Panel", nullptr, &showSubToolsPanel_);
-        ImGui::MenuItem("Layers Panel", nullptr, &showLayersPanel_);
-        ImGui::MenuItem("Game Ready Panel", nullptr, &showGamePanel_);
-        ImGui::MenuItem("Gaussian Splats", nullptr, &showSplatsPanel_);
-        ImGui::MenuItem("Brush Lab", nullptr, &showBrushLab_);
-        ImGui::MenuItem("Community brushes", nullptr, &showBrushGallery_);
-        ImGui::MenuItem("Polypaint & Materials", nullptr, &showPolypaintPanel_);
-        ImGui::MenuItem("Generate 3D", nullptr, &showImageTo3D_);
-        ImGui::MenuItem("Show Splats", nullptr, &renderSettings_.showSplats, !doc_.splats.empty());
-        if (ImGui::MenuItem("Frame Model", "F")) camera_.frame(sceneBounds());
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Help")) {
-        ImGui::MenuItem("Controls", "F1", &showHelp_);
-        ImGui::MenuItem("About SculptForge", nullptr, &showAbout_);
-        if (ImGui::MenuItem("Website & documentation")) SDL_OpenURL("https://islandmed.github.io/SculptForge/");
-        if (ImGui::MenuItem("Report a problem")) SDL_OpenURL("https://github.com/islandmed/SculptForge/issues");
-        ImGui::EndMenu();
-    }
-    ImGui::EndMainMenuBar();
-}
-
-void App::drawLayersPanel() {
+void App::drawLayersContents() {
     const float scale = uiScale_;
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 290 * scale, vp->Pos.y + 34 * scale), ImGuiCond_FirstUseEver);
-    if (!beginPanel("Layers / Blend Shapes", nullptr, 280 * scale)) {
-        ImGui::End();
-        return;
-    }
     ImGui::TextDisabled("Sculpt expressions & correctives;\nexported as glTF morph targets.");
 
     if (ImGui::RadioButton("Base mesh", doc_.activeLayer < 0)) runCommand("layer_set_active", {{"index", -1.0}});
@@ -1246,7 +1178,6 @@ void App::drawLayersPanel() {
                                   ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
     if (ImGui::Button("+ Add") || enter) runCommand("layer_add", {{"name", std::string(newLayerName_)}});
-    ImGui::End();
 }
 
 void App::sendToUnreal() {
@@ -1283,15 +1214,7 @@ void App::pollUnreal() {
     status_ = pendingUnreal_.get();
 }
 
-void App::drawGameExportPanel() {
-    const float scale = uiScale_;
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 290 * scale, vp->Pos.y + 330 * scale),
-                            ImGuiCond_FirstUseEver);
-    if (!beginPanel("Game Ready", nullptr, 280 * scale)) {
-        ImGui::End();
-        return;
-    }
+void App::drawGameExportContents() {
     ImGui::PushItemWidth(-ImGui::CalcTextSize("Reduction").x - ImGui::GetStyle().ItemInnerSpacing.x);
     if (ImGui::SliderInt("LODs", &lodLevels_, 2, 6)) clearLods();
     if (ImGui::SliderFloat("Reduction", &lodRatio_, 0.1f, 0.9f, "x%.2f / level")) clearLods();
@@ -1361,7 +1284,6 @@ void App::drawGameExportPanel() {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("Unreal, Unity, Godot, Blender, three.js");
     ImGui::PopStyleColor();
-    ImGui::End();
 }
 
 // ---------------------------------------------------------------------------
@@ -1581,10 +1503,9 @@ void App::drawAiSettings() {
 void App::drawBrushLab() {
     const float scale = uiScale_;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    // First use: bottom of the window, right of the Tools panel.
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + 270 * scale, std::max(vp->Pos.y + 34 * scale,
-                                                                     vp->Pos.y + vp->Size.y - 470 * scale)),
-                            ImGuiCond_FirstUseEver);
+    // First use: the canvas's top-left corner, clear of the model.
+    const CanvasRect canvas = canvasRect();
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + canvas.x + 16 * scale, vp->Pos.y + canvas.y + 16 * scale), ImGuiCond_FirstUseEver);
     if (!beginPanel("Brush Lab", &showBrushLab_, 420 * scale)) {
         ImGui::End();
         return;
@@ -1702,15 +1623,14 @@ bool App::loadReferenceImage(const std::string& path) {
 
 void App::projectImageFromView() {
     if (refImage_.empty()) return;
-    int w = 0, h = 0;
-    SDL_GetWindowSize(window_, &w, &h);
+    const CanvasRect view = canvasRect();
     const AABB b = doc_.mesh.bounds();
     ProjectOptions o;
     o.depth = projectDepth_ * glm::length(b.extent());
     o.invert = projectInvert_;
     Mesh m = doc_.mesh;
     size_t n = projectImage(m, doc_.activeLayer, refImage_, camera_.projection() * camera_.view(),
-                            float(w) / float(std::max(h, 1)), camera_.position(), o);
+                            view.w / std::max(view.h, 1.0f), camera_.position(), o);
     if (n == 0) {
         status_ = "The image didn't land on the model - aim the view at it first";
         return;
@@ -1856,7 +1776,9 @@ void App::drawComfyUi() {
 void App::drawImageTo3D() {
     const float scale = uiScale_;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 590 * scale, vp->Pos.y + 34 * scale), ImGuiCond_FirstUseEver);
+    const CanvasRect canvas = canvasRect(); // first use: the canvas's top-right corner
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + canvas.x + canvas.w - 306 * scale, vp->Pos.y + canvas.y + 16 * scale),
+                            ImGuiCond_FirstUseEver);
     if (!beginPanel("Generate 3D", &showImageTo3D_, 290 * scale)) {
         ImGui::End();
         return;
@@ -2036,100 +1958,8 @@ void App::drawImageTo3D() {
     ImGui::End();
 }
 
-void App::drawToolPanel() {
-    const float scale = uiScale_;
-    ImGui::SetNextWindowPos(ImVec2(10 * scale, 34 * scale), ImGuiCond_FirstUseEver);
-    if (!beginPanel("Tools", nullptr, 250 * scale)) {
-        ImGui::End();
-        return;
-    }
-
-    ImGui::SeparatorText("Brush");
-    const float bw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-    for (int i = 0; i < int(BrushType::Count); ++i) {
-        const auto type = BrushType(i);
-        const bool selected = brush_ == type && doc_.activeBrush < 0 && !paintMode_;
-        if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        // Hotkeys 1-9 and 0 cover the first ten brushes.
-        std::string label = (i < 9 ? std::to_string(i + 1) : i == 9 ? std::string("0") : std::string(" ")) + "  " +
-                            brushName(type);
-        if (ImGui::Button(label.c_str(), ImVec2(bw, 0))) {
-            brush_ = type;
-            doc_.activeBrush = -1;
-            paintMode_ = false;
-        }
-        if (selected) ImGui::PopStyleColor();
-        if (i % 2 == 0) ImGui::SameLine();
-    }
-
-    drawCustomBrushes(); // PanelBrushLibrary.cpp
-    if (ImGui::Button(showBrushLab_ ? "Hide Brush Lab" : "Brush Lab (AI)...", ImVec2(-1, 0)))
-        showBrushLab_ = !showBrushLab_;
-    if (ImGui::Button(showImageTo3D_ ? "Hide Generate 3D" : "Generate 3D...", ImVec2(-1, 0)))
-        showImageTo3D_ = !showImageTo3D_;
-    if (ImGui::Button(showPolypaintPanel_ ? "Hide Polypaint" : "Polypaint & Materials...", ImVec2(-1, 0)))
-        showPolypaintPanel_ = !showPolypaintPanel_;
-
-    ImGui::PushItemWidth(-ImGui::CalcTextSize("Strength").x - ImGui::GetStyle().ItemInnerSpacing.x);
-    ImGui::SliderFloat("Size", &radiusPx_, 2.0f, 800.0f, "%.0f px", ImGuiSliderFlags_Logarithmic);
-    ImGui::SliderFloat("Strength", &strength_, 0.01f, 1.0f, "%.2f");
-    ImGui::PopItemWidth();
-    ImGui::Checkbox("Invert (Alt)", &invertToggle_);
-    ImGui::Checkbox("Front faces only", &frontFacesOnly_);
-    drawBrushOptions();
-
-    ImGui::SeparatorText("Symmetry");
-    ImGui::Checkbox("X", &symmetry_.x);
-    ImGui::SameLine();
-    ImGui::Checkbox("Y", &symmetry_.y);
-    ImGui::SameLine();
-    ImGui::Checkbox("Z", &symmetry_.z);
-
-    ImGui::SeparatorText("Tablet");
-    ImGui::Checkbox("Pressure > strength", &pressureStrength_);
-    ImGui::Checkbox("Pressure > size", &pressureSize_);
-    if (penSeen_) ImGui::Text("Pen pressure: %.2f", penPressure_);
-    else ImGui::TextDisabled("No pen detected");
-
-    drawMaskingSection();
-
-    ImGui::SeparatorText("Mesh");
-    if (ImGui::Button("Subdivide (Ctrl+D)", ImVec2(-1, 0))) runCommand("subdivide");
-    if (ImGui::Button("Voxel remesh", ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, 0)))
-        runCommand("remesh", {{"resolution", double(voxelResolution_)}});
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Rebuild as an even, watertight surface (like DynaMesh): merges parts, fixes scans and generated models.");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(-1);
-    ImGui::SliderInt("##voxres", &voxelResolution_, 64, 400, "res %d");
-    ImGui::Checkbox("Wireframe", &renderSettings_.wireframe);
-    ImGui::ColorEdit3("Material", &renderSettings_.baseColor.x, ImGuiColorEditFlags_NoInputs);
-    drawPolygroupsSection();
-
-    ImGui::Separator();
-    ImGui::Text("%zu verts  %zu tris", doc_.mesh.vertexCount(), doc_.mesh.triangleCount());
-    ImGui::Text("%.0f fps", ImGui::GetIO().Framerate);
-    if (!status_.empty()) ImGui::TextWrapped("%s", status_.c_str());
-    ImGui::End();
-}
-
-void App::drawSplatSection() {
-    // Opens by itself whenever splats arrive (file, command or AI agent).
-    if (doc_.splatsVersion != seenSplatsVersion_) {
-        seenSplatsVersion_ = doc_.splatsVersion;
-        if (!doc_.splats.empty()) showSplatsPanel_ = true;
-    }
-    if (!showSplatsPanel_) return;
-    const float scale = uiScale_;
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 590 * scale, vp->Pos.y + 34 * scale), ImGuiCond_FirstUseEver);
-    if (!beginPanel("Gaussian Splats", &showSplatsPanel_, 280 * scale)) {
-        ImGui::End();
-        return;
-    }
-    struct EndWindow {
-        ~EndWindow() { ImGui::End(); }
-    } endWindow;
+// The Splats palette (it comes into the right tray by itself when splats arrive, see drawShell).
+void App::drawPalette_Splats() {
     if (doc_.splats.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TextWrapped("Open or drop a .ply capture (Polycam, Luma, Postshot, Scaniverse...) to sculpt against it.");
@@ -2166,6 +1996,12 @@ void App::drawSplatSection() {
 
 void App::drawBrushCursor() {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const CanvasRect canvas = canvasRect();
+    dl->PushClipRect(ImVec2(canvas.x, canvas.y), ImVec2(canvas.x + canvas.w, canvas.y + canvas.h), true);
+    struct PopClip {
+        ImDrawList* dl;
+        ~PopClip() { dl->PopClipRect(); }
+    } popClip{dl};
     const float r = radiusPx_ * (pressureSize_ && lastInputPen_ ? std::max(penPressure_, 0.05f) : 1.0f);
     const ImVec2 c(mouseX_, mouseY_);
     const bool inverted = invertToggle_ != ((SDL_GetModState() & SDL_KMOD_ALT) != 0);

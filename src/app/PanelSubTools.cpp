@@ -58,10 +58,8 @@ void drawEye(ImDrawList* dl, ImVec2 c, float size, bool open, ImU32 col) {
 } // namespace
 
 int App::pickSubtool(float x, float y, RayHit* out) {
-    int w = 0, h = 0;
-    SDL_GetWindowSize(window_, &w, &h);
     glm::vec3 origin, dir;
-    camera_.screenRay(x, y, float(w), float(h), origin, dir);
+    canvasRay(x, y, origin, dir);
     int best = -1;
     RayHit nearest;
     for (int i = 0; i < doc_.subtoolCount(); ++i) {
@@ -98,10 +96,8 @@ void App::subtoolClickMove(float x, float y) {
         beginStroke(subtoolClickX_, subtoolClickY_, hit);
         if (drag_ == Drag::Stroke) strokeTo(x, y);
     } else {
-        int w = 0, h = 0;
-        SDL_GetWindowSize(window_, &w, &h);
         drag_ = Drag::Pan;
-        camera_.pan(x - subtoolClickX_, y - subtoolClickY_, float(h));
+        camera_.pan(x - subtoolClickX_, y - subtoolClickY_, canvasHeight());
     }
 }
 
@@ -111,15 +107,8 @@ void App::subtoolClickRelease() {
     subtoolClickTarget_ = -1;
 }
 
-void App::drawSubToolsPanel() {
+void App::drawSubToolsContents() {
     const float scale = uiScale_;
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    // First use: top right, beside the Layers and Game Ready column.
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 548 * scale, vp->Pos.y + 34 * scale), ImGuiCond_FirstUseEver);
-    if (!beginPanel("SubTools", &showSubToolsPanel_, 250 * scale)) {
-        ImGui::End();
-        return;
-    }
     const int count = doc_.subtoolCount();
     const int active = doc_.activeSubtool;
     const ImGuiStyle& style = ImGui::GetStyle();
@@ -164,7 +153,7 @@ void App::drawSubToolsPanel() {
                 if (!s.visible) ImGui::PushStyleColor(ImGuiCol_Text, style.Colors[ImGuiCol_TextDisabled]);
                 if (ImGui::Selectable(s.name.c_str(), isActive,
                                       ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap |
-                                          ImGuiSelectableFlags_AllowDoubleClick) &&
+                                          ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_NoAutoClosePopups) &&
                     !isActive)
                     selectIndex = i;
                 if (!s.visible) ImGui::PopStyleColor();
@@ -323,7 +312,6 @@ void App::drawSubToolsPanel() {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayNormal))
         ImGui::SetTooltip("One SubTool per disconnected piece");
     ImGui::TextDisabled("Alt+click a SubTool to select it");
-    ImGui::End();
 }
 
 void App::drawSubToolPopups() {

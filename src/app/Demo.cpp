@@ -35,8 +35,10 @@ struct ItemTable {
         ImGuiID id, seed;
         std::string window;
         Placed placed;
+        std::vector<std::string> scopes;
     };
     std::vector<Seeded> frame;
+    std::vector<std::string> scopes; // Demo::pushScope: panels drawn inside the shell's trays and drop-downs
 };
 ItemTable& items() {
     static ItemTable t;
@@ -55,7 +57,7 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
     if (id && ctx && ctx->CurrentWindow && !ctx->CurrentWindow->IDStack.empty()) {
         std::string window = ctx->CurrentWindow->RootWindow->Name; // a child (list, table) counts as its panel
         if (const size_t hash = window.find("##"); hash != std::string::npos) window.resize(hash);
-        items().frame.push_back({id, ctx->CurrentWindow->IDStack.back(), std::move(window), {bb, clip}});
+        items().frame.push_back({id, ctx->CurrentWindow->IDStack.back(), std::move(window), {bb, clip}, items().scopes});
     }
 }
 
@@ -68,9 +70,21 @@ void ImGuiTestEngineHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* lab
     auto add = [&](const std::string& key) {
         items().byLabel[key] = it->second;
         if (!window.empty()) items().byLabel[window + "/" + key] = it->second;
+        for (const auto& scope : items().scopes) items().byLabel[scope + "/" + key] = it->second;
     };
     add(text);
     if (const size_t hash = text.find("##"); hash != std::string::npos && hash > 0) add(text.substr(0, hash));
+    // Labels that start with an icon (ICON_LC_*: UTF-8 private-use characters, U+E000-U+F8FF) are also found
+    // by their words: "AI Brush" for "<sparkles> AI Brush".
+    if (text.size() > 3 && static_cast<unsigned char>(text[0]) == 0xEE) {
+        size_t start = 3;
+        while (start < text.size() && text[start] == ' ') ++start;
+        const std::string words = text.substr(start);
+        if (!words.empty() && words.compare(0, 2, "##") != 0) {
+            add(words);
+            if (const size_t hash = words.find("##"); hash != std::string::npos && hash > 0) add(words.substr(0, hash));
+        }
+    }
 }
 
 void ImGuiTestEngineHook_Log(ImGuiContext*, const char*, ...) {}
@@ -100,6 +114,13 @@ glm::vec3 onSphere(float latDeg, float lonDeg, float r = 1.0f) {
 void Demo::beginFrame() {
     items().byLabel.clear();
     items().frame.clear();
+    items().scopes.clear();
+}
+
+void Demo::pushScope(const char* name) { items().scopes.emplace_back(name); }
+
+void Demo::popScope() {
+    if (!items().scopes.empty()) items().scopes.pop_back();
 }
 
 std::vector<std::string> Demo::similarItems(const std::string& label) {
@@ -131,7 +152,9 @@ bool Demo::findItem(const std::string& label, ImVec2& center, bool* visible, ImV
         name = label.substr(slash + 1);
     }
     for (auto s = items().frame.rbegin(); s != items().frame.rend(); ++s) {
-        if (!window.empty() && s->window != window) continue;
+        if (!window.empty() && s->window != window &&
+            std::find(s->scopes.begin(), s->scopes.end(), window) == s->scopes.end())
+            continue;
         if (ImHashStr(name.c_str(), 0, s->seed) == s->id) return found(s->placed);
     }
     return false;
@@ -199,11 +222,10 @@ void Demo::mouseButton(bool down, int button) {
 }
 
 ImVec2 Demo::project(const glm::vec3& p) const {
-    int w = 0, h = 0;
-    SDL_GetWindowSize(app_.window_, &w, &h);
+    const CanvasRect r = app_.canvasRect();
     const glm::vec4 c = app_.camera_.projection() * app_.camera_.view() * glm::vec4(p, 1.0f);
     const glm::vec2 ndc = glm::vec2(c) / c.w;
-    return ImVec2((ndc.x * 0.5f + 0.5f) * float(w), (0.5f - ndc.y * 0.5f) * float(h));
+    return ImVec2(r.x + (ndc.x * 0.5f + 0.5f) * r.w, r.y + (0.5f - ndc.y * 0.5f) * r.h);
 }
 
 ImVec2 Demo::onModel(float u, float v) const {
@@ -252,7 +274,10 @@ void Demo::moveToItem(const std::string& label, float seconds) {
     auto from = std::make_shared<ImVec2>();
     steps_.push_back([this, label, seconds, from](float t) {
         ImVec2 to;
-        if (!findItem(label, to)) return t > 3.0f; // not on screen yet: give the UI a moment
+        if (!findItem(label, to)) { // not on screen yet: give the UI a moment
+            if (t > 3.0f) SDL_Log("Demo: no UI item \"%s\" to move to", label.c_str());
+            return t > 3.0f;
+        }
         if (t == 0.0f || (from->x == 0 && from->y == 0)) *from = mouse_;
         const float u = smooth(t / seconds);
         mouseMotion(from->x + (to.x - from->x) * u, from->y + (to.y - from->y) * u);
@@ -436,6 +461,9 @@ void Demo::buildShowcase() {
     run([this, k] {
         app_.radiusPx_ = 70.0f * k;
         app_.strength_ = 0.9f;
+        // Custom brushes sit on the bottom shelf next to the built-in ones.
+        auto& shelf = app_.layout_.bottomShelf;
+        shelf.insert(std::find(shelf.begin(), shelf.end(), "widget.add_brush"), "recipe:Edge Wear");
     });
     click("Edge Wear");
     stroke(line(0.16f, 0.30f, 0.20f, 0.70f), 1.4f);
@@ -487,7 +515,7 @@ void Demo::buildSculpt() {
 
     // Horns: drag the upper skull out with the Move brush (mirrored by symmetry).
     run([this, k] { app_.radiusPx_ = 110.0f * k; });
-    click("4  Move");
+    click("Move##brush.move");
     stroke(pull(52, -38, -150 * k, -170 * k), 1.6f);
     run([this, k] { app_.radiusPx_ = 70.0f * k; });
     stroke(pull(70, -48, -140 * k, -150 * k), 1.3f);
@@ -495,7 +523,7 @@ void Demo::buildSculpt() {
 
     // Heavy brow and cheekbones with Clay.
     run([this, k] { app_.radiusPx_ = 62.0f * k; });
-    click("2  Clay");
+    click("Clay##brush.clay");
     for (int pass = 0; pass < 3; ++pass) stroke(arc(24, -52, 30, -4), 0.9f);
     for (int pass = 0; pass < 2; ++pass) stroke(arc(-14, -58, -6, -24), 0.9f);
 
@@ -504,23 +532,23 @@ void Demo::buildSculpt() {
         app_.radiusPx_ = 40.0f * k;
         app_.strength_ = 0.9f;
     });
-    click("1  Standard");
+    click("Standard##brush.standard");
     stroke(arc(10, -30, 10, -16), 0.7f, true);
     stroke(arc(6, -32, 6, -14), 0.7f, true);
 
     // Turn to the side and pull a snout forward.
     orbit(-330.0f * k, 0.0f, 1.6f);
     run([this, k] { app_.radiusPx_ = 120.0f * k; });
-    click("4  Move");
+    click("Move##brush.move");
     stroke(pull(-14, 0, -190 * k, 30 * k), 1.6f);
     orbit(250.0f * k, 0.0f, 1.4f);
 
     // Nostrils and a mouth line.
     run([this, k] { app_.radiusPx_ = 30.0f * k; });
-    click("6  Crease");
+    click("Crease##brush.crease");
     stroke(arc(-36, -30, -33, 0), 1.0f, true);
     run([this, k] { app_.radiusPx_ = 34.0f * k; });
-    click("5  Inflate");
+    click("Inflate##brush.inflate");
     stroke(arc(-6, -10, -4, -6), 0.5f);
 
     // Soften.
@@ -528,7 +556,7 @@ void Demo::buildSculpt() {
         app_.radiusPx_ = 80.0f * k;
         app_.strength_ = 0.35f;
     });
-    click("3  Smooth");
+    click("Smooth##brush.smooth");
     stroke(arc(-45, -60, 45, -60), 1.0f);
     caption("Smooth, fast and scriptable", "Unlimited undo, layers, voxel remesh, one-click LODs", 5.0f);
     orbit(-760.0f * k, 30.0f * k, 6.0f);
@@ -569,7 +597,7 @@ void Demo::buildImageTo3D() {
         app_.radiusPx_ = 55.0f;
         app_.symmetry_.x = true;
     });
-    click("2  Clay");
+    click("Clay##brush.clay");
     stroke([this](float u) { return project(glm::vec3(-0.25f + 0.15f * u, 0.15f - 0.3f * u, 0.38f)); }, 1.2f);
     orbit(-260.0f, 30.0f, 2.5f);
 }
@@ -579,8 +607,6 @@ void Demo::buildBrushLab() {
         app_.runCommand("new_plane", {{"resolution", 320.0}});
         app_.runCommand("subdivide");
         app_.showBrushLab_ = true;
-        app_.showGamePanel_ = false;
-        app_.showLayersPanel_ = false;
         app_.camera_.yaw = glm::radians(-20.0f);
         app_.camera_.pitch = glm::radians(-50.0f);
         app_.camera_.distance *= 0.62f;
@@ -624,12 +650,13 @@ void Demo::buildGameReady() {
         app_.camera_.pitch = glm::radians(-6.0f);
         app_.camera_.distance *= 0.85f;
         std::snprintf(app_.newLayerName_, sizeof app_.newLayerName_, "Grin");
+        app_.layout_.openSubpalettes = {"tool.layers", "tool.export"}; // the Tool palette's Layers and Export
     });
     caption("Built for game & animation pipelines", "Sculpt layers become blend shapes / morph targets", 4.0f);
     click("+ Add");
     const float k = float(app_.options_.height) / 1080.0f;
     run([this, k] { app_.radiusPx_ = 70.0f * k; });
-    click("4  Move");
+    click("Move##brush.move");
     // Pull the mouth corners up and back into a grin, on the new layer only.
     stroke([this, k](float u) {
         const ImVec2 p = project(onSphere(-32.0f, -28.0f));
@@ -651,12 +678,12 @@ void Demo::buildGameReady() {
     wait(1.0f);
     click("LOD3");
     wait(1.5f);
-    click("Sculpt");
+    click("Game Ready/Sculpt");
     run([this] { app_.renderSettings_.wireframe = false; });
     caption("Send to Unreal Engine", "FBX with LODs and morph targets, straight into the editor", 4.5f);
-    moveToItem("Send to Unreal", 0.8f);
+    moveToItem("Game Ready/Send to Unreal", 0.8f);
     wait(1.5f);
-    moveToItem("Export FBX for Unreal...", 0.6f);
+    moveToItem("Game Ready/Export FBX for Unreal...", 0.6f);
     wait(1.0f);
     caption("Plus glTF, USD/USDZ and OBJ", "Validated with the Khronos and OpenUSD tools", 3.5f);
     orbit(500.0f * k, 0.0f, 3.5f);
@@ -666,19 +693,19 @@ void Demo::buildSplats() {
     run([this] {
         app_.openPath(app_.options_.demoAsset);
         app_.showBrushLab_ = false;
-        app_.showSplatsPanel_ = true;
+        app_.layout_.rightTray = {"splats", "tool"}; // the Splats palette first in the tray
         app_.camera_.frame(app_.sceneBounds());
         app_.camera_.yaw = glm::radians(-30.0f);
     });
     caption("Gaussian splats", "Turn a sculpt into splats for web viewers and engines", 4.0f);
     wait(1.0f);
-    click("Sculpt to splats");
-    click("Show mesh");
+    click("Gaussian Splats/Sculpt to splats");
+    click("Gaussian Splats/Show mesh");
     orbit(450.0f, 20.0f, 4.0f);
     caption("And captures back into meshes", "Splat -> watertight, sculptable mesh in under a second", 4.0f);
-    click("Convert to mesh");
-    click("Show mesh");
-    click("Show##splats");
+    click("Gaussian Splats/Convert to mesh");
+    click("Gaussian Splats/Show mesh");
+    click("Gaussian Splats/Show##splats");
     orbit(-450.0f, -20.0f, 4.0f);
     caption("Open standards", "PLY, .splat, glTF KHR_gaussian_splatting, OpenUSD ParticleField", 3.5f);
     wait(2.0f);

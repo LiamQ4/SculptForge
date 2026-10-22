@@ -1,0 +1,437 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The palettes of the palette bar (docs/ui-design.md §3.2), listed
+// alphabetically like ZBrush's. Each body is one function, drawn the same way
+// in a drop-down and in a tray. ZBrush's Tool palette holds the SubTool,
+// Layers, Geometry, Remesh, Masking, Polygroups, Visibility, Export and
+// Display sub-palettes.
+#include "app/App.h"
+
+#include "app/Demo.h"
+#include "app/Shell.h"
+#include "app/Theme.h"
+#include "app/Ui.h"
+#include "core/Matcap.h"
+
+#include <IconsLucide.h>
+
+#include <algorithm>
+#include <cstdio>
+#include <iterator>
+
+namespace sf {
+
+const PaletteDef* palettes(int& count) {
+    // Sorted by name; a new palette lands in alphabetical order by being added in its place here.
+    static const PaletteDef kPalettes[] = {
+        {"alpha", "Alpha", ICON_LC_CIRCLE_DASHED, nullptr, &App::drawPalette_Alpha},
+        {"brush", "Brush", ICON_LC_BRUSH, nullptr, &App::drawPalette_Brush},
+        {"color", "Color", ICON_LC_PALETTE, "Polypaint & Materials", &App::drawPalette_Color},
+        {"draw", "Draw", ICON_LC_PENCIL, nullptr, &App::drawPalette_Draw},
+        {"edit", "Edit", ICON_LC_UNDO_2, nullptr, &App::drawPalette_Edit},
+        {"file", "File", ICON_LC_FILE, nullptr, &App::drawPalette_File},
+        {"generate", "Generate", ICON_LC_WAND_SPARKLES, nullptr, &App::drawPalette_Generate},
+        {"help", "Help", ICON_LC_CIRCLE_HELP, nullptr, &App::drawPalette_Help},
+        {"material", "Material", ICON_LC_SUN, "Polypaint & Materials", &App::drawPalette_Material},
+        {"preferences", "Preferences", ICON_LC_SETTINGS, nullptr, &App::drawPalette_Preferences},
+        {"render", "Render", ICON_LC_EYE, nullptr, &App::drawPalette_Render},
+        {"script", "Script", ICON_LC_SQUARE_TERMINAL, nullptr, &App::drawPalette_Script},
+        {"splats", "Splats", ICON_LC_SPARKLE, "Gaussian Splats", &App::drawPalette_Splats},
+        {"stroke", "Stroke", ICON_LC_SPLINE, nullptr, &App::drawPalette_Stroke},
+        {"tool", "Tool", ICON_LC_BOXES, nullptr, &App::drawPalette_Tool},
+        {"transform", "Transform", ICON_LC_MOVE_3D, nullptr, &App::drawPalette_Transform},
+    };
+    count = int(std::size(kPalettes));
+    return kPalettes;
+}
+
+const PaletteDef* findPalette(std::string_view id) {
+    int count = 0;
+    const PaletteDef* list = palettes(count);
+    for (int i = 0; i < count; ++i)
+        if (id == list[i].id) return &list[i];
+    return nullptr;
+}
+
+namespace {
+
+// A row of equal-width action buttons filling the line.
+void actionRow(App& app, std::initializer_list<const char*> ids) {
+    std::vector<const char*> present;
+    for (const char* id : ids)
+        if (app.actions().find(id)) present.push_back(id);
+    if (present.empty()) return;
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float w = (ImGui::GetContentRegionAvail().x - spacing * float(present.size() - 1)) / float(present.size());
+    for (size_t i = 0; i < present.size(); ++i) {
+        if (i) ImGui::SameLine();
+        ui::ActionButton(app, present[i], ImVec2(w, 0));
+        ui::HelpAction(app, present[i]);
+    }
+}
+
+// Adjacent toggle buttons that read as one control (Zadd | Zsub, X | Y | Z).
+void segmented(App& app, std::initializer_list<const char*> ids, float width = -1.0f) {
+    const float total = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
+    const float w = (total - float(ids.size() - 1)) / float(ids.size());
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(1.0f, ImGui::GetStyle().ItemSpacing.y));
+    bool first = true;
+    for (const char* id : ids) {
+        if (!first) ImGui::SameLine();
+        first = false;
+        ui::ActionButton(app, id, ImVec2(w, 0));
+        ui::HelpAction(app, id);
+    }
+    ImGui::PopStyleVar();
+}
+
+// A menu-style row for an action: label, shortcut on the right, check mark for toggles.
+void menuAction(App& app, const char* id) {
+    const Action* a = app.actions().find(id);
+    if (!a) return;
+    const std::string shortcut = app.actions().shortcutText(id);
+    const bool enabled = !a->enabled || a->enabled();
+    const bool checked = a->checked && a->checked();
+    const std::string label = a->label + "##" + a->id; // no icons: they'd misalign with the plain project items
+    if (ImGui::MenuItem(label.c_str(), shortcut.empty() ? nullptr : shortcut.c_str(), checked, enabled) && a->run) {
+        app.actions().touch(a->id);
+        a->run();
+    }
+    ui::HelpAction(app, id);
+}
+
+void hint(const char* text) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", text);
+    ImGui::PopStyleColor();
+}
+
+} // namespace
+
+bool App::subpalette(const char* id, const char* title) {
+    auto& open = layout_.openSubpalettes;
+    bool isOpen = std::find(open.begin(), open.end(), id) != open.end();
+    const float s = uiScale_;
+    const float h = 22.0f * s;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    const bool clicked = ImGui::InvisibleButton((std::string(title) + "##" + id).c_str(), ImVec2(w, h));
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), theme::u32(hovered ? theme::headerHover : theme::header, isOpen ? 1.0f : 0.75f),
+                      2.0f * s);
+    if (isOpen) dl->AddRectFilled(p, ImVec2(p.x + 2.0f * s, p.y + h), theme::u32(theme::accent), 0.0f);
+    const float ty = p.y + (h - ImGui::GetFontSize()) * 0.5f;
+    dl->AddText(ImVec2(p.x + 6.0f * s, ty), theme::u32(isOpen ? theme::accent : theme::textDim),
+                isOpen ? ICON_LC_CHEVRON_DOWN : ICON_LC_CHEVRON_RIGHT);
+    dl->AddText(ImVec2(p.x + 24.0f * s, ty), theme::u32(isOpen || hovered ? theme::text : theme::text, isOpen ? 1.0f : 0.85f), title);
+    ImGui::LogText("%s", title);
+    ui::HelpText(title, nullptr,
+                 "Click to open or close. Opening one closes the others (Shift+click keeps them open; Preferences > "
+                 "Interface).",
+                 "Tool");
+    if (clicked) {
+        if (isOpen) {
+            open.erase(std::remove(open.begin(), open.end(), id), open.end());
+        } else {
+            if (oneSubpalette_ && !(SDL_GetModState() & SDL_KMOD_SHIFT)) {
+                // Close the siblings: sub-palettes that share this one's palette prefix ("tool.").
+                const std::string prefix = std::string(id).substr(0, std::string(id).find('.') + 1);
+                open.erase(std::remove_if(open.begin(), open.end(), [&](const std::string& o) { return o.rfind(prefix, 0) == 0; }),
+                           open.end());
+            }
+            open.push_back(id);
+        }
+        isOpen = !isOpen;
+    }
+    if (isOpen) ImGui::Dummy(ImVec2(0, 1.0f * s));
+    return isOpen;
+}
+
+// ---------------------------------------------------------------------------
+
+void App::drawPalette_Alpha() { drawAlphaSection(); }
+
+void App::drawPalette_Brush() {
+    drawBrushGrid(*this, GridMode::Palette); // the picker's grid (Pickers.cpp)
+    drawCustomBrushes();                     // PanelBrushLibrary.cpp: list, right-click menu
+    actionRow(*this, {"ui.brush_lab", "ui.brush_gallery"});
+    actionRow(*this, {"brush.paste"});
+    ImGui::Checkbox("Front faces only", &frontFacesOnly_);
+    ui::HelpAction(*this, "draw.front_faces");
+    ImGui::SameLine();
+    ImGui::Checkbox("Invert (Alt)", &invertToggle_);
+    ui::HelpText("Invert", "Alt", "Brushes subtract instead of add (ZBrush Zsub). Holding Alt flips it for one stroke.", "Brush");
+    if (BrushRecipe* recipe = doc_.activeBrush >= 0 && doc_.activeBrush < int(doc_.brushes.size())
+                                  ? &doc_.brushes[size_t(doc_.activeBrush)]
+                                  : nullptr) {
+        if (subpalette("brush.recipe", ("Edit recipe: " + recipe->name).c_str())) {
+            drawRecipeEditor(*recipe);
+            if (!pendingRename_.empty()) {
+                runCommand("brush_rename", {{"to", pendingRename_}});
+                pendingRename_.clear();
+            }
+        }
+    }
+}
+
+void App::drawPalette_Draw() {
+    ImGui::SetNextItemWidth(-1);
+    ui::SliderInside("##drawsize", &radiusPx_, 2.0f, 800.0f, "Draw Size %.0f", ImGuiSliderFlags_Logarithmic);
+    ui::HelpText("Draw Size", "S", "Brush radius in screen pixels. [ and ] change it by 10%.", "Draw");
+    ImGui::SetNextItemWidth(-1);
+    ui::SliderInside("##strength", &strength_, 0.01f, 1.0f, "Strength %.2f");
+    ui::HelpText("Strength", "I", "How strongly each dab changes the surface (ZBrush Z Intensity).", "Draw");
+    segmented(*this, {"draw.sculpt", "draw.paint"});
+    segmented(*this, {"draw.zadd", "draw.zsub"});
+    actionRow(*this, {"draw.rgb", "draw.front_faces"});
+    ImGui::SeparatorText("Tablet");
+    ImGui::Checkbox("Pressure > strength", &pressureStrength_);
+    ui::HelpAction(*this, "draw.pressure_strength");
+    ImGui::Checkbox("Pressure > size", &pressureSize_);
+    ui::HelpAction(*this, "draw.pressure_size");
+    if (penSeen_) ImGui::Text("Pen pressure: %.2f", penPressure_);
+    else ImGui::TextDisabled("No pen detected");
+}
+
+void App::drawPalette_Edit() {
+    const std::string undoText = doc_.undo.canUndo() ? "Undo " + doc_.undo.undoLabel() : std::string("Undo");
+    const std::string redoText = doc_.undo.canRedo() ? "Redo " + doc_.undo.redoLabel() : std::string("Redo");
+    ImGui::BeginDisabled(!doc_.undo.canUndo());
+    if (ImGui::MenuItem((undoText + "##edit.undo").c_str(), "Ctrl+Z")) runCommand("undo");
+    ImGui::EndDisabled();
+    ui::HelpAction(*this, "edit.undo");
+    ImGui::BeginDisabled(!doc_.undo.canRedo());
+    if (ImGui::MenuItem((redoText + "##edit.redo").c_str(), "Ctrl+Shift+Z")) runCommand("redo");
+    ImGui::EndDisabled();
+    ui::HelpAction(*this, "edit.redo");
+    menuAction(*this, "brush.paste");
+}
+
+void App::drawPalette_File() {
+    menuAction(*this, "file.new_sphere");
+    menuAction(*this, "file.new_plane");
+    ImGui::Separator();
+    menuAction(*this, "file.open");
+    drawFileMenuProjectItems(); // Open Recent, Save, Save As, autosave
+    ImGui::SeparatorText("Import / Export");
+    menuAction(*this, "file.import");
+    menuAction(*this, "file.export_obj");
+    menuAction(*this, "file.export_glb");
+    menuAction(*this, "file.export_lods");
+    menuAction(*this, "file.export_usd");
+    menuAction(*this, "file.export_fbx");
+    menuAction(*this, "file.send_unreal");
+    menuAction(*this, "file.save_splats");
+    ImGui::Separator();
+    drawGozMenu();
+    ImGui::Separator();
+    menuAction(*this, "file.quit");
+}
+
+void App::drawPalette_Generate() {
+    actionRow(*this, {"ui.generate3d"});
+    hint("Image or text to a sculptable 3D model: Hugging Face (free), fal.ai, Meshy, your ComfyUI server, your own "
+         "command, or an offline blockout.");
+    ImGui::SeparatorText("From an image");
+    if (ImGui::Button(refImage_.empty() ? "Choose image...##generate" : "Change image...##generate", ImVec2(-1, 0))) {
+        static const SDL_DialogFileFilter filters[] = {{"Images", "png;jpg;jpeg;bmp;tga;psd;gif"}, {"All files", "*"}};
+        SDL_ShowOpenFileDialog(
+            [](void* user, const char* const* files, int) {
+                if (files && files[0]) static_cast<App*>(user)->queueFile(FileAction::OpenImage, files[0]);
+            },
+            this, window_, filters, 2, nullptr, false);
+    }
+    ui::HelpText("Choose image", nullptr, "A sketch, concept, logo, photo or height map (or drop one on the window).", "Generate");
+    ImGui::BeginDisabled(refImage_.empty());
+    const float third = (ImGui::GetContentRegionAvail().x - 2.0f * ImGui::GetStyle().ItemSpacing.x) / 3.0f;
+    if (ImGui::Button("Relief", ImVec2(third, 0)))
+        runCommand("image_relief", {{"path", refImagePath_},
+                                    {"depth", double(reliefDepth_)},
+                                    {"resolution", double(reliefDetail_)},
+                                    {"invert", reliefInvert_}});
+    ui::HelpText("Relief", nullptr, "Light areas rise: logos, coins, emblems, height maps.", "Generate");
+    ImGui::SameLine();
+    if (ImGui::Button("Inflate", ImVec2(third, 0)))
+        runCommand("image_inflate", {{"path", refImagePath_},
+                                     {"thickness", double(inflateThickness_)},
+                                     {"resolution", double(inflateDetail_)},
+                                     {"subdivisions", 2.0}});
+    ui::HelpText("Inflate", nullptr, "Inflates the outline into a rounded blockout.", "Generate");
+    ImGui::SameLine();
+    if (ImGui::Button("Stamp", ImVec2(third, 0))) projectImageFromView();
+    ui::HelpText("Stamp", nullptr, "Projects the image onto the model from this view as surface detail.", "Generate");
+    ImGui::EndDisabled();
+    if (subpalette("generate.ai", "AI brush provider")) drawAiSettings();
+}
+
+void App::drawPalette_Help() {
+    menuAction(*this, "help.controls");
+    menuAction(*this, "ui.command_palette");
+    menuAction(*this, "help.website");
+    menuAction(*this, "help.report");
+    ImGui::Separator();
+    menuAction(*this, "help.about");
+}
+
+void App::drawPalette_Preferences() {
+    if (subpalette("preferences.config", "Config")) {
+        // Store / Restore / Load / Save UI come from the config actions when they're registered.
+        ImGui::Checkbox("Enable Customize", &layout_.customize);
+        ui::HelpText("Enable Customize", nullptr,
+                     "Ctrl+Alt+drag shelf items to move them, onto another shelf to copy them, or off the shelves to "
+                     "remove them.",
+                     "Preferences > Config");
+        actionRow(*this, {"config.store", "config.restore_custom"});
+        actionRow(*this, {"config.restore_standard"});
+        actionRow(*this, {"config.save", "config.load"});
+        ImGui::TextDisabled("Layout");
+        ImGui::SameLine();
+        for (int i = 1; i <= 3; ++i) {
+            ImGui::SameLine();
+            ui::ActionButton(*this, ("ui.preset." + std::to_string(i)).c_str(), ImVec2(ImGui::GetFrameHeight() * 1.4f, 0));
+            ui::HelpAction(*this, ("ui.preset." + std::to_string(i)).c_str());
+        }
+    }
+    if (subpalette("preferences.interface", "Interface")) {
+        ImGui::Checkbox("One sub-palette open", &oneSubpalette_);
+        ui::HelpText("One sub-palette open", nullptr, "Opening a sub-palette closes the others (Shift+click keeps them).",
+                     "Preferences > Interface");
+        ImGui::Checkbox("Auto collapse left tray", &autoCollapse_[0]);
+        ui::HelpText("Auto collapse", nullptr, "Opening a palette in the tray collapses the others there.", "Preferences > Interface");
+        ImGui::Checkbox("Auto collapse right tray", &autoCollapse_[1]);
+        ui::HelpText("Auto collapse right tray", nullptr, "Opening a palette in the right tray collapses the others there.",
+                     "Preferences > Interface");
+        if (ImGui::Checkbox("Left-handed layout", &layout_.leftHanded)) noteLayoutChanged();
+        ui::HelpText("Left-handed layout", nullptr, "Mirror the shelves and trays left to right.", "Preferences > Interface");
+        bool shelves = layout_.shelvesVisible;
+        if (ImGui::Checkbox("Shelves (Tab)", &shelves)) layout_.shelvesVisible = shelves;
+        ui::HelpAction(*this, "ui.toggle_shelves");
+        bool menus = layout_.paletteBarVisible;
+        if (ImGui::Checkbox("Palette bar (Menus)", &menus)) layout_.paletteBarVisible = menus;
+        ui::HelpAction(*this, "ui.menus");
+    }
+    if (subpalette("preferences.lightbox", "LightBox")) {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("##lightboxrows", &layout_.lightboxRows, 1, 4, "Rows %d");
+        ui::HelpText("LightBox rows", nullptr, "How many rows of thumbnails the LightBox shows.", "Preferences > LightBox");
+        ImGui::Checkbox("Show at the bottom", &layout_.lightboxBottom);
+        ui::HelpText("LightBox placement", nullptr, "Show the LightBox along the bottom of the canvas instead of the top.",
+                     "Preferences > LightBox");
+    }
+    if (subpalette("preferences.autosave", "Autosave")) {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("##autosave", &autosaveMinutes_, 0, 60, autosaveMinutes_ ? "Every %d min" : "Autosave off");
+        if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectPrefs();
+        ui::HelpText("Autosave", nullptr, "Save a recovery copy this often (0 = off). Restored after a crash.",
+                     "Preferences > Autosave");
+    }
+}
+
+void App::drawPalette_Render() {
+    ImGui::Checkbox("Wireframe", &renderSettings_.wireframe);
+    ui::HelpAction(*this, "view.wireframe");
+    ImGui::Checkbox("Show Mesh", &renderSettings_.showMesh);
+    ui::HelpAction(*this, "view.mesh");
+    ImGui::Checkbox("Show Polypaint", &renderSettings_.showPolypaint);
+    ui::HelpAction(*this, "view.polypaint");
+    ImGui::Checkbox("Show Mask", &renderSettings_.showMask);
+    ui::HelpAction(*this, "view.mask");
+    ImGui::Checkbox("Show Polygroups##render", &renderSettings_.showPolygroups);
+    ui::HelpAction(*this, "view.polygroups");
+    ImGui::BeginDisabled(doc_.splats.empty());
+    ImGui::Checkbox("Show Splats", &renderSettings_.showSplats);
+    ImGui::EndDisabled();
+    ui::HelpAction(*this, "view.splats");
+    actionRow(*this, {"view.frame"});
+}
+
+void App::drawPalette_Script() {
+    const bool any = actions_.find("ui.console") || actions_.find("script.run_file");
+    actionRow(*this, {"ui.console"});
+    actionRow(*this, {"script.run_file"});
+    actionRow(*this, {"script.copy_session", "script.clear"});
+    if (!any)
+        hint("Every action is a script command: run them with --script \"subdivide; remesh resolution=200\" or the "
+             "sculptforge-cli tool.");
+}
+
+void App::drawPalette_Stroke() { drawStrokeSection(); }
+
+void App::drawPalette_Tool() {
+    const float s = uiScale_;
+    // Header: the active SubTool and its size, then Open / Save / Import.
+    {
+        const SubTool& st = doc_.activeSubtoolInfo();
+        if (fontBold_) ImGui::PushFont(fontBold_);
+        ImGui::TextUnformatted(st.name.c_str());
+        if (fontBold_) ImGui::PopFont();
+        char tris[64];
+        std::snprintf(tris, sizeof tris, "%zu tris", doc_.mesh.triangleCount());
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize(tris).x);
+        ImGui::TextDisabled("%s", tris);
+        actionRow(*this, {"file.open", "file.save", "file.import"});
+        ImGui::Dummy(ImVec2(0, 2.0f * s));
+    }
+    if (subpalette("tool.subtool", "SubTool")) {
+        Demo::pushScope("SubTools");
+        drawSubToolsContents();
+        Demo::popScope();
+    }
+    if (subpalette("tool.layers", "Layers")) {
+        Demo::pushScope("Layers");
+        drawLayersContents();
+        Demo::popScope();
+    }
+    if (subpalette("tool.geometry", "Geometry")) {
+        actionRow(*this, {"geometry.subdivide"});
+        const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (ImGui::Button("Decimate", ImVec2(half, 0))) runCommand("decimate", {{"ratio", double(decimateRatio_)}});
+        ui::HelpText("Decimate", nullptr, "Reduce the triangle count while keeping the shape. Sculpt layers are kept.",
+                     "Tool > Geometry");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ui::SliderInside("##decimate", &decimateRatio_, 0.05f, 0.95f, "Keep %.2f");
+        ui::HelpText("Keep", nullptr, "Fraction of the triangles Decimate keeps.", "Tool > Geometry");
+    }
+    if (subpalette("tool.remesh", "Remesh")) {
+        const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        ui::ActionButton(*this, "geometry.remesh", ImVec2(half, 0));
+        ui::HelpAction(*this, "geometry.remesh");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderInt("##voxres", &voxelResolution_, 64, 400, "Resolution %d");
+        ui::HelpText("Resolution", nullptr, "Voxels across the model: higher keeps more detail and makes more triangles.",
+                     "Tool > Remesh");
+    }
+    if (subpalette("tool.masking", "Masking")) drawMaskingSection();
+    if (subpalette("tool.polygroups", "Polygroups")) drawPolygroupsSection();
+    if (subpalette("tool.visibility", "Visibility")) drawVisibilitySection();
+    if (subpalette("tool.export", "Export")) {
+        Demo::pushScope("Game Ready");
+        drawGameExportContents();
+        Demo::popScope();
+    }
+    if (subpalette("tool.display", "Display")) {
+        ImGui::Checkbox("Wireframe##display", &renderSettings_.wireframe);
+        ui::HelpAction(*this, "view.wireframe");
+        ImGui::SameLine();
+        ImGui::Checkbox("Mask##display", &renderSettings_.showMask);
+        ui::HelpAction(*this, "view.mask");
+        ImGui::SameLine();
+        ImGui::Checkbox("Groups##display", &renderSettings_.showPolygroups);
+        ui::HelpAction(*this, "view.polygroups");
+        ImGui::ColorEdit3("Material colour", &renderSettings_.baseColor.x, ImGuiColorEditFlags_NoInputs);
+        ui::HelpText("Material colour", nullptr, "Colour of the Studio material (the clay colour).", "Tool > Display");
+    }
+}
+
+void App::drawPalette_Transform() {
+    ImGui::TextDisabled("Symmetry");
+    segmented(*this, {"transform.sym_x", "transform.sym_y", "transform.sym_z"});
+    actionRow(*this, {"view.frame", "subtool.solo"});
+    actionRow(*this, {"view.polyf"});
+}
+
+} // namespace sf

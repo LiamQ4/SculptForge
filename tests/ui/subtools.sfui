@@ -1,7 +1,7 @@
 # SubTools: the panel, Alt+click in the viewport, sculpting and undo per SubTool,
 # visibility, rename, duplicate, delete, merge and split.
 run new_sphere subdivisions=4 ; subtool_rename to=Body
-expect "SubTools"
+expect "SubTools/Append"
 expect_value subtools == 1
 expect "SubTools/Body"
 shot one-subtool
@@ -40,7 +40,7 @@ expect_value edited_subtools == 0
 shot alt-click
 
 # A stroke changes only the active SubTool; undo history is per SubTool.
-click "2  Clay"
+click "Clay##brush.clay"
 stroke 0.3 0.4 0.6 0.6
 expect_value can_undo == 1
 expect_value edited_subtools == 1
@@ -132,24 +132,25 @@ expect_value subtools == 3
 expect_status Split into 3 SubTools
 shot split-parts
 
-# The View menu hides and shows the panel.
-click "View"
-click "SubTools Panel"
+# The Tool palette's SubTool sub-palette closes and opens.
+click "SubTool##tool.subtool"
 expect_not "SubTools/Append"
-click "View"
-click "SubTools Panel"
+click "SubTool##tool.subtool"
 expect "SubTools/Append"
 
 # Wireframe, polygroup colours and the LOD preview are for the active SubTool only.
 key w
 expect_value wireframe == 1
+click "Polygroups"
 click "Show polygroups"
 shot active-overlays
 click "Show polygroups"
 key w
+click "Export"
 click "Generate LOD chain"
 shot lod-preview
 click "Game Ready/Sculpt"
+click "SubTool##tool.subtool"
 
 # Past six SubTools the list scrolls; clicks scroll it like a person would.
 run subtool_append ; subtool_append ; subtool_append ; subtool_append

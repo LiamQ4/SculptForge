@@ -46,9 +46,8 @@ bool App::polygroupMouseDown(float x, float y, SDL_Keymod mod) {
 void App::polygroupMouseUp() {
     hideRectActive_ = false;
     const bool alt = (SDL_GetModState() & SDL_KMOD_ALT) != 0;
-    int w = 0, h = 0;
-    SDL_GetWindowSize(window_, &w, &h);
-    if (w <= 0 || h <= 0) return;
+    const CanvasRect c = canvasRect();
+    if (c.w <= 0.0f || c.h <= 0.0f) return;
 
     if (std::abs(mouseX_ - hideRectX_) < kClickSlopPx && std::abs(mouseY_ - hideRectY_) < kClickSlopPx) {
         // Click: isolate the group under the cursor (again: invert), Alt hides it,
@@ -67,7 +66,7 @@ void App::polygroupMouseUp() {
     }
 
     // Drag: rectangle in normalised device coordinates (y up).
-    auto ndc = [&](float px, float py) { return glm::vec2(px / float(w) * 2.0f - 1.0f, 1.0f - py / float(h) * 2.0f); };
+    auto ndc = [&](float px, float py) { return glm::vec2((px - c.x) / c.w * 2.0f - 1.0f, 1.0f - (py - c.y) / c.h * 2.0f); };
     const glm::vec2 a = ndc(hideRectX_, hideRectY_), b = ndc(mouseX_, mouseY_);
     runCommand("hide_rect", {{"x0", double(a.x)},
                              {"y0", double(a.y)},
@@ -92,7 +91,6 @@ void App::drawPolygroupOverlay() {
 }
 
 void App::drawPolygroupsSection() {
-    ImGui::SeparatorText("Polygroups");
     ImGui::Checkbox("Show polygroups", &renderSettings_.showPolygroups);
     ImGui::SameLine();
     const Mesh& m = doc_.mesh;
@@ -125,7 +123,10 @@ void App::drawPolygroupsSection() {
     if (ImGui::Button("Merge visible", ImVec2(half, 0))) group("polygroup_merge_visible");
     ImGui::SameLine();
     if (ImGui::Button("Clear groups", ImVec2(half, 0))) runCommand("polygroup_clear");
+}
 
+void App::drawVisibilitySection() {
+    const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
     ImGui::BeginDisabled(!doc_.mesh.hasHidden());
     if (ImGui::Button("Show all", ImVec2(half, 0))) runCommand("show_all");
     ImGui::EndDisabled();

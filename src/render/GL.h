@@ -43,6 +43,7 @@ constexpr GLenum GL_RENDERER = 0x1F01;
 constexpr GLenum GL_VERSION = 0x1F02;
 constexpr GLenum GL_POLYGON_OFFSET_FILL = 0x8037;
 constexpr GLenum GL_MULTISAMPLE = 0x809D;
+constexpr GLenum GL_SCISSOR_TEST = 0x0C11;
 constexpr GLenum GL_ARRAY_BUFFER = 0x8892;
 constexpr GLenum GL_ELEMENT_ARRAY_BUFFER = 0x8893;
 constexpr GLenum GL_STATIC_DRAW = 0x88E4;
@@ -88,6 +89,7 @@ constexpr GLbitfield GL_COLOR_BUFFER_BIT = 0x4000;
     X(void, Clear, GLbitfield)                                                               \
     X(void, ClearColor, GLfloat, GLfloat, GLfloat, GLfloat)                                  \
     X(void, Viewport, GLint, GLint, GLsizei, GLsizei)                                        \
+    X(void, Scissor, GLint, GLint, GLsizei, GLsizei)                                         \
     X(void, Enable, GLenum)                                                                  \
     X(void, Disable, GLenum)                                                                 \
     X(void, DepthFunc, GLenum)                                                               \

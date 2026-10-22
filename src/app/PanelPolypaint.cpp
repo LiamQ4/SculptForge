@@ -4,6 +4,7 @@
 // Polypaint & Materials panel: the Paint brush (ZBrush Rgb / Zadd), colour
 // picker and swatches, fills, and the viewport MatCap material picker.
 #include "app/App.h"
+#include "app/Ui.h"
 
 #include "core/Matcap.h"
 #include "core/Polypaint.h"
@@ -69,23 +70,14 @@ void App::pickColorUnderCursor() {
     status_ = "Paint colour " + colorToHex(doc_.paintColor);
 }
 
-void App::drawPolypaintPanel() {
-    const float scale = uiScale_;
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + 270 * scale, vp->Pos.y + 34 * scale), ImGuiCond_FirstUseEver);
-    if (!beginPanel("Polypaint & Materials", &showPolypaintPanel_, 250 * scale)) {
-        ImGui::End();
-        return;
-    }
-
+// Color palette: the Paint brush (ZBrush Rgb / Zadd), the colour, swatches and fills.
+void App::drawPalette_Color() {
     ImGui::SeparatorText("Paint");
     const bool painting = paintMode_;
     if (painting) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
     if (ImGui::Button("Paint brush (P)", ImVec2(-1, 0))) paintMode_ = !paintMode_;
     if (painting) ImGui::PopStyleColor();
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Paint colour without sculpting. Size, strength, pressure and symmetry come from Tools;\n"
-                          "Alt paints back to white, Shift smooths the surface, masked areas are protected.");
+    ui::HelpAction(*this, "draw.paint");
     ImGui::Checkbox("RGB while sculpting", &paintRgb_);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sculpt brushes also paint the colour (ZBrush Rgb with Zadd)");
 
@@ -128,34 +120,49 @@ void App::drawPolypaintPanel() {
     if (ImGui::Button("Clear", ImVec2(half, 0))) runCommand("paint_clear");
     ImGui::EndDisabled();
     ImGui::Checkbox("Show polypaint", &renderSettings_.showPolypaint);
+}
 
-    ImGui::SeparatorText("Material");
+// Material palette grid: Studio plus every MatCap, `tile` px square.
+void App::drawMaterialGrid(float tile) {
+    const float scale = uiScale_;
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    const float tile = (ImGui::GetContentRegionAvail().x - 3 * spacing) / 4.0f;
+    const int columns = std::max(1, int((ImGui::GetContentRegionAvail().x + spacing) / (tile + spacing)));
+    tile = (ImGui::GetContentRegionAvail().x - float(columns - 1) * spacing) / float(columns);
     auto outline = [&](bool selected) {
-        if (!selected) return;
+        if (!selected && !ImGui::IsItemHovered()) return;
         ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                                            ImGui::GetColorU32(ImGuiCol_ButtonActive), 4.0f, 0, 2.0f * scale);
+                                            ImGui::GetColorU32(ImGuiCol_SliderGrab, selected ? 1.0f : 0.6f), 4.0f, 0,
+                                            2.0f * scale);
     };
-    if (ImGui::Button("Studio", ImVec2(tile, tile))) renderSettings_.matcap = -1;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Studio lights with the Tools material colour");
+    if (ImGui::Button("Studio##material", ImVec2(tile, tile))) renderSettings_.matcap = -1;
+    ui::HelpText("Studio", nullptr, "Studio lights with the base colour below (polypaint shows on top).", "Material");
     outline(renderSettings_.matcap < 0);
     for (int i = 0; i < matcapCount(); ++i) {
-        if ((i + 1) % 4 != 0) ImGui::SameLine();
+        if ((i + 1) % columns != 0) ImGui::SameLine();
         const GLuint tex = renderer_.matcapTexture(i);
         if (!tex) continue;
         ImGui::PushID(i);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
         // Textures are stored bottom-up: flip V for display.
-        if (ImGui::ImageButton("##matcap", ImTextureID(uintptr_t(tex)), ImVec2(tile, tile), ImVec2(0, 1), ImVec2(1, 0)))
+        ImTextureID thumb = thumbs_.material(i);
+        if (ImGui::ImageButton(matcapName(i), thumb ? thumb : ImTextureID(uintptr_t(tex)), ImVec2(tile, tile),
+                               thumb ? ImVec2(0, 0) : ImVec2(0, 1), thumb ? ImVec2(1, 1) : ImVec2(1, 0)))
             renderSettings_.matcap = i;
         ImGui::PopStyleVar();
         ImGui::PopID();
+        ui::HelpText(matcapName(i), nullptr, "MatCap material: lighting baked into a sphere picture. Polypaint multiplies it.",
+                     "Material");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", matcapName(i));
         outline(renderSettings_.matcap == i);
     }
+}
+
+// Material palette: the material grid and the studio material's colour.
+void App::drawPalette_Material() {
+    drawMaterialGrid(54.0f * uiScale_);
     ImGui::Text("%s", renderSettings_.matcap < 0 ? "Studio" : matcapName(renderSettings_.matcap));
-    ImGui::End();
+    ImGui::ColorEdit3("Base colour", &renderSettings_.baseColor.x, ImGuiColorEditFlags_NoInputs);
+    ui::HelpText("Base colour", nullptr, "Colour of the Studio material (the clay colour).", "Material");
 }
 
 } // namespace sf
