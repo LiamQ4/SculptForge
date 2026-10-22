@@ -4,6 +4,7 @@
 
 #include "ai/BrushAssistant.h"
 #include "app/Actions.h"
+#include "app/AssetLibrary.h"
 #include "app/LightBox.h"
 #include "app/Pickers.h"
 #include "app/Thumbnails.h"
@@ -446,6 +447,18 @@ private:
     // ---- LightBox (B): LightBox, thumbnails, pickers ----
     LightBox lightbox_;
     ThumbnailCache thumbs_;
+    friend struct PickerUi;
+    friend void drawAlphaGrid(App&, GridMode);
+    friend void drawMaterialGrid(App&, GridMode);
+    friend void drawStrokeGrid(App&, GridMode);
+    void initLightBox();   // end of init(): library folders, thumbnail cache, actions, project thumbnails
+    void drawLightBoxUi(); // every frame from drawUi: thumbnails, the LightBox, pickers, size / strength pop-ups
+    // The LightBox / picker shortcuts (, B M S I) until the action registry dispatches keys.
+    bool lightBoxKey(SDL_Keycode key, SDL_Keymod mod);
+    CanvasRect lightBoxCanvas() const; // the canvas until the shell provides canvasRect()
+    void quickSave();                  // file.quicksave: a timestamped project in <library>/QuickSave
+    LibraryRoots library_;
+    FolderScanner libraryScanner_;
     // ---- end LightBox (B) ----
 
     // ---- Help/Console/Config (C): actions, help, command palette, console, config ----

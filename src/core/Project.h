@@ -12,6 +12,7 @@
 
 #include "core/Commands.h"
 #include "core/Document.h"
+#include "core/Image.h"
 
 #include <functional>
 #include <string>
@@ -34,6 +35,18 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
 // Restores the active SubTool, sets doc.path, gives every SubTool an empty
 // edit history and marks the document clean.
 bool loadProject(const std::string& path, Document& doc, std::string& error);
+// --- Thumbnails: a small PNG preview ("thumbnail.png") stored right after the manifest, so the
+// LightBox can show a project without loading it. Optional: older projects have none.
+
+constexpr int kProjectThumbnailSize = 256;
+// Called by saveProject on the saving thread to render the preview (the app renders the current
+// view; the CLI sets none). Returning false or an empty image saves no thumbnail.
+using ProjectThumbnailProvider = std::function<bool(const Document& doc, Image& out)>;
+void setProjectThumbnailProvider(ProjectThumbnailProvider provider);
+// Reads only the thumbnail of the project at `path` (seeks past the other entries). False if the
+// file is not a project or has no thumbnail; `error` says which.
+bool loadProjectThumbnail(const std::string& path, Image& out, std::string& error);
+
 // loadProject wrapped as a command result (open_project, and `open` for .sfproj paths).
 CommandResult openProjectCommand(Document& doc, const std::string& path);
 
