@@ -117,6 +117,7 @@ private:
     int stride_ = 1;
     ImVec2 mouse_{960, 540};
     bool buttonDown_ = false;
+    bool buttonHeld_ = false; // orbit: right button pressed
 
     struct Caption {
         std::string title, subtitle;

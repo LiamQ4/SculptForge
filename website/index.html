@@ -234,16 +234,13 @@ rez-env sculptforge -- sculptforge troll.usda \
         </div>
 
         <div class="demo reverse">
-          <figure class="pair">
-            <img src="img/teddy-sketch.png" alt="A simple line sketch of a teddy bear" loading="lazy">
-            <span class="arrow" aria-hidden="true">→</span>
-            <img src="img/teddy-3d.png" alt="The teddy bear reconstructed as a full 3D model" loading="lazy">
-          </figure>
+          <video aria-label="An owl knight concept sketch becoming a full 3D model, then sculpted" src="media/image-to-3d.mp4?v=1" poster="media/poster-image-to-3d.jpg?v=1" muted loop playsinline preload="none" data-inview tabindex="0"></video>
           <div>
             <h3>From a sketch to a sculptable model in about 20 seconds</h3>
-            <p>A quick drawing became a full 3D model, with separate ears, arms and legs, a back and real depth.
-              It was made with the free Hunyuan3D 2.1 model, then voxel-remeshed into one clean surface ready
-              to sculpt. You can also type a description instead of using an image.</p>
+            <p>One concept sketch became a full 3D owl knight, with shields, belt and pouches, a back
+              and real depth. It was made with the free Hunyuan3D 2.1 model, then voxel-remeshed into one clean
+              surface ready to sculpt. The wait is sped up in the clip and labelled. You can also type a
+              description instead of using an image.</p>
           </div>
         </div>
 
@@ -294,17 +291,18 @@ rez-env sculptforge -- sculptforge troll.usda \
           <h2>How it compares</h2>
           <div class="table-wrap">
             <table class="compare">
-              <thead><tr><th></th><th>SculptForge</th><th>ZBrush</th><th>Blender</th><th>Nomad</th></tr></thead>
+              <thead><tr><th></th><th>SculptForge</th><th>ZBrush</th><th>Mudbox</th><th>Blender</th><th>Nomad</th></tr></thead>
               <tbody>
-                <tr><td>Price</td><td class="yes">Free</td><td>Subscription</td><td class="yes">Free</td><td>Paid</td></tr>
-                <tr><td>Built for sculpting</td><td class="yes">Yes</td><td>Yes</td><td>General 3D suite</td><td>Yes (mobile first)</td></tr>
-                <tr><td>Open source</td><td class="yes">GPL</td><td>No</td><td class="yes">GPL</td><td>No</td></tr>
-                <tr><td>Native Linux</td><td class="yes">Yes</td><td>No</td><td class="yes">Yes</td><td>No</td></tr>
-                <tr><td>Send to Unreal</td><td class="yes">Built in</td><td>Plugin</td><td>Add-on</td><td>No</td></tr>
-                <tr><td>Image / text to 3D</td><td class="yes">Built in</td><td>No</td><td>Add-ons</td><td>No</td></tr>
-                <tr><td>Gaussian splats</td><td class="yes">Built in</td><td>No</td><td>Add-ons</td><td>No</td></tr>
-                <tr><td>AI agent control (MCP)</td><td class="yes">Built in</td><td>No</td><td>Add-ons</td><td>No</td></tr>
-                <tr><td>VFX Reference Platform builds</td><td class="yes">CY2026/27</td><td>No</td><td class="yes">Yes</td><td>No</td></tr>
+                <tr><td>Price</td><td class="yes">Free</td><td>Subscription</td><td>Subscription (sales end Nov 2026)</td><td class="yes">Free</td><td>Paid</td></tr>
+                <tr><td>Built for sculpting</td><td class="yes">Yes</td><td>Yes</td><td>Yes</td><td>General 3D suite</td><td>Yes (mobile first)</td></tr>
+                <tr><td>Actively developed</td><td class="yes">Yes</td><td>Yes</td><td>No (being retired)</td><td class="yes">Yes</td><td>Yes</td></tr>
+                <tr><td>Open source</td><td class="yes">GPL</td><td>No</td><td>No</td><td class="yes">GPL</td><td>No</td></tr>
+                <tr><td>Native Linux</td><td class="yes">Yes</td><td>No</td><td>RHEL / Rocky</td><td class="yes">Yes</td><td>No</td></tr>
+                <tr><td>Send to Unreal</td><td class="yes">Built in</td><td>Plugin</td><td>No (FBX export)</td><td>Add-on</td><td>No</td></tr>
+                <tr><td>Image / text to 3D</td><td class="yes">Built in</td><td>No</td><td>No</td><td>Add-ons</td><td>No</td></tr>
+                <tr><td>Gaussian splats</td><td class="yes">Built in</td><td>No</td><td>No</td><td>Add-ons</td><td>No</td></tr>
+                <tr><td>AI agent control (MCP)</td><td class="yes">Built in</td><td>No</td><td>No</td><td>Add-ons</td><td>No</td></tr>
+                <tr><td>VFX Reference Platform builds</td><td class="yes">CY2026/27</td><td>No</td><td>Not stated</td><td class="yes">Yes</td><td>No</td></tr>
               </tbody>
             </table>
           </div>
@@ -366,6 +364,15 @@ rez-env sculptforge -- sculptforge troll.usda \
             multiresolution subdivision levels, dynamic topology, ZRemesher-class retopology or UV unwrapping, and
             it can't open ZBrush's .ZTL files (use GoZ, or export OBJ or FBX from ZBrush). It's an independent
             project, not affiliated with Maxon.</p></details>
+        <details><summary>Mudbox is being retired. Can SculptForge replace it?</summary>
+          <p>For sculpting, largely yes. Autodesk ends new Mudbox subscription sales on 7 November 2026, and its
+            releases since 2019 have added no new features. SculptForge is free, open source, actively developed
+            and runs natively on Windows, macOS and Linux (including RHEL and Rocky). It opens OBJ, FBX, glTF and
+            USD exported from Mudbox, and has layers, masking, polypaint and Send to Unreal. Mudbox's strength
+            was painting textures on UV-mapped models; SculptForge doesn't have UVs or texture painting yet
+            (they're on the <a href="https://github.com/islandmed/SculptForge/blob/main/ROADMAP.md">roadmap</a>),
+            and it has no multiresolution subdivision levels yet. It's an independent project, not affiliated
+            with Autodesk.</p></details>
         <details><summary>Does it fit a VFX studio pipeline?</summary>
           <p>Yes. Every release includes VFX Reference Platform CY2026 and CY2027 builds (Rocky Linux 8 and 9, GCC
             14.2, Python 3.13), there's a Rez package, and everything the app does can be scripted from Python or the

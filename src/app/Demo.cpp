@@ -398,20 +398,54 @@ void Demo::stroke(std::function<ImVec2(float u)> path, float seconds, bool inver
 }
 
 void Demo::orbit(float dx, float dy, float seconds) {
-    steps_.push_back([this, dx, dy, seconds](float t) {
-        if (t == 0.0f) mouseButton(true, SDL_BUTTON_RIGHT);
-        const float u0 = smooth(std::max(0.0f, t - 1.0f / 30.0f) / seconds), u1 = smooth(t / seconds);
+    auto last = std::make_shared<float>(0.0f); // eased progress at the previous frame (any frame rate)
+    auto at = std::make_shared<ImVec2>();
+    steps_.push_back([this, dx, dy, seconds, last, at](float t) {
+        // Drag from the cursor, or from a corner of the viewport while the cursor is parked off screen.
+        auto button = [this, at](bool down) {
+            SDL_Event e{};
+            e.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+            e.button.windowID = SDL_GetWindowID(app_.window_);
+            e.button.button = SDL_BUTTON_RIGHT;
+            e.button.down = down;
+            e.button.clicks = 1;
+            e.button.x = at->x;
+            e.button.y = at->y;
+            app_.handleEvent(e);
+        };
+        if (t == 0.0f) {
+            const CanvasRect r = app_.canvasRect();
+            const bool inside = mouse_.x >= r.x && mouse_.y >= r.y && mouse_.x < r.x + r.w && mouse_.y < r.y + r.h;
+            *at = inside ? mouse_ : ImVec2(r.x + r.w * 0.04f, r.y + r.h * 0.5f);
+            app_.hideBrushCursor_ = !inside;
+            *last = 0.0f;
+            SDL_Event move{}; // hover the viewport first, so the UI under the old position lets go
+            move.type = SDL_EVENT_MOUSE_MOTION;
+            move.motion.windowID = SDL_GetWindowID(app_.window_);
+            move.motion.x = at->x;
+            move.motion.y = at->y;
+            app_.handleEvent(move);
+            return false; // press on the next frame, once the UI has seen the hover
+        }
+        if (*last == 0.0f && !buttonHeld_) {
+            buttonHeld_ = true;
+            button(true);
+        }
+        const float u0 = *last, u1 = smooth(t / seconds);
+        *last = u1;
         SDL_Event e{};
         e.type = SDL_EVENT_MOUSE_MOTION;
         e.motion.windowID = SDL_GetWindowID(app_.window_);
-        e.motion.x = mouse_.x;
-        e.motion.y = mouse_.y;
+        e.motion.x = at->x;
+        e.motion.y = at->y;
         e.motion.xrel = dx * (u1 - u0);
         e.motion.yrel = dy * (u1 - u0);
         e.motion.state = SDL_BUTTON_RMASK;
         app_.handleEvent(e);
         if (t >= seconds) {
-            mouseButton(false, SDL_BUTTON_RIGHT);
+            button(false);
+            buttonHeld_ = false;
+            app_.hideBrushCursor_ = false;
             return true;
         }
         return false;
@@ -685,14 +719,18 @@ void Demo::buildImageTo3D() {
         waitUntil([this] { return ready(app_.pendingGenerator_); }, 600.0f, 10);
         run([this] {
             app_.pollGenerator();
-            if (!app_.options_.demoOutput.empty()) app_.runCommand("export_glb", {{"path", app_.options_.demoOutput}});
+            if (!app_.options_.demoOutput.empty()) { // keep a copy for rehearsals; the status bar keeps its message
+                const std::string status = app_.status_;
+                app_.runCommand("export_glb", {{"path", app_.options_.demoOutput}});
+                app_.status_ = status;
+            }
         });
     }
     run([this] {
         app_.renderSettings_.showMesh = true;
         app_.showImageTo3D_ = false;
         app_.camera_.frame(app_.doc_.mesh.bounds());
-        app_.camera_.yaw = glm::radians(-200.0f); // starts from the back and turns to the front
+        app_.camera_.yaw = glm::radians(60.0f); // a three-quarter turn via the back, ending on the front
         app_.camera_.pitch = glm::radians(-8.0f);
         app_.camera_.distance *= 0.82f;
         mouse_ = ImVec2(-80.0f, -80.0f);
@@ -715,12 +753,13 @@ void Demo::buildImageTo3D() {
             return ImVec2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
         };
     };
-    stroke(line(0.38f, 0.40f, 0.46f, 0.52f), 0.8f);
-    stroke(line(0.40f, 0.55f, 0.47f, 0.62f), 0.7f);
+    // Panel lines across the breastplate (mirrored by symmetry).
+    stroke(line(0.36f, 0.385f, 0.50f, 0.385f), 0.8f);
+    stroke(line(0.37f, 0.455f, 0.50f, 0.455f), 0.8f);
     wait(0.4f);
     zoomOut(1.3f);
     run([this] { mouse_ = ImVec2(-80.0f, -80.0f); });
-    orbit(160.0f, 0.0f, 2.4f);
+    orbit(-60.0f, 0.0f, 2.4f);
     fadeTo(1.0f, 0.8f);
     wait(0.8f);
 }

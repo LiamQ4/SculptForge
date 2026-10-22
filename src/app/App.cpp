@@ -1115,7 +1115,8 @@ void App::drawUi() {
                                                 IM_COL32(255, 190, 120, 255), banner.c_str());
     }
     const ImVec2 mouse(mouseX_, mouseY_);
-    if ((!ImGui::GetIO().WantCaptureMouse && canvasRect().contains(mouse.x, mouse.y)) || drag_ == Drag::Stroke)
+    if (((!ImGui::GetIO().WantCaptureMouse && canvasRect().contains(mouse.x, mouse.y)) || drag_ == Drag::Stroke) &&
+        !hideBrushCursor_)
         drawBrushCursor();
     drawPolygroupOverlay();
     drawBrushLibraryPopups();

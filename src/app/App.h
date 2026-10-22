@@ -436,6 +436,7 @@ private:
 
     // ---- Shell (A): layout, shelves, palettes, trays, theme ----
     float topInset() const;  // window px kept clear at the top (camera notch)
+    bool hideBrushCursor_ = false; // demos: camera moves while the cursor is off screen
     float fpsShown_ = -1.0f; // title-strip frame rate, refreshed twice a second
     double fpsShownAt_ = 0.0;
 public:
