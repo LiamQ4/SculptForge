@@ -105,3 +105,7 @@ shot preset-wide
 click "1##ui.preset.1"
 expect "SubTools/Append"
 expect_not "Stroke/DragRect"
+
+# Window controls: minimise and close sit at the far right of the title strip.
+expect "Minimize##window"
+expect "Close##window"

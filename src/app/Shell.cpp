@@ -624,7 +624,9 @@ void App::drawTitleStrip(const ShellGeometry& g) {
     auto buttonW = [&](const char* label) { return ImGui::CalcTextSize(label, nullptr, true).x + st.FramePadding.x * 2.0f; };
     const bool quickSave = actions_.find("file.quicksave") != nullptr;
     const float searchW = 150.0f * s;
-    float rightW = searchW + buttonW(ICON_LC_MENU " Menus") + 3.0f * (buttonH + 2.0f * s) + 18.0f * s;
+    const float windowButtonW = buttonH + 6.0f * s; // minimise and close, at the far right like ZBrush's
+    float rightW = searchW + buttonW(ICON_LC_MENU " Menus") + 3.0f * (buttonH + 2.0f * s) + 18.0f * s +
+                   10.0f * s + 2.0f * windowButtonW + 2.0f * s;
     if (quickSave) rightW += buttonW("QuickSave") + 8.0f * s;
     const float rightX = g.title.w - 8.0f * s - rightW;
 
@@ -704,6 +706,29 @@ void App::drawTitleStrip(const ShellGeometry& g) {
             if (const Action* a = actions_.find("ui.command_palette"); a && a->run) a->run();
         }
         ui::HelpText("Search", "F3", "Find any command, brush or material by name and run it.", "Title");
+    }
+    // Window controls: minimise, and close (asks to save changes first).
+    ImGui::SameLine(0.0f, 10.0f * s);
+    for (int k = 0; k < 2; ++k) {
+        const bool close = k == 1;
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const bool clicked = ImGui::InvisibleButton(close ? "Close##window" : "Minimize##window", ImVec2(windowButtonW, buttonH));
+        const bool hovered = ImGui::IsItemHovered();
+        if (hovered)
+            dl->AddRectFilled(p, ImVec2(p.x + windowButtonW, p.y + buttonH),
+                              theme::u32(close ? theme::danger : theme::frameHover), 3.0f * s);
+        const char* glyph = close ? ICON_LC_X : ICON_LC_MINUS;
+        const ImVec2 gs = ImGui::CalcTextSize(glyph);
+        dl->AddText(ImVec2(p.x + (windowButtonW - gs.x) * 0.5f, p.y + (buttonH - ImGui::GetFontSize()) * 0.5f),
+                    theme::u32(hovered && close ? theme::text : theme::textDim), glyph);
+        if (close) {
+            if (clicked) requestQuit();
+            ui::HelpAction(*this, "file.quit");
+        } else {
+            if (clicked) SDL_MinimizeWindow(window_);
+            ui::HelpText("Minimize", nullptr, "Minimize the SculptForge window.", "Title");
+        }
+        if (!close) ImGui::SameLine(0.0f, 2.0f * s);
     }
     ImGui::PopStyleVar(2);
     ImGui::End();
