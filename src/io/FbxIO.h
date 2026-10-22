@@ -12,6 +12,7 @@
 #pragma once
 
 #include "core/Mesh.h"
+#include "io/MeshObject.h"
 
 #include <string>
 #include <vector>
@@ -31,9 +32,24 @@ struct FbxExportOptions {
 bool saveFbx(const std::string& path, const std::string& name, const std::vector<const Mesh*>& lods,
              const FbxExportOptions& options, std::string& error);
 
+// One object (SubTool) of a multi-object export: its LOD chain (lods[0] = full resolution).
+struct FbxObject {
+    std::string name;
+    std::vector<const Mesh*> lods;
+};
+// Every object becomes its own model under the scene root, named after it,
+// with its own blend shapes. An object with several LODs becomes its own LOD
+// group (`name`, children `name_LOD0..N`); Unreal's "Combine Meshes" then
+// builds one static mesh whose LOD n holds every object's level n.
+bool saveFbx(const std::string& path, const std::vector<FbxObject>& objects, const FbxExportOptions& options,
+             std::string& error);
+
 // Reads .fbx (binary or ASCII, any version) via ufbx: all visible meshes are
 // merged in world space (Y-up, 1 unit = 1 m, matching saveFbx with scale 100),
 // only LOD0 of LOD groups is taken, and blend shapes become sculpt layers.
 bool loadFbx(const std::string& path, Mesh& out, std::string& error);
+// The same, but each visible mesh node is its own object, named after the
+// node (or after its LOD group, for a LOD0 mesh).
+bool loadFbx(const std::string& path, std::vector<MeshObject>& out, std::string& error);
 
 } // namespace sf

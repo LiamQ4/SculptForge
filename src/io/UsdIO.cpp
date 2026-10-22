@@ -103,9 +103,10 @@ void writeExtent(Writer& w, const AABB& b) {
     w.s += "]\n";
 }
 
-void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::string& material) {
+// One mesh prim `prim` under the root (a SkelRoot holding the Mesh when it has blend shapes).
+void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::string& prim, const std::string& material) {
     const bool skinned = !mesh.layers.empty();
-    const std::string meshPath = skinned ? "/" + root + "/Sculpt/Mesh" : "/" + root + "/Sculpt";
+    const std::string meshPath = skinned ? "/" + root + "/" + prim + "/Mesh" : "/" + root + "/" + prim;
     // Unique, valid names for the blend shapes.
     std::vector<std::string> shapeNames;
     std::set<std::string> used;
@@ -122,8 +123,8 @@ void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::
     base.rebuildTopology();
     base.recomputeAllNormals();
 
-    if (skinned) w.open("def SkelRoot \"Sculpt\"");
-    w.line(std::string("def Mesh \"") + (skinned ? "Mesh" : "Sculpt") + "\" (");
+    if (skinned) w.open("def SkelRoot \"" + prim + "\"");
+    w.line("def Mesh \"" + (skinned ? std::string("Mesh") : prim) + "\" (");
     w.line(skinned ? "    prepend apiSchemas = [\"SkelBindingAPI\", \"MaterialBindingAPI\"]"
                    : "    prepend apiSchemas = [\"MaterialBindingAPI\"]");
     w.line(")");
@@ -156,7 +157,7 @@ void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::
     if (skinned) {
         w.array("uniform token[] skel:blendShapes", shapeNames, [&](const std::string& n) { w.s += quoted(n); });
         w.array("rel skel:blendShapeTargets", shapeNames, [&](const std::string& n) { w.s += "<" + meshPath + "/" + n + ">"; });
-        w.line("rel skel:skeleton = </" + root + "/Sculpt/Skel>");
+        w.line("rel skel:skeleton = </" + root + "/" + prim + "/Skel>");
         for (size_t k = 0; k < mesh.layers.size(); ++k) {
             // Sparse: only the points the layer actually moves.
             std::vector<uint32_t> idx;
@@ -184,7 +185,7 @@ void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::
         w.line("uniform matrix4d[] bindTransforms = []");
         w.line("uniform token[] joints = []");
         w.line("uniform matrix4d[] restTransforms = []");
-        w.line("rel skel:animationSource = </" + root + "/Sculpt/Skel/Weights>");
+        w.line("rel skel:animationSource = </" + root + "/" + prim + "/Skel/Weights>");
         w.s += '\n';
         w.open("def SkelAnimation \"Weights\"");
         w.array("uniform token[] blendShapes", shapeNames, [&](const std::string& n) { w.s += quoted(n); });
@@ -225,9 +226,37 @@ void writeSplats(Writer& w, const SplatCloud& c) {
     w.close();
 }
 
-std::string buildUsda(const Mesh* mesh, const SplatCloud* splats, const std::string& name) {
+// A UsdPreviewSurface clay material; `painted` reads the polypaint primvar for its colour.
+void writeMaterial(Writer& w, const std::string& path, const std::string& name, bool painted) {
+    w.open("def Material " + quoted(name));
+    w.line("token outputs:surface.connect = <" + path + "/PreviewSurface.outputs:surface>");
+    w.s += '\n';
+    w.open("def Shader \"PreviewSurface\"");
+    w.line("uniform token info:id = \"UsdPreviewSurface\"");
+    if (painted) w.line("color3f inputs:diffuseColor.connect = <" + path + "/Polypaint.outputs:result>");
+    else w.line("color3f inputs:diffuseColor = (0.8, 0.55, 0.45)");
+    w.line("float inputs:metallic = 0");
+    w.line("float inputs:roughness = 0.65");
+    w.line("token outputs:surface");
+    w.close();
+    if (painted) {
+        w.s += '\n';
+        w.open("def Shader \"Polypaint\"");
+        w.line("uniform token info:id = \"UsdPrimvarReader_float3\"");
+        w.line("string inputs:varname = \"displayColor\"");
+        w.line("float3 outputs:result");
+        w.close();
+    }
+    w.close();
+}
+
+std::string buildUsda(const std::vector<MeshObjectRef>& meshes, const SplatCloud* splats, const std::string& name) {
     const std::string root = usdIdentifier(name.empty() ? "Sculpt" : name);
-    const std::string material = "/" + root + "/Materials/Clay";
+    // Polypainted meshes bind a material that reads their colours; with a mix, plain ones bind "Clay".
+    size_t painted = 0;
+    for (const auto& m : meshes) painted += m.mesh->hasColors();
+    const bool mixed = painted && painted < meshes.size();
+    const std::string clay = "/" + root + "/Materials/Clay", paintedClay = "/" + root + "/Materials/PaintedClay";
     Writer w;
     w.line("#usda 1.0");
     w.line("(");
@@ -242,34 +271,30 @@ std::string buildUsda(const Mesh* mesh, const SplatCloud* splats, const std::str
     w.line(")");
     w.line("{");
     ++w.depth;
-    if (mesh && mesh->triangleCount()) {
-        writeMesh(w, *mesh, root, material);
-        w.s += '\n';
-        w.open("def Scope \"Materials\"");
-        w.open("def Material \"Clay\"");
-        w.line("token outputs:surface.connect = <" + material + "/PreviewSurface.outputs:surface>");
-        w.s += '\n';
-        w.open("def Shader \"PreviewSurface\"");
-        w.line("uniform token info:id = \"UsdPreviewSurface\"");
-        if (mesh->hasColors()) w.line("color3f inputs:diffuseColor.connect = <" + material + "/Polypaint.outputs:result>");
-        else w.line("color3f inputs:diffuseColor = (0.8, 0.55, 0.45)");
-        w.line("float inputs:metallic = 0");
-        w.line("float inputs:roughness = 0.65");
-        w.line("token outputs:surface");
-        w.close();
-        if (mesh->hasColors()) {
+    if (!meshes.empty()) {
+        // One prim per object: "Sculpt" for a single one, else valid unique names from the objects.
+        std::set<std::string> used = {"Materials", "Splats"};
+        for (const auto& m : meshes) {
+            std::string prim = "Sculpt";
+            if (meshes.size() > 1) {
+                const std::string base = usdIdentifier(m.name.empty() ? "Mesh" : m.name);
+                prim = base;
+                for (int k = 2; used.count(prim); ++k) prim = base + "_" + std::to_string(k);
+            }
+            used.insert(prim);
+            writeMesh(w, *m.mesh, root, prim, mixed && m.mesh->hasColors() ? paintedClay : clay);
             w.s += '\n';
-            w.open("def Shader \"Polypaint\"");
-            w.line("uniform token info:id = \"UsdPrimvarReader_float3\"");
-            w.line("string inputs:varname = \"displayColor\"");
-            w.line("float3 outputs:result");
-            w.close();
         }
-        w.close();
+        w.open("def Scope \"Materials\"");
+        writeMaterial(w, clay, "Clay", painted && !mixed);
+        if (mixed) {
+            w.s += '\n';
+            writeMaterial(w, paintedClay, "PaintedClay", true);
+        }
         w.close();
     }
     if (splats && !splats->empty()) {
-        if (mesh && mesh->triangleCount()) w.s += '\n';
+        if (!meshes.empty()) w.s += '\n';
         writeSplats(w, *splats);
     }
     w.close();
@@ -618,7 +643,27 @@ std::vector<glm::vec3> vec3s(const Value* v) {
     return out;
 }
 
-bool readUsdaText(const std::string& text, Mesh& outMesh, SplatCloud& outSplats, std::string& error) {
+// A point index from a USD array, or `size` when it is negative, fractional junk or too large.
+size_t indexValue(double v, size_t size) { return v >= 0.0 && v < double(size) ? size_t(v) : size; }
+
+// The SkelAnimation driving a mesh: skel:skeleton on the mesh or an ancestor, then its animationSource.
+const Prim* skelAnimation(const std::vector<Prim>& prims, const std::map<std::string, size_t>& byPath, size_t mesh) {
+    for (int i = int(mesh); i >= 0; i = prims[size_t(i)].parent) {
+        const Value* skel = prims[size_t(i)].get("skel:skeleton");
+        if (!skel || skel->strs.empty()) continue;
+        auto s = byPath.find(skel->strs[0]);
+        if (s == byPath.end()) return nullptr;
+        const Value* anim = prims[s->second].get("skel:animationSource");
+        if (!anim || anim->strs.empty()) return nullptr;
+        auto a = byPath.find(anim->strs[0]);
+        return a == byPath.end() ? nullptr : &prims[a->second];
+    }
+    return nullptr;
+}
+
+// Merges every Mesh prim into one object, or (split) makes one object per prim.
+bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& outMeshes, SplatCloud& outSplats,
+                  std::string& error) {
     Parser parser(text);
     if (!parser.parse()) {
         error = parser.error;
@@ -649,16 +694,12 @@ bool readUsdaText(const std::string& text, Mesh& outMesh, SplatCloud& outSplats,
             weights.try_emplace(names->strs[k], float(w->nums[k]));
     }
 
-    Mesh m;
-    std::vector<SculptLayer> layers;
-    auto layerFor = [&](const std::string& name) -> SculptLayer& {
-        for (auto& l : layers)
-            if (l.name == name) return l;
-        auto it = weights.find(name);
-        layers.push_back({name, std::vector<glm::vec3>(m.positions.size(), glm::vec3(0.0f)),
-                          it == weights.end() ? 0.0f : it->second});
-        return layers.back();
+    struct Gathered {
+        std::string name;
+        Mesh m;
+        std::vector<SculptLayer> layers;
     };
+    std::vector<Gathered> objects(split ? 0 : 1);
     bool splatsFound = false;
     SplatCloud cloud;
 
@@ -672,6 +713,31 @@ bool readUsdaText(const std::string& text, Mesh& outMesh, SplatCloud& outSplats,
             if (pts.empty() || !counts || !indices) continue;
             const Value* orient = p.get("orientation");
             const bool leftHanded = orient && !orient->strs.empty() && orient->strs[0] == "leftHanded";
+            if (split) {
+                // Named after the prim, or after its SkelRoot (SculptForge writes <Name>/Mesh for blend shapes).
+                const int parent = p.parent;
+                const Prim& named = parent >= 0 && prims[size_t(parent)].type == "SkelRoot" ? prims[size_t(parent)] : p;
+                objects.push_back({named.path.substr(named.path.rfind('/') + 1), {}, {}});
+            }
+            Mesh& m = objects.back().m;
+            std::vector<SculptLayer>& layers = objects.back().layers;
+            // Layer weights from the mesh's own SkelAnimation, else from any animation naming the shape.
+            std::map<std::string, float> ownWeights;
+            if (const Prim* anim = skelAnimation(prims, byPath, i)) {
+                const Value* names = anim->get("blendShapes");
+                const Value* w = anim->get("blendShapeWeights");
+                for (size_t k = 0; names && w && k < names->strs.size() && k < w->nums.size(); ++k)
+                    ownWeights.try_emplace(names->strs[k], float(w->nums[k]));
+            }
+            auto layerFor = [&](const std::string& name) -> SculptLayer& {
+                for (auto& l : layers)
+                    if (l.name == name) return l;
+                auto own = ownWeights.find(name);
+                auto it = weights.find(name);
+                layers.push_back({name, std::vector<glm::vec3>(m.positions.size(), glm::vec3(0.0f)),
+                                  own != ownWeights.end() ? own->second : it == weights.end() ? 0.0f : it->second});
+                return layers.back();
+            };
             const uint32_t baseIndex = uint32_t(m.positions.size());
             for (const auto& q : pts) m.positions.push_back(glm::vec3(world[i] * glm::vec4(q, 1.0f)));
             size_t cursor = 0;
@@ -682,8 +748,9 @@ bool readUsdaText(const std::string& text, Mesh& outMesh, SplatCloud& outSplats,
                     return false;
                 }
                 for (size_t k = 1; k + 1 < n; ++k) {
-                    glm::uvec3 t(uint32_t(indices->nums[cursor]), uint32_t(indices->nums[cursor + k]),
-                                 uint32_t(indices->nums[cursor + k + 1]));
+                    glm::uvec3 t(uint32_t(indexValue(indices->nums[cursor], pts.size())),
+                                 uint32_t(indexValue(indices->nums[cursor + k], pts.size())),
+                                 uint32_t(indexValue(indices->nums[cursor + k + 1], pts.size())));
                     if (t.x >= pts.size() || t.y >= pts.size() || t.z >= pts.size()) {
                         error = "Mesh " + p.path + " has a face index out of range";
                         return false;
@@ -710,7 +777,7 @@ bool readUsdaText(const std::string& text, Mesh& outMesh, SplatCloud& outSplats,
                     SculptLayer& layer = layerFor(names->strs[k]);
                     layer.delta.resize(m.positions.size(), glm::vec3(0.0f));
                     for (size_t o = 0; o < offsets.size(); ++o) {
-                        const size_t v = pointIndices ? (o < pointIndices->nums.size() ? size_t(pointIndices->nums[o]) : pts.size())
+                        const size_t v = pointIndices ? (o < pointIndices->nums.size() ? indexValue(pointIndices->nums[o], pts.size()) : pts.size())
                                                       : o;
                         if (v < pts.size()) layer.delta[baseIndex + v] = linear * offsets[o];
                     }
@@ -745,11 +812,16 @@ bool readUsdaText(const std::string& text, Mesh& outMesh, SplatCloud& outSplats,
         }
     }
 
-    if (m.triangles.empty() && !splatsFound) {
+    outMeshes.clear();
+    for (auto& o : objects) {
+        if (o.m.triangles.empty()) continue;
+        for (auto& l : o.layers) l.delta.resize(o.m.positions.size(), glm::vec3(0.0f));
+        outMeshes.push_back({o.name, weldImported(o.m, o.layers)});
+    }
+    if (outMeshes.empty() && !splatsFound) {
         error = "No meshes or Gaussian splats found (references, payloads and binary .usdc layers are not supported yet)";
         return false;
     }
-    outMesh = m.triangles.empty() ? Mesh() : weldImported(m, layers);
     outSplats = splatsFound ? std::move(cloud) : SplatCloud();
     return true;
 }
@@ -765,9 +837,18 @@ std::string usdIdentifier(const std::string& text) {
 
 bool saveUsd(const std::string& path, const Mesh* mesh, const SplatCloud* splats, const std::string& name,
              std::string& error) {
-    const bool hasMesh = mesh && mesh->triangleCount() > 0;
+    std::vector<MeshObjectRef> meshes;
+    if (mesh && mesh->triangleCount() > 0) meshes.push_back({name, mesh});
+    return saveUsd(path, meshes, splats, name, error);
+}
+
+bool saveUsd(const std::string& path, const std::vector<MeshObjectRef>& meshesIn, const SplatCloud* splats,
+             const std::string& name, std::string& error) {
+    std::vector<MeshObjectRef> meshes;
+    for (const auto& m : meshesIn)
+        if (m.mesh && m.mesh->triangleCount() > 0) meshes.push_back(m);
     const bool hasSplats = splats && !splats->empty();
-    if (!hasMesh && !hasSplats) {
+    if (meshes.empty() && !hasSplats) {
         error = "Nothing to export";
         return false;
     }
@@ -777,7 +858,7 @@ bool saveUsd(const std::string& path, const Mesh* mesh, const SplatCloud* splats
             return false;
         }
     }
-    const std::string text = buildUsda(hasMesh ? mesh : nullptr, hasSplats ? splats : nullptr, name);
+    const std::string text = buildUsda(meshes, hasSplats ? splats : nullptr, name);
     const std::string ext = lowerExtension(path);
     if (ext == ".usdz") {
         std::string inner = usdIdentifier(name.empty() ? "Sculpt" : name) + ".usda";
@@ -795,7 +876,10 @@ bool saveUsd(const std::string& path, const Mesh* mesh, const SplatCloud* splats
     return true;
 }
 
-bool loadUsd(const std::string& path, Mesh& mesh, SplatCloud& splats, std::string& error) {
+namespace {
+
+bool readUsdFile(const std::string& path, bool split, std::vector<MeshObject>& meshes, SplatCloud& splats,
+                 std::string& error) {
     std::string text;
     if (lowerExtension(path) == ".usdz") {
         std::vector<ZipEntry> entries;
@@ -821,7 +905,20 @@ bool loadUsd(const std::string& path, Mesh& mesh, SplatCloud& splats, std::strin
         error = path + " is not a text USD layer";
         return false;
     }
-    return readUsdaText(text, mesh, splats, error);
+    return readUsdaText(text, split, meshes, splats, error);
+}
+
+} // namespace
+
+bool loadUsd(const std::string& path, Mesh& mesh, SplatCloud& splats, std::string& error) {
+    std::vector<MeshObject> meshes;
+    if (!readUsdFile(path, false, meshes, splats, error)) return false;
+    mesh = meshes.empty() ? Mesh() : std::move(meshes.front().mesh);
+    return true;
+}
+
+bool loadUsd(const std::string& path, std::vector<MeshObject>& meshes, SplatCloud& splats, std::string& error) {
+    return readUsdFile(path, true, meshes, splats, error);
 }
 
 } // namespace sf

@@ -539,6 +539,11 @@ bool gozShellSafePath(const std::string& path) {
 }
 
 bool gozSend(const Mesh& mesh, const GozSendOptions& o, std::string& message) {
+    return gozSend(std::vector<MeshObjectRef>{{o.name.empty() ? "SculptForge" : o.name, &mesh}}, o, message);
+}
+
+bool gozSend(const std::vector<MeshObjectRef>& objects, const GozSendOptions& o, std::string& message,
+             std::vector<std::string>* sentNames) {
     const std::string root = o.root.empty() ? gozDefaultRoot() : o.root;
     if (root.empty()) {
         message = gozUnavailableMessage();
@@ -560,10 +565,15 @@ bool gozSend(const Mesh& mesh, const GozSendOptions& o, std::string& message) {
             }
         }
     }
-    if (mesh.triangleCount() == 0) {
-        message = "Nothing to send: the mesh is empty";
+    if (objects.empty()) {
+        message = "Nothing to send: no visible SubTools";
         return false;
     }
+    for (const auto& obj : objects)
+        if (!obj.mesh || obj.mesh->triangleCount() == 0) {
+            message = "Nothing to send: the mesh is empty";
+            return false;
+        }
     const fs::path rootPath = utf8Path(root);
     const fs::path brush = rootPath / "GoZBrush";
     const fs::path project = rootPath / "GoZProjects" / "Default";
@@ -573,16 +583,26 @@ bool gozSend(const Mesh& mesh, const GozSendOptions& o, std::string& message) {
         message = "Cannot create the GoZ folder " + pathUtf8(project);
         return false;
     }
-    const std::string name = gozObjectName(o.name.empty() ? "SculptForge" : o.name);
-    // Object paths are written without the .GoZ extension, ZBrush appends it.
-    const std::string base = genericUtf8(project / name);
-    std::string err;
-    if (!saveGoz(pathUtf8(project / (name + ".GoZ")), mesh, name, err)) {
-        message = err;
-        return false;
+    // One .GoZ per object (ZBrush makes each a SubTool), all listed in GoZ_ObjectList.txt.
+    std::vector<std::string> names;
+    std::string list;
+    bool ok = true;
+    for (const auto& obj : objects) {
+        const std::string wanted = gozObjectName(obj.name.empty() ? "SculptForge" : obj.name);
+        std::string name = wanted;
+        for (int k = 2; std::find(names.begin(), names.end(), name) != names.end(); ++k) name = wanted + "_" + std::to_string(k);
+        names.push_back(name);
+        // Object paths are written without the .GoZ extension, ZBrush appends it.
+        const std::string base = genericUtf8(project / name);
+        std::string err;
+        if (!saveGoz(pathUtf8(project / (name + ".GoZ")), *obj.mesh, name, err)) {
+            message = err;
+            return false;
+        }
+        ok = ok && writeText(project / (name + ".ztn"), base);
+        list += base + "\n";
     }
-    bool ok = writeText(project / (name + ".ztn"), base) && writeText(brush / "GoZ_ObjectList.txt", base + "\n") &&
-              writeText(brush / "GoZ_Application.txt", "SculptForge") &&
+    ok = ok && writeText(brush / "GoZ_ObjectList.txt", list) && writeText(brush / "GoZ_Application.txt", "SculptForge") &&
               writeText(brush / "GoZ_ProjectPath.txt", genericUtf8(project) + "/");
     // Register SculptForge in ZBrush's GoZ application list.
     if (!fs::exists(app / "GoZ_Info.txt", ec))
@@ -596,7 +616,9 @@ bool gozSend(const Mesh& mesh, const GozSendOptions& o, std::string& message) {
         message = "Cannot write the GoZ bridge files in " + root;
         return false;
     }
-    message = "Sent " + name + " to " + pathUtf8(project);
+    message = "Sent " + names.front() + (names.size() > 1 ? " and " + std::to_string(names.size() - 1) + " more SubTools" : "") +
+              " to " + pathUtf8(project);
+    if (sentNames) *sentNames = names;
     if (!o.launch) return true;
 
     // Official GoZ plug-ins notify a running ZBrush with GoZBrushFromApp; GoB
@@ -651,7 +673,7 @@ void appendMesh(Mesh& dst, const Mesh& src) {
 
 } // namespace
 
-bool gozReceive(const std::string& rootIn, Mesh& out, std::string& message, std::vector<std::string>* names) {
+bool gozReceive(const std::string& rootIn, std::vector<MeshObject>& out, std::string& message) {
     const std::string root = rootIn.empty() ? gozDefaultRoot() : rootIn;
     if (root.empty()) {
         message = gozUnavailableMessage();
@@ -662,8 +684,7 @@ bool gozReceive(const std::string& rootIn, Mesh& out, std::string& message, std:
         message = "Nothing to receive: " + gozObjectListPath(root) + " does not exist (press GoZ in ZBrush first)";
         return false;
     }
-    Mesh merged;
-    std::vector<std::string> loaded;
+    std::vector<MeshObject> loaded;
     std::string line, problems;
     while (std::getline(list, line)) {
         while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\0')) line.pop_back();
@@ -679,21 +700,38 @@ bool gozReceive(const std::string& rootIn, Mesh& out, std::string& message, std:
             problems += (problems.empty() ? "" : "; ") + err;
             continue;
         }
-        loaded.push_back(info.name.empty() ? pathUtf8(utf8Path(path).stem()) : info.name);
-        appendMesh(merged, m);
+        loaded.push_back({info.name.empty() ? pathUtf8(utf8Path(path).stem()) : info.name, std::move(m)});
     }
     if (loaded.empty()) {
         message = problems.empty() ? "Nothing to receive: GoZ_ObjectList.txt is empty" : problems;
         return false;
     }
+    size_t tris = 0;
+    for (const auto& obj : loaded) tris += obj.mesh.triangleCount();
+    message = "Received " + loaded.front().name;
+    if (loaded.size() > 1) message += " and " + std::to_string(loaded.size() - 1) + " more SubTools";
+    message += " from ZBrush (" + std::to_string(tris) + " triangles)";
+    if (!problems.empty()) message += "; skipped: " + problems;
+    out = std::move(loaded);
+    return true;
+}
+
+bool gozReceive(const std::string& root, Mesh& out, std::string& message, std::vector<std::string>* names) {
+    std::vector<MeshObject> objects;
+    if (!gozReceive(root, objects, message)) return false;
+    Mesh merged;
+    if (names) names->clear();
+    for (const auto& obj : objects) {
+        appendMesh(merged, obj.mesh);
+        if (names) names->push_back(obj.name);
+    }
     merged.rebuildTopology();
     merged.recomputeAllNormals();
     out = std::move(merged);
-    message = "Received " + loaded.front();
-    if (loaded.size() > 1) message += " and " + std::to_string(loaded.size() - 1) + " more SubTools (merged)";
-    message += " from ZBrush (" + std::to_string(out.triangleCount()) + " triangles)";
-    if (!problems.empty()) message += "; skipped: " + problems;
-    if (names) *names = std::move(loaded);
+    if (objects.size() > 1) {
+        const size_t from = message.find(" more SubTools");
+        if (from != std::string::npos) message.insert(from + 14, " (merged)");
+    }
     return true;
 }
 

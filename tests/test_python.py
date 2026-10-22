@@ -48,6 +48,25 @@ try:
 except sf.CommandError:
     pass
 
+# SubTools: the mesh properties follow the active one; exports write every visible one.
+sf.run(doc, "new_sphere", subdivisions=2)
+sf.run(doc, "subtool_append", type="cube", name="Box")
+assert [s["name"] for s in doc.subtools] == ["Sphere", "Box"] and doc.active_subtool == 1
+box_tris = doc.triangles.shape[0]
+doc.active_subtool = "Sphere"
+assert doc.active_subtool == 0 and doc.triangles.shape[0] == 320 and doc.subtools[1]["triangles"] == box_tris
+try:
+    doc.active_subtool = 5
+    raise AssertionError("expected IndexError")
+except IndexError:
+    pass
+with tempfile.TemporaryDirectory() as d:
+    out = os.path.join(d, "scene.obj")
+    sf.run(doc, "save_obj", path=out)
+    back = sf.Document()
+    sf.run(back, "open", path=out)
+    assert [s["name"] for s in back.subtools] == ["Sphere", "Box"], back.subtools
+
 # Bring your own mesh in from a pipeline.
 doc.set_mesh([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]])
 assert doc.triangles.shape == (4, 3)

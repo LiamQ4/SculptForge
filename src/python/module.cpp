@@ -184,6 +184,28 @@ PYBIND11_MODULE(sculptforge, m) {
             },
             py::arg("vertices"), py::arg("triangles"), "Replace the sculpt with your own mesh (clears undo).")
         .def_property_readonly("splat_count", [](const Document& d) { return d.splats.size(); })
+        // SubTools: the mesh properties above are the active SubTool's.
+        .def_property_readonly("subtools",
+                               [](const Document& d) {
+                                   py::list out;
+                                   for (int i = 0; i < d.subtoolCount(); ++i)
+                                       out.append(py::dict(py::arg("name") = d.subtools[size_t(i)].name,
+                                                           py::arg("visible") = d.subtools[size_t(i)].visible,
+                                                           py::arg("triangles") = d.subtoolMesh(i).triangleCount()));
+                                   return out;
+                               },
+                               "The SubTools (separate meshes) in list order, as dicts with name, visible and triangles.")
+        .def_property(
+            "active_subtool", [](const Document& d) { return d.activeSubtool; },
+            [](Document& d, const py::object& v) {
+                int index = -1;
+                if (py::isinstance<py::str>(v)) index = d.findSubtool(v.cast<std::string>());
+                else index = v.cast<int>();
+                if (index < 0 || index >= d.subtoolCount()) throw py::index_error("no such SubTool");
+                d.selectSubtool(index);
+            },
+            "Index of the SubTool that vertices, mask, layers... and editing commands refer to. Set it to an "
+            "index or a SubTool name to select another one.")
         .def("__repr__", [](const Document& d) {
             return "<sculptforge.Document " + std::to_string(d.mesh.vertexCount()) + " vertices, " +
                    std::to_string(d.mesh.triangleCount()) + " triangles, " + std::to_string(d.mesh.layers.size()) +

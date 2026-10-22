@@ -86,6 +86,31 @@ Mesh mergedVisibleMesh(const Document& doc) {
     return mergeMeshes(meshes);
 }
 
+std::vector<MeshObjectRef> visibleSubtoolObjects(const Document& doc) {
+    if (doc.subtoolCount() == 1) {
+        if (doc.mesh.triangleCount() == 0) return {};
+        return {{doc.assetName(), &doc.mesh}};
+    }
+    std::vector<MeshObjectRef> out;
+    for (int i = 0; i < doc.subtoolCount(); ++i)
+        if (doc.subtools[size_t(i)].visible && doc.subtoolMesh(i).triangleCount())
+            out.push_back({doc.subtools[size_t(i)].name, &doc.subtoolMesh(i)});
+    return out;
+}
+
+void setSceneObjects(Document& doc, std::vector<MeshObject> objects, const std::string& fallbackName) {
+    if (objects.empty()) {
+        doc.setMesh(Mesh(), fallbackName);
+        return;
+    }
+    auto nameOf = [&](size_t i) {
+        return objects.size() == 1 || objects[i].name.empty() ? fallbackName : objects[i].name;
+    };
+    doc.setMesh(std::move(objects[0].mesh), nameOf(0));
+    for (size_t i = 1; i < objects.size(); ++i) doc.addSubtool(std::move(objects[i].mesh), nameOf(i), false);
+    doc.markClean();
+}
+
 std::vector<Mesh> splitByPolygroups(const Mesh& mesh) {
     std::vector<uint32_t> ids;
     for (uint32_t t = 0; t < mesh.triangleCount(); ++t) ids.push_back(mesh.polygroupAt(t));
@@ -202,14 +227,27 @@ void registerSubToolCommands(CommandRegistry& reg) {
                  Mesh m;
                  std::string name;
                  if (a.contains("path")) {
-                     // Load through `open` into a scratch document, so every format and its attributes work.
+                     // Load through `open` into a scratch document, so every format and its attributes work;
+                     // each object in the file becomes its own SubTool.
                      Document scratch;
                      const std::string path = argString(a, "path");
                      CommandResult r = CommandRegistry().execute(scratch, "open", {{"path", path}});
                      if (!r.ok) return r;
-                     if (scratch.mesh.triangleCount() == 0) return {false, path + " has no mesh to append"};
-                     m = mergedVisibleMesh(scratch);
-                     name = fileStem(path);
+                     if (scratch.subtoolCount() == 1) {
+                         if (scratch.mesh.triangleCount() == 0) return {false, path + " has no mesh to append"};
+                         m = std::move(scratch.mesh);
+                         name = fileStem(path);
+                     } else {
+                         const int first = doc.subtoolCount();
+                         size_t tris = 0;
+                         for (int i = 0; i < scratch.subtoolCount(); ++i) {
+                             tris += scratch.subtoolMesh(i).triangleCount();
+                             doc.addSubtool(std::move(scratch.subtoolMesh(i)), scratch.subtools[size_t(i)].name, false);
+                         }
+                         doc.selectSubtool(first);
+                         return {true, "Appended " + std::to_string(scratch.subtoolCount()) + " SubTools from " + path + " (" +
+                                           countText(tris) + ")"};
+                     }
                  } else {
                      const std::string type = argString(a, "type", "sphere");
                      const AABB scene = doc.visibleBounds();

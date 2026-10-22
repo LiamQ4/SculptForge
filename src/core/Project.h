@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Native project files (.sfproj): an uncompressed ZIP holding a JSON manifest
-// ("manifest.json") and little-endian binary blobs for the mesh, its optional
-// attributes, sculpt layers and any loaded Gaussian splats.
+// ("manifest.json") and little-endian binary blobs for every SubTool (mesh,
+// optional attributes, sculpt layers) and any loaded Gaussian splats.
 //
 // The manifest names every blob with its element type and count, so readers
 // ignore anything they don't know (forward compatible) and refuse files whose
@@ -19,17 +19,20 @@
 
 namespace sf {
 
-constexpr int kProjectVersion = 1;
+// 1: one mesh. 2: a list of SubTools (version 1 files still load, as one SubTool).
+constexpr int kProjectVersion = 2;
 constexpr const char* kProjectExtension = ".sfproj";
 
 // True for paths ending in .sfproj (any case).
 bool isProjectPath(const std::string& path);
 
-// Writes `doc` (mesh, attributes, layers, splats, brush library, active layer
+// Writes `doc` (every SubTool with its name, visibility, mesh, attributes,
+// layers, active layer and GoZ name; the active SubTool; splats, brush library
 // and doc.projectSettings) to `path`. Does not change the document.
 bool saveProject(const std::string& path, const Document& doc, std::string& error);
 // Replaces the scene with the project at `path`. On failure `doc` is untouched.
-// Sets doc.path, clears the edit history and marks the document clean.
+// Restores the active SubTool, sets doc.path, gives every SubTool an empty
+// edit history and marks the document clean.
 bool loadProject(const std::string& path, Document& doc, std::string& error);
 // loadProject wrapped as a command result (open_project, and `open` for .sfproj paths).
 CommandResult openProjectCommand(Document& doc, const std::string& path);

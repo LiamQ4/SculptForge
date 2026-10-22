@@ -269,7 +269,7 @@ TEST(goz_bridge_send_and_receive) {
     CHECK(std::string(list.begin(), list.end()) == expected);
     CHECK(doc.gozName == "Sphere_1");
 
-    // ZBrush sends two SubTools back: they are merged into one undoable step.
+    // ZBrush sends two SubTools back: the first replaces the fresh scene (undoably), the second is added.
     Mesh second = makeIcosphere(1);
     for (auto& p : second.positions) p += glm::vec3(3, 0, 0);
     std::string err;
@@ -281,11 +281,26 @@ TEST(goz_bridge_send_and_receive) {
     Document back = makeDoc(makeIcosphere(0));
     r = reg.execute(back, "goz_receive", {{"folder", folder}});
     CHECK(r.ok && r.message.find("Sphere_1") != std::string::npos);
-    CHECK(back.mesh.vertexCount() == m.vertexCount() + second.vertexCount());
-    CHECK(back.mesh.triangleCount() == m.triangleCount() + second.triangleCount());
+    CHECK(back.subtoolCount() == 2 && back.activeSubtool == 0);
+    CHECK(back.subtools[0].name == "Sphere_1" && back.gozName == "Sphere_1");
+    CHECK(back.subtools[1].name == "Other" && back.subtools[1].gozName == "Other");
+    CHECK(back.mesh.vertexCount() == m.vertexCount() && back.mesh.triangleCount() == m.triangleCount());
+    CHECK(back.subtoolMesh(1).triangleCount() == second.triangleCount());
     CHECK(back.mesh.mask.size() == back.mesh.vertexCount() && back.mesh.polygroups.size() == back.mesh.triangleCount());
     CHECK(back.mesh.uvs.size() == back.mesh.triangleCount() * 3);
     CHECK(back.undo.canUndo());
+    // Receiving again updates the same SubTools (matched by GoZ name) instead of adding more.
+    r = reg.execute(back, "goz_receive", {{"folder", folder}});
+    CHECK(r.ok && back.subtoolCount() == 2 && back.activeSubtool == 0);
+    back.selectSubtool(1);
+    CHECK(back.undo.canUndo() && back.mesh.triangleCount() == second.triangleCount());
+    back.selectSubtool(0);
+    // Sending both back writes one .GoZ per SubTool, listed in order.
+    r = reg.execute(back, "goz_send", {{"folder", folder}, {"launch", false}});
+    CHECK(r.ok);
+    list = readFile((root / "GoZBrush" / "GoZ_ObjectList.txt").string());
+    CHECK(std::string(list.begin(), list.end()) ==
+          (project / "Sphere_1").generic_string() + "\n" + (project / "Other").generic_string() + "\n");
 
     // Missing object list explains what to do.
     fs::remove(root / "GoZBrush" / "GoZ_ObjectList.txt");

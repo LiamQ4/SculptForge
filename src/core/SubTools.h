@@ -8,6 +8,7 @@
 #pragma once
 
 #include "core/Document.h"
+#include "io/MeshObject.h"
 
 #include <string>
 #include <vector>
@@ -25,6 +26,17 @@ Mesh mergeMeshes(const std::vector<const Mesh*>& meshes);
 // The visible SubTools merged into one mesh (for exporters that write a single
 // mesh). With one SubTool this is a copy of it, whether shown or not.
 Mesh mergedVisibleMesh(const Document& doc);
+
+// The visible SubTools that have triangles, in list order and named after
+// them, for exporters that write one object per SubTool. With a single SubTool
+// it is that one (shown or not) named doc.assetName(), so one-object exports
+// stay as they were.
+std::vector<MeshObjectRef> visibleSubtoolObjects(const Document& doc);
+
+// Replaces the scene with one SubTool per object (the first one active), named
+// after the objects. A single object, or an unnamed one, is named
+// `fallbackName` (e.g. the file name). Clears the edit history like setMesh.
+void setSceneObjects(Document& doc, std::vector<MeshObject> objects, const std::string& fallbackName);
 
 // One mesh per polygroup, in increasing group id order (empty if there's only one group).
 std::vector<Mesh> splitByPolygroups(const Mesh& mesh);

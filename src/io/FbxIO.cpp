@@ -4,6 +4,7 @@
 
 #include "ufbx.h"
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <filesystem>
@@ -270,10 +271,21 @@ Node makeModel(int64_t id, const std::string& name, const std::string& type) {
 
 bool saveFbx(const std::string& path, const std::string& name, const std::vector<const Mesh*>& lods,
              const FbxExportOptions& o, std::string& error) {
-    if (lods.empty() || !lods[0] || lods[0]->triangleCount() == 0) {
+    return saveFbx(path, std::vector<FbxObject>{{name, lods}}, o, error);
+}
+
+bool saveFbx(const std::string& path, const std::vector<FbxObject>& fbxObjects, const FbxExportOptions& o,
+             std::string& error) {
+    if (fbxObjects.empty()) {
         error = "The mesh is empty";
         return false;
     }
+    for (const auto& obj : fbxObjects)
+        if (obj.lods.empty() || !obj.lods[0] || obj.lods[0]->triangleCount() == 0 ||
+            std::find(obj.lods.begin(), obj.lods.end(), nullptr) != obj.lods.end()) {
+            error = "The mesh is empty";
+            return false;
+        }
     Ids ids;
     Node root;
     addHeader(root);
@@ -292,7 +304,7 @@ bool saveFbx(const std::string& path, const std::string& name, const std::vector
     Node connections("Connections");
     int models = 0, geometries = 0, deformers = 0, attributes = 0;
 
-    // Material shared by every LOD.
+    // Material shared by every object and LOD.
     const int64_t materialId = ids();
     {
         Node& mat = objects.add("Material").i64(materialId).objName(o.materialName, "Material").str("");
@@ -307,99 +319,103 @@ bool saveFbx(const std::string& path, const std::string& name, const std::vector
         prop70(p70, "ShininessExponent", "double", "Number", "").f64(20.0);
     }
 
-    const bool grouped = lods.size() > 1;
-    int64_t parentId = 0;
-    if (grouped) {
-        const int64_t groupId = ids(), attrId = ids();
-        Node attr("NodeAttribute");
-        attr.i64(attrId).objName("", "NodeAttribute").str("LodGroup");
-        Node& p70 = attr.add("Properties70");
-        prop70(p70, "MinMaxDistance", "bool", "", "").i32(0);
-        prop70(p70, "MinDistance", "double", "Number", "").f64(-100.0);
-        prop70(p70, "MaxDistance", "double", "Number", "").f64(100.0);
-        prop70(p70, "WorldSpace", "bool", "", "").i32(0);
-        prop70(p70, "ThresholdsUsedAsPercentage", "bool", "", "").i32(1);
-        for (size_t i = 1; i < lods.size(); ++i)
-            prop70(p70, "Thresholds|Level" + std::to_string(i - 1), "Distance", "", "")
-                .f32(100.0f / float(1u << i))
-                .str("cm");
-        for (size_t i = 0; i < lods.size(); ++i)
-            prop70(p70, "DisplayLevels|Level" + std::to_string(i), "enum", "", "").i32(0);
-        attr.add("TypeFlags").str("LodGroup");
-        objects.children.push_back(std::move(attr));
-        objects.children.push_back(makeModel(groupId, name, "LodGroup"));
-        addConnection(connections, "OO", attrId, groupId);
-        addConnection(connections, "OO", groupId, 0);
-        parentId = groupId;
-        ++models;
-        ++attributes;
-    }
-
-    for (size_t level = 0; level < lods.size(); ++level) {
-        const Mesh& mesh = *lods[level];
-        const std::string meshName = grouped ? name + "_LOD" + std::to_string(level) : name;
-        const int64_t modelId = ids(), geometryId = ids();
-        objects.children.push_back(makeGeometry(geometryId, meshName, mesh, o.scale));
-        objects.children.push_back(makeModel(modelId, meshName, "Mesh"));
-        addConnection(connections, "OO", geometryId, modelId);
-        addConnection(connections, "OO", materialId, modelId);
+    for (const FbxObject& object : fbxObjects) {
+        const std::string& name = object.name;
+        const std::vector<const Mesh*>& lods = object.lods;
+        const bool grouped = lods.size() > 1;
+        int64_t parentId = 0;
         if (grouped) {
-            // Like Maya/FBX SDK files: LOD group -> one Null per level -> the level's mesh.
-            const int64_t levelId = ids(), levelAttrId = ids();
+            const int64_t groupId = ids(), attrId = ids();
             Node attr("NodeAttribute");
-            attr.i64(levelAttrId).objName("", "NodeAttribute").str("Null");
-            attr.add("TypeFlags").str("Null");
+            attr.i64(attrId).objName("", "NodeAttribute").str("LodGroup");
+            Node& p70 = attr.add("Properties70");
+            prop70(p70, "MinMaxDistance", "bool", "", "").i32(0);
+            prop70(p70, "MinDistance", "double", "Number", "").f64(-100.0);
+            prop70(p70, "MaxDistance", "double", "Number", "").f64(100.0);
+            prop70(p70, "WorldSpace", "bool", "", "").i32(0);
+            prop70(p70, "ThresholdsUsedAsPercentage", "bool", "", "").i32(1);
+            for (size_t i = 1; i < lods.size(); ++i)
+                prop70(p70, "Thresholds|Level" + std::to_string(i - 1), "Distance", "", "")
+                    .f32(100.0f / float(1u << i))
+                    .str("cm");
+            for (size_t i = 0; i < lods.size(); ++i)
+                prop70(p70, "DisplayLevels|Level" + std::to_string(i), "enum", "", "").i32(0);
+            attr.add("TypeFlags").str("LodGroup");
             objects.children.push_back(std::move(attr));
-            objects.children.push_back(makeModel(levelId, "LOD_" + std::to_string(level), "Null"));
-            addConnection(connections, "OO", levelAttrId, levelId);
-            addConnection(connections, "OO", levelId, parentId);
-            addConnection(connections, "OO", modelId, levelId);
+            objects.children.push_back(makeModel(groupId, name, "LodGroup"));
+            addConnection(connections, "OO", attrId, groupId);
+            addConnection(connections, "OO", groupId, 0);
+            parentId = groupId;
             ++models;
             ++attributes;
-        } else {
-            addConnection(connections, "OO", modelId, parentId);
         }
-        ++models;
-        ++geometries;
 
-        // Sculpt layers -> blend shape channels (LOD0 only).
-        if (level == 0 && o.layers && !mesh.layers.empty()) {
-            const int64_t blendId = ids();
-            Node& blend = objects.add("Deformer").i64(blendId).objName(meshName, "Deformer").str("BlendShape");
-            blend.add("Version").i32(100);
-            addConnection(connections, "OO", blendId, geometryId);
-            ++deformers;
-            for (const auto& layer : mesh.layers) {
-                const int64_t channelId = ids(), shapeId = ids();
-                Node& channel = objects.add("Deformer").i64(channelId).objName(layer.name, "SubDeformer").str("BlendShapeChannel");
-                channel.add("Version").i32(100);
-                channel.add("DeformPercent").f64(double(layer.weight) * 100.0);
+        for (size_t level = 0; level < lods.size(); ++level) {
+            const Mesh& mesh = *lods[level];
+            const std::string meshName = grouped ? name + "_LOD" + std::to_string(level) : name;
+            const int64_t modelId = ids(), geometryId = ids();
+            objects.children.push_back(makeGeometry(geometryId, meshName, mesh, o.scale));
+            objects.children.push_back(makeModel(modelId, meshName, "Mesh"));
+            addConnection(connections, "OO", geometryId, modelId);
+            addConnection(connections, "OO", materialId, modelId);
+            if (grouped) {
+                // Like Maya/FBX SDK files: LOD group -> one Null per level -> the level's mesh.
+                const int64_t levelId = ids(), levelAttrId = ids();
+                Node attr("NodeAttribute");
+                attr.i64(levelAttrId).objName("", "NodeAttribute").str("Null");
+                attr.add("TypeFlags").str("Null");
+                objects.children.push_back(std::move(attr));
+                objects.children.push_back(makeModel(levelId, "LOD_" + std::to_string(level), "Null"));
+                addConnection(connections, "OO", levelAttrId, levelId);
+                addConnection(connections, "OO", levelId, parentId);
+                addConnection(connections, "OO", modelId, levelId);
+                ++models;
+                ++attributes;
+            } else {
+                addConnection(connections, "OO", modelId, parentId);
+            }
+            ++models;
+            ++geometries;
 
-                std::vector<int32_t> indexes;
-                std::vector<double> offsets;
-                for (uint32_t v = 0; v < layer.delta.size(); ++v) {
-                    if (layer.delta[v] == glm::vec3(0.0f)) continue;
-                    indexes.push_back(int32_t(v));
-                    const glm::vec3 d = layer.delta[v] * o.scale;
-                    offsets.insert(offsets.end(), {double(d.x), double(d.y), double(d.z)});
-                }
-                if (indexes.empty()) {
-                    indexes.push_back(0);
-                    offsets.insert(offsets.end(), {0.0, 0.0, 0.0});
-                }
-                channel.add("FullWeights").f64s(std::vector<double>(indexes.size(), 100.0));
-                Node& shape = objects.add("Geometry").i64(shapeId).objName(layer.name, "Geometry").str("Shape");
-                shape.add("Properties70");
-                shape.add("Version").i32(100);
-                shape.add("Indexes").i32s(indexes);
-                shape.add("Vertices").f64s(offsets);
-                std::vector<double> shapeNormals(offsets.size(), 0.0);
-                shapeNormals[0] = 1.1e-6; // all-zero shape normals break some importers (Unity)
-                shape.add("Normals").f64s(shapeNormals);
-                addConnection(connections, "OO", shapeId, channelId);
-                addConnection(connections, "OO", channelId, blendId);
+            // Sculpt layers -> blend shape channels (LOD0 only).
+            if (level == 0 && o.layers && !mesh.layers.empty()) {
+                const int64_t blendId = ids();
+                Node& blend = objects.add("Deformer").i64(blendId).objName(meshName, "Deformer").str("BlendShape");
+                blend.add("Version").i32(100);
+                addConnection(connections, "OO", blendId, geometryId);
                 ++deformers;
-                ++geometries;
+                for (const auto& layer : mesh.layers) {
+                    const int64_t channelId = ids(), shapeId = ids();
+                    Node& channel = objects.add("Deformer").i64(channelId).objName(layer.name, "SubDeformer").str("BlendShapeChannel");
+                    channel.add("Version").i32(100);
+                    channel.add("DeformPercent").f64(double(layer.weight) * 100.0);
+
+                    std::vector<int32_t> indexes;
+                    std::vector<double> offsets;
+                    for (uint32_t v = 0; v < layer.delta.size(); ++v) {
+                        if (layer.delta[v] == glm::vec3(0.0f)) continue;
+                        indexes.push_back(int32_t(v));
+                        const glm::vec3 d = layer.delta[v] * o.scale;
+                        offsets.insert(offsets.end(), {double(d.x), double(d.y), double(d.z)});
+                    }
+                    if (indexes.empty()) {
+                        indexes.push_back(0);
+                        offsets.insert(offsets.end(), {0.0, 0.0, 0.0});
+                    }
+                    channel.add("FullWeights").f64s(std::vector<double>(indexes.size(), 100.0));
+                    Node& shape = objects.add("Geometry").i64(shapeId).objName(layer.name, "Geometry").str("Shape");
+                    shape.add("Properties70");
+                    shape.add("Version").i32(100);
+                    shape.add("Indexes").i32s(indexes);
+                    shape.add("Vertices").f64s(offsets);
+                    std::vector<double> shapeNormals(offsets.size(), 0.0);
+                    shapeNormals[0] = 1.1e-6; // all-zero shape normals break some importers (Unity)
+                    shape.add("Normals").f64s(shapeNormals);
+                    addConnection(connections, "OO", shapeId, channelId);
+                    addConnection(connections, "OO", channelId, blendId);
+                    ++deformers;
+                    ++geometries;
+                }
             }
         }
     }
@@ -470,9 +486,15 @@ bool isLowerLod(const ufbx_node* node) {
 
 glm::vec3 toVec(const ufbx_vec3& v) { return {float(v.x), float(v.y), float(v.z)}; }
 
-} // namespace
+// An object's name: its LOD group's for a LOD0 mesh, else the node's.
+std::string objectName(const ufbx_node* node) {
+    for (const ufbx_node* p = node->parent; p; p = p->parent)
+        if (p->attrib_type == UFBX_ELEMENT_LOD_GROUP && p->name.length) return std::string(p->name.data, p->name.length);
+    return std::string(node->name.data, node->name.length);
+}
 
-bool loadFbx(const std::string& path, Mesh& out, std::string& error) {
+// Merges every mesh node into one object, or (split) makes one object per node.
+bool readFbx(const std::string& path, bool split, std::vector<MeshObject>& out, std::string& error) {
     ufbx_load_opts opts = {};
     opts.target_axes = ufbx_axes_right_handed_y_up;
     opts.target_unit_meters = 1.0;
@@ -485,14 +507,22 @@ bool loadFbx(const std::string& path, Mesh& out, std::string& error) {
         error = "Cannot read FBX: " + std::string(buf);
         return false;
     }
-    Mesh m;
-    std::vector<SculptLayer> layers;
-    std::map<std::string, size_t> layerIndex;
+    struct Gathered {
+        std::string name;
+        Mesh m;
+        std::vector<SculptLayer> layers;
+        std::map<std::string, size_t> layerIndex;
+    };
+    std::vector<Gathered> objects(split ? 0 : 1);
     std::vector<uint32_t> tri;
     for (size_t ni = 0; ni < scene->nodes.count; ++ni) {
         const ufbx_node* node = scene->nodes.data[ni];
         const ufbx_mesh* mesh = node->mesh;
         if (!mesh || !node->visible || isLowerLod(node)) continue;
+        if (split) objects.push_back({objectName(node), {}, {}, {}});
+        Mesh& m = objects.back().m;
+        std::vector<SculptLayer>& layers = objects.back().layers;
+        std::map<std::string, size_t>& layerIndex = objects.back().layerIndex;
         const uint32_t base = uint32_t(m.positions.size());
         const ufbx_matrix& xf = node->geometry_to_world;
         const ufbx_vec3 zero = {};
@@ -526,13 +556,30 @@ bool loadFbx(const std::string& path, Mesh& out, std::string& error) {
         }
     }
     ufbx_free_scene(scene);
-    if (m.triangles.empty()) {
+    out.clear();
+    for (auto& o : objects) {
+        if (o.m.triangles.empty()) continue;
+        for (auto& l : o.layers) l.delta.resize(o.m.positions.size(), glm::vec3(0.0f));
+        out.push_back({o.name, weldImported(o.m, o.layers)});
+    }
+    if (out.empty()) {
         error = "No meshes found in " + path;
         return false;
     }
-    for (auto& l : layers) l.delta.resize(m.positions.size(), glm::vec3(0.0f));
-    out = weldImported(m, layers);
     return true;
+}
+
+} // namespace
+
+bool loadFbx(const std::string& path, Mesh& out, std::string& error) {
+    std::vector<MeshObject> objects;
+    if (!readFbx(path, false, objects, error)) return false;
+    out = std::move(objects.front().mesh);
+    return true;
+}
+
+bool loadFbx(const std::string& path, std::vector<MeshObject>& out, std::string& error) {
+    return readFbx(path, true, out, error);
 }
 
 } // namespace sf

@@ -91,17 +91,20 @@ bool writeGlbFile(const std::string& path, std::string jsonStr, const std::vecto
 } // namespace
 
 bool saveGlb(const std::string& path, const Mesh& mesh, const std::string& name, std::string& error) {
-    if (mesh.triangleCount() == 0) {
-        error = "Mesh is empty";
+    return saveGlb(path, std::vector<MeshObjectRef>{{name, &mesh}}, name, error);
+}
+
+bool saveGlb(const std::string& path, const std::vector<MeshObjectRef>& objects, const std::string& sceneName,
+             std::string& error) {
+    if (objects.empty()) {
+        error = "Nothing to export";
         return false;
     }
-
-    // Base shape and its normals.
-    Mesh baseMesh;
-    baseMesh.positions = mesh.basePositions();
-    baseMesh.triangles = mesh.triangles;
-    baseMesh.rebuildTopology();
-    baseMesh.recomputeAllNormals();
+    for (const auto& o : objects)
+        if (!o.mesh || o.mesh->triangleCount() == 0) {
+            error = "Mesh is empty";
+            return false;
+        }
 
     BinWriter bin;
     struct View {
@@ -109,7 +112,7 @@ bool saveGlb(const std::string& path, const Mesh& mesh, const std::string& name,
         bool indices;
     };
     std::vector<View> views;
-    std::ostringstream accessors;
+    std::ostringstream accessors, meshes, nodes;
     int accessorCount = 0;
 
     auto addVec3 = [&](const std::vector<glm::vec3>& v, bool withMinMax) {
@@ -126,42 +129,61 @@ bool saveGlb(const std::string& path, const Mesh& mesh, const std::string& name,
         return accessorCount++;
     };
 
-    int posAcc = addVec3(baseMesh.positions, true);
-    int nrmAcc = addVec3(baseMesh.normals, false);
-    const bool colors = mesh.hasColors() && mesh.colors.size() == mesh.vertexCount();
-    int colorAcc = colors ? addVec3(mesh.colors, false) : -1; // polypaint as COLOR_0 (linear)
+    // One node and one mesh per object, each with its own morph targets.
+    for (size_t oi = 0; oi < objects.size(); ++oi) {
+        const Mesh& mesh = *objects[oi].mesh;
+        const std::string& name = objects[oi].name;
+        // Base shape and its normals.
+        Mesh baseMesh;
+        baseMesh.positions = mesh.basePositions();
+        baseMesh.triangles = mesh.triangles;
+        baseMesh.rebuildTopology();
+        baseMesh.recomputeAllNormals();
 
-    size_t idxOff = bin.append(mesh.triangles.data(), mesh.triangleCount() * sizeof(glm::uvec3));
-    views.push_back({idxOff, mesh.triangleCount() * sizeof(glm::uvec3), true});
-    accessors << ",{\"bufferView\":" << views.size() - 1 << ",\"componentType\":5125,\"count\":"
-              << mesh.triangleCount() * 3 << ",\"type\":\"SCALAR\"}";
-    int idxAcc = accessorCount++;
+        int posAcc = addVec3(baseMesh.positions, true);
+        int nrmAcc = addVec3(baseMesh.normals, false);
+        const bool colors = mesh.hasColors() && mesh.colors.size() == mesh.vertexCount();
+        int colorAcc = colors ? addVec3(mesh.colors, false) : -1; // polypaint as COLOR_0 (linear)
 
-    std::vector<int> targetAccs;
-    for (const auto& l : mesh.layers) targetAccs.push_back(addVec3(l.delta, true));
+        size_t idxOff = bin.append(mesh.triangles.data(), mesh.triangleCount() * sizeof(glm::uvec3));
+        views.push_back({idxOff, mesh.triangleCount() * sizeof(glm::uvec3), true});
+        accessors << ",{\"bufferView\":" << views.size() - 1 << ",\"componentType\":5125,\"count\":"
+                  << mesh.triangleCount() * 3 << ",\"type\":\"SCALAR\"}";
+        int idxAcc = accessorCount++;
+
+        std::vector<int> targetAccs;
+        for (const auto& l : mesh.layers) targetAccs.push_back(addVec3(l.delta, true));
+
+        nodes << (oi ? "," : "") << "{\"mesh\":" << oi << ",\"name\":\"" << jsonEscape(name) << "\"}";
+        std::ostringstream& json = meshes; // this object's entry in "meshes"
+        json << (oi ? "," : "") << "{\"name\":\"" << jsonEscape(name) << "\",\"primitives\":[{\"attributes\":{\"POSITION\":"
+             << posAcc << ",\"NORMAL\":" << nrmAcc;
+        if (colors) json << ",\"COLOR_0\":" << colorAcc;
+        json << "},\"indices\":" << idxAcc << ",\"mode\":4";
+        if (!mesh.layers.empty()) {
+            json << ",\"targets\":[";
+            for (size_t i = 0; i < targetAccs.size(); ++i) json << (i ? "," : "") << "{\"POSITION\":" << targetAccs[i] << "}";
+            json << "]";
+        }
+        json << "}]";
+        if (!mesh.layers.empty()) {
+            json << ",\"weights\":[";
+            for (size_t i = 0; i < mesh.layers.size(); ++i) json << (i ? "," : "") << mesh.layers[i].weight;
+            json << "],\"extras\":{\"targetNames\":[";
+            for (size_t i = 0; i < mesh.layers.size(); ++i)
+                json << (i ? "," : "") << "\"" << jsonEscape(mesh.layers[i].name) << "\"";
+            json << "]}";
+        }
+        json << "}";
+    }
 
     std::ostringstream json;
-    json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"SculptForge\"},\"scene\":0,"
-         << "\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0,\"name\":\"" << jsonEscape(name) << "\"}],"
-         << "\"meshes\":[{\"name\":\"" << jsonEscape(name) << "\",\"primitives\":[{\"attributes\":{\"POSITION\":"
-         << posAcc << ",\"NORMAL\":" << nrmAcc;
-    if (colors) json << ",\"COLOR_0\":" << colorAcc;
-    json << "},\"indices\":" << idxAcc << ",\"mode\":4";
-    if (!mesh.layers.empty()) {
-        json << ",\"targets\":[";
-        for (size_t i = 0; i < targetAccs.size(); ++i) json << (i ? "," : "") << "{\"POSITION\":" << targetAccs[i] << "}";
-        json << "]";
-    }
-    json << "}]";
-    if (!mesh.layers.empty()) {
-        json << ",\"weights\":[";
-        for (size_t i = 0; i < mesh.layers.size(); ++i) json << (i ? "," : "") << mesh.layers[i].weight;
-        json << "],\"extras\":{\"targetNames\":[";
-        for (size_t i = 0; i < mesh.layers.size(); ++i)
-            json << (i ? "," : "") << "\"" << jsonEscape(mesh.layers[i].name) << "\"";
-        json << "]}";
-    }
-    json << "}],\"accessors\":[" << accessors.str() << "],\"bufferViews\":[";
+    json << "{\"asset\":{\"version\":\"2.0\",\"generator\":\"SculptForge\"},\"scene\":0,\"scenes\":[{";
+    if (objects.size() > 1) json << "\"name\":\"" << jsonEscape(sceneName) << "\",";
+    json << "\"nodes\":[";
+    for (size_t i = 0; i < objects.size(); ++i) json << (i ? "," : "") << i;
+    json << "]}],\"nodes\":[" << nodes.str() << "],\"meshes\":[" << meshes.str() << "],\"accessors\":["
+         << accessors.str() << "],\"bufferViews\":[";
     for (size_t i = 0; i < views.size(); ++i)
         json << (i ? "," : "") << "{\"buffer\":0,\"byteOffset\":" << views[i].offset << ",\"byteLength\":"
              << views[i].length << ",\"target\":" << (views[i].indices ? 34963 : 34962) << "}";
@@ -403,7 +425,20 @@ glm::mat4 nodeMatrix(const Json& node) {
 
 } // namespace
 
-bool loadGltf(const std::string& path, Mesh& out, std::string& error, SplatCloud* splatsOut) {
+namespace {
+
+// Triangles gathered for one object (a node with a mesh, or the whole file when merging).
+struct GltfObject {
+    std::string name;
+    Mesh m;
+    std::vector<std::vector<glm::vec3>> targetDeltas;
+    std::vector<std::string> targetNames;
+    std::vector<float> targetWeights;
+    bool targetsConsistent = true;
+};
+
+bool readGltf(const std::string& path, bool split, std::vector<MeshObject>& out, std::string& error,
+              SplatCloud* splatsOut) {
     const std::filesystem::path fsPath(std::u8string(path.begin(), path.end()));
     std::vector<uint8_t> file;
     if (!readFile(fsPath, file)) {
@@ -466,11 +501,7 @@ bool loadGltf(const std::string& path, Mesh& out, std::string& error, SplatCloud
         r.buffers.push_back(std::move(data));
     }
 
-    Mesh m;
-    std::vector<std::vector<glm::vec3>> targetDeltas;
-    std::vector<std::string> targetNames;
-    std::vector<float> targetWeights;
-    bool targetsConsistent = true;
+    std::vector<GltfObject> objects(1);
 
     SplatCloud splats;
     auto readSplats = [&](const Json& prim, const glm::mat4& world) -> bool {
@@ -527,6 +558,19 @@ bool loadGltf(const std::string& path, Mesh& out, std::string& error, SplatCloud
         const glm::mat3 linear(world);
         if (node["mesh"].isNumber()) {
             const Json& mesh = r.doc["meshes"][size_t(node["mesh"].asNumber())];
+            // Splitting: every node with a mesh is its own object (its primitives are material slots).
+            if (split && (objects.size() > 1 || !objects[0].m.triangles.empty() || !objects[0].name.empty()))
+                objects.emplace_back();
+            GltfObject& o = objects.back();
+            if (split && o.name.empty()) {
+                o.name = node["name"].isString() ? node["name"].asString() : mesh["name"].asString();
+                if (o.name.empty()) o.name = "Mesh " + std::to_string(objects.size());
+            }
+            Mesh& m = o.m;
+            auto& targetDeltas = o.targetDeltas;
+            auto& targetNames = o.targetNames;
+            auto& targetWeights = o.targetWeights;
+            bool& targetsConsistent = o.targetsConsistent;
             for (const Json& prim : mesh["primitives"].items()) {
                 const Json& gs = prim["extensions"]["KHR_gaussian_splatting"];
                 if (gs.isObject()) {
@@ -613,25 +657,36 @@ bool loadGltf(const std::string& path, Mesh& out, std::string& error, SplatCloud
         auto stem = std::filesystem::path(fsPath).stem().u8string();
         splats.name = std::string(stem.begin(), stem.end());
         *splatsOut = std::move(splats);
-        if (m.triangles.empty()) {
-            out = Mesh();
-            return true;
-        }
     }
-    if (m.triangles.empty()) {
+    out.clear();
+    for (auto& o : objects) {
+        if (o.m.triangles.empty()) continue;
+        // Weld vertices split along UV/normal seams so strokes don't tear the surface.
+        std::vector<SculptLayer> layers;
+        if (o.targetsConsistent)
+            for (size_t k = 0; k < o.targetDeltas.size(); ++k)
+                layers.push_back({o.targetNames[k], std::move(o.targetDeltas[k]), o.targetWeights[k]});
+        if (!o.m.colors.empty()) o.m.colors.resize(o.m.positions.size(), glm::vec3(1.0f));
+        out.push_back({o.name, weldImported(o.m, layers)});
+    }
+    if (out.empty() && !(splatsOut && !splatsOut->empty())) {
         error = r.error.empty() ? "No triangle meshes found in " + path : r.error;
         return false;
     }
-
-    // Weld vertices split along UV/normal seams so strokes don't tear the surface.
-    std::vector<SculptLayer> layers;
-    if (targetsConsistent)
-        for (size_t k = 0; k < targetDeltas.size(); ++k)
-            layers.push_back({targetNames[k], std::move(targetDeltas[k]), targetWeights[k]});
-    if (!m.colors.empty()) m.colors.resize(m.positions.size(), glm::vec3(1.0f));
-    Mesh welded = weldImported(m, layers);
-    out = std::move(welded);
     return true;
+}
+
+} // namespace
+
+bool loadGltf(const std::string& path, Mesh& out, std::string& error, SplatCloud* splatsOut) {
+    std::vector<MeshObject> objects;
+    if (!readGltf(path, false, objects, error, splatsOut)) return false;
+    out = objects.empty() ? Mesh() : std::move(objects.front().mesh);
+    return true;
+}
+
+bool loadGltf(const std::string& path, std::vector<MeshObject>& out, std::string& error, SplatCloud* splatsOut) {
+    return readGltf(path, true, out, error, splatsOut);
 }
 
 } // namespace sf
