@@ -42,6 +42,7 @@ Json toJson(const UiPrefs& p) {
     j.set("uiScale", double(p.uiScale));
     j.set("lightboxAtStartup", p.lightboxAtStartup);
     j.set("libraryFolder", p.libraryFolder);
+    j.set("tablet", toJson(p.tablet));
     return j;
 }
 
@@ -56,6 +57,7 @@ void fromJson(const Json& j, UiPrefs& p) {
     p.uiScale = std::clamp(float(j["uiScale"].asNumber(p.uiScale)), 0.0f, 3.0f);
     p.lightboxAtStartup = j["lightboxAtStartup"].asBool(p.lightboxAtStartup);
     if (j["libraryFolder"].isString()) p.libraryFolder = j["libraryFolder"].asString();
+    fromJson(j["tablet"], p.tablet);
 }
 
 namespace {
@@ -113,7 +115,9 @@ constexpr Gesture kGestures[] = {
     {"Select a SubTool", "Alt + click it"},
     {"Help on any control", "Hold Ctrl and point at it (Ctrl+Alt: scripting parameters)"},
     {"Assign a shortcut", "Ctrl+Alt + click any button, then press the key"},
-    {"Tablet pressure", "Used automatically when a pen is detected"},
+    {"Tablet pressure", "Used automatically when a pen is detected (Preferences > Tablet: curve, test area)"},
+    {"Pen eraser end", "Inverts the brush (Ctrl + eraser erases mask); Preferences > Tablet"},
+    {"Pen side buttons", "Lower: right-click (drag to rotate), upper: Alt (invert); Preferences > Tablet"},
     {"Open files", "Drop a model (.obj, .glb ...), brush (.sfbrush) or image onto the window"},
 };
 

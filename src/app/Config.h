@@ -9,6 +9,7 @@
 #pragma once
 
 #include "core/Json.h"
+#include "core/Tablet.h"
 
 #include <string>
 
@@ -25,6 +26,7 @@ struct UiPrefs {
     float uiScale = 0.0f;       // 0 = follow the display; otherwise applied at the next start
     bool lightboxAtStartup = true;
     std::string libraryFolder;  // "" = Documents/SculptForge
+    TabletSettings tablet;      // Preferences > Tablet: pressure curve, eraser, pen buttons
 };
 
 Json toJson(const UiPrefs& prefs);

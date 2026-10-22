@@ -500,6 +500,7 @@ int App::run() {
 // ---------------------------------------------------------------------------
 
 void App::handleEvent(const SDL_Event& e) {
+    if (dropPenMouseEvent(e)) return; // pen side buttons are mapped in Tablet.cpp, not left to SDL
     ImGui_ImplSDL3_ProcessEvent(&e);
     const ImGuiIO& io = ImGui::GetIO();
 
@@ -511,10 +512,14 @@ void App::handleEvent(const SDL_Event& e) {
         if (e.window.windowID == SDL_GetWindowID(window_)) requestQuit();
         break;
     case SDL_EVENT_PEN_PROXIMITY_IN:
-        penSeen_ = true;
-        break;
+    case SDL_EVENT_PEN_PROXIMITY_OUT:
+    case SDL_EVENT_PEN_DOWN:
+    case SDL_EVENT_PEN_UP:
+    case SDL_EVENT_PEN_MOTION:
     case SDL_EVENT_PEN_AXIS:
-        if (e.paxis.axis == SDL_PEN_AXIS_PRESSURE) penPressure_ = e.paxis.value;
+    case SDL_EVENT_PEN_BUTTON_DOWN:
+    case SDL_EVENT_PEN_BUTTON_UP:
+        handlePenEvent(e);
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         lastInputPen_ = e.button.which == SDL_PEN_MOUSEID;
@@ -553,14 +558,25 @@ bool App::pick(float x, float y, RayHit& hit) const {
 
 BrushType App::activeBrush() const {
     // ZBrush convention: holding Shift temporarily switches to Smooth.
-    return (SDL_GetModState() & SDL_KMOD_SHIFT) ? BrushType::Smooth : brush_;
+    // The pen's eraser end can be set to smooth too (Preferences > Tablet).
+    const bool smooth = (inputMods() & SDL_KMOD_SHIFT) || (erasing() && eraserAction() == PenAction::Smooth);
+    return smooth ? BrushType::Smooth : brush_;
 }
 
 void App::onMouseDown(float x, float y, Uint8 button) {
     mouseX_ = x;
     mouseY_ = y;
-    const SDL_Keymod mod = SDL_GetModState();
+    const SDL_Keymod mod = inputMods();
+    // A pen button is already driving the view: touching down with the tip keeps navigating.
+    if (penNavButton_ && (drag_ == Drag::Orbit || drag_ == Drag::Pan)) return;
+    dragFromPen_ = lastInputPen_;
     doc_.syncBvh();
+    if (button == SDL_BUTTON_LEFT && erasing() && eraserAction() != PenAction::Invert && eraserAction() != PenAction::Smooth) {
+        // The eraser end set to Erase mask or Nothing (Preferences > Tablet).
+        RayHit hit;
+        if (eraserAction() == PenAction::EraseMask && previewLod_ < 0 && pick(x, y, hit)) beginMaskStroke(x, y);
+        return;
+    }
     if (button == SDL_BUTTON_LEFT) {
         if (polygroupMouseDown(x, y, mod)) return;
         // Alt+click on another SubTool selects it (ZBrush); Alt+drag stays an inverted stroke or a pan.
@@ -599,6 +615,7 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     mouseX_ = x;
     mouseY_ = y;
     lastInputPen_ = fromPen;
+    if (!fromPen && dragFromPen_ && drag_ != Drag::None) return; // a pen drag ignores a stray mouse
     switch (drag_) {
     case Drag::Stroke: strokeTo(x, y); break;
     case Drag::Orbit: camera_.orbit(dx, dy); break;
@@ -616,6 +633,8 @@ void App::onMouseUp() {
     if (drag_ == Drag::MaskCanvas) maskCanvasRelease();
     if (drag_ == Drag::SubToolClick) subtoolClickRelease();
     drag_ = Drag::None;
+    dragFromPen_ = false;
+    penNavButton_ = 0;
 }
 
 void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
@@ -630,7 +649,7 @@ void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
 
 void App::beginStroke(float x, float y, const RayHit& hit) {
     strokeBrush_ = activeBrush();
-    strokeInvert_ = invertToggle_ != ((SDL_GetModState() & SDL_KMOD_ALT) != 0);
+    strokeInvert_ = invertToggle_ != (((inputMods() & SDL_KMOD_ALT) != 0) || (erasing() && eraserAction() == PenAction::Invert));
     // Shift still smooths geometry while the Paint brush is active (ZBrush behaviour).
     strokePaint_ = strokeBrush_ != BrushType::Smooth && (paintMode_ || paintRgb_);
     strokeSculpt_ = !(strokePaint_ && paintMode_);
@@ -652,7 +671,7 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
     residual_ = 0.0f;
 
     if (strokeBrush_ == BrushType::Move && !recipe && strokeSculpt_) {
-        float pressure = lastInputPen_ && pressureSize_ ? penPressure_ : 1.0f;
+        const float pressure = pressureSize_ ? std::max(strokePressure(), 0.05f) : 1.0f;
         DabParams p;
         p.center = hit.position;
         p.viewDir = camera_.forward();
@@ -672,7 +691,7 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
         dragAnchorHit_ = hit.position;
         return; // the stamp appears once the drag gives it a size
     }
-    dabAt(x, y);
+    firstDab(x, y);
 }
 
 void App::strokeTo(float x, float y) {
@@ -703,22 +722,39 @@ void App::strokeTo(float x, float y) {
         y = lazy.y;
     }
 
-    // Place dabs at even screen-space spacing along the cursor path.
+    if (firstDabPending_) {
+        // The pen touched down without a real pressure yet: the stroke starts where it first presses
+        // (a pen that has never reported pressure draws from its first motion).
+        if (!penTracker_.readyForFirstDab() && penTracker_.everSampled()) {
+            lastX_ = x;
+            lastY_ = y;
+            return;
+        }
+        firstDabPending_ = false;
+        lastStrokePressure_ = strokePressure();
+        dabAt(lastX_, lastY_, lastStrokePressure_);
+    }
+
+    // Place dabs at even screen-space spacing along the cursor path. Every input sample counts (pens
+    // send 100-200+ a second, several per frame); the pressure is interpolated between samples.
     const float spacing = std::max(1.0f, radiusPx_ * (recipe ? recipe->spacing : 0.15f));
     glm::vec2 from(lastX_, lastY_), to(x, y);
     float len = glm::length(to - from);
+    const float p0 = lastStrokePressure_, p1 = strokePressure();
     float travelled = spacing - residual_;
     while (travelled <= len) {
-        glm::vec2 p = from + (to - from) * (travelled / len);
-        dabAt(p.x, p.y);
+        const float u = travelled / len;
+        glm::vec2 p = from + (to - from) * u;
+        dabAt(p.x, p.y, p0 + (p1 - p0) * u);
         travelled += spacing;
     }
     residual_ = len - (travelled - spacing);
     lastX_ = x;
     lastY_ = y;
+    lastStrokePressure_ = p1;
 }
 
-void App::dabAt(float x, float y) {
+void App::dabAt(float x, float y, float pressure) {
     const BrushRecipe* recipe = strokeRecipe();
     if (recipe && recipe->jitter > 0.0f) {
         // Deterministic per-stroke scatter (xorshift).
@@ -743,7 +779,7 @@ void App::dabAt(float x, float y) {
     }
     RayHit hit;
     if (!pick(x, y, hit)) return;
-    const float pressure = lastInputPen_ ? std::clamp(penPressure_, 0.0f, 1.0f) : 1.0f;
+    if (pressure < 0.0f) pressure = strokePressure();
 
     DabParams p;
     p.center = hit.position;
@@ -775,6 +811,7 @@ void App::dabAt(float x, float y) {
 
 void App::endStroke() {
     strokeMask_ = false;
+    firstDabPending_ = false;
     UndoRecord r = doc_.sculptor.endStroke();
     finishPaintStroke(r);
     if (!r.empty()) {
@@ -1933,10 +1970,12 @@ void App::drawBrushCursor() {
         ImDrawList* dl;
         ~PopClip() { dl->PopClipRect(); }
     } popClip{dl};
-    const float r = radiusPx_ * (pressureSize_ && lastInputPen_ ? std::max(penPressure_, 0.05f) : 1.0f);
+    const float r = radiusPx_ * (pressureSize_ && lastInputPen_ ? std::max(strokePressure(), 0.05f) : 1.0f);
     const ImVec2 c(mouseX_, mouseY_);
-    const bool inverted = invertToggle_ != ((SDL_GetModState() & SDL_KMOD_ALT) != 0);
-    const SDL_Keymod mod = SDL_GetModState();
+    const SDL_Keymod mod = inputMods();
+    const bool inverted = drag_ == Drag::Stroke ? strokeInvert_
+                                                : invertToggle_ != (((mod & SDL_KMOD_ALT) != 0) ||
+                                                                    (erasing() && eraserAction() == PenAction::Invert));
     const bool masking = drag_ == Drag::Stroke ? strokeMask_ : ctrlDown(mod) && !(mod & SDL_KMOD_SHIFT);
     ImU32 col = masking                                ? IM_COL32(230, 230, 230, 200)
                 : activeBrush() == BrushType::Smooth ? IM_COL32(120, 200, 255, 200)
