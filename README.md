@@ -254,6 +254,9 @@ app: F1 for Controls, Shift+F1 for the guide).
 | Select a SubTool | Alt + click it |
 | Show all | Ctrl+Shift + click on the background |
 | Hide outside / inside a rectangle | Ctrl+Shift + drag / Ctrl+Shift+Alt + drag |
+| Pen pressure | Strength (and optionally size); curve and test area in **Preferences > Tablet** |
+| Pen eraser end | Inverts the brush (Ctrl + eraser erases mask); or Smooth / Erase mask |
+| Pen side buttons | Lower: right-click (drag to rotate), upper: Alt (invert), third: pan; remappable |
 | Brush size | `[` / `]` |
 | Select brush | `1`–`9`, `0` |
 | Paint brush / pick colour | `P` / `C` |
@@ -264,6 +267,9 @@ app: F1 for Controls, Shift+F1 for the guide).
 | Open / Save project / Save as | Ctrl+O / Ctrl+S / Ctrl+Shift+S |
 | Export GLB | Ctrl+E |
 | Send to Unreal | Ctrl+U |
+
+Graphics tablets (Wacom, XP-Pen, Huion ...) work through the system's tablet driver on Windows (Windows Ink),
+macOS and Linux (Wayland / X11). Setup and mappings: [docs/tablet.md](docs/tablet.md).
 
 ## Project layout
 

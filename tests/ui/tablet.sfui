@@ -1,0 +1,118 @@
+# Graphics tablet with a simulated pen (real SDL3 pen events plus the mouse events SDL synthesizes from them):
+# pressure, the global pressure curve, Pressure > Size, the eraser end, side buttons, leaving proximity
+# mid-stroke, and Preferences > Tablet.
+run new_sphere subdivisions=5
+snapshot
+
+# No pressure spike at the stroke start: the touch comes before its first pressure sample, and the
+# value before it (1.0 assumed at start-up, or stale from the last stroke) must not reach the first
+# dab. A short stroke, so one wrong dab would show.
+pen_stroke 0.4 0.45 0.45 0.45 0.2 0.2
+remember moved_out short
+key ctrl+z
+pen_pressure 1
+pen_stroke 0.4 0.45 0.45 0.45 0.2 0.2
+expect_value moved_out <= $short*1.01
+expect_value moved_out >= $short*0.99
+key ctrl+z
+pen_stroke 0.4 0.45 0.45 0.45 1 1
+expect_value moved_out > $short*2
+key ctrl+z
+
+# Light and heavy pressure: the heavy stroke pushes the surface out much further.
+pen_stroke 0.3 0.45 0.7 0.55 0.2 0.2
+expect_value moved_out > 0
+remember moved_out light
+remember moved light_area
+expect_value can_undo == 1
+key ctrl+z
+expect_value moved == 0
+pen_stroke 0.3 0.45 0.7 0.55 0.9 0.9
+expect_value moved_out > $light*3
+remember moved_out heavy
+key ctrl+z
+
+
+# The mouse always presses fully, whatever the pen did last.
+stroke 0.3 0.45 0.7 0.55
+expect_value brush_pressure == 1
+expect_value moved_out > $heavy
+key ctrl+z
+
+# Pressure > Size (top shelf): a light touch also makes the brush smaller.
+click "Pressure > Size"
+pen_stroke 0.3 0.45 0.7 0.55 0.2 0.2
+expect_value moved < $light_area*0.6
+key ctrl+z
+click "Pressure > Size"
+
+# The eraser end inverts the brush: the surface goes in.
+pen_stroke 0.3 0.45 0.7 0.55 0.6 0.6 eraser
+expect_value moved_out < 0
+shot eraser
+key ctrl+z
+
+# Upper side button = Alt (default): inverts while held.
+pen_button 2 down
+pen_stroke 0.3 0.45 0.7 0.55 0.6 0.6
+pen_button 2 up
+expect_value moved_out < 0
+key ctrl+z
+pen_stroke 0.3 0.45 0.7 0.55 0.6 0.6
+expect_value moved_out > 0
+key ctrl+z
+
+# Lower side button = right-click (default): drag to rotate. SDL's own synthesized click is ignored.
+pen_hover 0.5 0.5
+remember camera_yaw yaw
+pen_button 1 down
+pen_hover 0.9 0.5
+pen_button 1 up
+expect_value camera_yaw != $yaw
+expect_value moved == 0
+
+# Out of range mid-stroke: the stroke still ends cleanly, as one undo step.
+pen_stroke 0.3 0.45 0.7 0.55 0.6 0.6 leave
+expect_value stroking == 0
+expect_value moved_out > 0
+key ctrl+z
+expect_value moved == 0
+expect_value can_undo == 0
+
+# Preferences > Tablet: device, live pressure meter, draw-test area, curve editor, mappings.
+click "Preferences##palette.preferences"
+click "Tablet##preferences.tablet"
+expect_text Pressure curve (all brushes)
+expect "##Lower button"
+pen_drag_item "##tablet_test" 220 0 0.05 1.0 0.8
+pen_pressure 0.62
+expect_value pen_pressure == 0.62
+expect_text Pressure 0.62
+wait 0.1
+shot preferences-tablet
+
+# A firm global curve: the same light stroke now does much less.
+click "Firm##tablet_curve"
+wait 0.1
+shot curve-firm
+key escape
+pen_stroke 0.3 0.45 0.7 0.55 0.2 0.2
+expect_value moved_out < $light*0.5
+expect_value moved_out > 0
+key ctrl+z
+
+# Eraser mapped to Erase mask: the eraser removes mask instead of sculpting.
+click "Preferences##palette.preferences"
+click "Linear##tablet_curve"
+click "##Eraser"
+click "Erase mask##Eraser"
+expect_text Erase mask
+key escape
+hold ctrl
+stroke 0.2 0.5 0.8 0.5
+hold none
+expect_value masked > 50
+remember masked mask_before
+pen_stroke 0.2 0.5 0.8 0.5 1 1 eraser
+expect_value masked < $mask_before*0.5
+expect_value moved == 0

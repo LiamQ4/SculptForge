@@ -9,6 +9,7 @@
 #pragma once
 
 #include "core/Json.h"
+#include "core/Tablet.h"
 
 #include <string>
 
@@ -27,6 +28,7 @@ struct UiPrefs {
     std::string libraryFolder;  // "" = Documents/SculptForge
     bool alphabeticalPalettes = false; // strict A-Z palette bar like ZBrush (default: File, Edit first)
     int cameraNotch = 0;        // keep the UI out of a laptop's camera notch: 0 automatic, 1 always, 2 never
+    TabletSettings tablet;      // Preferences > Tablet: pressure curve, eraser, pen buttons
 };
 
 Json toJson(const UiPrefs& prefs);

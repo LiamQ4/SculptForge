@@ -45,7 +45,7 @@ bool App::polygroupMouseDown(float x, float y, SDL_Keymod mod) {
 
 void App::polygroupMouseUp() {
     hideRectActive_ = false;
-    const bool alt = (SDL_GetModState() & SDL_KMOD_ALT) != 0;
+    const bool alt = (inputMods() & SDL_KMOD_ALT) != 0;
     const CanvasRect c = canvasRect();
     if (c.w <= 0.0f || c.h <= 0.0f) return;
 
@@ -80,7 +80,7 @@ void App::drawPolygroupOverlay() {
     if (!hideRectActive_) return;
     if (std::abs(mouseX_ - hideRectX_) < kClickSlopPx && std::abs(mouseY_ - hideRectY_) < kClickSlopPx) return;
     // Green keeps the inside, red hides it (Alt).
-    const bool alt = (SDL_GetModState() & SDL_KMOD_ALT) != 0;
+    const bool alt = (inputMods() & SDL_KMOD_ALT) != 0;
     const ImU32 line = alt ? IM_COL32(255, 110, 110, 230) : IM_COL32(120, 230, 140, 230);
     const ImU32 fill = alt ? IM_COL32(255, 110, 110, 40) : IM_COL32(120, 230, 140, 30);
     ImDrawList* dl = ImGui::GetForegroundDrawList();

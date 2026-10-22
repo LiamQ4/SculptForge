@@ -255,6 +255,18 @@ also have a **Pressure curve** setting that makes them respond to a light or a f
 [Brush Lab](brush-lab.md)). If the pen moves the cursor but pressure does nothing, see
 [Troubleshooting](troubleshooting.md).
 
+**Preferences > Tablet** checks and tunes the pen:
+
+- a pressure meter and a draw-test area, to see what the tablet reports at a light touch and a full press;
+- a pressure curve for all brushes (Soft, Linear or Firm, or set **Curve**, **Minimum**, **Maximum**, **Threshold**
+  and **Full pressure at** yourself), applied before each brush's own curve;
+- the eraser end (default **Invert**, like holding <kbd>Alt</kbd>) and the side buttons (default:
+  lower button right-click to rotate the view, upper button **Invert**, third button **Pan view**).
+
+**Store Config** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd>) keeps these settings. Setup notes for Windows
+Ink, macOS and Linux are in
+[docs/tablet.md](https://github.com/islandmed/SculptForge/blob/main/docs/tablet.md).
+
 ## Customize the bottom shelf
 
 The bottom shelf holds your most-used brushes. By default it shows Standard, Clay, ClayBuildup, DamStandard,

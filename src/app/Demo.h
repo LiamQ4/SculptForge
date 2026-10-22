@@ -21,6 +21,7 @@
 #include <SDL3/SDL.h>
 
 #include <functional>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -102,8 +103,15 @@ private:
     void buildSplats();
 
     // Input injection.
-    void mouseMotion(float x, float y);
-    void mouseButton(bool down, int button);
+    void mouseMotion(float x, float y, SDL_MouseID which = 0); // which = SDL_PEN_MOUSEID: synthesized from a pen
+    void mouseButton(bool down, int button, SDL_MouseID which = 0);
+    // Pen events as SDL3 sends them (UiTest.cpp): the pen's own event, then the mouse event SDL synthesizes.
+    void penProximity(bool in);
+    void penMove(float x, float y);                 // PEN_MOTION (+ mouse motion), touching or hovering
+    void penPressure(float pressure);               // PEN_AXIS pressure
+    void penTouch(bool down, bool eraser);          // PEN_DOWN / PEN_UP (+ left button)
+    void penButtonEvent(int button, bool down);     // PEN_BUTTON_DOWN / UP (+ SDL 3.4's mouse button)
+    void penStroke(std::function<ImVec2(float u)> path, float p0, float p1, bool eraser, bool leave, float seconds);
 
     // World -> screen in window coordinates.
     ImVec2 project(const glm::vec3& p) const;
@@ -144,6 +152,13 @@ private:
     std::string frameText_, shotRequest_, shotDir_, scriptName_, lineText_;
     std::string scriptDir_; // the .sfui script's folder: relative `drop` paths, $SCRIPT_DIR in env steps
     SDL_Keymod held_ = SDL_KMOD_NONE; // modifiers held by `hold` (Ctrl to mask, Ctrl+Shift to hide...)
+    // Simulated pen (pen_* steps).
+    static constexpr SDL_PenID kTestPen = 1;
+    bool penIn_ = false, penDown_ = false, penEraser_ = false;
+    SDL_PenInputFlags penState_ = 0;
+    // `snapshot` saves the active mesh; moved* values compare against it. `remember` keeps values for $NAME.
+    std::vector<glm::vec3> basePositions_, baseNormals_;
+    std::map<std::string, double> remembered_;
 };
 
 } // namespace sf

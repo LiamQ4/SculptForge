@@ -38,6 +38,20 @@ All notable changes to SculptForge are listed here. The format follows
   shortcuts (Ctrl+Alt+click a button, then press a key). Tab hides the shelves.
 - Lucide icons (ISC/MIT). Brush Lab now opens from the "AI Brush" button instead of covering the model at start.
 
+### Graphics tablets
+- Preferences > Tablet: the pen in use, a live pressure meter, a draw-test area that shows the pressure along
+  your stroke, a global pressure curve (Soft / Linear / Firm, curve, min / max, threshold, full-pressure point)
+  applied before each brush's own curve, Pressure > Strength / Size, and the pen's tilt when reported.
+- The eraser end inverts the brush (Ctrl + eraser erases mask); it can be set to Smooth, Erase mask or Nothing.
+- Pen side buttons are mapped by SculptForge instead of SDL's version-dependent clicks: lower = right-click
+  (drag to rotate, context menus), upper = Alt (invert), third = pan; each can be Invert, Smooth, Rotate view,
+  Pan view, Right-click or Nothing.
+- No pressure spike at the start of a stroke (the first dab waits for the touch's own pressure sample), every
+  pen sample is used with the pressure interpolated between samples, the mouse always presses fully, and a pen
+  that leaves the tablet's range mid-stroke ends the stroke cleanly.
+- UI tests drive a simulated pen (`pen_stroke`, `pen_button`, `pen_hover`, ...), see tests/ui/tablet.sfui.
+  Guide: docs/tablet.md.
+
 ### ComfyUI
 - Generate 3D can run on your own ComfyUI (local or a studio GPU server): any API-format workflow, with
   ready-made Hunyuan3D 2.1 image-to-3D and FLUX + Hunyuan3D text-to-3D workflows, a connection test, queue

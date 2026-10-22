@@ -35,12 +35,35 @@
 //                            console_open, command_palette_open, customize, shelves_visible,
 //                            right_tray_open, left_tray_open, lightbox_open, guide_open, guide_hits (search results), shelves (1 shown), left_tray / right_tray (palettes in
 //                            the tray, -1 when closed); OP is == != < <= > >=
+//                            moved (vertices moved since `snapshot`), moved_max / moved_sum (distance),
+//                            moved_out (summed movement along the snapshot's normals: > 0 out, < 0 in),
+//                            pen_pressure (raw), brush_pressure (after the curve; 1 for the mouse),
+//                            stroking (1 while a stroke is open), camera_yaw (degrees), camera_pan (target offset);
+//                            N may be $NAME or $NAME*K for a value kept by `remember`
 //   (mesh values are the active SubTool's)
+//   snapshot                 remember the active mesh's vertices (for the moved* values)
+//   remember VALUE NAME      keep VALUE's current value as $NAME
 //   shot NAME                save a screenshot NAME.png (to --ui-out)
 //   expect_guide FILE        the User Guide shows FILE ("masking.md", "index.md")
 //   dump_shortcuts NAME      write every default shortcut as a Markdown table to --ui-out/NAME
 //                            (tools/guide/update_shortcuts.py puts it into docs/guide/shortcuts.md)
+//
+// Simulated graphics tablet: real SDL3 pen events, each followed by the mouse event SDL synthesizes
+// from it (SDL_PEN_MOUSEID), in SDL's order. The touch comes before its first pressure sample, as
+// with Windows Ink, and every frame carries 4 pen samples (a 240 Hz pen at 60 fps).
+//   pen_stroke U0 V0 U1 V1 P0 P1 [eraser] [leave] [S]   pen stroke across the model with pressure P0 -> P1;
+//                            eraser: the eraser end; leave: the pen leaves proximity before lifting
+//   pen_drag_item LABEL DX DY P0 P1 [S]   pen stroke through the item's centre, DX DY pixels long
+//   pen_button N down|up     side button N (1 lower, 2 upper, 3 third) with SDL 3.4's synthesized click
+//   pen_hover U V [S]        move the hovering pen to a point on the model (drags the view while a
+//                            button mapped to rotate / pan / right-click is held)
+//   pen_pressure P           a pressure sample from the hovering pen (e.g. a stale value before a stroke)
+//   pen_out                  the pen leaves proximity
 #include "app/App.h"
+
+#ifndef SDL_PEN_INPUT_IN_PROXIMITY
+#define SDL_PEN_INPUT_IN_PROXIMITY (1u << 31) // SDL 3.4's flag; older SDL 3 never sets it
+#endif
 #include "app/Demo.h"
 #include "app/Ui.h"
 
@@ -223,6 +246,24 @@ double Demo::query(const std::string& name, bool& known) const {
         for (uint8_t h : m.hidden) n += h != 0;
         return double(n);
     }
+    if (name == "moved" || name == "moved_max" || name == "moved_sum" || name == "moved_out") {
+        if (basePositions_.size() != m.vertexCount()) return -1.0; // no snapshot, or the topology changed
+        double count = 0.0, maxD = 0.0, sum = 0.0, out = 0.0;
+        for (size_t v = 0; v < basePositions_.size(); ++v) {
+            const glm::vec3 d = m.positions[v] - basePositions_[v];
+            const double len = glm::length(d);
+            count += len > 1e-6 ? 1.0 : 0.0;
+            maxD = std::max(maxD, len);
+            sum += len;
+            if (v < baseNormals_.size()) out += glm::dot(d, baseNormals_[v]);
+        }
+        return name == "moved" ? count : name == "moved_max" ? maxD : name == "moved_sum" ? sum : out;
+    }
+    if (name == "pen_pressure") return app_.penTracker_.raw();
+    if (name == "brush_pressure") return app_.strokePressure();
+    if (name == "stroking") return app_.drag_ == App::Drag::Stroke ? 1.0 : 0.0;
+    if (name == "camera_yaw") return glm::degrees(app_.camera_.yaw);
+    if (name == "camera_pan") return glm::length(app_.camera_.target);
     if (name == "groups") {
         std::set<uint32_t> ids(m.polygroups.begin(), m.polygroups.end());
         return double(std::max<size_t>(ids.size(), m.triangleCount() ? 1 : 0));
@@ -606,12 +647,22 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             error = "unknown value '" + w[1] + "'";
             return false;
         }
-        const std::string name = w[1], op = w[2];
-        const double want = num(3, 0);
-        run([this, line, name, op, want] {
+        const std::string name = w[1], op = w[2], wantText = w[3];
+        run([this, line, name, op, wantText] {
+            double want = std::strtod(wantText.c_str(), nullptr);
+            if (!wantText.empty() && wantText[0] == '$') { // $NAME or $NAME*K
+                const size_t star = wantText.find('*');
+                const std::string key = wantText.substr(1, star == std::string::npos ? std::string::npos : star - 1);
+                const auto it = remembered_.find(key);
+                if (it == remembered_.end()) {
+                    fail(line, "nothing remembered as $" + key);
+                    return;
+                }
+                want = it->second * (star == std::string::npos ? 1.0 : std::strtod(wantText.c_str() + star + 1, nullptr));
+            }
             bool k = false;
             const double v = query(name, k);
-            if (!compare(v, op, want)) fail(line, name + " is " + number(v) + ", expected " + op + " " + number(want));
+            if (!compare(v, op, want)) fail(line, name + " is " + number(v) + ", expected " + op + " " + number(want) + " (" + wantText + ")");
         });
     } else if (verb == "expect_guide") {
         if (!need(1)) return false;
@@ -630,6 +681,90 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             f << shortcutsMarkdown();
             if (!f) fail(line, "can't write " + name + " in " + shotDir_);
         });
+    } else if (verb == "snapshot") {
+        run([this] {
+            basePositions_ = app_.doc_.mesh.positions;
+            baseNormals_ = app_.doc_.mesh.normals;
+        });
+    } else if (verb == "remember") {
+        if (!need(2)) return false;
+        bool known = false;
+        query(w[1], known);
+        if (!known) {
+            error = "unknown value '" + w[1] + "'";
+            return false;
+        }
+        run([this, name = w[1], as = w[2]] {
+            bool k = false;
+            remembered_[as] = query(name, k);
+            SDL_Log("remember %s = %s", as.c_str(), number(remembered_[as]).c_str());
+        });
+    } else if (verb == "pen_stroke") {
+        if (!need(6)) return false;
+        const float u0 = num(1, 0), v0 = num(2, 0), u1 = num(3, 0), v1 = num(4, 0), p0 = num(5, 1), p1 = num(6, 1);
+        bool eraser = false, leave = false;
+        float seconds = 0.6f;
+        for (size_t i = 7; i < w.size(); ++i) {
+            if (w[i] == "eraser") eraser = true;
+            else if (w[i] == "leave") leave = true;
+            else seconds = num(i, seconds);
+        }
+        auto ends = std::make_shared<std::pair<ImVec2, ImVec2>>();
+        run([this, ends, u0, v0, u1, v1] { *ends = {onModel(u0, v0), onModel(u1, v1)}; });
+        penStroke([ends](float u) {
+            return ImVec2(ends->first.x + (ends->second.x - ends->first.x) * u, ends->first.y + (ends->second.y - ends->first.y) * u);
+        }, p0, p1, eraser, leave, seconds);
+        wait(0.1f);
+    } else if (verb == "pen_drag_item") {
+        if (!need(5)) return false;
+        const std::string label = w[1];
+        const float dx = num(2, 0), dy = num(3, 0), p0 = num(4, 1), p1 = num(5, 1), seconds = num(6, 0.6f);
+        auto centre = std::make_shared<ImVec2>();
+        steps_.push_back([this, line, label, centre](float t) {
+            if (findItem(label, *centre)) return true;
+            if (t > 3.0f) fail(line, notFound(label));
+            return t > 3.0f;
+        });
+        penStroke([centre, dx, dy](float u) { return ImVec2(centre->x + dx * (u - 0.5f), centre->y + dy * (u - 0.5f)); }, p0, p1,
+                  false, false, seconds);
+        wait(0.1f);
+    } else if (verb == "pen_button") {
+        if (!need(2)) return false;
+        const int button = int(num(1, 1));
+        if (w[2] != "down" && w[2] != "up") {
+            error = "pen_button needs down or up";
+            return false;
+        }
+        run([this, button, down = w[2] == "down"] {
+            if (!penIn_) penProximity(true);
+            penButtonEvent(button, down);
+        });
+        wait(0.05f);
+    } else if (verb == "pen_hover") {
+        if (!need(2)) return false;
+        const float u = num(1, 0.5f), v = num(2, 0.5f), seconds = num(3, 0.4f);
+        auto from = std::make_shared<ImVec2>();
+        auto to = std::make_shared<ImVec2>();
+        steps_.push_back([this, from, to, u, v, seconds](float t) {
+            if (t == 0.0f) {
+                if (!penIn_) penProximity(true);
+                *from = mouse_;
+                *to = onModel(u, v);
+            }
+            const float k = std::min(t / seconds, 1.0f);
+            penMove(from->x + (to->x - from->x) * k, from->y + (to->y - from->y) * k);
+            return t >= seconds;
+        });
+        wait(0.05f);
+    } else if (verb == "pen_pressure") {
+        if (!need(1)) return false;
+        run([this, p = num(1, 0)] {
+            if (!penIn_) penProximity(true);
+            penPressure(p);
+        });
+    } else if (verb == "pen_out") {
+        run([this] { penProximity(false); });
+        wait(0.05f);
     } else if (verb == "shot") {
         if (!need(1)) return false;
         const std::string name = w[1];
@@ -681,6 +816,123 @@ std::string Demo::shortcutsMarkdown() const {
     }
     if (!md.empty()) md.pop_back();
     return md;
+}
+
+// ---------------------------------------------------------------- simulated pen
+
+void Demo::penProximity(bool in) {
+    SDL_Event e{};
+    e.type = in ? SDL_EVENT_PEN_PROXIMITY_IN : SDL_EVENT_PEN_PROXIMITY_OUT;
+    e.pproximity.windowID = SDL_GetWindowID(app_.window_);
+    e.pproximity.which = kTestPen;
+    penIn_ = in;
+    if (!in) penDown_ = penEraser_ = false;
+    penState_ = in ? SDL_PEN_INPUT_IN_PROXIMITY : 0; // leaving releases the tip and every button
+    app_.handleEvent(e);
+}
+
+void Demo::penMove(float x, float y) {
+    SDL_Event e{};
+    e.type = SDL_EVENT_PEN_MOTION;
+    e.pmotion.windowID = SDL_GetWindowID(app_.window_);
+    e.pmotion.which = kTestPen;
+    e.pmotion.pen_state = penState_;
+    e.pmotion.x = x;
+    e.pmotion.y = y;
+    app_.handleEvent(e);
+    mouseMotion(x, y, SDL_PEN_MOUSEID); // SDL moves the mouse with a touching or hovering pen
+}
+
+void Demo::penPressure(float pressure) {
+    SDL_Event e{};
+    e.type = SDL_EVENT_PEN_AXIS;
+    e.paxis.windowID = SDL_GetWindowID(app_.window_);
+    e.paxis.which = kTestPen;
+    e.paxis.pen_state = penState_;
+    e.paxis.x = mouse_.x;
+    e.paxis.y = mouse_.y;
+    e.paxis.axis = SDL_PEN_AXIS_PRESSURE;
+    e.paxis.value = pressure;
+    app_.handleEvent(e);
+}
+
+void Demo::penTouch(bool down, bool eraser) {
+    penDown_ = down;
+    penEraser_ = down && eraser;
+    penState_ = (penState_ & ~(SDL_PEN_INPUT_DOWN | SDL_PEN_INPUT_ERASER_TIP)) | (down ? SDL_PEN_INPUT_DOWN : 0) |
+                (penEraser_ ? SDL_PEN_INPUT_ERASER_TIP : 0);
+    SDL_Event e{};
+    e.type = down ? SDL_EVENT_PEN_DOWN : SDL_EVENT_PEN_UP;
+    e.ptouch.windowID = SDL_GetWindowID(app_.window_);
+    e.ptouch.which = kTestPen;
+    e.ptouch.pen_state = penState_;
+    e.ptouch.x = mouse_.x;
+    e.ptouch.y = mouse_.y;
+    e.ptouch.eraser = eraser;
+    e.ptouch.down = down;
+    app_.handleEvent(e);
+    if (down) mouseMotion(mouse_.x, mouse_.y, SDL_PEN_MOUSEID); // SDL_SendPenTouch: motion, then the left button
+    mouseButton(down, SDL_BUTTON_LEFT, SDL_PEN_MOUSEID);
+}
+
+void Demo::penButtonEvent(int button, bool down) {
+    const SDL_PenInputFlags bit = SDL_PenInputFlags(1u << button);
+    penState_ = down ? (penState_ | bit) : (penState_ & ~bit);
+    SDL_Event e{};
+    e.type = down ? SDL_EVENT_PEN_BUTTON_DOWN : SDL_EVENT_PEN_BUTTON_UP;
+    e.pbutton.windowID = SDL_GetWindowID(app_.window_);
+    e.pbutton.which = kTestPen;
+    e.pbutton.pen_state = penState_;
+    e.pbutton.x = mouse_.x;
+    e.pbutton.y = mouse_.y;
+    e.pbutton.button = Uint8(button);
+    e.pbutton.down = down;
+    app_.handleEvent(e);
+    // SDL 3.4 also clicks a mouse button for it (1: right, 2: middle ...); the app must ignore that.
+    static const int kMouse[] = {SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, SDL_BUTTON_MIDDLE, SDL_BUTTON_X1, SDL_BUTTON_X2};
+    if (button >= 1 && button < 5) mouseButton(down, kMouse[button], SDL_PEN_MOUSEID);
+}
+
+void Demo::penStroke(std::function<ImVec2(float u)> path, float p0, float p1, bool eraser, bool leave, float seconds) {
+    // Hover to the start, touch down, then 4 samples a frame along the path, then lift (or leave).
+    auto from = std::make_shared<ImVec2>();
+    steps_.push_back([this, path, from](float t) {
+        if (t == 0.0f) {
+            if (!penIn_) penProximity(true);
+            *from = mouse_;
+        }
+        const ImVec2 p = path(0.0f);
+        const float k = std::min(t / 0.25f, 1.0f), u = k * k * (3.0f - 2.0f * k);
+        penMove(from->x + (p.x - from->x) * u, from->y + (p.y - from->y) * u);
+        return t >= 0.25f;
+    });
+    auto last = std::make_shared<float>(-1.0f);
+    steps_.push_back([this, path, p0, p1, eraser, leave, seconds, last](float t) {
+        if (*last < 0.0f) {
+            penTouch(true, eraser);
+            penPressure(p0); // the first pressure sample comes after the touch
+            *last = 0.0f;
+            return false;
+        }
+        const float u = std::min(t / seconds, 1.0f);
+        constexpr int kSamples = 4;
+        for (int k = 1; k <= kSamples; ++k) {
+            const float uu = *last + (u - *last) * float(k) / float(kSamples);
+            penPressure(p0 + (p1 - p0) * uu);
+            const ImVec2 p = path(uu);
+            penMove(p.x, p.y);
+        }
+        *last = u;
+        if (u < 1.0f) return false;
+        if (leave) {
+            penProximity(false); // out of range without lifting first
+        } else {
+            penTouch(false, eraser);
+            penPressure(0.0f);
+        }
+        *last = -1.0f;
+        return true;
+    });
 }
 
 void Demo::testKeyNow(SDL_Keycode key, SDL_Keymod mods) {
