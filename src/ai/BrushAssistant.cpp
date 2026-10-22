@@ -138,6 +138,9 @@ Json AiSettings::toJson() const {
     j.set("meshyKey", meshyKey);
     j.set("meshyModel", meshyModel);
     j.set("meshyEndpoint", meshyEndpoint);
+    j.set("comfyUrl", comfyUrl);
+    j.set("comfyImageWorkflow", comfyImageWorkflow);
+    j.set("comfyTextWorkflow", comfyTextWorkflow);
     return j;
 }
 
@@ -167,6 +170,9 @@ AiSettings AiSettings::fromJson(const Json& j) {
     text("meshyKey", s.meshyKey);
     text("meshyModel", s.meshyModel);
     text("meshyEndpoint", s.meshyEndpoint);
+    text("comfyUrl", s.comfyUrl);
+    s.comfyImageWorkflow = j["comfyImageWorkflow"].asString();
+    s.comfyTextWorkflow = j["comfyTextWorkflow"].asString();
     return s;
 }
 

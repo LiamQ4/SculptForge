@@ -79,7 +79,10 @@ endif()
 
 # --- Bring-your-own-AI (brush assistant). HTTPS via WinHTTP or libcurl. ---
 add_library(sculptforge_ai STATIC src/ai/Http.cpp src/ai/BrushAssistant.cpp src/ai/Generator3D.cpp
-  src/ai/ImageTo3DService.cpp src/ai/GradioClient.cpp src/ai/AiCommands.cpp src/link/Socket.cpp src/link/UnrealLink.cpp)
+  src/ai/ImageTo3DService.cpp src/ai/GradioClient.cpp src/ai/ComfyUI.cpp src/ai/AiCommands.cpp src/link/Socket.cpp
+  src/link/UnrealLink.cpp)
+# Lets a build run from its tree find the bundled ComfyUI workflows (integrations/comfyui/workflows).
+target_compile_definitions(sculptforge_ai PRIVATE SF_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 find_package(Threads REQUIRED)
 target_link_libraries(sculptforge_ai PUBLIC sculptforge_core Threads::Threads)
 if(WIN32)
@@ -198,7 +201,16 @@ else()
   set(SF_DOC_DIR ${CMAKE_INSTALL_DOCDIR})
 endif()
 install(FILES LICENSE THIRD_PARTY_NOTICES.md README.md CHANGELOG.md DESTINATION ${SF_DOC_DIR})
-install(FILES docs/ai-services.md docs/unreal.md docs/generators.md DESTINATION ${SF_DOC_DIR}/docs)
+install(FILES docs/ai-services.md docs/unreal.md docs/generators.md docs/comfyui.md DESTINATION ${SF_DOC_DIR}/docs)
+# Bundled ComfyUI workflows, where the Generate 3D window looks for them (see src/ai/ComfyUI.cpp).
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/integrations/comfyui/workflows)
+  if(APPLE)
+    set(SF_COMFY_DIR SculptForge.app/Contents/Resources/comfyui)
+  else()
+    set(SF_COMFY_DIR ${CMAKE_INSTALL_DATADIR}/sculptforge/comfyui)
+  endif()
+  install(DIRECTORY integrations/comfyui/workflows DESTINATION ${SF_COMFY_DIR})
+endif()
 
 set(CPACK_PACKAGE_NAME "sculptforge")
 set(CPACK_PACKAGE_VENDOR "The SculptForge contributors")

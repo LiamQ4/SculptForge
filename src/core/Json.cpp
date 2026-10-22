@@ -252,7 +252,7 @@ void Json::dumpTo(std::string& out, bool pretty, int indent) const {
     case Type::Number: {
         if (!std::isfinite(number_)) {
             out += "null";
-        } else if (number_ == std::floor(number_) && std::abs(number_) < 1e15) {
+        } else if (number_ == std::floor(number_) && std::abs(number_) < 9007199254740992.0) { // 2^53: exact in a double
             out += std::to_string(static_cast<long long>(number_));
         } else {
             char buf[32];

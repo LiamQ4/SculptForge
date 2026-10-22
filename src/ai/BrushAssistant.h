@@ -25,7 +25,8 @@ struct AiSettings {
     std::string apiKey; // Free: unused; empty = use ANTHROPIC_API_KEY / OPENAI_API_KEY from the environment
     std::string effort = "low";
     // Image to 3D. service: "huggingface" (free Spaces), "fal", "meshy",
-    // "command" (generatorCommand with {input}/{output}) or "inflate" (offline).
+    // "comfyui" (your ComfyUI server), "command" (generatorCommand with
+    // {input}/{output}) or "inflate" (offline).
     std::string generatorService = "huggingface";
     std::string hfToken;  // empty = HF_TOKEN from the environment (optional; raises the free quota)
     std::string hfModel = "hunyuan3d-2.1";
@@ -36,6 +37,9 @@ struct AiSettings {
     std::string meshyKey; // empty = MESHY_API_KEY from the environment
     std::string meshyModel = "latest";
     std::string meshyEndpoint = "https://api.meshy.ai";
+    std::string comfyUrl = "http://127.0.0.1:8188";
+    std::string comfyImageWorkflow; // API-format workflow files; empty = the bundled default
+    std::string comfyTextWorkflow;
     std::string resolvedFalKey() const;
     std::string resolvedHfToken() const;
     std::string resolvedMeshyKey() const;

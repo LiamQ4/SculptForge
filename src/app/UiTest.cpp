@@ -14,6 +14,7 @@
 //   drag X0 Y0 X1 Y1 [S]     left-drag in window fractions (rectangle hide, sliders...)
 //   orbit DX DY              right-drag on the background, in pixels
 //   run COMMANDS             sculptforge-cli commands, e.g. run new_sphere subdivisions=4
+//   drop FILE                as if FILE were dropped onto the window (relative to the script's folder)
 //   wait SECONDS / wait_idle [TIMEOUT] (AI requests and background jobs) / wait_for LABEL [TIMEOUT]
 //   expect LABEL / expect_not LABEL
 //   expect_text TEXT / expect_no_text TEXT   any text drawn this frame contains TEXT
@@ -409,6 +410,12 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
     } else if (verb == "orbit") {
         if (!need(2)) return false;
         orbit(num(1, 0), num(2, 0), 0.4f);
+    } else if (verb == "drop") {
+        if (!need(1)) return false;
+        auto file = std::filesystem::path(std::u8string(w[1].begin(), w[1].end()));
+        if (file.is_relative()) file = std::filesystem::path(std::u8string(scriptDir_.begin(), scriptDir_.end())) / file;
+        const auto u8 = file.lexically_normal().u8string();
+        run([this, path = std::string(u8.begin(), u8.end())] { app_.openPathConfirmed(path); });
     } else if (verb == "run") {
         if (!need(1)) return false;
         std::vector<ScriptStatement> statements;
@@ -429,7 +436,7 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
         const float timeout = num(1, 120.0f);
         steps_.push_back([this, line, timeout](float t) {
             const bool idle = !busy(app_.pendingBrush_) && !busy(app_.pendingGenerator_) && !busy(app_.pendingModels_) &&
-                              !busy(app_.pendingUnreal_);
+                              !busy(app_.pendingUnreal_) && !busy(app_.pendingComfyCheck_);
             if (idle) return true;
             SDL_Delay(10); // real work runs in real time
             if (t > timeout) fail(line, "still busy after " + number(timeout) + " s");
@@ -530,6 +537,8 @@ bool Demo::loadScript(const std::string& path, std::string& error) {
     }
     testing_ = true;
     scriptName_ = std::filesystem::path(std::u8string(path.begin(), path.end())).filename().string();
+    const auto dir = std::filesystem::path(std::u8string(path.begin(), path.end())).parent_path().u8string();
+    scriptDir_.assign(dir.begin(), dir.end());
     shotDir_ = app_.options_.uiOutDir;
     if (!shotDir_.empty()) {
         std::error_code ec;
