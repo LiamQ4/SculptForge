@@ -439,8 +439,8 @@ def page_html(page: Page, index: Page, chapters, position: int) -> str:
             group = g
         is_cur = ch.name == current
         href = ch.name[:-3] + ".html"
-        toc.append(f'<li><a href="{href}"{" class=\"current\" aria-current=\"page\"" if is_cur else ""}>'
-                   f'{html.escape(ch.title)}</a>')
+        current_attr = ' class="current" aria-current="page"' if is_cur else ""
+        toc.append(f'<li><a href="{href}"{current_attr}>{html.escape(ch.title)}</a>')
         if is_cur:
             subs = [h for h in ch.headings if h[0] == 2]
             if subs:
