@@ -49,6 +49,7 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 | Gaussian splats, OpenUSD / USDZ | **Built in** | No |
 | AI agents (MCP), headless scripting | **Built in** | ZScript |
 | Masking, polygroups, visibility (Ctrl / Ctrl+Shift), polypaint, MatCaps | **Yes** | Yes |
+| SubTools (separate meshes: append, split, merge, solo, Alt+click to select) | **Yes** (new) | Yes |
 | GoZ exchange with ZBrush | **Yes** (new in 0.2; not yet tested against a live ZBrush) | Yes |
 | Multiresolution (subdivision levels), dynamic topology, ZRemesher-class retopology, UV unwrapping | Not yet ([roadmap](ROADMAP.md)) | Yes |
 
@@ -70,6 +71,10 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
   respects.
 - **Polygroups and visibility** the ZBrush way: auto groups, Ctrl+Shift isolate / hide, rectangle hide, delete
   hidden.
+- **SubTools**: keep the body, eyes, teeth and armour as separate meshes, each with its own undo history. You can
+  append a sphere, cube, plane or model file, show/hide, solo, reorder, duplicate, merge and split (by polygroup or
+  by piece), and Alt+click a SubTool to select it. Projects, OBJ, glTF, FBX, USD and GoZ keep them as separate
+  objects.
 - **Polypaint** (Paint brush, RGB while sculpting, fills, cavity paint) and six MatCap materials.
 - **Project files** (`.sfproj`) that keep everything, with an unsaved-changes prompt, recent files and autosave.
 - Unlimited undo, Loop subdivision, **voxel remesh** (DynaMesh-style) and quadric decimation.
@@ -101,7 +106,7 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 
 **ZBrush interchange**
 - `.GoZ` import/export with polygroups, mask, polypaint and UVs, and a GoZ bridge (Send / Receive) on Windows and
-  macOS. See [docs/goz.md](docs/goz.md); the live bridge hasn't been tested against a running ZBrush yet.
+  macOS. Every visible SubTool goes over as its own ZBrush SubTool. See [docs/goz.md](docs/goz.md); the live bridge hasn't been tested against a running ZBrush yet.
 
 **Gaussian splats**
 - Open phone captures (Polycam, Luma, Postshot, Scaniverse and others) as a sculpting reference, convert them
@@ -220,6 +225,7 @@ argument `--mcp`. The agent gets every command as a tool and works on one live s
 | Paint / erase mask | Hold **Ctrl** / **Ctrl+Alt** while stroking |
 | Invert / clear mask | Ctrl + click / Ctrl + drag on the background |
 | Isolate / hide polygroup | Ctrl+Shift + click / Ctrl+Shift+Alt + click |
+| Select a SubTool | Alt + click it |
 | Show all | Ctrl+Shift + click on the background |
 | Hide outside / inside a rectangle | Ctrl+Shift + drag / Ctrl+Shift+Alt + drag |
 | Brush size | `[` / `]` |

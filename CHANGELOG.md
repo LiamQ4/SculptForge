@@ -6,6 +6,18 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### SubTools
+- A scene can hold several meshes (SubTools), like ZBrush: each keeps its own attributes, sculpt layers and undo
+  history. Only the active one is sculpted; the others are drawn slightly dimmed.
+- SubTools panel: select, rename (double-click), show/hide, Solo, Unhide all, reorder, Append (sphere, cube,
+  plane or a model file), Duplicate, Delete, Merge down, Merge visible, Split by polygroups, Split into parts.
+  Alt+click a SubTool in the viewport to select it. New `subtool_*` commands for scripts, Python and MCP agents.
+- Files: projects save every SubTool (format version 2; version 1 projects still open). OBJ (`o` objects), glTF,
+  FBX (an LOD group per SubTool), USD and GoZ export each visible SubTool as its own object, and multi-object
+  files open as SubTools. PLY, STL and splat conversion use the visible SubTools merged.
+- OBJ import: `g` groups now become polygroups (as ZBrush writes them) and `o` objects become SubTools.
+- New cube primitive.
+
 ### Fixed
 - Side panels (Brush Lab, Tools, Generate 3D...) never grow past the bottom of the window. They move up
   and scroll instead, so expanded sections such as AI provider are always reachable.

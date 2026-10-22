@@ -78,6 +78,11 @@ retopology, a full ZBrush feature list, rendering/animation (use Blender).
   mask by cavity and by polygroup; every brush and polypaint respect the mask
 - ✅ Polygroups (auto by normals, by connectivity, from mask, merge visible) and ZBrush-style visibility:
   Ctrl+Shift isolate / hide a group, rectangle hide, show all, invert, delete hidden
+- ✅ SubTools: separate meshes in one scene, each with its own undo history; append (primitives or files),
+  duplicate, delete, rename, show/hide, solo, reorder, merge down / merge visible, split by polygroups or pieces,
+  Alt+click to select. Saved in projects (format 2) and exported as separate objects to OBJ, glTF, FBX (an LOD
+  group per SubTool), USD and GoZ; multi-object files open as SubTools
+- ✅ UI tests: `.sfui` scripts drive the real app (clicks, typing, strokes) with screenshots, in CI
 - 📋 Multiresolution: subdivision levels you can step up/down while keeping detail
 - 📋 Dynamic topology (local remeshing under the brush)
 - ✅ Alphas (round, square, noise or any grayscale image) and stroke types (dots, drag-rect, spray, lazy mouse)
