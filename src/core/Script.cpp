@@ -3,6 +3,7 @@
 #include "core/Script.h"
 
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 
 namespace sf {
@@ -99,6 +100,33 @@ bool parseScript(const std::string& text, std::vector<ScriptStatement>& out, std
         tokens.emplace_back(std::move(s), false);
     }
     return flush();
+}
+
+std::string formatValue(const ArgValue& value) {
+    if (const bool* b = std::get_if<bool>(&value)) return *b ? "true" : "false";
+    if (const double* d = std::get_if<double>(&value)) {
+        char buf[40];
+        std::snprintf(buf, sizeof buf, "%g", *d);
+        if (std::strtod(buf, nullptr) != *d) std::snprintf(buf, sizeof buf, "%.17g", *d);
+        return buf;
+    }
+    const std::string& s = std::get<std::string>(value);
+    bool quote = s.empty() || parseValue(s, false).index() != 2; // "true" or "12" must stay strings
+    for (char c : s)
+        if (std::isspace(static_cast<unsigned char>(c)) || c == ';' || c == '#' || c == '"') quote = true;
+    if (!quote) return s;
+    std::string out = "\"";
+    for (char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+    }
+    return out + '"';
+}
+
+std::string formatStatement(const std::string& command, const Args& args) {
+    std::string out = command;
+    for (const auto& [key, value] : args) out += " " + key + "=" + formatValue(value);
+    return out;
 }
 
 } // namespace sf

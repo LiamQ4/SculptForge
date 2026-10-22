@@ -8,7 +8,7 @@
 //
 //   click LABEL / double_click LABEL / right_click LABEL / hover LABEL
 //   type LABEL TEXT          click a text field and type into it
-//   key COMBO                e.g. enter, escape, ctrl+z, ctrl+shift+z, 3
+//   key COMBO                e.g. enter, escape, ctrl+z, ctrl+shift+z, 3, comma, backtick, tab, f3
 //   hold MODS                ctrl / shift / alt / ctrl+shift ... or none (for strokes and drags)
 //   stroke U0 V0 U1 V1 [S]   brush stroke across the model (fractions of its on-screen bounds)
 //   drag X0 Y0 X1 Y1 [S]     left-drag in window fractions (rectangle hide, sliders...)
@@ -20,6 +20,7 @@
 //   expect LABEL / expect_not LABEL
 //   expect_text TEXT / expect_no_text TEXT   any text drawn this frame contains TEXT
 //   expect_status TEXT       the status bar message contains TEXT
+//   expect_help TEXT         the Ctrl-hover help box shown this frame contains TEXT (hold ctrl, then hover)
 //   clipboard TEXT           put TEXT on the clipboard (to test pasting, e.g. a brush code)
 //   expect_clipboard TEXT    the clipboard contains TEXT (after a copy)
 //   click_subtool NAME [U V] left-click SubTool NAME in the viewport (with the held modifiers, e.g.
@@ -29,11 +30,14 @@
 //                            subtools (count), active_subtool (index, 0 = top), visible_subtools,
 //                            edited_subtools (SubTools with undo history), user_brushes (brushes in the
 //                            user library), library_files (.sfbrush files in it; UI tests get an empty
-//                            one in --ui-out/brush-library); OP is == != < <= > >=
+//                            one in --ui-out/brush-library), ui_config (1 once Store Config wrote ui.json),
+//                            console_open, command_palette_open, customize, shelves_visible,
+//                            right_tray_open, left_tray_open, lightbox_open; OP is == != < <= > >=
 //   (mesh values are the active SubTool's)
 //   shot NAME                save a screenshot NAME.png (to --ui-out)
 #include "app/App.h"
 #include "app/Demo.h"
+#include "app/Ui.h"
 
 #include "core/BrushLibrary.h"
 #include "core/Script.h"
@@ -163,6 +167,18 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "show_polygroups") return app_.renderSettings_.showPolygroups ? 1.0 : 0.0;
     if (name == "show_mask") return app_.renderSettings_.showMask ? 1.0 : 0.0;
     if (name == "wireframe") return app_.renderSettings_.wireframe ? 1.0 : 0.0;
+    if (name == "ui_config") {
+        std::error_code ec;
+        const std::string p = app_.uiConfigPath();
+        return !p.empty() && std::filesystem::is_regular_file(std::filesystem::path(std::u8string(p.begin(), p.end())), ec) ? 1.0 : 0.0;
+    }
+    if (name == "console_open") return app_.layout_.consoleOpen ? 1.0 : 0.0;
+    if (name == "command_palette_open") return app_.palette_.isOpen() ? 1.0 : 0.0;
+    if (name == "customize") return app_.layout_.customize ? 1.0 : 0.0;
+    if (name == "shelves_visible") return app_.layout_.shelvesVisible ? 1.0 : 0.0;
+    if (name == "right_tray_open") return app_.layout_.rightTrayOpen ? 1.0 : 0.0;
+    if (name == "left_tray_open") return app_.layout_.leftTrayOpen ? 1.0 : 0.0;
+    if (name == "lightbox_open") return app_.lightbox_.open() ? 1.0 : 0.0;
     const Document& doc = app_.doc_;
     if (name == "subtools") return double(doc.subtoolCount());
     if (name == "active_subtool") return double(doc.activeSubtool);
@@ -266,6 +282,10 @@ void Demo::testKey(int line, const std::string& combo) {
     std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
     if (lower == "enter") keyName = "Return"; // SDL's name for it
     else if (lower == "esc") keyName = "Escape";
+    else if (lower == "comma") keyName = ",";
+    else if (lower == "backtick" || lower == "grave") keyName = "`";
+    else if (lower == "tab") keyName = "Tab";
+    else if (lower == "f3") keyName = "F3";
     const SDL_Keycode key = SDL_GetKeyFromName(keyName.c_str());
     if (key == SDLK_UNKNOWN) {
         run([this, line, keyName] { fail(line, "unknown key \"" + keyName + "\""); });
@@ -513,6 +533,17 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
         run([this, line, text] {
             if (app_.status_.find(text) == std::string::npos)
                 fail(line, "status is \"" + app_.status_ + "\", expected it to contain \"" + text + "\"");
+        });
+    } else if (verb == "expect_help") {
+        if (!need(1)) return false;
+        const std::string text = restOf(lineText_, 1);
+        steps_.push_back([this, line, text](float t) {
+            if (t == 0.0f) return false; // the frame drawn after the previous step
+            const std::string& shown = ui::HelpShown();
+            if (shown.empty()) fail(line, "no Ctrl-help box is shown (hold ctrl, then hover an item)");
+            else if (shown.find(text) == std::string::npos)
+                fail(line, "the Ctrl-help box says \"" + shown.substr(0, 120) + "\", expected \"" + text + "\"");
+            return true;
         });
     } else if (verb == "clipboard") {
         if (!need(1)) return false;

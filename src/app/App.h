@@ -4,6 +4,9 @@
 
 #include "ai/BrushAssistant.h"
 #include "app/Actions.h"
+#include "app/CommandPalette.h"
+#include "app/Config.h"
+#include "app/Console.h"
 #include "app/LightBox.h"
 #include "app/Pickers.h"
 #include "app/Thumbnails.h"
@@ -449,7 +452,60 @@ private:
     // ---- end LightBox (B) ----
 
     // ---- Help/Console/Config (C): actions, help, command palette, console, config ----
+public:
+    UiPrefs& uiPrefs() { return uiPrefs_; }
+    const CommandRegistry& commands() const { return commands_; }
+    ImFont* helpTitleFont() const { return fontHelpTitle_ ? fontHelpTitle_ : ImGui::GetFont(); }
+    ImFont* consoleFont() const { return fontConsole_ ? fontConsole_ : ImGui::GetFont(); }
+    // The next key press becomes ACTION's shortcut (Ctrl+Alt+click a button, or Preferences > Hotkeys).
+    void beginShortcutCapture(const std::string& actionId);
+    const std::string& capturingShortcut() const { return capturingShortcut_; }
+    void openCommandPalette() { palette_.open(); }
+    void setConsoleOpen(bool open);
+    void consolePrefill(const std::string& text); // opens the console with TEXT typed
+    // Store Config (Ctrl+Shift+I) / Restore Standard UI / Restore Custom UI / Save UI... / Load UI... (Ctrl+L)
+    void storeConfig();
+    void restoreStandardUi();
+    void restoreCustomUi();
+    void saveUiDialog();
+    void loadUiDialog();
+    void queueUiFile(int kind, std::string path); // file dialog callbacks (any thread)
+
+private:
+    friend class Console;
+    friend class CommandPalette;
+    friend void config::drawHotkeysSection(App&);
+    friend void config::drawLightBoxSection(App&);
+    void initUiConfig(bool deterministic); // reads ui.json before fonts are built (UI scale)
+    void initActions();                    // the default actions and shortcuts, then every command as cmd.*
+    void addHelpFonts(float scale);
+    void drawHelpConsoleUi();              // console, command palette, Controls, shortcut capture, Ctrl help
+    void drawControlsWindow();
+    bool captureShortcutKey(SDL_Keycode key, SDL_Keymod mod);
+    void consoleEcho(const std::string& name, const Args& args, const CommandResult& r);
+    std::string uiConfigPath() const;
+    bool readUiConfig(const std::string& path, std::string& err);
+    bool writeUiConfig(const std::string& path, std::string& err);
+    std::string layoutKey() const; // the layout without per-session state, to notice edits
+    void watchLayoutChanges();
+    void saveRecentActions();
+    CanvasRect consoleRect() const;
+    CanvasRect paletteArea() const;
     ActionRegistry actions_;
+    UiPrefs uiPrefs_;
+    Console console_;
+    CommandPalette palette_;
+    std::string configDir_;           // <prefs>/ (ui.json, console_history.txt, recent_actions.txt)
+    std::string capturingShortcut_;   // action id waiting for a key
+    std::string layoutBaseline_;      // layoutKey() as last stored / loaded / restored
+    bool layoutHintShown_ = false;
+    int layoutCheckFrame_ = 0;
+    bool uiConfigDeterministic_ = false; // UI tests, renders, recordings: standard layout, nothing read
+    ImFont* fontHelpTitle_ = nullptr;
+    ImFont* fontConsole_ = nullptr;
+    std::string commandSource_; // shown before echoed commands, e.g. "AI" while the agent drives the app
+    std::mutex uiFileMutex_;
+    std::vector<std::pair<int, std::string>> uiFiles_; // (kind, path) from file dialogs
     // ---- end Help/Console/Config (C) ----
 };
 
