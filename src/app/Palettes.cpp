@@ -271,6 +271,7 @@ void App::drawPalette_Generate() {
 
 void App::drawPalette_Help() {
     menuAction(*this, "help.controls");
+    menuAction(*this, "help.guide");
     menuAction(*this, "ui.command_palette");
     menuAction(*this, "help.website");
     menuAction(*this, "help.report");

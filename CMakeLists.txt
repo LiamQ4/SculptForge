@@ -53,6 +53,7 @@ add_library(sculptforge_core STATIC
   src/core/Polypaint.cpp
   src/core/Matcap.cpp
   src/core/Project.cpp
+  src/core/Guide.cpp
   src/io/ObjIO.cpp
   src/io/FbxIO.cpp
   third_party/ufbx/ufbx.c
@@ -119,8 +120,11 @@ if(SCULPTFORGE_BUILD_APP)
     fontSemiBold ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Inter-SemiBold.ttf
     fontLucide ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/lucide.ttf
     appIcon ${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/sculptforge-256.png)
+  include(cmake/EmbedGuide.cmake)
+  embed_guide(${CMAKE_CURRENT_BINARY_DIR}/EmbeddedGuide.cpp ${CMAKE_CURRENT_SOURCE_DIR}/docs/guide)
   add_executable(sculptforge
     ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedFonts.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedGuide.cpp
     src/app/main.cpp
     src/app/App.cpp
     src/app/Demo.cpp
@@ -138,6 +142,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/LightBox.cpp
     src/app/Thumbnails.cpp
     src/app/Pickers.cpp
+    src/app/UserGuide.cpp
     src/app/AssetLibrary.cpp
     src/app/PanelMasking.cpp
     src/app/PanelPolygroups.cpp
@@ -336,6 +341,10 @@ if(SCULPTFORGE_BUILD_TESTS)
     add_test(NAME brush_gallery_index
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/brush-gallery/build_index.py
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/brush-gallery/repo --check --cli $<TARGET_FILE:sculptforge-cli>)
+    # The user guide (docs/guide): every link, anchor and image resolves, only characters the app's font has,
+    # and the website pages build.
+    add_test(NAME guide_site COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/guide/build_site.py --check
+                                     --out ${CMAKE_CURRENT_BINARY_DIR}/guide-site)
   endif()
 
   # UI tests: each tests/ui/*.sfui script drives the real app headless (needs an
@@ -354,5 +363,14 @@ if(SCULPTFORGE_BUILD_TESTS)
     add_test(NAME ui_help_console_1080 COMMAND sculptforge --ui-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/help_console.sfui
              --size 1920x1080 --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/help_console_1080)
     set_tests_properties(ui_help_console_1080 PROPERTIES LABELS ui TIMEOUT 300)
+    add_test(NAME ui_user_guide_1080 COMMAND sculptforge --ui-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/user_guide.sfui
+             --size 1920x1080 --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/user_guide_1080)
+    set_tests_properties(ui_user_guide_1080 PROPERTIES LABELS ui TIMEOUT 300)
+    # The guide's keyboard table must match the app's default shortcuts (tools/guide/update_shortcuts.py).
+    if(Python3_Interpreter_FOUND)
+      add_test(NAME ui_guide_shortcuts COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/guide/update_shortcuts.py
+               --app $<TARGET_FILE:sculptforge> --check)
+      set_tests_properties(ui_guide_shortcuts PROPERTIES LABELS ui TIMEOUT 300)
+    endif()
   endif()
 endif()

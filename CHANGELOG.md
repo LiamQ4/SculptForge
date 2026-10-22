@@ -6,6 +6,15 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### User guide
+- A complete user guide (21 chapters, from the interface and every brush to Send to Unreal, scripting and
+  troubleshooting, with screenshots) built into the app: Help > User Guide (Shift+F1), with contents, full-text
+  search, links, back / forward and copyable code. Hold Ctrl over a control and press F1 to open its chapter.
+- The same guide on the website (guide/), generated from docs/guide by tools/guide/build_site.py, with search,
+  a contents drawer on phones and swipe / arrow keys between chapters.
+- Website motion: page transitions (View Transitions), scroll-linked effects, a progress bar and staggered
+  reveals tuned for phones, tablets and monitors; all off with "reduce motion".
+
 ### A ZBrush-style interface
 - Laptop camera notches: when SculptForge fills the screen, the interface stays below the camera notch of
   MacBooks (macOS reports the safe area; on Linux a notched MacBook display is recognised), with a plain band

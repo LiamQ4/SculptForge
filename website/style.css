@@ -145,9 +145,17 @@ p { margin: 0 0 1em; }
 .card { transition: border-color 0.2s, transform 0.2s; }
 .card:hover { border-color: #3a3a44; transform: translateY(-2px); }
 
-/* Scroll reveal (added by script, so content stays visible without JS). */
-.reveal { opacity: 0; transform: translateY(14px); transition: opacity 0.6s ease, transform 0.6s ease; }
-.reveal.shown { opacity: 1; transform: none; }
+/* Scroll reveal (classes added by motion.js, so content stays visible without JS). The distance and timing
+   follow the screen: a long, slow rise on monitors, shorter on tablets, a quick small one on phones. */
+:root { --reveal-dist: 30px; --reveal-time: 0.75s; --reveal-scale: 0.965; }
+@media (max-width: 960px) { :root { --reveal-dist: 22px; --reveal-time: 0.6s; --reveal-scale: 0.975; } }
+@media (max-width: 620px) { :root { --reveal-dist: 14px; --reveal-time: 0.5s; --reveal-scale: 0.985; } }
+.reveal, .reveal-media { transition: opacity var(--reveal-time) cubic-bezier(.2, .7, .2, 1) var(--reveal-delay, 0ms),
+                                     transform var(--reveal-time) cubic-bezier(.2, .7, .2, 1) var(--reveal-delay, 0ms),
+                                     filter var(--reveal-time) ease var(--reveal-delay, 0ms); }
+.reveal { opacity: 0; transform: translateY(var(--reveal-dist)); }
+.reveal-media { opacity: 0; transform: translateY(var(--reveal-dist)) scale(var(--reveal-scale)); filter: blur(6px); }
+.reveal.shown, .reveal-media.shown { opacity: 1; transform: none; filter: none; }
 
 @media (max-width: 620px) {
   body { font-size: 16px; }
@@ -203,7 +211,7 @@ p { margin: 0 0 1em; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  .reveal { opacity: 1; transform: none; transition: none; }
+  .reveal, .reveal-media { opacity: 1; transform: none; filter: none; transition: none; }
 }
 
 .code { background: #0b0b0e; border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; overflow-x: auto;
@@ -314,3 +322,196 @@ p { margin: 0 0 1em; }
   .accent { color: Highlight; text-shadow: none; }
   .btn.primary { border: 1px solid ButtonText; }
 }
+
+/* ---------------------------------------------------------------------------------------------------------
+   Motion: page transitions and scroll-linked effects (motion.js adds the rest).
+   --------------------------------------------------------------------------------------------------------- */
+.scroll-progress { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 30; pointer-events: none;
+                   background: linear-gradient(90deg, #e2742a, var(--accent-2)); transform: scaleX(0);
+                   transform-origin: 0 50%; }
+.nav { transition: box-shadow 0.3s, background-color 0.3s; }
+body.scrolled .nav { box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Pages cross-fade and slide when you follow a link (Chrome, Edge, Safari 18.2+; others just load the page).
+     The header stays still; guide chapters slide the way you're reading. */
+  @view-transition { navigation: auto; }
+  .nav { view-transition-name: site-nav; }
+  .guide-main { view-transition-name: guide-main; }
+  ::view-transition-old(root) { animation: vt-fade-out 0.22s ease both; }
+  ::view-transition-new(root) { animation: vt-rise-in 0.42s cubic-bezier(.2, .7, .2, 1) both; }
+  ::view-transition-old(guide-main) { animation: vt-fade-out 0.2s ease both; }
+  ::view-transition-new(guide-main) { animation: vt-rise-in 0.4s cubic-bezier(.2, .7, .2, 1) both; }
+  html:active-view-transition-type(forward)::view-transition-old(guide-main) { animation: vt-out-left 0.28s ease both; }
+  html:active-view-transition-type(forward)::view-transition-new(guide-main) { animation: vt-in-right 0.42s cubic-bezier(.2, .7, .2, 1) both; }
+  html:active-view-transition-type(back)::view-transition-old(guide-main) { animation: vt-out-right 0.28s ease both; }
+  html:active-view-transition-type(back)::view-transition-new(guide-main) { animation: vt-in-left 0.42s cubic-bezier(.2, .7, .2, 1) both; }
+
+  /* Scroll-linked effects where the browser supports scroll timelines (no JavaScript, no jank). */
+  @supports (animation-timeline: scroll()) {
+    .scroll-progress { animation: progress linear both; animation-timeline: scroll(root); }
+    .nav { animation: nav-lift linear both; animation-timeline: scroll(root); animation-range: 0 140px; }
+    /* The hero video settles back as you scroll past it. */
+    .hero-video video { animation: hero-settle linear both; animation-timeline: view(); animation-range: exit 0% exit 100%; }
+    /* Demo videos ease in as they arrive (monitors and tablets). */
+    @media (min-width: 621px) {
+      .demo video { animation: media-arrive linear both; animation-timeline: view(); animation-range: entry 0% cover 35%; }
+    }
+    /* Phones: feature cards in the swipe row come into focus at the centre and recede at the edges. */
+    @media (max-width: 620px) {
+      .grid .card { animation: card-focus linear both; animation-timeline: view(inline); animation-range: entry 0% exit 100%; }
+      .tags button { animation: none; }
+    }
+  }
+}
+@keyframes vt-fade-out { to { opacity: 0; } }
+@keyframes vt-rise-in { from { opacity: 0; transform: translateY(18px); } }
+@keyframes vt-out-left { to { opacity: 0; transform: translateX(-48px); } }
+@keyframes vt-in-right { from { opacity: 0; transform: translateX(64px); } }
+@keyframes vt-out-right { to { opacity: 0; transform: translateX(48px); } }
+@keyframes vt-in-left { from { opacity: 0; transform: translateX(-64px); } }
+@keyframes drawer-in { from { opacity: 0; transform: translateY(-10px); } }
+@keyframes progress { to { transform: scaleX(1); } }
+@keyframes nav-lift { to { box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); background-color: rgba(15, 15, 18, 0.94); } }
+@keyframes hero-settle { to { transform: scale(0.94) translateY(-3%); opacity: 0.35; filter: saturate(0.7); } }
+@keyframes media-arrive { from { transform: perspective(1200px) rotateX(9deg) scale(0.94); opacity: 0.4; } }
+@keyframes card-focus {
+  0% { transform: scale(0.92); opacity: 0.55; }
+  35%, 65% { transform: none; opacity: 1; }
+  100% { transform: scale(0.92); opacity: 0.55; }
+}
+
+/* ---------------------------------------------------------------------------------------------------------
+   User guide (website/guide, generated by tools/guide/build_site.py from docs/guide).
+   --------------------------------------------------------------------------------------------------------- */
+.guide-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr) 200px; gap: 48px; align-items: start;
+                padding-top: 36px; padding-bottom: 72px; max-width: 1360px; }
+.guide-side { position: sticky; top: 84px; max-height: calc(100vh - 100px); overflow-y: auto; scrollbar-width: thin;
+              padding-right: 4px; }
+.toc-toggle { display: none; }
+.guide-search { position: relative; margin-bottom: 18px; }
+.guide-search input { width: 100%; padding: 9px 14px; border-radius: 10px; border: 1px solid var(--border);
+                      background: var(--panel); color: var(--text); font: inherit; font-size: 0.9rem; }
+.guide-search input:focus { outline: none; border-color: var(--accent); }
+.search-results { position: absolute; left: 0; top: calc(100% + 6px); width: min(440px, 86vw); z-index: 20;
+                  background: #1d1d23; border: 1px solid #34343c; border-radius: 12px; padding: 6px;
+                  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55); max-height: 70vh; overflow-y: auto; }
+.search-results a { display: block; padding: 9px 11px; border-radius: 8px; color: var(--text); }
+.search-results a:hover, .search-results a:focus { background: #292930; text-decoration: none; outline: none; }
+.search-results .r-chapter { display: block; color: var(--accent-2); font-size: 0.74rem; font-weight: 600;
+                             letter-spacing: 0.04em; text-transform: uppercase; }
+.search-results .r-section { display: block; font-weight: 600; font-size: 0.95rem; }
+.search-results .r-snip { display: block; color: var(--muted); font-size: 0.84rem; line-height: 1.45; }
+.search-results mark { background: rgba(242, 140, 60, 0.3); color: #fff; border-radius: 3px; padding: 0 1px; }
+.search-results .none { color: var(--muted); font-size: 0.9rem; margin: 8px 10px; }
+.toc { font-size: 0.92rem; }
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.toc a { display: block; color: #c9c9d1; padding: 4px 10px; border-radius: 7px; line-height: 1.35; }
+.toc a:hover { color: #fff; background: #1d1d23; text-decoration: none; }
+.toc a.current, .toc-home.current { color: #fff; background: rgba(242, 140, 60, 0.14); box-shadow: inset 2px 0 0 var(--accent); }
+.toc-home { font-weight: 600; margin-bottom: 6px; }
+.toc-group { color: var(--muted); font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+             margin: 16px 10px 4px; }
+.toc-sections { margin: 2px 0 6px 12px !important; border-left: 1px solid var(--border); }
+.toc-sections a { font-size: 0.84rem; color: var(--muted); padding: 3px 10px; }
+
+.guide-main { min-width: 0; }
+.guide-article { max-width: 780px; }
+.guide-article h1 { font-size: clamp(2rem, 3.4vw, 2.7rem); margin-bottom: 0.6em; }
+.guide-article h2 { font-size: clamp(1.4rem, 2.2vw, 1.75rem); margin: 2.1em 0 0.6em; padding-bottom: 0.3em;
+                    border-bottom: 1px solid var(--border); scroll-margin-top: 84px; }
+.guide-article h3 { font-size: 1.15rem; margin: 1.7em 0 0.5em; scroll-margin-top: 84px; }
+.guide-article .anchor { margin-left: 0.4em; color: var(--muted); opacity: 0; font-weight: 400; transition: opacity 0.15s; }
+.guide-article h2:hover .anchor, .guide-article h3:hover .anchor { opacity: 1; text-decoration: none; }
+.guide-article p, .guide-article li { color: #d6d6dd; }
+.guide-article strong { color: #fff; font-weight: 600; }
+.guide-article ul, .guide-article ol { padding-left: 1.4em; margin: 0 0 1.1em; }
+.guide-article li { margin-bottom: 0.35em; }
+.guide-article li > ul, .guide-article li > ol { margin: 0.35em 0 0.2em; }
+.guide-article li::marker { color: var(--muted); }
+kbd { display: inline-block; min-width: 1.5em; padding: 0.05em 0.45em; border: 1px solid #44444d; border-bottom-width: 2px;
+      border-radius: 6px; background: #24242b; color: var(--accent-2); font: 600 0.82em/1.4 "Inter", system-ui, sans-serif;
+      text-align: center; vertical-align: 0.08em; }
+.guide-article .table-wrap { margin: 0 0 1.4em; border: 1px solid var(--border); border-radius: 12px; }
+.guide-article table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.guide-article th, .guide-article td { text-align: left; vertical-align: top; padding: 9px 13px; border-bottom: 1px solid var(--border); }
+.guide-article th { background: #1d1d23; color: #fff; font-weight: 600; }
+.guide-article tr:last-child td { border-bottom: 0; }
+.guide-article tbody tr:nth-child(even) td { background: rgba(255, 255, 255, 0.015); }
+.callout { margin: 0 0 1.3em; padding: 13px 18px; border-radius: 12px; background: #1b1b21; border: 1px solid var(--border);
+           border-left: 3px solid #8c8c96; }
+.callout p { margin: 0; }
+.callout-tip { border-left-color: #62c07e; } .callout-tip strong:first-child { color: #7fd497; }
+.callout-note { border-left-color: #6fa8e6; } .callout-note strong:first-child { color: #8dbcf0; }
+.callout-zbrush { border-left-color: var(--accent); background: linear-gradient(90deg, rgba(242, 140, 60, 0.07), #1b1b21 40%); }
+.callout-zbrush strong:first-child { color: var(--accent-2); }
+.callout-not-yet { border-left-color: #a990dc; } .callout-not-yet strong:first-child { color: #c1aef0; }
+.callout-warning, .callout-important { border-left-color: #e5604a; } .callout-warning strong:first-child { color: #f08a78; }
+.code-block { position: relative; margin: 0 0 1.3em; }
+.code-block .code { margin: 0; }
+.code-block .copy { position: absolute; top: 8px; right: 8px; font: 600 0.75rem "Inter", sans-serif; color: var(--muted);
+                    background: #1f1f25; border: 1px solid var(--border); border-radius: 7px; padding: 4px 10px; cursor: pointer;
+                    opacity: 0; transition: opacity 0.15s; }
+.code-block:hover .copy, .code-block .copy:focus { opacity: 1; }
+.shot { margin: 1.6em 0; }
+.shot img { border-radius: 10px; border: 1px solid var(--border); box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+            margin: 0 auto; cursor: zoom-in; height: auto; }
+.shot figcaption { color: var(--muted); font-size: 0.85rem; text-align: center; margin-top: 10px; }
+.pager { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 780px; margin-top: 56px; }
+.pager a { display: flex; flex-direction: column; gap: 2px; padding: 16px 20px; border: 1px solid var(--border);
+           border-radius: var(--radius); background: var(--panel); color: #fff; font-weight: 600;
+           transition: border-color 0.2s, transform 0.2s; }
+.pager a:hover { border-color: var(--accent); text-decoration: none; transform: translateY(-2px); }
+.pager a span { color: var(--muted); font-size: 0.8rem; font-weight: 400; }
+.pager .next { grid-column: 2; text-align: right; }
+.guide-meta { max-width: 780px; margin-top: 28px; }
+.on-page { position: sticky; top: 84px; font-size: 0.85rem; }
+.on-page p { color: var(--muted); font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 8px; }
+.on-page ul { list-style: none; margin: 0; padding: 0; border-left: 1px solid var(--border); }
+.on-page a { display: block; color: var(--muted); padding: 4px 12px; margin-left: -1px; border-left: 2px solid transparent;
+             line-height: 1.35; transition: color 0.2s, border-color 0.2s; }
+.on-page a:hover { color: #fff; text-decoration: none; }
+.on-page a.active { color: #fff; border-left-color: var(--accent); }
+.zoom-view { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 3vw;
+             background: rgba(8, 8, 10, 0.88); backdrop-filter: blur(6px); opacity: 0; transition: opacity 0.22s; cursor: zoom-out; }
+.zoom-view.open { opacity: 1; }
+.zoom-view img { max-height: 92vh; width: auto; border-radius: 10px; box-shadow: 0 30px 90px rgba(0, 0, 0, 0.7);
+                 transform: scale(0.96); transition: transform 0.3s cubic-bezier(.2, .7, .2, 1); }
+.zoom-view.open img { transform: none; }
+
+/* Monitors narrower than 1280: no "On this page" column. */
+@media (max-width: 1279px) {
+  .guide-layout { grid-template-columns: 240px minmax(0, 1fr); gap: 40px; }
+  .on-page { display: none; }
+}
+/* Tablets and phones: the contents become a drawer under a sticky bar. */
+@media (max-width: 960px) {
+  .guide-layout { display: block; padding-top: 0; }
+  .guide-side { position: sticky; top: 64px; z-index: 9; max-height: none; overflow: visible; margin: 0 -24px 24px;
+                padding: 0; background: rgba(15, 15, 18, 0.92); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
+  .toc-toggle { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 24px; border: 0; background: none;
+                color: var(--text); font: 600 0.92rem "Inter", sans-serif; cursor: pointer; text-align: left; }
+  .toc-toggle::after { content: ""; margin-left: auto; width: 8px; height: 8px; border-right: 2px solid var(--muted);
+                       border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform 0.25s; }
+  .toc-toggle[aria-expanded="true"]::after { transform: rotate(225deg); }
+  .toc-current { color: var(--muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toc-panel { display: none; padding: 4px 24px 16px; max-height: calc(100vh - 130px); overflow-y: auto; }
+  .toc-panel.open { display: block; animation: drawer-in 0.32s cubic-bezier(.2, .7, .2, 1); }
+  .toc-panel.open .search-results { position: static; width: auto; margin-top: 6px; }
+  .guide-article h2, .guide-article h3 { scroll-margin-top: 120px; }
+}
+@media (max-width: 620px) {
+  .guide-side { top: 56px; margin: 0 -16px 18px; }
+  .toc-toggle, .toc-panel { padding-left: 16px; padding-right: 16px; }
+  .guide-article h1 { font-size: 1.9rem; }
+  .guide-article .table-wrap { margin-left: -16px; margin-right: -16px; border-radius: 0; border-left: 0; border-right: 0; }
+  .guide-article table { font-size: 0.84rem; }
+  .guide-article th, .guide-article td { padding: 8px 10px; }
+  .guide-article td code { word-break: break-word; }
+  .shot { margin: 1.2em -16px; }
+  .shot img { border-radius: 0; border-left: 0; border-right: 0; }
+  .pager { grid-template-columns: 1fr; }
+  .pager .next { grid-column: 1; }
+  .code-block .copy { opacity: 1; }
+}
+.guide-page .nav .wrap, .guide-page .footer .wrap { max-width: 1360px; }

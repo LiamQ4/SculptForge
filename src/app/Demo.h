@@ -58,6 +58,7 @@ public:
     int stepsRun() const { return int(step_); }
     // Every piece of text drawn in the last frame (ImGui log capture), for expect_text.
     void setFrameText(std::string text) { frameText_ = std::move(text); }
+    std::string shortcutsMarkdown() const; // dump_shortcuts: the default shortcuts as Markdown tables
     // A screenshot requested by a `shot` step: the frame loop saves the next frame there.
     std::string takeShotRequest() { return std::exchange(shotRequest_, std::string()); }
 

@@ -16,9 +16,11 @@
   <meta property="og:image" content="https://islandmed.github.io/SculptForge/img/social-preview.png?v=2">
   <meta property="og:url" content="https://islandmed.github.io/SculptForge/">
   <meta name="twitter:card" content="summary_large_image">
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=7">
+  <script src="motion.js?v=1" defer></script>
 </head>
 <body>
+  <div class="scroll-progress" aria-hidden="true"></div>
   <header class="nav">
     <div class="wrap nav-inner">
       <a class="brand" href="#top"><img src="img/logo.svg?v=2" alt="" width="34" height="34"><span>SculptForge</span></a>
@@ -27,8 +29,8 @@
         <a href="#demos">Demos</a>
         <a href="#vfx">VFX &amp; Animation</a>
         <a href="brushes.html">Brushes</a>
+        <a href="guide/index.html">Guide</a>
         <a class="nav-dl" href="#download">Download</a>
-        <a href="https://github.com/islandmed/SculptForge#readme">Docs</a>
         <a class="gh" href="https://github.com/islandmed/SculptForge">GitHub</a>
       </nav>
     </div>
@@ -384,6 +386,7 @@ rez-env sculptforge -- sculptforge troll.usda \
           <a href="https://github.com/islandmed/SculptForge/blob/main/LICENSE">GNU GPL v3.0 or later</a>.</p>
       </div>
       <div class="links">
+        <a href="guide/index.html">User guide</a>
         <a href="https://github.com/islandmed/SculptForge">Source code</a>
         <a href="https://github.com/islandmed/SculptForge/blob/main/THIRD_PARTY_NOTICES.md">Third-party notices</a>
         <a href="https://github.com/islandmed/SculptForge/blob/main/docs/ai-services.md">AI services &amp; privacy</a>
@@ -399,7 +402,7 @@ rez-env sculptforge -- sculptforge troll.usda \
     </div>
   </footer>
   <script>
-    // Demo clips play silently while on screen (tap, click or Enter/Space to pause), and sections fade in.
+    // Demo clips play silently while on screen (tap, click or Enter/Space to pause).
     (() => {
       const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
       const clips = document.querySelectorAll("video[data-inview]");
@@ -420,12 +423,7 @@ rez-env sculptforge -- sculptforge troll.usda \
         v.addEventListener("keydown", (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(); } });
         if (still) v.controls = true;
       }
-      if (still) return;
-      const items = document.querySelectorAll(".section h2, .section-lede, .card, .demo, .two-col > div, .dl, .faq details, .spec, .vfx-points li, .vfx-code");
-      const reveal = new IntersectionObserver((entries) => {
-        for (const e of entries) if (e.isIntersecting) { e.target.classList.add("shown"); reveal.unobserve(e.target); }
-      }, { rootMargin: "0px 0px -8% 0px" });
-      for (const el of items) { el.classList.add("reveal"); reveal.observe(el); }
+      // Scroll reveals, transitions and the progress bar: motion.js.
     })();
   </script>
 </body>

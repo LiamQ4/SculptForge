@@ -33,10 +33,13 @@
 //                            user library), library_files (.sfbrush files in it; UI tests get an empty
 //                            one in --ui-out/brush-library), ui_config (1 once Store Config wrote ui.json),
 //                            console_open, command_palette_open, customize, shelves_visible,
-//                            right_tray_open, left_tray_open, lightbox_open, shelves (1 shown), left_tray / right_tray (palettes in
+//                            right_tray_open, left_tray_open, lightbox_open, guide_open, guide_hits (search results), shelves (1 shown), left_tray / right_tray (palettes in
 //                            the tray, -1 when closed); OP is == != < <= > >=
 //   (mesh values are the active SubTool's)
 //   shot NAME                save a screenshot NAME.png (to --ui-out)
+//   expect_guide FILE        the User Guide shows FILE ("masking.md", "index.md")
+//   dump_shortcuts NAME      write every default shortcut as a Markdown table to --ui-out/NAME
+//                            (tools/guide/update_shortcuts.py puts it into docs/guide/shortcuts.md)
 #include "app/App.h"
 #include "app/Demo.h"
 #include "app/Ui.h"
@@ -54,6 +57,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <map>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -184,6 +188,8 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "right_tray_open") return app_.layout_.rightTrayOpen ? 1.0 : 0.0;
     if (name == "left_tray_open") return app_.layout_.leftTrayOpen ? 1.0 : 0.0;
     if (name == "lightbox_open") return app_.lightbox_.open() ? 1.0 : 0.0;
+    if (name == "guide_open") return app_.guide_.isOpen() ? 1.0 : 0.0;
+    if (name == "guide_hits") return double(app_.guide_.searchHits());
     const Document& doc = app_.doc_;
     if (name == "subtools") return double(doc.subtoolCount());
     if (name == "active_subtool") return double(doc.activeSubtool);
@@ -607,6 +613,23 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             const double v = query(name, k);
             if (!compare(v, op, want)) fail(line, name + " is " + number(v) + ", expected " + op + " " + number(want));
         });
+    } else if (verb == "expect_guide") {
+        if (!need(1)) return false;
+        const std::string file = w[1];
+        steps_.push_back([this, line, file](float t) {
+            if (t == 0.0f) return false;
+            if (app_.guide_.currentFile() != file)
+                fail(line, "the User Guide shows " + app_.guide_.currentFile() + ", expected " + file);
+            return true;
+        });
+    } else if (verb == "dump_shortcuts") {
+        if (!need(1)) return false;
+        const std::string name = w[1];
+        run([this, line, name] {
+            std::ofstream f(std::filesystem::path(std::u8string(shotDir_.begin(), shotDir_.end())) / name, std::ios::binary);
+            f << shortcutsMarkdown();
+            if (!f) fail(line, "can't write " + name + " in " + shotDir_);
+        });
     } else if (verb == "shot") {
         if (!need(1)) return false;
         const std::string name = w[1];
@@ -621,6 +644,43 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
         return false;
     }
     return true;
+}
+
+// Every default shortcut, grouped by palette like the Controls window (F1), as Markdown for the user guide.
+std::string Demo::shortcutsMarkdown() const {
+    auto keys = [](const std::string& chord) {
+        std::string out;
+        size_t start = 0;
+        while (start <= chord.size()) {
+            const size_t at = chord.find(" / ", start);
+            const std::string part = chord.substr(start, at == std::string::npos ? std::string::npos : at - start);
+            if (!out.empty()) out += " or ";
+            const auto parts = chordKeys(part);
+            for (size_t i = 0; i < parts.size(); ++i) out += (i ? "+<kbd>" : "<kbd>") + parts[i] + "</kbd>";
+            if (at == std::string::npos) break;
+            start = at + 3;
+        }
+        return out;
+    };
+    auto cell = [](std::string text) {
+        for (size_t at = text.find('|'); at != std::string::npos; at = text.find('|', at + 2)) text.replace(at, 1, "\\|");
+        return text;
+    };
+    std::map<std::string, std::vector<const Action*>> groups;
+    for (const auto& a : app_.actions_.all()) {
+        if (a.shortcut.empty()) continue; // the defaults, not this session's overrides
+        const std::string top = a.palette.substr(0, a.palette.find(" > "));
+        groups[top.empty() ? "General" : top].push_back(&a);
+    }
+    std::string md;
+    for (auto& [group, list] : groups) {
+        std::stable_sort(list.begin(), list.end(), [](const Action* x, const Action* y) { return x->label < y->label; });
+        md += "### " + group + "\n\n| Action | Keys | What it does |\n|---|---|---|\n";
+        for (const Action* a : list) md += "| " + cell(a->label) + " | " + keys(a->shortcut) + " | " + cell(a->description) + " |\n";
+        md += "\n";
+    }
+    if (!md.empty()) md.pop_back();
+    return md;
 }
 
 void Demo::testKeyNow(SDL_Keycode key, SDL_Keymod mods) {

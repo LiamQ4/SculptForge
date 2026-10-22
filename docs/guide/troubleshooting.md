@@ -1,0 +1,240 @@
+# Troubleshooting and FAQ
+
+This chapter collects fixes for common problems: start-up and graphics errors, tablets, AI service messages,
+ComfyUI errors, the camera notch, first-launch warnings on macOS and Windows, where SculptForge keeps its
+settings, how to reset the interface, and how to report a bug.
+
+## SculptForge doesn't start
+
+SculptForge draws with OpenGL 3.3 (core profile). Almost every GPU from the last decade supports it, but an
+old driver, a remote desktop session or a virtual machine without 3D acceleration may not.
+
+1. **Update your graphics driver** from the GPU maker (NVIDIA, AMD, Intel) or your Linux distribution.
+2. **Virtual machines:** turn on 3D acceleration in the VM settings.
+3. **Remote desktop:** some remote sessions only offer an older OpenGL. Run SculptForge locally, or use a
+   remote tool that forwards the GPU.
+4. **Linux:** on a machine without a working GPU driver, Mesa's software renderer works (slowly):
+   `LIBGL_ALWAYS_SOFTWARE=1 sculptforge`.
+
+To see why it stopped, start it from a terminal and read the messages. It prints the OpenGL version and GPU it
+found at start-up (for example `OpenGL 4.6 (Core Profile) Mesa 26.1.8 on ...`), or the error, such as
+`OpenGL 3.3 context creation failed` or `Missing OpenGL function: ...`.
+
+- Linux: run `sculptforge` in a terminal.
+- macOS: run `/Applications/SculptForge.app/Contents/MacOS/SculptForge` in Terminal.
+- Windows: the release build has no console window; if it closes straight away, update the driver first.
+
+## First launch warnings on macOS and Windows
+
+The release builds aren't code-signed yet, so the operating system warns the first time.
+
+- **macOS (Gatekeeper):** "SculptForge can't be opened because it is from an unidentified developer". In
+  Finder, right-click (or <kbd>Ctrl</kbd>+click) **SculptForge** in Applications and choose **Open**, then
+  **Open** again. macOS remembers the choice. On recent macOS versions you may instead need **System Settings
+  > Privacy & Security > Open Anyway**.
+- **Windows (SmartScreen):** "Windows protected your PC". Click **More info**, then **Run anyway**.
+
+Download SculptForge only from the official releases page on GitHub (the website that Help > **Website &
+documentation** opens links to it).
+
+## The viewport is slow
+
+- Check the triangle count in the title strip (**Tris**). Millions of triangles on a laptop GPU are heavy;
+  **Tool > Geometry > Decimate** or a lower **Voxel Remesh** resolution brings it down. See
+  [Subdivide, Remesh, Decimate and LODs](geometry.md).
+- Turn off **Wireframe** (<kbd>W</kbd>) on dense meshes.
+- Hide SubTools you aren't working on, or **Solo** the active one.
+- A large Gaussian splat capture costs GPU time too: lower the count with **Clean floaters**, or untick
+  **Show** in the **Splats** palette while you sculpt.
+- On laptops with two GPUs, make sure SculptForge runs on the dedicated one (in the GPU maker's control panel
+  or the operating system's graphics settings).
+
+## Pen tablets
+
+SculptForge reads pen pressure through the operating system's standard pen input, so most Wacom, XP-Pen, Huion
+and similar tablets, and pen displays, work without settings.
+
+1. Open the **Draw** palette. Under **Tablet** it shows "Pen pressure: 0.42" once the pen has come near the
+   tablet, or "No pen detected".
+2. **Pressure > strength** (on by default) and **Pressure > size** choose what pressure controls. They are
+   also on the top shelf.
+3. A custom brush can also set its own pressure response (**pressureCurve** in its recipe, see
+   [Brush Lab and sharing brushes](brush-lab.md)).
+
+If no pen is detected or pressure doesn't change:
+
+- Install or update the tablet maker's driver, then restart SculptForge.
+- **Windows:** most drivers have a **Windows Ink** option. If pressure doesn't reach SculptForge, try
+  switching it (on or off) in the tablet driver's settings for SculptForge or for all applications, then
+  restart SculptForge.
+- **Linux:** check that the system sees the pen as a tablet (for example in your desktop's tablet settings).
+- If the cursor moves but strokes have no pressure, test in another application to see whether the driver
+  reports pressure at all.
+
+## AI services
+
+### Hugging Face (free image and text to 3D)
+
+| Message | What to do |
+|---|---|
+| *Hugging Face's free GPU time is used up for now* | The anonymous daily allowance ran out. Add a free token (huggingface.co/settings/tokens, read access) in **HF token** in the Generate 3D window, or set `HF_TOKEN`; or wait for it to refill (about a day); or pick another model |
+| *The Hugging Face Space is asleep or restarting* | The model's demo is starting up. Try again in a minute, or pick another model |
+| Waiting in the queue for a long time | The demos are shared. Try a faster model (Hunyuan3D 2 mini Turbo, Stable Fast 3D) or another time of day |
+| TRELLIS.2 fails without a token | TRELLIS.2 needs a Hugging Face token |
+
+### fal.ai and Meshy
+
+| Message | What to do |
+|---|---|
+| *The API key was rejected* | Check the key in the Generate 3D window, or the `FAL_KEY` / `MESHY_API_KEY` variable |
+| *Out of credits on this account* | Top up your account with that service |
+| *Model or endpoint not found* | Check the fal model id |
+| *Rate limited* | Wait a moment and try again |
+
+### Brush Lab
+
+The default **Free** provider uses a hosted open model with no account. If it is unreachable and Ollama runs
+on your computer, SculptForge uses your local model instead. "Rate limited by the provider" means too many
+requests in a short time: wait a few seconds. For setup of local models, see
+[Brush Lab and sharing brushes](brush-lab.md).
+
+### No connection at all
+
+AI features need internet access (except a local Ollama, LM Studio or ComfyUI). Behind a company proxy or
+firewall, ask IT to allow the service you use: huggingface.co (and `*.hf.space`), fal.ai, meshy.ai, or the
+Pollinations.ai text endpoint for the free Brush Lab model.
+
+## ComfyUI errors
+
+| Message | What to do |
+|---|---|
+| *Nothing is answering at http://...* | ComfyUI isn't running at that address, or a firewall blocks it. Check the address and port (8188 by default). For another computer, start ComfyUI with `--listen` |
+| *...answered, but not like ComfyUI* | Something else uses that port, or a proxy is in the way. Use the address ComfyUI prints when it starts |
+| *This workflow was saved in ComfyUI's editor format* | Export it again in ComfyUI with **Workflow > Export (API)** |
+| *This ComfyUI does not have the node ...* or *...is missing the nodes ...* | Install the custom nodes the workflow uses (ComfyUI Manager > **Install Missing Custom Nodes**) and restart ComfyUI |
+| *...names a model file this server doesn't have* | Download the model into the right subfolder of ComfyUI's `models` folder, for example `models/checkpoints` |
+| *ComfyUI rejected the workflow: node N ...* | An input is out of range. Open the workflow in ComfyUI: it shows the same error on that node |
+| *The workflow finished but saved no mesh file* | End the workflow with Save GLB or another node that saves a mesh |
+| *...the GPU ran out of memory* | The GPU ran out of memory. Lower the resolution or octree size, or use a smaller model |
+| *The job disappeared from ComfyUI's queue* | Someone cleared the queue or ComfyUI restarted. Generate again |
+| *The workflow has no Load Image node* | You chose a text workflow on the **From image** tab. Use it from **From text** |
+
+See [Image and text to 3D](generate-3d.md#comfyui-your-own-server) for setup.
+
+## The interface
+
+### The top of the window is hidden behind the camera notch
+
+On MacBooks with a camera notch, SculptForge keeps the interface below the notch when it fills the screen. If
+the title strip or palette bar is still covered, or a plain band appears where you don't want one, change
+**Preferences > Interface > Camera notch**: **Automatic** (asks the system on macOS, recognises notched
+MacBook displays on Linux), **Always reserve**, or **Off**. <kbd>F11</kbd> switches between fullscreen and a
+window.
+
+### Text and buttons are too small or too large
+
+**Preferences > Interface > UI scale** sets the size (Automatic, 100% to 200%). It takes effect the next time
+SculptForge starts, and only if you press **Store Config** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd>).
+
+### My layout or shortcuts are gone after a restart
+
+Like ZBrush, SculptForge never saves the layout on its own. Press **Store Config**
+(<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd>) to keep the current layout, shortcuts and interface
+preferences. See [The interface](interface.md).
+
+### Reset the interface
+
+- **Preferences > Config > Restore Standard UI** returns to the built-in layout and default shortcuts. Press
+  **Store Config** afterwards to make it stick.
+- **Restore Custom UI** goes back to what the last Store Config saved.
+- To start completely fresh, quit SculptForge and delete `ui.json` (layout, shortcuts, interface preferences)
+  and `imgui.ini` (positions of floating windows such as Brush Lab) from the settings folder below.
+
+### A key does nothing
+
+Shortcuts don't fire while you type in a text field: click the canvas first. Check the key in **Help >
+Controls** (<kbd>F1</kbd>), which shows every shortcut as currently assigned; a key you reassigned shows in
+orange in **Preferences > Hotkeys**, where **Default shortcuts** undoes every change.
+
+## Where settings live
+
+SculptForge keeps its settings in one folder per user:
+
+| System | Settings folder |
+|---|---|
+| Linux | `~/.local/share/SculptForge/SculptForge/` (or `$XDG_DATA_HOME/SculptForge/SculptForge/`) |
+| macOS | `~/Library/Application Support/SculptForge/SculptForge/` |
+| Windows | `%APPDATA%\SculptForge\SculptForge\` (usually `C:\Users\<you>\AppData\Roaming\SculptForge\SculptForge\`) |
+
+| File or folder | What it holds |
+|---|---|
+| `ui.json` | Layout, shortcut changes and interface preferences, written by **Store Config** |
+| `imgui.ini` | Positions and sizes of floating windows |
+| `ai.json` | AI settings: providers, models, keys, ComfyUI address (readable only by your account) |
+| `project.json` | Recent files and the autosave interval |
+| `autosave.sfproj` | The autosaved copy of unsaved work (removed once you save) |
+| `clean_exit` | Marks a normal exit; without it, the autosave is offered for restore |
+| `console_history.txt` | The console's command history |
+| `recent_actions.txt` | Recently used entries of the command palette |
+| `brushes/` | Your brush library, one `.sfbrush` file per brush |
+| `brush-gallery-cache/`, `brush-gallery.json` | Community brush gallery cache and its address |
+| `thumbs/` | Cached LightBox and picker thumbnails (safe to delete) |
+
+Your **library folder** (projects, tools, alphas, images, splats and QuickSaves shown in the LightBox) is
+separate: `Documents/SculptForge` by default, changeable in **Preferences > LightBox > Library folder**.
+
+> **Tip:** To move settings to another computer, copy `ui.json`, `ai.json` and the `brushes` folder. For a
+> shared layout, use **Preferences > Config > Save UI...** and **Load UI...** instead.
+
+## Recovering work after a crash
+
+SculptForge autosaves unsaved work every 5 minutes by default (**Preferences > Autosave**, 0 turns it off).
+After a crash, the next start asks "SculptForge did not close normally last time. Restore the autosaved
+work?". **Restore** opens it as unsaved work (save it under a name); **Discard** deletes it. See
+[Projects, autosave and QuickSave](projects.md).
+
+## Frequently asked questions
+
+**Can SculptForge open ZBrush files (.ZTL, .ZPR)?**
+No. They are proprietary and undocumented. Use GoZ, or export OBJ or FBX from ZBrush. See
+[Exporting, Send to Unreal and GoZ](exporting.md#exchange-models-with-zbrush-goz).
+
+**Does it have subdivision levels, DynaMesh, ZRemesher or UVs?**
+Voxel remesh works like DynaMesh. Multiresolution subdivision levels, dynamic topology, automatic retopology
+and UV unwrapping are not there yet; they are on the roadmap.
+
+**Is it really free? Can I sell what I make?**
+Yes and yes. SculptForge is GPL-3.0-or-later free software; the licence covers the program, not your models.
+The AI models have their own licences (see [Image and text to 3D](generate-3d.md#privacy-and-model-licences)).
+
+**Does SculptForge send anything about me anywhere?**
+No. There is no telemetry and no account. AI features talk only to the service you choose, when you use them.
+
+**Does it work offline?**
+Yes. Everything except the hosted AI services works offline, and Brush Lab and image-to-3D can run on local
+models (Ollama, LM Studio, your own ComfyUI or generator command).
+
+**Where are my brushes?**
+In the `brushes` folder in the settings folder above. Brush Lab saves every brush you make or refine there.
+
+## Report a problem
+
+Choose **Help > Report a problem** to open the issue tracker on GitHub (you need a free GitHub account). A
+good report includes:
+
+1. **The SculptForge version** (**Help > About SculptForge**) and your operating system.
+2. **Your GPU and driver**: the `OpenGL ... on ...` line SculptForge prints at start-up (see
+   [SculptForge doesn't start](#sculptforge-doesnt-start)), or the GPU name from your system settings.
+3. **Steps to reproduce**: what you did, what you expected and what happened instead.
+4. **The commands you ran**: open the console (the backtick key, left of <kbd>1</kbd>), click **Copy session
+   as script** and paste it into the report. It often reproduces the problem exactly.
+5. **A file** if the problem is with a particular model (a small `.sfproj` or the original file), and a
+   screenshot for display problems.
+
+For a security problem, don't open a public issue; follow `SECURITY.md` in the repository instead.
+
+## See also
+
+- [Installing SculptForge](installing.md)
+- [The interface](interface.md)
+- [Glossary](glossary.md)

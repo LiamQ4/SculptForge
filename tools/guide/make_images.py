@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+# SculptForge - open source digital sculpting
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Turns the raw UI screenshots of tools/guide/shots.sfui into the user guide's images.
+
+    build/sculptforge --ui-test tools/guide/shots.sfui --ui-out build/guide-shots
+    python3 tools/guide/make_images.py build/guide-shots [--preview sheet.png]
+
+Each image is a crop of a 1600x960 screenshot (coordinates below), optionally labelled, scaled to at most
+MAX_WIDTH and saved as a JPEG of a few dozen KB in docs/guide/images. Needs Pillow.
+"""
+import argparse
+import pathlib
+import sys
+
+from PIL import Image, ImageDraw, ImageFont
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+OUT = ROOT / "docs" / "guide" / "images"
+FONT = ROOT / "assets" / "fonts" / "Inter-SemiBold.ttf"
+MAX_WIDTH = 1100
+ACCENT = (240, 136, 46)
+
+# name: (screenshot, (x0, y0, x1, y1) crop in 1600x960 window pixels, max width)
+CROPS = {
+    "palette-dropdown": ("palette-dropdown", (0, 0, 620, 560), 620),
+    "palette-tray": ("palette-tray", (1276, 46, 1600, 520), 324),
+    "draw-palette": ("draw-palette", (240, 20, 640, 330), 400),
+    "lightbox": ("lightbox", (100, 100, 900, 300), 800),
+    "brush-picker": ("brush-picker", (250, 100, 740, 430), 490),
+    "stroke-picker": ("stroke-picker", (0, 200, 440, 360), 440),
+    "alpha-picker": ("alpha-picker", (0, 310, 600, 520), 600),
+    "material-picker": ("material-picker", (0, 330, 520, 590), 520),
+    "ctrl-help": ("ctrl-help", (1040, 180, 1600, 420), 560),
+    "command-palette": ("command-palette", (340, 120, 980, 250), 640),
+    "console": ("console", (0, 690, 1280, 900), MAX_WIDTH),
+    "preferences": ("preferences", (440, 20, 790, 690), 350),
+    "right-shelf": ("overview", (1200, 110, 1290, 560), 90),
+    "bottom-shelf": ("overview", (0, 890, 1280, 960), MAX_WIDTH),
+    "sculpt-lion": ("overview", (0, 46, 1280, 900), 960),
+    "brush-lab": ("brush-lab", (110, 120, 580, 370), 470),
+    "brush-library": ("brush-library", (140, 40, 480, 960), 340),
+    "community-brushes": ("community-brushes", (390, 130, 1210, 820), 820),
+    "generate-3d": ("generate-3d", (882, 132, 1204, 862), 322),
+    "export": ("export", (1276, 46, 1600, 700), 324),
+    "masking": ("masking", (420, 46, 1600, 800), 960),
+    "polypaint": ("polypaint", (190, 20, 900, 800), 710),
+    "layers": ("layers", (1276, 46, 1600, 560), 324),
+    "subtools": ("subtools", (380, 46, 1600, 900), 960),
+    "polygroups": ("polygroups", (300, 100, 1600, 860), 960),
+    "splats": ("splats", (420, 46, 1600, 900), 960),
+    "user-guide": ("user-guide", (130, 140, 1190, 880), 1060),
+}
+
+# The labelled overview: region name and box in window pixels.
+REGIONS = [
+    ("Title strip", (0, 0, 1600, 24)),
+    ("Palette bar", (0, 24, 1276, 46)),
+    ("Top shelf", (8, 50, 1216, 114)),
+    ("Left shelf", (2, 118, 100, 640)),
+    ("Canvas", (102, 118, 1216, 895)),
+    ("Right shelf", (1218, 118, 1276, 560)),
+    ("Bottom shelf", (2, 897, 1276, 960)),
+    ("Right tray (Tool palette)", (1280, 50, 1600, 560)),
+]
+
+
+def font(size):
+    try:
+        return ImageFont.truetype(str(FONT), size)
+    except OSError:
+        return ImageFont.load_default()
+
+
+def save(img: Image.Image, name: str, max_width: int):
+    if img.width > max_width:
+        img = img.resize((max_width, round(img.height * max_width / img.width)), Image.LANCZOS)
+    path = OUT / f"{name}.jpg"
+    img.convert("RGB").save(path, "JPEG", quality=84, optimize=True, progressive=True)
+    return path
+
+
+def label(draw, xy, text, size=17, anchor="la"):
+    f = font(size)
+    x0, y0, x1, y1 = draw.textbbox(xy, text, font=f, anchor=anchor)
+    draw.rounded_rectangle((x0 - 7, y0 - 4, x1 + 7, y1 + 5), radius=6, fill=ACCENT)
+    draw.text(xy, text, font=f, fill=(255, 255, 255), anchor=anchor)
+
+
+def overview(shots: pathlib.Path):
+    img = Image.open(shots / "overview.png").convert("RGB")
+    over = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(over)
+    for _, box in REGIONS:
+        d.rectangle(box, outline=ACCENT + (255,), width=3)
+    img = Image.alpha_composite(img.convert("RGBA"), over)
+    d = ImageDraw.Draw(img)
+    # Where each label sits, and the point its leader line goes to (None: the label is inside its region).
+    spots = {
+        "Title strip": ((760, 170), (760, 12)), "Palette bar": ((420, 170), (420, 35)),
+        "Top shelf": ((1060, 170), (1060, 100)), "Left shelf": ((112, 400), None),
+        "Canvas": ((640, 800), None), "Right shelf": ((1206, 590), None),
+        "Bottom shelf": ((640, 880), None), "Right tray (Tool palette)": ((1440, 600), None),
+    }
+    anchors = {"Left shelf": "lm", "Right shelf": "rm", "Canvas": "mm", "Bottom shelf": "mb",
+               "Right tray (Tool palette)": "mm"}
+    for name, _ in REGIONS:
+        at, target = spots[name]
+        if target:
+            d.line((at, target), fill=ACCENT, width=3)
+            d.ellipse((target[0] - 5, target[1] - 5, target[0] + 5, target[1] + 5), fill=ACCENT)
+        label(d, at, name, 19, anchors.get(name, "mm"))
+    return save(img, "interface-overview", 1280)
+
+
+def remesh(shots: pathlib.Path):
+    box = (380, 230, 940, 780)
+    before = Image.open(shots / "remesh-before.png").convert("RGB").crop(box)
+    after = Image.open(shots / "remesh-after.png").convert("RGB").crop(box)
+    img = Image.new("RGB", (before.width * 2 + 12, before.height), (20, 20, 22))
+    img.paste(before, (0, 0))
+    img.paste(after, (before.width + 12, 0))
+    d = ImageDraw.Draw(img)
+    label(d, (before.width // 2, 24), "Before: decimated, uneven", 20, "mt")
+    label(d, (before.width + 12 + after.width // 2, 24), "After Voxel Remesh", 20, "mt")
+    return save(img, "remesh", 900)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("shots", type=pathlib.Path, help="folder with the screenshots (--ui-out of shots.sfui)")
+    ap.add_argument("--preview", type=pathlib.Path, help="also write a contact sheet of every image here")
+    args = ap.parse_args()
+    OUT.mkdir(parents=True, exist_ok=True)
+    made = [overview(args.shots), remesh(args.shots)]
+    for name, (shot, box, width) in CROPS.items():
+        src = args.shots / f"{shot}.png"
+        if not src.exists():
+            print(f"missing screenshot {src}", file=sys.stderr)
+            return 1
+        made.append(save(Image.open(src).convert("RGB").crop(box), name, width))
+    for p in made:
+        print(f"{p.relative_to(ROOT)}  {p.stat().st_size // 1024} KB")
+    if args.preview:
+        thumbs = [Image.open(p) for p in made]
+        cols, cell = 5, 320
+        sheet = Image.new("RGB", (cols * cell, ((len(thumbs) + cols - 1) // cols) * cell), (40, 40, 40))
+        for i, t in enumerate(thumbs):
+            t.thumbnail((cell - 8, cell - 24))
+            sheet.paste(t, ((i % cols) * cell + 4, (i // cols) * cell + 4))
+            ImageDraw.Draw(sheet).text(((i % cols) * cell + 4, (i // cols) * cell + cell - 18), made[i].stem, fill="yellow")
+        sheet.save(args.preview)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

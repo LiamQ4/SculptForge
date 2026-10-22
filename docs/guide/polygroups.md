@@ -1,0 +1,143 @@
+# Polygroups and visibility
+
+Polygroups divide a SubTool's surface into named regions, shown as flat colours when you turn them on. You use
+them to hide and isolate parts of a model so you can reach what you want to sculpt, to build masks, and to
+split a model into SubTools. This chapter covers creating polygroups, the <kbd>Ctrl</kbd>+<kbd>Shift</kbd>
+visibility gestures and the **Tool > Polygroups** and **Tool > Visibility** controls.
+
+![Polygroups shown as colours, with the Polygroups sub-palette](images/polygroups.jpg)
+
+## Show polygroups
+
+Click **Groups** in the right shelf to colour each polygroup of the active SubTool. The same toggle is
+**Show polygroups** in **Tool > Polygroups** and **Show Polygroups** in the **Render** palette. The grouping
+buttons turn the colours on for you, so you see the result straight away.
+
+The number next to **Show polygroups** is how many polygroups are visible right now.
+
+A mesh without polygroups is one group. Polygroups come from:
+
+- the grouping buttons below;
+- OBJ files: each `g` group becomes a polygroup, as ZBrush writes them (SculptForge also writes polygroups as
+  `g` groups when it exports OBJ);
+- `.GoZ` files from ZBrush and SculptForge projects, which keep polygroups.
+
+## Create polygroups
+
+Open **Tool > Polygroups**. Grouping works on the **visible** part of the SubTool only; hidden parts keep their
+groups. So you can isolate one part and regroup just that part.
+
+| Control | What it does | Command |
+|---|---|---|
+| **By normals** | A new group wherever the surface turns more than the angle next to it (1 to 90 degrees, default 30). Each flat side of a box becomes its own group. | `polygroup_auto_by_normals` |
+| **By pieces** | One group per disconnected piece, such as separate eyes or buttons in one mesh. | `polygroup_by_connectivity` |
+| **From mask** | Masked triangles move into a new group. | `polygroup_from_mask` |
+| **Merge visible** | Everything visible becomes one group. | `polygroup_merge_visible` |
+| **Clear groups** | Remove all polygroups; the whole SubTool becomes one group again. | `polygroup_clear` |
+
+Each button is one undo step.
+
+> **ZBrush:** **By normals** is Auto Groups / Groups By Normals, **By pieces** is Auto Groups on a mesh with
+> separate parts, **From mask** is Group Masked (<kbd>Ctrl</kbd>+<kbd>W</kbd> in ZBrush; it has no shortcut
+> here, but you can assign one), and **Merge visible** is Group Visible.
+
+### Group a region you painted
+
+1. Paint a mask over the region with <kbd>Ctrl</kbd> (see [Masking](masking.md)).
+2. Click **From mask** in **Tool > Polygroups**.
+3. <kbd>Ctrl</kbd> + drag on the background to clear the mask.
+
+## Hide and show parts
+
+Visibility is the main reason to have polygroups: hide what is in the way, sculpt what's left, then show
+everything again. Hidden parts can't be sculpted, painted or masked, so hiding also protects them.
+
+All of the gestures use <kbd>Ctrl</kbd>+<kbd>Shift</kbd> in the viewport (<kbd>Cmd</kbd>+<kbd>Shift</kbd> on
+macOS):
+
+| Gesture | Effect |
+|---|---|
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click a polygroup | Isolate it: show only that group. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click the isolated group again | Invert the visibility: show everything else instead. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd> + click a polygroup | Hide that group. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click the background | Show everything. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + drag a rectangle | Keep what's inside the rectangle, hide the rest. The rectangle is drawn green. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd> + drag a rectangle | Hide what's inside the rectangle. The rectangle is drawn red. |
+
+The rectangle works in screen space: a triangle counts as inside when its centre falls inside the rectangle as
+you see it, including triangles on the far side of the model. You can press or release <kbd>Alt</kbd> while
+dragging; what counts is whether it is held when you let go.
+
+SculptForge refuses a change that would hide everything, as ZBrush does. Every visibility change is one undo
+step, so <kbd>Ctrl</kbd>+<kbd>Z</kbd> brings back what you just hid.
+
+> **ZBrush:** the gestures are the same as ZBrush's SelectRect with polygroups. SelectLasso, Grow and Shrink
+> visibility and hiding by clicking with the rectangle brush are not available yet.
+
+### The Visibility sub-palette
+
+Open **Tool > Visibility**:
+
+| Control | What it does | Command |
+|---|---|---|
+| **Show all** | Show every hidden part again. Available when something is hidden. | `show_all` |
+| **Invert visible** | Hide what is visible and show what is hidden. | `invert_visibility` |
+| **Delete hidden** | Permanently remove the hidden triangles from the mesh. Undoable. | `delete_hidden` |
+
+**Delete hidden** keeps every attribute of what remains (mask, polypaint, polygroups, UVs and sculpt layers).
+Use it to cut away parts of a scan or a generated model, or to remove the inside of a mesh after you isolated
+the outside.
+
+## Typical workflows
+
+### Work on one part of a character
+
+1. Click **By pieces** (for a mesh made of separate parts) or **By normals**.
+2. <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click the part you want, for example the head.
+3. Sculpt. The rest of the body is hidden and can't be touched.
+4. <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click the background to show everything.
+
+### Clean up a scan or a generated model
+
+1. Turn the model so the unwanted piece is on screen.
+2. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd> + drag a rectangle over it to hide it.
+3. Click **Delete hidden** in **Tool > Visibility**.
+
+### Split a model into SubTools
+
+Group the model, then click **Split groups** in **Tool > SubTool**: each polygroup becomes its own SubTool.
+**Split parts** does the same by disconnected piece. See [SubTools](subtools.md).
+
+## Polygroups and other tools
+
+- **Masking**: **By polygroup** in **Tool > Masking** masks one group (see [Masking](masking.md)).
+- **Brushes and polypaint** skip hidden faces.
+- **Projects** save polygroups and what's hidden; **GoZ** and **OBJ** carry polygroups to and from ZBrush.
+- Each SubTool has its own polygroups and visibility. To show and hide whole SubTools, use the eye icons and
+  **Solo** in **Tool > SubTool**.
+
+## Polygroups from a script
+
+| Command | Options |
+|---|---|
+| `polygroup_auto_by_normals` | `angle` (1-180 degrees, default 30) |
+| `polygroup_by_connectivity`, `polygroup_from_mask`, `polygroup_merge_visible`, `polygroup_clear` | |
+| `isolate_polygroup`, `hide_polygroup` | `group` (required): the polygroup id |
+| `show_all`, `invert_visibility`, `delete_hidden` | |
+| `hide_rect` | `x0 y0 x1 y1` (-1 to 1, y up), `inside`, optional `view_proj` matrix; without a view the rectangle spans the mesh seen from the front |
+
+When you isolate or hide a group in the viewport, the console (<kbd>`</kbd>) shows the command with the group's
+id, for example `isolate_polygroup group=3`, which you can reuse in scripts.
+
+```sh
+sculptforge-cli -c 'open path=robot.obj; polygroup_by_connectivity; subtool_split_groups; save_project path=robot.sfproj'
+```
+
+> **Not yet:** a polygroup paint brush, Group Front, polygroups from UV islands or PolyPaint, and
+> polygroup-based crease edges are not available yet.
+
+## See also
+
+- [Masking](masking.md): build masks from polygroups and polygroups from masks
+- [SubTools](subtools.md): split by groups, show, hide and solo whole SubTools
+- [Keyboard and mouse reference](shortcuts.md)

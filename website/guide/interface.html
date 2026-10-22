@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The interface - SculptForge User Guide</title>
+  <meta name="description" content="SculptForge&#x27;s window is laid out like ZBrush&#x27;s: a canvas in the middle, shelves of the most-used controls around it, a bar of alphabetical palettes that hold every function, and trays at the sides where palettes can stay open. This chapter walks through each region, the pop-up pickers, the LightBox,">
+  <meta name="theme-color" content="#111114">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" type="image/svg+xml" href="../img/favicon.svg?v=2">
+  <link rel="icon" type="image/png" href="../img/favicon-64.png?v=2">
+  <link rel="apple-touch-icon" href="../img/icon-256.png?v=2">
+  <link rel="canonical" href="https://islandmed.github.io/SculptForge/guide/interface.html">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="The interface - SculptForge User Guide">
+  <meta property="og:description" content="SculptForge&#x27;s window is laid out like ZBrush&#x27;s: a canvas in the middle, shelves of the most-used controls around it, a bar of alphabetical palettes that hold every function, and trays at the sides where palettes can stay open. This chapter walks through each region, the pop-up pickers, the LightBox,">
+  <meta property="og:image" content="https://islandmed.github.io/SculptForge/img/social-preview.png?v=2">
+  <meta property="og:url" content="https://islandmed.github.io/SculptForge/guide/interface.html">
+  <link rel="stylesheet" href="../style.css?v=7">
+  <script src="../motion.js?v=1" defer></script>
+  <script src="search-index.js?v=21" defer></script>
+</head>
+<body class="guide-page" data-prev="installing.html" data-next="navigation.html">
+  <div class="scroll-progress" aria-hidden="true"></div>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="../index.html"><img src="../img/logo.svg?v=2" alt="" width="34" height="34"><span>SculptForge</span></a>
+      <nav aria-label="Main">
+        <a href="../index.html#features">Features</a>
+        <a href="../index.html#demos">Demos</a>
+        <a href="../brushes.html">Brushes</a>
+        <a href="index.html" aria-current="page">Guide</a>
+        <a class="nav-dl" href="../index.html#download">Download</a>
+        <a class="gh" href="https://github.com/islandmed/SculptForge">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <div class="wrap guide-layout">
+    <div class="guide-side">
+      <button class="toc-toggle" type="button" aria-expanded="false" aria-controls="guide-toc">
+        <span>Contents</span><span class="toc-current">The interface</span></button>
+      <div id="guide-toc" class="toc-panel">
+        <div class="guide-search" role="search">
+          <input type="search" id="guide-q" placeholder="Search the guide" aria-label="Search the guide" autocomplete="off">
+          <div class="search-results" id="guide-results" hidden></div>
+        </div>
+        <nav class="toc" aria-label="User guide"><a class="toc-home" href="index.html">Contents</a><p class="toc-group">Getting started</p><ul><li><a href="welcome.html">Welcome to SculptForge</a></li><li><a href="installing.html">Installing SculptForge</a></li><li><a href="interface.html" class="current" aria-current="page">The interface</a><ul class="toc-sections"><li><a href="#the-regions-at-a-glance">The regions at a glance</a></li><li><a href="#the-title-strip">The title strip</a></li><li><a href="#palettes">Palettes</a></li><li><a href="#trays">Trays</a></li><li><a href="#the-shelves">The shelves</a></li><li><a href="#pop-up-pickers">Pop-up pickers</a></li><li><a href="#the-lightbox">The LightBox</a></li><li><a href="#getting-help-on-anything">Getting help on anything</a></li><li><a href="#the-command-palette">The command palette</a></li><li><a href="#the-console">The console</a></li><li><a href="#customizing-the-interface">Customizing the interface</a></li><li><a href="#see-also">See also</a></li></ul></li><li><a href="navigation.html">Navigating the view</a></li></ul><p class="toc-group">Sculpting</p><ul><li><a href="sculpting.html">Sculpting and brushes</a></li><li><a href="brush-lab.html">Brush Lab and sharing brushes</a></li><li><a href="masking.html">Masking</a></li><li><a href="polygroups.html">Polygroups and visibility</a></li><li><a href="subtools.html">SubTools</a></li><li><a href="polypaint.html">Polypaint and materials</a></li><li><a href="layers.html">Sculpt layers and blend shapes</a></li><li><a href="geometry.html">Subdivide, remesh, decimate and LODs</a></li></ul><p class="toc-group">AI and capture</p><ul><li><a href="generate-3d.html">Image and text to 3D</a></li><li><a href="splats.html">Gaussian splats</a></li></ul><p class="toc-group">Files and pipelines</p><ul><li><a href="exporting.html">Exporting, Unreal and ZBrush</a></li><li><a href="projects.html">Projects, autosave and QuickSave</a></li><li><a href="scripting.html">Scripting and automation</a></li><li><a href="studios.html">SculptForge for studios</a></li></ul><p class="toc-group">Reference</p><ul><li><a href="shortcuts.html">Keyboard and mouse</a></li><li><a href="troubleshooting.html">Troubleshooting and FAQ</a></li><li><a href="glossary.html">Glossary</a></li></ul></nav>
+      </div>
+    </div>
+    <main class="guide-main" id="top">
+      <article class="guide-article">
+<h1 id="the-interface">The interface</h1>
+<p>SculptForge&#x27;s window is laid out like ZBrush&#x27;s: a canvas in the middle, shelves of the most-used controls around it, a bar of alphabetical palettes that hold every function, and trays at the sides where palettes can stay open. This chapter walks through each region, the pop-up pickers, the LightBox, the built-in help, and how to rearrange the interface and keep your changes.</p>
+<figure class="shot"><a href="images/interface-overview.jpg" class="zoom"><img src="images/interface-overview.jpg" alt="The SculptForge window with its main regions labelled" width="1280" height="768" loading="lazy" decoding="async"></a><figcaption>The SculptForge window with its main regions labelled</figcaption></figure>
+<h2 id="the-regions-at-a-glance">The regions at a glance<a class="anchor" href="#the-regions-at-a-glance" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>Region</th><th>Where</th><th>What it holds</th></tr></thead><tbody><tr><td>Title strip</td><td>Top edge</td><td>Document name, scene statistics, status messages, QuickSave, layout presets, Menus, Search</td></tr><tr><td>Palette bar</td><td>Under the title strip</td><td>The 16 palettes, which hold every function</td></tr><tr><td>Top shelf</td><td>Above the canvas</td><td>LightBox, Sculpt/Paint, Zadd/Zsub, Rgb, Draw Size, Strength, symmetry, pressure</td></tr><tr><td>Left shelf</td><td>Left of the canvas</td><td>Brush, Stroke, Alpha and Material tiles, the colour picker</td></tr><tr><td>Canvas</td><td>Centre</td><td>The 3D view; strokes and navigation start only here</td></tr><tr><td>Right shelf</td><td>Right of the canvas</td><td>Frame, Move, Zoom and Rotate, display toggles, Solo</td></tr><tr><td>Bottom shelf</td><td>Below the canvas</td><td>Your quick brushes</td></tr><tr><td>Trays</td><td>Far left and far right</td><td>Palettes you keep open; the right tray holds the Tool palette by default</td></tr></tbody></table></div>
+<p>Press <kbd>Tab</kbd> to hide the shelves and trays for a bigger canvas, and again to bring them back. The palette bar stays, so every function is still one click away.</p>
+<h2 id="the-title-strip">The title strip<a class="anchor" href="#the-title-strip" aria-label="Link to this section">#</a></h2>
+<p>From left to right:</p>
+<ul>
+<li>
+<strong>SculptForge</strong> and the <strong>document name</strong> (&quot;Untitled&quot; until you save). A <code>*</code> after the name means there are unsaved changes; click the name to save (<kbd>Ctrl</kbd>+<kbd>S</kbd>).
+</li>
+<li>
+<strong>Scene statistics</strong>: vertices and triangles across all SubTools, the active SubTool and its position (&quot;SubTool Body (2/5)&quot;), the active sculpt layer (&quot;Layer Base&quot; when you sculpt the base mesh), the number of Gaussian splats when a capture is loaded, and the frame rate.
+</li>
+<li>
+<strong>The status message</strong>: the result of the last command or action. Errors show in red for a few seconds. Point at a long message to read all of it.
+</li>
+<li>
+<strong>QuickSave</strong>: saves a timestamped copy of the whole scene to your library without touching your project file (see <a href="projects.html">Projects, autosave and QuickSave</a>).
+</li>
+<li>
+<strong>1</strong>, <strong>2</strong>, <strong>3</strong>: the layout presets (see <a href="#layout-presets">Layout presets</a>).
+</li>
+<li>
+<strong>Menus</strong>: shows or hides the palette bar.
+</li>
+<li>
+<strong>Search</strong> (<kbd>F3</kbd>): opens the <a href="#the-command-palette">command palette</a>.
+</li>
+<li>
+<strong>Minimize</strong> and <strong>Close</strong> at the far right. Close asks to save changes first, as <kbd>Ctrl</kbd>+<kbd>Q</kbd> does.
+</li>
+</ul>
+<h2 id="palettes">Palettes<a class="anchor" href="#palettes" aria-label="Link to this section">#</a></h2>
+<p>Every function in SculptForge lives in one of 16 palettes. Click a palette&#x27;s name in the palette bar and it drops down under the name. Click another name to switch, or press <kbd>Esc</kbd> or click outside to close it.</p>
+<figure class="shot"><a href="images/palette-dropdown.jpg" class="zoom"><img src="images/palette-dropdown.jpg" alt="The Stroke palette open as a drop-down from the palette bar" width="620" height="560" loading="lazy" decoding="async"></a><figcaption>The Stroke palette open as a drop-down from the palette bar</figcaption></figure>
+<p>The palette bar lists <strong>File</strong> and <strong>Edit</strong> first and <strong>Help</strong> last, where other desktop applications put them, and the rest in alphabetical order. If you prefer ZBrush&#x27;s strict A to Z order, turn on <strong>Preferences &gt; Interface &gt; Palettes strictly A-Z (ZBrush order)</strong>.</p>
+<div class="table-wrap"><table><thead><tr><th>Palette</th><th>What&#x27;s in it</th></tr></thead><tbody><tr><td><strong>File</strong></td><td>New Sphere, New Plane, Open, Open Recent, Save, Save As, autosave interval, Import and every export (OBJ, GLB, LOD chain, USD/USDZ, FBX for Unreal, Send to Unreal, splats), ZBrush (GoZ), Quit</td></tr><tr><td><strong>Edit</strong></td><td>Undo and Redo (with the name of the step), Paste brush</td></tr><tr><td><strong>Alpha</strong></td><td>The brush alphas: Round, Square, Noise, images from your library, Load image, Invert loaded image</td></tr><tr><td><strong>Brush</strong></td><td>AI Brush (Brush Lab), Community brushes, Paste brush, your custom brushes, Front faces only, Invert (Alt), the recipe editor for a custom brush, and every brush as a thumbnail grid with a filter</td></tr><tr><td><strong>Color</strong></td><td>The Paint brush, RGB while sculpting, the paint colour and swatches, Fill, Fill masked, Cavity, Clear, Show polypaint</td></tr><tr><td><strong>Draw</strong></td><td>Draw Size, Strength, Sculpt/Paint, Zadd/Zsub, Rgb, Front, and the tablet options (Pressure &gt; strength, Pressure &gt; size) with a pen readout</td></tr><tr><td><strong>Generate</strong></td><td>Generate 3D (image or text to 3D), Relief, Inflate and Stamp from an image, and the AI brush provider settings</td></tr><tr><td><strong>Material</strong></td><td>Studio and the six MatCap materials, Base colour</td></tr><tr><td><strong>Preferences</strong></td><td>Config, Interface, Hotkeys, LightBox and Autosave sub-palettes (see <a href="#customizing-the-interface">Customizing the interface</a>)</td></tr><tr><td><strong>Render</strong></td><td>Wireframe, Show Mesh, Show Polypaint, Show Mask, Show Polygroups, Show Splats, Frame, Fullscreen</td></tr><tr><td><strong>Script</strong></td><td>Console, Run script file, Copy session as script, Clear console</td></tr><tr><td><strong>Splats</strong></td><td>Gaussian splat tools: show, flip, turn, fit, clean floaters, convert to mesh, sculpt to splats, save, clear</td></tr><tr><td><strong>Stroke</strong></td><td>The stroke types (Dots, DragRect, Spray, LazyMouse) and their settings</td></tr><tr><td><strong>Tool</strong></td><td>The active SubTool with Open, Save and Import, and the SubTool, Layers, Geometry, Remesh, Masking, Polygroups, Visibility, Export and Display sub-palettes</td></tr><tr><td><strong>Transform</strong></td><td>Symmetry X, Y and Z, Frame, Solo, PolyF</td></tr><tr><td><strong>Help</strong></td><td>Controls, User Guide, Command palette, Website &amp; documentation, Report a problem, About SculptForge</td></tr></tbody></table></div>
+<h3 id="sub-palettes">Sub-palettes<a class="anchor" href="#sub-palettes" aria-label="Link to this section">#</a></h3>
+<p>Large palettes are divided into <strong>sub-palettes</strong>: headers you click to open or close. The Tool palette is the main example (SubTool, Layers, Geometry and so on). By default opening one sub-palette closes the others in the same palette, which keeps the palette short. <strong>Shift</strong>+click a header to open it without closing the others, or turn off <strong>Preferences &gt; Interface &gt; One sub-palette open</strong>.</p>
+<aside class="callout callout-zbrush"><p><strong>ZBrush:</strong> as in ZBrush, SubTool, Layers, Masking, Polygroups and Visibility are sub-palettes of the Tool palette rather than palettes of their own. SculptForge&#x27;s Remesh sub-palette is where DynaMesh would be.</p></aside>
+<h2 id="trays">Trays<a class="anchor" href="#trays" aria-label="Link to this section">#</a></h2>
+<p>The trays are columns at the far left and far right of the window where palettes stay open while you work. The right tray is open by default and holds the <strong>Tool</strong> palette; the left tray starts closed and empty.</p>
+<ul>
+<li>
+<strong>Put a palette in a tray</strong>: open it from the palette bar and click the tray icon at the left of its header. It goes into the right tray; <strong>Shift</strong>+click the icon to put it in the left tray. You can also drag the icon onto a tray.
+</li>
+<li>
+<strong>Take it out again</strong>: click the tray icon in its header inside the tray. The palette returns to the bar.
+</li>
+<li>
+<strong>Collapse it in place</strong>: click its title (or the arrow at the right of the header).
+</li>
+<li>
+<strong>Find it</strong>: a palette that is in a tray shows its name in orange in the palette bar. Clicking the name scrolls the tray to the palette and flashes its header.
+</li>
+<li>
+<strong>Open or close a tray</strong>: click its divider, the thin strip with a grip between the tray and the shelves. <strong>Drag</strong> the divider to make the tray wider or narrower (240 to 480 pixels).
+</li>
+</ul>
+<figure class="shot"><a href="images/palette-tray.jpg" class="zoom"><img src="images/palette-tray.jpg" alt="The Stroke palette kept in the right tray above the Tool palette" width="324" height="474" loading="lazy" decoding="async"></a><figcaption>The Stroke palette kept in the right tray above the Tool palette</figcaption></figure>
+<p>When a tray holds several palettes, <strong>Preferences &gt; Interface &gt; Auto collapse left tray</strong> (on by default) and <strong>Auto collapse right tray</strong> (off by default) collapse the other palettes when the one you open would not fit.</p>
+<p>When you open a Gaussian splat capture, the Splats palette moves into the right tray by itself.</p>
+<aside class="callout callout-note"><p><strong>Note:</strong> on a window narrower than 1280 pixels (at 100% UI scale) the right tray folds away and palettes open as drop-downs only. The left-shelf tiles get smaller and the bottom shelf scrolls sideways with the mouse wheel.</p></aside>
+<h2 id="the-shelves">The shelves<a class="anchor" href="#the-shelves" aria-label="Link to this section">#</a></h2>
+<p>Shelves surround the canvas and hold the controls you use all the time. Point at anything with <kbd>Ctrl</kbd> held to see what it does. Right-click an item for <strong>Remove from shelf</strong>; see <a href="#customizing-the-interface">Customizing the interface</a> to add items.</p>
+<h3 id="top-shelf">Top shelf<a class="anchor" href="#top-shelf" aria-label="Link to this section">#</a></h3>
+<p>First row:</p>
+<ul>
+<li>
+<strong>LightBox</strong> (<kbd>,</kbd>): shows or hides the <a href="#the-lightbox">LightBox</a>.
+</li>
+<li>
+<strong>Sculpt</strong> / <strong>Paint</strong> (<kbd>P</kbd>): brushes change the shape, or paint colour without sculpting.
+</li>
+<li>
+<strong>Zadd</strong> / <strong>Zsub</strong>: brushes add to or subtract from the surface. Holding <kbd>Alt</kbd> flips it for one stroke.
+</li>
+<li>
+<strong>Rgb</strong>: sculpt brushes paint the colour at the same time.
+</li>
+<li>
+<strong>Draw Size</strong>: the brush radius in screen pixels (2 to 800).
+</li>
+<li>
+<strong>Strength</strong>: how strongly each dab changes the surface (0.01 to 1), ZBrush&#x27;s Z Intensity.
+</li>
+</ul>
+<p>Second row:</p>
+<ul>
+<li>
+<strong>AI Brush</strong>: opens Brush Lab (see <a href="brush-lab.html">Brush Lab and sharing brushes</a>).
+</li>
+<li>
+<strong>Front</strong>: front faces only, so brushes leave the far side of thin parts alone.
+</li>
+<li>
+<strong>X</strong>, <strong>Y</strong>, <strong>Z</strong>: symmetry across each axis (<kbd>X</kbd> toggles X).
+</li>
+<li>
+<strong>Pressure &gt; Strength</strong> and <strong>Pressure &gt; Size</strong>: what pen pressure controls.
+</li>
+<li>
+<strong>ActiveTris / TotalTris</strong> at the right: the triangles you can see and sculpt (visible SubTools, hidden parts left out) and the total in the scene.
+</li>
+</ul>
+<p>Draw Size and Strength are sliders with the label inside, as in ZBrush: drag along them, or <kbd>Ctrl</kbd>+click to type a value.</p>
+<h3 id="left-shelf">Left shelf<a class="anchor" href="#left-shelf" aria-label="Link to this section">#</a></h3>
+<p>Four large tiles, each showing the current choice. Click one to open its <a href="#pop-up-pickers">pop-up picker</a>:</p>
+<ul>
+<li>
+<strong>Brush</strong>: the active brush, with a rendered preview.
+</li>
+<li>
+<strong>Stroke</strong>: Dots, DragRect, Spray or LazyMouse.
+</li>
+<li>
+<strong>Alpha</strong>: the brush&#x27;s stamp shape.
+</li>
+<li>
+<strong>Material</strong>: how the model is shaded in the view.
+</li>
+</ul>
+<p>Under them is the <strong>colour picker</strong> for polypaint (a saturation/value square and a hue strip), two swatches (the main and second colour; click either to swap them, like ZBrush&#x27;s Alternate) and <strong>Fill</strong>, which fills the unmasked area with the main colour.</p>
+<h3 id="right-shelf">Right shelf<a class="anchor" href="#right-shelf" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>
+<strong>Frame</strong> (<kbd>F</kbd>): fits the model in the view.
+</li>
+<li>
+<strong>Move</strong>, <strong>Zoom</strong>, <strong>Rotate</strong>: drag on these buttons to pan, zoom and orbit the view, as in ZBrush.
+</li>
+<li>
+<strong>PolyF</strong> (<kbd>W</kbd>): shows the mesh&#x27;s triangles.
+</li>
+<li>
+<strong>Groups</strong>: colours each polygroup.
+</li>
+<li>
+<strong>Mask</strong>: darkens masked areas (on by default).
+</li>
+<li>
+<strong>Paint</strong>: shows polypaint colours (on by default).
+</li>
+<li>
+<strong>Solo</strong>: shows only the active SubTool (available with two or more SubTools).
+</li>
+<li>
+<strong>Splats</strong>: shows or hides a Gaussian splat capture (only shown while one is loaded).
+</li>
+</ul>
+<p>Toggles that are on have an orange background. See <a href="navigation.html">Navigating the view</a> for the camera.</p>
+<h3 id="bottom-shelf">Bottom shelf<a class="anchor" href="#bottom-shelf" aria-label="Link to this section">#</a></h3>
+<p>A row of quick brushes: Standard, Clay, ClayBuildup, DamStandard, Move, Smooth, Inflate, Pinch, Flatten, Crease, Trim, SnakeHook, Layer, Nudge and Paint. The small digit in a tile&#x27;s corner is its shortcut (<kbd>1</kbd> to <kbd>9</kbd> and <kbd>0</kbd> select the first ten built-in brushes, <kbd>P</kbd> is Paint). The active brush has an orange outline.</p>
+<figure class="shot"><a href="images/bottom-shelf.jpg" class="zoom"><img src="images/bottom-shelf.jpg" alt="The bottom shelf of quick brushes" width="1100" height="60" loading="lazy" decoding="async"></a><figcaption>The bottom shelf of quick brushes</figcaption></figure>
+<ul>
+<li>
+<strong>Add a brush</strong>: click <strong>+</strong> at the end of the shelf and pick any brush, built-in or one of your own. Or right-click a brush in the brush picker and choose <strong>Add to bottom shelf</strong>. Custom brushes show a small sparkle in the corner.
+</li>
+<li>
+<strong>Remove a brush</strong>: right-click its tile and choose <strong>Remove from shelf</strong>.
+</li>
+</ul>
+<h2 id="pop-up-pickers">Pop-up pickers<a class="anchor" href="#pop-up-pickers" aria-label="Link to this section">#</a></h2>
+<p>Pickers are pop-up grids of thumbnails. They open beside the left-shelf tile you click, or under the mouse when you use a key. They close when you pick something, press <kbd>Esc</kbd> or click elsewhere. Pointing at a tile for a moment shows <strong>Quick Info</strong>: a large preview and a description.</p>
+<h3 id="brush-picker">Brush picker<a class="anchor" href="#brush-picker" aria-label="Link to this section">#</a></h3>
+<p>Press <kbd>B</kbd> (or click the Brush tile). The picker shows a <strong>Recent</strong> row, then <strong>Built-in</strong>, <strong>Custom</strong> (your brushes and Brush Lab creations) and <strong>Library</strong> (<code>.sfbrush</code> files in your library that aren&#x27;t loaded yet; picking one loads it).</p>
+<figure class="shot"><a href="images/brush-picker.jpg" class="zoom"><img src="images/brush-picker.jpg" alt="The brush picker after pressing B and typing S" width="490" height="330" loading="lazy" decoding="async"></a><figcaption>The brush picker after pressing B and typing S</figcaption></figure>
+<p>Choose a brush with the keyboard the ZBrush way:</p>
+<ol>
+<li>
+Press <kbd>B</kbd>.
+</li>
+<li>
+Type the first letter of the brush. Only the brushes starting with that letter stay, and each shows an orange letter: the next key that tells it apart.
+</li>
+<li>
+Press that orange letter to pick the brush. For example <kbd>B</kbd> <kbd>S</kbd> <kbd>T</kbd> picks Standard.
+</li>
+</ol>
+<p><kbd>Backspace</kbd> takes back a letter and <kbd>Enter</kbd> picks the first match. If no name starts with what you typed, the picker falls back to names that contain it. The letter chips along the top (with a count for each letter) filter by a click as well.</p>
+<p>Right-click a brush for <strong>Add to bottom shelf</strong> and, for custom brushes, <strong>Copy brush code</strong>, <strong>Rename...</strong>, <strong>Save as .sfbrush...</strong>, <strong>Delete...</strong> and <strong>Reveal in folder</strong> (see <a href="brush-lab.html">Brush Lab and sharing brushes</a>).</p>
+<h3 id="stroke-alpha-and-material-pickers">Stroke, Alpha and Material pickers<a class="anchor" href="#stroke-alpha-and-material-pickers" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>
+<strong>Stroke</strong> (click the Stroke tile): Dots, DragRect, Spray and LazyMouse, with Scatter for Spray and Lazy radius for LazyMouse. See <a href="sculpting.html">Sculpting and brushes</a>.
+</li>
+<li>
+<strong>Alpha</strong> (click the Alpha tile): Round, Square and Noise, the image alpha you loaded, images in your library&#x27;s Alphas folder, <strong>Load image...</strong> and <strong>Invert loaded image</strong>.
+</li>
+<li>
+<strong>Material</strong> (<kbd>M</kbd>, or click the Material tile): Studio and the MatCaps. Point at a material to preview it on the model; click to keep it. Closing the picker without clicking puts the old material back. See <a href="polypaint.html">Polypaint and materials</a>.
+</li>
+</ul>
+<h3 id="draw-size-and-strength-at-the-cursor">Draw Size and Strength at the cursor<a class="anchor" href="#draw-size-and-strength-at-the-cursor" aria-label="Link to this section">#</a></h3>
+<p>Press <kbd>S</kbd> for a Draw Size slider under the mouse, or <kbd>I</kbd> for Strength. Drag the slider, or type a number and press <kbd>Enter</kbd> (<kbd>Esc</kbd> cancels). The pop-up closes when you release the slider. For Strength, typing a number above 1 is read as a percentage (<code>50</code> means 0.50). <kbd>[</kbd> and <kbd>]</kbd> make the brush 10% smaller or larger at any time.</p>
+<h2 id="the-lightbox">The LightBox<a class="anchor" href="#the-lightbox" aria-label="Link to this section">#</a></h2>
+<p>The LightBox is a strip of thumbnails across the top of the canvas for browsing everything you can load. Press <kbd>,</kbd> (comma) or click <strong>LightBox</strong> on the top shelf to show or hide it. It opens on its own at start-up (see <a href="#interface-preferences">Preferences</a>).</p>
+<figure class="shot"><a href="images/lightbox.jpg" class="zoom"><img src="images/lightbox.jpg" alt="The LightBox on the Tool tab" width="800" height="200" loading="lazy" decoding="async"></a><figcaption>The LightBox on the Tool tab</figcaption></figure>
+<div class="table-wrap"><table><thead><tr><th>Tab</th><th>Shows</th><th>Double-click</th></tr></thead><tbody><tr><td><strong>Project</strong></td><td>Projects (<code>.sfproj</code>) in your library and recently opened projects</td><td>Open the project</td></tr><tr><td><strong>Tool</strong></td><td>Sphere, Plane and Cube, and model files in your library</td><td>Open (replaces the scene)</td></tr><tr><td><strong>Brush</strong></td><td>Every brush: built-in, custom and <code>.sfbrush</code> files</td><td>Select or load the brush</td></tr><tr><td><strong>Alpha</strong></td><td>Round, Square, Noise and images in your Alphas folder</td><td>Use as the brush alpha</td></tr><tr><td><strong>Material</strong></td><td>Studio and the MatCaps</td><td>Use the material</td></tr><tr><td><strong>Image</strong></td><td>Reference images in your library</td><td>A menu: Generate 3D, relief, inflate, project onto the model, use as alpha</td></tr><tr><td><strong>Splats</strong></td><td>Gaussian splat captures (<code>.ply</code>, <code>.splat</code>)</td><td>Open the capture as a reference</td></tr><tr><td><strong>QuickSave</strong></td><td>The autosave and your QuickSaves, newest first</td><td>Open it</td></tr><tr><td><strong>Recent</strong></td><td>Recently opened files of every kind</td><td>Open it</td></tr></tbody></table></div>
+<p>Working with the strip:</p>
+<ul>
+<li>
+<strong>Shift+double-click</strong> a model, project or primitive to append it to the scene as a new SubTool instead of replacing the scene.
+</li>
+<li>
+Drag sideways (or use the mouse wheel) to scroll through the strip. A drag of more than a few pixels scrubs, so a plain click still selects.
+</li>
+<li>
+Drag a tile down out of the LightBox onto the canvas to load it, like a double-click.
+</li>
+<li>
+Folders open with a double-click; the first tile inside a folder goes back up. The arrows at the top go back and forward through tabs and folders, and the breadcrumb shows where you are.
+</li>
+<li>
+Type in <strong>Filter</strong> to show only items whose names contain the text.
+</li>
+<li>
+Choose <strong>1</strong> to <strong>4</strong> rows of thumbnails.
+</li>
+<li>
+<strong>Open folder...</strong> adds a folder of your own to the root of every tab.
+</li>
+<li>
+On the QuickSave tab, <strong>Save now</strong> makes a QuickSave.
+</li>
+<li>
+Right-click a tile for <strong>Open</strong>, <strong>Append as SubTool</strong>, the image actions, <strong>Show in file manager</strong> and <strong>Refresh thumbnail</strong>.
+</li>
+</ul>
+<p>At the root of the Tool and Image tabs is a <strong>Built-in</strong> folder (the models and images that ship with SculptForge, such as the demo lion head), and the Project, Tool, Brush, Alpha, Image and Splats tabs have a <strong>User</strong> folder, your library folder (<strong>Documents/SculptForge</strong> by default). To use a different library folder, choose it in <strong>Preferences &gt; LightBox &gt; Library folder</strong>.</p>
+<aside class="callout callout-zbrush"><p><strong>ZBrush:</strong> the LightBox works like ZBrush&#x27;s: comma toggles it, double-click loads, and Built-in and User folders play the part of ZBrush&#x27;s Maxon and User folders.</p></aside>
+<h2 id="getting-help-on-anything">Getting help on anything<a class="anchor" href="#getting-help-on-anything" aria-label="Link to this section">#</a></h2>
+<h3 id="ctrl-hover-help">Ctrl-hover help<a class="anchor" href="#ctrl-hover-help" aria-label="Link to this section">#</a></h3>
+<p>Hold <kbd>Ctrl</kbd> and point at any button, slider, tile or shelf item. A box shows the item&#x27;s name, its shortcut as keycaps, what it does, where it lives (for example &quot;Tool &gt; Geometry&quot;) and the script command it runs.</p>
+<figure class="shot"><a href="images/ctrl-help.jpg" class="zoom"><img src="images/ctrl-help.jpg" alt="Ctrl-hover help on the Subdivide button" width="560" height="240" loading="lazy" decoding="async"></a><figcaption>Ctrl-hover help on the Subdivide button</figcaption></figure>
+<p>Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd> instead to see the <strong>scripting reference</strong> for items that run a command: the command&#x27;s usage line and each parameter with its type and description. This is the same information the console, <code>sculptforge-cli</code> and AI agents use.</p>
+<p>Without <kbd>Ctrl</kbd>, icon-only buttons and labels that don&#x27;t fit show their name after a short delay (<strong>Preferences &gt; Interface &gt; Tooltip delay</strong>). Turn Ctrl-hover help off with <strong>Preferences &gt; Interface &gt; Popup Info (Ctrl+hover help)</strong>, and make the box more or less see-through with <strong>Popup Info opacity</strong>.</p>
+<h3 id="the-controls-sheet">The Controls sheet<a class="anchor" href="#the-controls-sheet" aria-label="Link to this section">#</a></h3>
+<p>Press <kbd>F1</kbd> (or <strong>Help &gt; Controls</strong>) for the <strong>Controls</strong> window. The <strong>Keyboard</strong> tab lists every action that has a shortcut, grouped by palette and generated from the actions themselves, so it always shows your current keys. The <strong>Mouse &amp; pen</strong> tab lists the gestures. Type in the filter field to search both. Double-click a row on the Keyboard tab to give that action a new key.</p>
+<h3 id="this-guide">This guide<a class="anchor" href="#this-guide" aria-label="Link to this section">#</a></h3>
+<p><strong>Help &gt; User Guide</strong> (<kbd>Shift</kbd>+<kbd>F1</kbd>) opens this guide in its own window: the contents on the left (the open chapter lists its sections), the chapter on the right, and links between chapters.</p>
+<figure class="shot"><a href="images/user-guide.jpg" class="zoom"><img src="images/user-guide.jpg" alt="The User Guide window on the Masking chapter" width="1060" height="740" loading="lazy" decoding="async"></a><figcaption>The User Guide window on the Masking chapter</figcaption></figure>
+<ul>
+<li>
+<strong>Search:</strong> type in the search box (<kbd>Ctrl</kbd>+<kbd>F</kbd>) to find every section that mentions all of your words. Click a result to jump there; the words are marked on the page. <kbd>Esc</kbd> clears it.
+</li>
+<li>
+<strong>Back and forward:</strong> the arrow buttons, <kbd>Alt</kbd>+<kbd>Left</kbd> / <kbd>Alt</kbd>+<kbd>Right</kbd>, or the back and forward buttons of your mouse.
+</li>
+<li>
+<strong>From any control:</strong> while Ctrl-hover help is showing, press <kbd>F1</kbd> (keep <kbd>Ctrl</kbd> held) to open the chapter about that control. The help box shows which chapter it is (&quot;Learn more: ...&quot;).
+</li>
+<li>
+<strong>Code blocks</strong> have a <strong>Copy</strong> button, and <strong>Open in browser</strong> shows the same page on the SculptForge website.
+</li>
+</ul>
+<p>The guide is built into SculptForge, so it works offline and always matches your version.</p>
+<h2 id="the-command-palette">The command palette<a class="anchor" href="#the-command-palette" aria-label="Link to this section">#</a></h2>
+<p>Press <kbd>F3</kbd> (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>, or click <strong>Search</strong> in the title strip) to find any action or command by name and run it. It opens at the top centre of the canvas.</p>
+<figure class="shot"><a href="images/command-palette.jpg" class="zoom"><img src="images/command-palette.jpg" alt="The command palette searching for subdivide" width="640" height="130" loading="lazy" decoding="async"></a><figcaption>The command palette searching for subdivide</figcaption></figure>
+<ul>
+<li>
+Type part of a name, a palette or a word from the description. The search is forgiving: letters in order are enough (&quot;sbdv&quot; finds Subdivide), and every word you type must match somewhere.
+</li>
+<li>
+Each row shows the action, its palette and its shortcut.
+</li>
+<li>
+<kbd>Up</kbd> and <kbd>Down</kbd> (or <kbd>Page Up</kbd> and <kbd>Page Down</kbd>) choose a row, <kbd>Enter</kbd> runs it and <kbd>Esc</kbd> closes the palette.
+</li>
+<li>
+With nothing typed, the palette lists the actions you used most recently.
+</li>
+<li>
+Commands with a required parameter (for example <code>image_relief path=</code>) open in the console with the name already typed. Other commands run with their default values; <kbd>Shift</kbd>+<kbd>Enter</kbd> sends a command with parameters to the console instead, so you can set them first.
+</li>
+</ul>
+<p>Everything scriptable is in the command palette, including commands that have no button in the interface.</p>
+<h2 id="the-console">The console<a class="anchor" href="#the-console" aria-label="Link to this section">#</a></h2>
+<p>Press <kbd>`</kbd> (the backtick key, left of <kbd>1</kbd> on US keyboards) to open the console, a strip between the canvas and the bottom shelf. It works like ZBrush&#x27;s ZScript window:</p>
+<ul>
+<li>
+Every command you run, from a button, a key, the command palette, a script or an AI agent, appears as a script line followed by its result. Errors show in red.
+</li>
+<li>
+Type a command and press <kbd>Enter</kbd>: for example <code>remesh resolution=200</code> or <code>subdivide; decimate ratio=0.5</code>. <kbd>Tab</kbd> completes command and parameter names, <kbd>Up</kbd> and <kbd>Down</kbd> recall earlier lines, and <code>help</code> (or <code>help remesh</code>) explains commands.
+</li>
+<li>
+Drag the console&#x27;s top edge to make it taller or shorter.
+</li>
+<li>
+The <strong>Script</strong> palette has <strong>Run script file...</strong>, <strong>Copy session as script</strong> (every command you ran this session, ready to replay, which makes it a macro recorder) and <strong>Clear console</strong>.
+</li>
+</ul>
+<figure class="shot"><a href="images/console.jpg" class="zoom"><img src="images/console.jpg" alt="The console after a few commands" width="1100" height="180" loading="lazy" decoding="async"></a><figcaption>The console after a few commands</figcaption></figure>
+<p>See <a href="scripting.html">Scripting and automation</a> for the command language, scripts and headless use.</p>
+<h2 id="customizing-the-interface">Customizing the interface<a class="anchor" href="#customizing-the-interface" aria-label="Link to this section">#</a></h2>
+<p>Everything about the layout can change: which palettes sit in the trays, what&#x27;s on each shelf, and which keys do what. As in ZBrush, <strong>changes last until you quit</strong> unless you store them with <strong>Store Config</strong>.</p>
+<h3 id="move-add-and-remove-shelf-items">Move, add and remove shelf items<a class="anchor" href="#move-add-and-remove-shelf-items" aria-label="Link to this section">#</a></h3>
+<ol>
+<li>
+Open <strong>Preferences &gt; Config</strong> and turn on <strong>Enable Customize</strong>. The shelves get a dashed orange outline and the status line reads &quot;Customize: Ctrl+Alt+drag to move or remove items&quot;.
+</li>
+<li>
+Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd> and drag any button, slider or tile:
+<ul>
+<li>
+onto a shelf to put it there (an orange line shows where it will go), which is how you <strong>add</strong> buttons from palettes to a shelf;
+</li>
+<li>
+along its shelf, or to another shelf, to <strong>move</strong> it;
+</li>
+<li>
+off the shelves (onto the canvas, for example) to <strong>remove</strong> it.
+</li>
+</ul>
+</li>
+</ol>
+<ol start="3">
+<li>
+Turn <strong>Enable Customize</strong> off when you&#x27;re done, and press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> to keep the result.
+</li>
+</ol>
+<p>Right-clicking a shelf item and choosing <strong>Remove from shelf</strong> works without Customize mode.</p>
+<h3 id="assign-shortcuts">Assign shortcuts<a class="anchor" href="#assign-shortcuts" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>
+Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd> and <strong>click</strong> any button (with Customize off), then press the key you want. <kbd>Esc</kbd> cancels and <kbd>Backspace</kbd> removes the button&#x27;s shortcut.
+</li>
+<li>
+Or open <strong>Preferences &gt; Hotkeys</strong>, find the action (there&#x27;s a filter), click its key button and press the new key. Keys you changed show in orange. <strong>Default shortcuts</strong> undoes every change.
+</li>
+<li>
+Or double-click a row in the Controls window (<kbd>F1</kbd>).
+</li>
+</ul>
+<p>If the key already belongs to another action, it moves to the new one (as in ZBrush) and the status line says which action lost it.</p>
+<h3 id="store-config-and-friends">Store Config and friends<a class="anchor" href="#store-config-and-friends" aria-label="Link to this section">#</a></h3>
+<p>All in <strong>Preferences &gt; Config</strong>:</p>
+<div class="table-wrap"><table><thead><tr><th>Item</th><th>What it does</th></tr></thead><tbody><tr><td><strong>Store Config</strong> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd>)</td><td>Keeps the current layout, shortcuts and interface preferences for future sessions</td></tr><tr><td><strong>Restore Custom UI</strong></td><td>Goes back to what the last Store Config saved</td></tr><tr><td><strong>Restore Standard UI</strong></td><td>Goes back to the built-in layout and default shortcuts (Store Config afterwards to make it stick)</td></tr><tr><td><strong>Save UI...</strong></td><td>Saves the layout, shortcuts and preferences to a <code>.json</code> file you can share</td></tr><tr><td><strong>Load UI...</strong> (<kbd>Ctrl</kbd>+<kbd>L</kbd>)</td><td>Loads such a file (Store Config afterwards to keep it)</td></tr></tbody></table></div>
+<p>The first time you change the layout in a session, the status line reminds you once: &quot;Layout changed - Ctrl+Shift+I to keep it&quot;. What a session changes by itself (the console and LightBox being open, the LightBox tab) doesn&#x27;t count as a layout change.</p>
+<aside class="callout callout-zbrush"><p><strong>ZBrush:</strong> Store Config has the same shortcut as in ZBrush, and SculptForge never saves the layout on its own either.</p></aside>
+<h3 id="layout-presets">Layout presets<a class="anchor" href="#layout-presets" aria-label="Link to this section">#</a></h3>
+<p>The <strong>1</strong>, <strong>2</strong> and <strong>3</strong> buttons in the title strip (also in <strong>Preferences &gt; Config</strong>) switch between three layouts:</p>
+<ol>
+<li>
+<strong>Standard</strong>: the Tool palette in the right tray and shelves around the canvas.
+</li>
+<li>
+<strong>Sculpt</strong>: both trays closed, for the largest canvas.
+</li>
+<li>
+<strong>Wide</strong>: Brush, Stroke and Alpha in the left tray, Tool and Material in the right tray.
+</li>
+</ol>
+<p>A preset changes the layout only (the console, LightBox and left-handed setting stay as they are). Store Config keeps it.</p>
+<h3 id="interface-preferences">Interface preferences<a class="anchor" href="#interface-preferences" aria-label="Link to this section">#</a></h3>
+<p><strong>Preferences &gt; Interface</strong>:</p>
+<div class="table-wrap"><table><thead><tr><th>Setting</th><th>Default</th><th>What it does</th></tr></thead><tbody><tr><td><strong>Popup Info (Ctrl+hover help)</strong></td><td>On</td><td>Ctrl-hover help boxes</td></tr><tr><td><strong>Popup Info opacity</strong></td><td>0.97</td><td>How solid the help box is</td></tr><tr><td><strong>Tooltip delay</strong></td><td>0.5 s</td><td>How long to point at an icon-only button before its name appears</td></tr><tr><td><strong>One sub-palette open</strong></td><td>On</td><td>Opening a sub-palette closes the others in that palette</td></tr><tr><td><strong>Auto collapse left tray</strong> / <strong>right tray</strong></td><td>On / Off</td><td>Collapse other palettes in the tray when one wouldn&#x27;t fit</td></tr><tr><td><strong>Palettes strictly A-Z (ZBrush order)</strong></td><td>Off</td><td>Strict alphabetical palette bar instead of File and Edit first, Help last</td></tr><tr><td><strong>Left-handed layout</strong></td><td>Off</td><td>Mirrors the shelves and trays: tools on the right, navigation on the left</td></tr><tr><td><strong>UI scale</strong></td><td>Automatic</td><td>Size of text and controls (100% to 200%); takes effect at the next start</td></tr><tr><td><strong>Camera notch</strong></td><td>Automatic</td><td>Keeps the interface below a laptop&#x27;s camera notch in fullscreen (see below)</td></tr></tbody></table></div>
+<p><strong>Preferences &gt; LightBox</strong> has <strong>Show at startup</strong> (on by default), the number of <strong>Rows</strong>, <strong>Placement</strong> (along the top of the canvas, or at the bottom above the bottom shelf) and the <strong>Library folder</strong>. <strong>Preferences &gt; Autosave</strong> sets how often a recovery copy is saved (see <a href="projects.html">Projects, autosave and QuickSave</a>).</p>
+<figure class="shot"><a href="images/preferences.jpg" class="zoom"><img src="images/preferences.jpg" alt="The Preferences palette with the Config and Interface sub-palettes" width="350" height="670" loading="lazy" decoding="async"></a><figcaption>The Preferences palette with the Config and Interface sub-palettes</figcaption></figure>
+<h3 id="fullscreen-the-palette-bar-and-the-camera-notch">Fullscreen, the palette bar and the camera notch<a class="anchor" href="#fullscreen-the-palette-bar-and-the-camera-notch" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>
+<kbd>F11</kbd> (or <strong>Render &gt; Fullscreen</strong>) fills the screen with SculptForge; press it again to go back to a window. <code>sculptforge --fullscreen</code> starts that way.
+</li>
+<li>
+<strong>Menus</strong> in the title strip hides the palette bar; click it again to bring it back.
+</li>
+<li>
+<kbd>Tab</kbd> hides the shelves and trays.
+</li>
+<li>
+On MacBooks with a camera notch, SculptForge keeps the interface below the notch when it fills the screen and fills the band beside the notch with the shell colour. <strong>Automatic</strong> asks macOS for the safe area (on Linux it recognises a notched MacBook display); <strong>Always reserve</strong> always keeps a band free at the top, whatever the display; <strong>Off</strong> uses the full height.
+</li>
+</ul>
+<h2 id="see-also">See also<a class="anchor" href="#see-also" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>
+<a href="navigation.html">Navigating the view</a>
+</li>
+<li>
+<a href="shortcuts.html">Keyboard and mouse</a>
+</li>
+<li>
+<a href="scripting.html">Scripting and automation</a>
+</li>
+<li>
+<a href="troubleshooting.html">Troubleshooting and FAQ</a>
+</li>
+</ul>
+      </article>
+      <nav class="pager" aria-label="Previous and next chapter"><a class="prev" rel="prev" href="installing.html"><span>Previous</span>Installing SculptForge</a><a class="next" rel="next" href="navigation.html"><span>Next</span>Navigating the view</a></nav>
+      <p class="guide-meta fine">Also in the app: <strong>Help &gt; User Guide</strong> (<kbd>Shift</kbd>+<kbd>F1</kbd>).
+        Found a mistake? <a href="https://github.com/islandmed/SculptForge/edit/main/docs/guide/interface.md">Edit this page on GitHub</a>.</p>
+    </main>
+    <aside class="on-page" aria-label="On this page"><p>On this page</p><ul><li><a href="#the-regions-at-a-glance">The regions at a glance</a></li><li><a href="#the-title-strip">The title strip</a></li><li><a href="#palettes">Palettes</a></li><li><a href="#trays">Trays</a></li><li><a href="#the-shelves">The shelves</a></li><li><a href="#pop-up-pickers">Pop-up pickers</a></li><li><a href="#the-lightbox">The LightBox</a></li><li><a href="#getting-help-on-anything">Getting help on anything</a></li><li><a href="#the-command-palette">The command palette</a></li><li><a href="#the-console">The console</a></li><li><a href="#customizing-the-interface">Customizing the interface</a></li><li><a href="#see-also">See also</a></li></ul></aside>
+  </div>
+  <footer class="footer">
+    <div class="wrap footer-grid">
+      <div>
+        <a class="brand" href="../index.html"><img src="../img/logo.svg?v=2" alt="" width="28" height="28"><span>SculptForge</span></a>
+        <p class="fine">Copyright © 2026 The SculptForge contributors.<br>The SculptForge User Guide is part of
+          SculptForge, licensed under the <a href="https://github.com/islandmed/SculptForge/blob/main/LICENSE">GNU GPL v3.0 or later</a>.</p>
+      </div>
+      <div class="links">
+        <a href="index.html">User guide</a>
+        <a href="https://github.com/islandmed/SculptForge">Source code</a>
+        <a href="https://github.com/islandmed/SculptForge/issues">Report a problem</a>
+        <a href="https://github.com/islandmed/SculptForge/blob/main/docs/ai-services.md">AI services &amp; privacy</a>
+      </div>
+      <p class="fine trademarks">SculptForge is an independent project, not affiliated with or endorsed by Maxon or
+        any other company named in this guide. ZBrush is a trademark of Maxon. All other trademarks belong to their
+        owners.</p>
+    </div>
+  </footer>
+</body>
+</html>

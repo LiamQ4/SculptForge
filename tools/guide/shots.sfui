@@ -1,0 +1,190 @@
+# Screenshots for the user guide (docs/guide/images). Run from the source folder:
+#   build/sculptforge --ui-test tools/guide/shots.sfui --ui-out build/guide-shots
+#   python3 tools/guide/make_images.py build/guide-shots
+# make_images.py crops, labels and compresses them into docs/guide/images.
+run open path=assets/demo/lion-head.glb
+wait_idle 20
+shot overview
+
+# Palettes: a drop-down, then the same palette in the right tray.
+click "Draw##palette.draw"
+shot draw-palette
+key escape
+click "File##palette.file"
+shot palette-dropdown
+key escape
+click "Stroke##palette.stroke"
+click "Stroke/##totray"
+click "Tool/SubTool"
+shot palette-tray
+click "Stroke/##totray"
+
+# LightBox and pickers.
+key comma
+click "LightBox/Tool"
+wait_idle 20
+wait 1
+shot lightbox
+key comma
+key b
+wait_idle 20
+key s
+wait 0.3
+shot brush-picker
+key escape
+click "##tile.stroke"
+wait 0.3
+shot stroke-picker
+key escape
+click "##tile.alpha"
+wait_idle 10
+shot alpha-picker
+key escape
+key m
+wait_idle 20
+shot material-picker
+key escape
+
+# Help: Ctrl-hover, the command palette, the console.
+click "Tool/Geometry"
+hold ctrl
+hover "Subdivide"
+wait 0.3
+shot ctrl-help
+hold none
+key f3
+type "##Command palette" subdiv
+wait 0.3
+shot command-palette
+key escape
+key backtick
+type Console/##console "remesh resolution=160"
+key enter
+wait_idle 30
+run undo
+shot console
+key escape
+key backtick
+expect_value console_open == 0
+
+# Preferences: Config and Interface open (Shift+click keeps both).
+click "Preferences##palette.preferences"
+click "Preferences/Config"
+hold shift
+click "Preferences/Interface"
+hold none
+shot preferences
+key escape
+
+# Brushes: Brush Lab, the Brush palette's custom brushes with their menu, the community gallery.
+click "AI Brush"
+wait 0.3
+shot brush-lab
+click "AI Brush"
+click "Brush##palette.brush"
+right_click "Wrinkle"
+wait 0.2
+shot brush-library
+key escape
+key escape
+click "Brush##palette.brush"
+click "Community brushes##ui.brush_gallery"
+key escape
+wait_idle 30
+wait 1
+shot community-brushes
+click "Brush##palette.brush"
+click "Community brushes##ui.brush_gallery"
+key escape
+expect_not "Community brushes/Share yours"
+
+
+# Generate 3D and the Tool > Export sub-palette.
+click "Generate##palette.generate"
+click "Generate 3D##ui.generate3d"
+drop ../../assets/demo/teddy-sketch.png
+wait 0.5
+shot generate-3d
+click "Generate##palette.generate"
+click "Generate 3D##ui.generate3d"
+key escape
+expect_not "Generate 3D/From image"
+click "Tool/Export"
+shot export
+
+# A mask painted with Ctrl over the mane.
+hold ctrl
+stroke 0.15 0.15 0.85 0.15
+stroke 0.1 0.3 0.25 0.7
+stroke 0.9 0.3 0.75 0.7
+hold none
+click "Tool/Masking"
+wait 0.2
+shot masking
+run mask_clear
+
+# Polypaint: cavity paint, with the Color palette.
+run paint_fill color=bone
+run paint_from_cavity color=4a2c18 strength=0.9
+click "Color##palette.color"
+wait 0.2
+shot polypaint
+key escape
+run undo
+run undo
+
+# Sculpt layers.
+run layer_add name=Smile
+run layer_add name=BrowRaise
+click "Tool/Layers"
+wait 0.2
+shot layers
+run layer_set_active index=-1
+
+# The User Guide itself.
+key shift+f1
+click "User Guide/Masking"
+wait 0.5
+shot user-guide
+key shift+f1
+
+# SubTools: append a sphere and a cube.
+run subtool_append type=sphere name=Eye
+run subtool_append type=cube name=Crate size=0.3
+key f
+click "Tool/SubTool"
+wait 0.3
+shot subtools
+
+# Polygroups on a cube.
+run new_cube
+run polygroup_auto_by_normals
+click "Groups##view.polygroups"
+click "Tool/Polygroups"
+key f
+drag_item "Rotate##nav.rotate" -160 60
+wait 0.3
+shot polygroups
+click "Groups##view.polygroups"
+
+# Remesh: an uneven mesh, then voxel remeshed.
+run new_sphere subdivisions=4
+run decimate ratio=0.08
+click "PolyF##view.polyf"
+key f
+wait 0.2
+shot remesh-before
+run remesh resolution=26
+wait 0.2
+shot remesh-after
+click "PolyF##view.polyf"
+
+# Gaussian splats made from the lion.
+run open path=assets/demo/lion-head.glb
+run mesh_to_splats
+click "Render##palette.render"
+click "Show Mesh"
+key escape
+click "Splats##palette.splats"
+wait 0.3
+shot splats

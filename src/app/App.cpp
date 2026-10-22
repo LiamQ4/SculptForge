@@ -215,6 +215,7 @@ bool App::init(const AppOptions& options) {
                                                     20.0f * scale, &big, kIconRanges);
     }
     addHelpFonts(scale); // Ctrl-help titles (Inter SemiBold) and the console (ProggyClean)
+    guide_.addFonts(scale); // User Guide headings
     if (recording) {
         fontCaption_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontSemiBold),
                                                       int(assets::fontSemiBold_size), float(options.height) * 0.042f,
@@ -1064,6 +1065,7 @@ void App::drawUi() {
         }
         ImGui::End();
     }
+    guide_.draw(*this);  // Help > User Guide
     drawHelpConsoleUi(); // console, command palette, Controls (F1), Ctrl-hover help: last, on top
 }
 

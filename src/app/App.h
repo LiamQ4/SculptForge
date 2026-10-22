@@ -13,6 +13,7 @@
 #include "app/ShellGeometry.h"
 #include "app/Thumbnails.h"
 #include "app/UiLayout.h"
+#include "app/UserGuide.h"
 #include "ai/ComfyUI.h"
 #include "ai/ImageTo3DService.h"
 #include "core/Commands.h"
@@ -595,6 +596,15 @@ private:
     std::mutex uiFileMutex_;
     std::vector<std::pair<int, std::string>> uiFiles_; // (kind, path) from file dialogs
     // ---- end Help/Console/Config (C) ----
+
+    // ---- User Guide (G): Help > User Guide, the embedded docs/guide reader ----
+public:
+    UserGuide& guide() { return guide_; }
+
+private:
+    friend class UserGuide; // reads the UI scale, writes the status line
+    UserGuide guide_;
+    // ---- end User Guide (G) ----
 };
 
 } // namespace sf

@@ -20,7 +20,7 @@ namespace {
 // The Ctrl-help request for this frame: the last hovered item that asked for help wins.
 struct HelpRequest {
     bool active = false;
-    std::string title, shortcut, description, path, command;
+    std::string title, shortcut, description, path, command, actionId;
     const char* icon = nullptr;
     bool disabled = false;
     std::vector<ParamSpec> params;
@@ -114,6 +114,7 @@ void HelpAction(App& app, const char* actionId) {
     g_help = HelpRequest{};
     g_help.active = true;
     g_help.title = a->label;
+    g_help.actionId = a->id;
     g_help.icon = a->icon;
     g_help.shortcut = app.actions().shortcutText(a->id);
     g_help.path = a->palette;
@@ -420,6 +421,18 @@ void DrawHelp(App& app) {
         }
         if (r.disabled) ImGui::TextColored(rgba(color::danger), "Not available right now.");
         ImGui::PopTextWrapPos();
+        // The user guide chapter about it: F1 (with Ctrl still held) opens it.
+        if (const std::string chapter = UserGuide::chapterFor(r.path, r.actionId); !chapter.empty()) {
+            const std::string title = app.guide().chapterTitle(chapter);
+            if (!title.empty()) {
+                ImGui::Dummy(ImVec2(0, 1.0f * s));
+                Keycaps("F1");
+                ImGui::SameLine();
+                ImGui::TextColored(rgba(color::textDim), "Learn more: %s", title.c_str());
+                if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) app.guide().open(chapter);
+                r.description += "\nLearn more: " + title;
+            }
+        }
         // Footer: where it lives (dim) and the script command (mono, right).
         if (!r.path.empty() || !r.command.empty()) {
             ImGui::Dummy(ImVec2(0, 2.0f * s));

@@ -237,6 +237,10 @@ void App::initActions() {
     // --- Help ---
     add("help.controls", "Controls", "Help", "F1", [this] { showHelp_ = !showHelp_; }, ICON_LC_KEYBOARD, nullptr,
         [this] { return showHelp_; }, nullptr, "Every shortcut and mouse gesture, generated from the commands themselves.");
+    add("help.guide", "User Guide", "Help", "Shift+F1", [this] { guide_.toggle(); }, ICON_LC_BOOK_OPEN_TEXT, nullptr,
+        [this] { return guide_.isOpen(); }, nullptr,
+        "The SculptForge user guide: every tool explained, with search. Hold Ctrl over a control and press F1 to open "
+        "the chapter about it.");
     add("help.about", "About SculptForge", "Help", nullptr, [this] { showAbout_ = true; }, ICON_LC_INFO, nullptr, nullptr, nullptr,
         "Version, licence and the open-source components SculptForge is built with.");
     add("help.website", "Website & documentation", "Help", nullptr, [] { SDL_OpenURL("https://islandmed.github.io/SculptForge/"); },

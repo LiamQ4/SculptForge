@@ -20,6 +20,7 @@
 <p align="center">
   <a href="https://islandmed.github.io/SculptForge/"><b>Website & demo videos</b></a> ·
   <a href="https://github.com/islandmed/SculptForge/releases/latest"><b>Download</b></a> ·
+  <a href="https://islandmed.github.io/SculptForge/guide/"><b>User guide</b></a> ·
   <a href="#features">Features</a> ·
   <a href="#building">Build from source</a> ·
   <a href="CONTRIBUTING.md">Contribute</a>
@@ -68,6 +69,9 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 - Shelves around the canvas, alphabetical palettes holding every tool, a LightBox (`,`) of thumbnails, the
   brush picker (`B`, type letters to pick), hold-Ctrl help on every button, a command palette (F3) and a script
   console (`` ` ``), and a fully customizable layout with Store Config. See [docs/ui-design.md](docs/ui-design.md).
+- A built-in **user guide** (Help > User Guide, Shift+F1) with search, also on the
+  [website](https://islandmed.github.io/SculptForge/guide/); hold Ctrl over any control and press F1 to open its
+  chapter. Source: [docs/guide](docs/guide/index.md).
 
 **Sculpting**
 - Standard, Clay, Smooth, Move, Inflate, Crease, Flatten, Pinch, Dam Standard, Clay Buildup, Snake Hook, Trim,
@@ -92,7 +96,7 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
   `.sfbrush` files or one-line brush codes (right-click > Copy brush code, Ctrl+V to paste one). Studios share
   a folder through `SCULPTFORGE_BRUSH_PATH`, and the
   [community gallery](https://islandmed.github.io/SculptForge/brushes.html) installs brushes in one click
-  (View > Community brushes). See [docs/brushes.md](docs/brushes.md).
+  (Brush > Community brushes). See [docs/brushes.md](docs/brushes.md).
 - **Free out of the box**: no account or key. It uses an open model (GPT-OSS 20B) hosted by Pollinations.ai,
   and falls back to a local Ollama when you're offline.
 - Or bring your own: Claude (Anthropic API) or any OpenAI-compatible endpoint, including **private local
@@ -232,6 +236,9 @@ For Claude Desktop or other MCP clients, add a stdio server whose command is `sc
 argument `--mcp`. The agent gets every command as a tool and works on one live scene per session.
 
 ## Controls
+
+The [user guide](https://islandmed.github.io/SculptForge/guide/shortcuts.html) has the full list (it's also in the
+app: F1 for Controls, Shift+F1 for the guide).
 
 | Action | Input |
 |---|---|
