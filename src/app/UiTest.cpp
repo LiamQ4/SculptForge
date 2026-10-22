@@ -57,6 +57,10 @@
 //   pen_pressure P           a pressure sample from the hovering pen (e.g. a stale value before a stroke)
 //   pen_out                  the pen leaves proximity
 #include "app/App.h"
+
+#ifndef SDL_PEN_INPUT_IN_PROXIMITY
+#define SDL_PEN_INPUT_IN_PROXIMITY (1u << 31) // SDL 3.4's flag; older SDL 3 never sets it
+#endif
 #include "app/Demo.h"
 #include "app/Ui.h"
 
