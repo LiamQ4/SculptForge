@@ -84,7 +84,10 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 **Free built-in AI: Brush Lab (describe a brush, AI builds it)**
 - "Dry cracked mud", "overlapping dragon scales", then "make it sharper". Brushes are recipes (data, never
   code), with every value exposed as a slider. They're kept in your brush library; share them as
-  `.sfbrush` files or one-line brush codes (right-click > Copy brush code, Ctrl+V to paste one).
+  `.sfbrush` files or one-line brush codes (right-click > Copy brush code, Ctrl+V to paste one). Studios share
+  a folder through `SCULPTFORGE_BRUSH_PATH`, and the
+  [community gallery](https://islandmed.github.io/SculptForge/brushes.html) installs brushes in one click
+  (View > Community brushes). See [docs/brushes.md](docs/brushes.md).
 - **Free out of the box**: no account or key. It uses an open model (GPT-OSS 20B) hosted by Pollinations.ai,
   and falls back to a local Ollama when you're offline.
 - Or bring your own: Claude (Anthropic API) or any OpenAI-compatible endpoint, including **private local

@@ -41,6 +41,10 @@ All notable changes to SculptForge are listed here. The format follows
   `SCULPTFORGE_STUDIO_BRUSHES` when set. Precedence: yours > studio > built-in.
 - New commands `brush_install`, `brush_code`, `brush_delete`, `brush_rename` and `brush_library`;
   `brush_list` shows each brush's source.
+- Community brushes (View > Community brushes): browse, search and install from the CC0 gallery at
+  github.com/islandmed/sculptforge-brushes (21 brushes to start), with checksums, an offline cache and a
+  "Share yours" link; also on the website (brushes.html) and as `brush_gallery_search` / `brush_gallery_install`.
+- New `stroke` command sculpts a stroke along points headlessly (scripts, MCP agents, brush previews).
 
 ### Fixed
 - Voxel remesh no longer leaves concentric voxel rings on curved surfaces and lands exactly on the original

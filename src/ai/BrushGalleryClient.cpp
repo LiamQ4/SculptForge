@@ -180,8 +180,9 @@ bool downloadGalleryBrush(const std::string& indexLocation, const GalleryBrush& 
 }
 
 CommandResult installGalleryBrushFile(const CommandRegistry& registry, Document& doc, const std::string& path) {
-    const bool library = registry.find("brush_install") != nullptr;
-    return registry.execute(doc, library ? "brush_install" : "brush_load", {{"path", path}});
+    if (registry.find("brush_install")) // the library tags it so the brush list shows where it came from
+        return registry.execute(doc, "brush_install", {{"path", path}, {"source", std::string("gallery")}});
+    return registry.execute(doc, "brush_load", {{"path", path}});
 }
 
 void registerBrushGalleryCommands(CommandRegistry& registry) {

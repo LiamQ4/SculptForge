@@ -168,7 +168,10 @@ void App::pollBrushGallery() {
         const BrushGalleryState::Download d = it->second.get();
         if (d.error.empty()) {
             // brush_install (the user's library) once it exists; brush_load keeps it for this session.
-            runCommand(commands_.find("brush_install") ? "brush_install" : "brush_load", {{"path", d.path}});
+            if (commands_.find("brush_install"))
+                runCommand("brush_install", {{"path", d.path}, {"source", std::string("gallery")}});
+            else
+                runCommand("brush_load", {{"path", d.path}});
             if (!lastCommandOk_) g.installError = status_;
         } else {
             g.installError = d.error;
