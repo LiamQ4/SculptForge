@@ -107,7 +107,7 @@ p { margin: 0 0 1em; }
 .compare th:nth-child(2), .compare td:nth-child(2) { background: rgba(242, 140, 60, 0.07); }
 .compare .yes { color: #fff; font-weight: 600; }
 
-.downloads { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+.downloads { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
 .dl { display: flex; flex-direction: column; gap: 4px; background: var(--panel); border: 1px solid var(--border);
       border-radius: var(--radius); padding: 18px 20px; color: var(--text); }
 .dl:hover { text-decoration: none; border-color: var(--accent); }
@@ -209,6 +209,56 @@ p { margin: 0 0 1em; }
 .code { background: #0b0b0e; border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; overflow-x: auto;
         font: 0.88rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #e4e4ea; }
 .code code { background: none; padding: 0; }
+
+/* VFX: the platform strip under the hero and the VFX section. */
+.platform-strip { display: block; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+                  background: linear-gradient(90deg, rgba(242, 140, 60, 0.10), rgba(242, 140, 60, 0.03) 60%, transparent);
+                  color: #d9d9e0; }
+.platform-strip:hover { text-decoration: none; background-color: rgba(242, 140, 60, 0.05); }
+.platform-strip:hover .strip-more { color: var(--text); }
+.strip-inner { display: flex; align-items: center; gap: 22px; padding-top: 16px; padding-bottom: 16px; }
+.strip-label { flex: none; color: var(--accent-2); font-weight: 600; font-size: 0.8rem; letter-spacing: 0.08em;
+               text-transform: uppercase; }
+.strip-items { display: flex; flex-wrap: wrap; gap: 8px; font-size: 0.9rem; }
+.strip-items span { white-space: nowrap; padding: 3px 11px; border: 1px solid #34343c; border-radius: 999px;
+                    background: rgba(15, 15, 18, 0.55); }
+.strip-items b { color: #fff; font-weight: 600; }
+.strip-more { flex: none; margin-left: auto; color: var(--accent-2); font-size: 0.9rem; font-weight: 600; }
+
+.vfx { background: radial-gradient(900px 420px at 85% 0%, rgba(242, 140, 60, 0.10), transparent 65%), var(--bg-alt);
+       border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.specs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 44px; }
+.spec { border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px;
+        background: linear-gradient(180deg, rgba(242, 140, 60, 0.08), rgba(242, 140, 60, 0.02)); }
+.spec strong { display: block; color: #fff; font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 4px; }
+.spec span { color: var(--muted); font-size: 0.88rem; }
+.vfx-grid { display: grid; grid-template-columns: 1fr 1.05fr; gap: 48px; align-items: start; }
+.vfx-grid > * { min-width: 0; }
+.vfx-points { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 26px 28px; }
+.vfx-points h3 { font-size: 1.02rem; color: #fff; margin-bottom: 0.35em; padding-left: 14px; border-left: 2px solid var(--accent); }
+.vfx-points p { color: var(--muted); font-size: 0.92rem; margin: 0; }
+.vfx-points code { font-size: 0.82em; }
+.vfx-code .code { margin: 0 0 14px; }
+.code .c { color: #8a8a96; }
+.vfx-links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 22px; }
+.downloads .vfx-dl { border-color: rgba(242, 140, 60, 0.45); background: linear-gradient(180deg, rgba(242, 140, 60, 0.08), var(--panel)); }
+
+@media (max-width: 960px) {
+  .specs { grid-template-columns: repeat(2, 1fr); }
+  .vfx-grid { grid-template-columns: 1fr; gap: 36px; }
+  .strip-more { display: none; }
+}
+@media (max-width: 620px) {
+  .strip-inner { flex-direction: column; align-items: flex-start; gap: 8px; padding-top: 14px; padding-bottom: 14px; }
+  .strip-items { font-size: 0.85rem; gap: 4px 20px; }
+  .specs { gap: 10px; margin-bottom: 32px; }
+  .spec { padding: 14px; }
+  .spec strong { font-size: 1.02rem; }
+  .spec span { font-size: 0.8rem; }
+  .vfx-points { grid-template-columns: 1fr; gap: 20px; }
+  .vfx-links { flex-direction: column; }
+  .vfx-links .btn { text-align: center; }
+}
 
 @media (forced-colors: active) {
   .accent { color: Highlight; text-shadow: none; }

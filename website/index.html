@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SculptForge - the free, open-source ZBrush alternative</title>
-  <meta name="description" content="SculptForge is a free, open-source alternative to ZBrush for Linux, macOS and Windows, with game-ready pipelines, Send to Unreal, Gaussian splats, OpenUSD and free built-in AI.">
+  <meta name="description" content="SculptForge is a free, open-source alternative to ZBrush for Linux, macOS and Windows, with VFX Reference Platform builds, OpenUSD, a Python API, game-ready pipelines, Send to Unreal, Gaussian splats and free built-in AI.">
   <meta name="theme-color" content="#111114">
   <meta name="color-scheme" content="dark">
   <link rel="icon" type="image/png" href="img/favicon-64.png">
@@ -15,7 +15,7 @@
   <meta property="og:image" content="https://islandmed.github.io/SculptForge/img/social-preview.png?v=2">
   <meta property="og:url" content="https://islandmed.github.io/SculptForge/">
   <meta name="twitter:card" content="summary_large_image">
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
   <header class="nav">
@@ -24,7 +24,7 @@
       <nav aria-label="Main">
         <a href="#features">Features</a>
         <a href="#demos">Demos</a>
-        <a href="#studios">Studios</a>
+        <a href="#vfx">VFX</a>
         <a class="nav-dl" href="#download">Download</a>
         <a href="https://github.com/islandmed/SculptForge#readme">Docs</a>
         <a class="gh" href="https://github.com/islandmed/SculptForge">GitHub</a>
@@ -49,10 +49,10 @@
             game-ready export and free built-in AI.</p>
           <div class="ctas">
             <a class="btn primary" href="#download">Download</a>
-            <a class="btn" href="https://github.com/islandmed/SculptForge">View on GitHub</a>
+            <a class="btn" href="#vfx">For VFX studios</a>
           </div>
           <ul class="pills" aria-label="Highlights">
-            <li>Free built-in AI</li><li>No account</li><li>No telemetry</li><li>Windows · macOS · Linux</li><li>Offline-first</li>
+            <li>VFX Reference Platform</li><li>Free built-in AI</li><li>No account</li><li>No telemetry</li><li>Windows · macOS · Linux</li>
           </ul>
         </div>
         <figure class="hero-video">
@@ -69,6 +69,20 @@
         </figure>
       </div>
     </section>
+
+    <a class="platform-strip" href="#vfx" aria-label="VFX Reference Platform support: see the VFX section">
+      <div class="wrap strip-inner">
+        <span class="strip-label">Built for VFX pipelines</span>
+        <span class="strip-items">
+          <span>VFX Reference Platform <b>CY2026</b> · <b>CY2027</b></span>
+          <span>Rocky Linux 8 &amp; 9</span>
+          <span>Python 3.13</span>
+          <span>OpenUSD</span>
+          <span>Rez</span>
+        </span>
+        <span class="strip-more">See how →</span>
+      </div>
+    </a>
 
     <section id="features" class="section">
       <div class="wrap">
@@ -136,6 +150,63 @@
             <p><code>sculptforge-cli</code> runs any operation headless for build farms. Its built-in MCP server
               lets Claude Code, Claude Desktop or any MCP client sculpt, convert and export.</p>
           </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="vfx" class="section vfx">
+      <div class="wrap">
+        <p class="eyebrow" id="studios">For VFX, animation and game studios</p>
+        <h2>Drops straight into a VFX pipeline</h2>
+        <p class="section-lede">SculptForge follows the VFX Reference Platform and is built and tested in its reference
+          environments on every commit. There's no licence server, no seats and no accounts, and every editor action
+          is scriptable from Python or the command line.</p>
+        <div class="specs">
+          <div class="spec"><strong>CY2026 · CY2027</strong><span>VFX Reference Platform builds in every release</span></div>
+          <div class="spec"><strong>Rocky Linux 8 &amp; 9</strong><span>glibc 2.28 / 2.34, verified in CI</span></div>
+          <div class="spec"><strong>GCC 14.2 · C++20</strong><span>gcc-toolset-14, as the platform specifies</span></div>
+          <div class="spec"><strong>Python 3.13</strong><span><code>import sculptforge</code> with NumPy mesh access</span></div>
+        </div>
+        <div class="vfx-grid">
+          <ul class="vfx-points">
+            <li><h3>OpenUSD in and out</h3>
+              <p>USDA and USDZ, with each SubTool as its own Mesh prim and sculpt layers as UsdSkel blend shapes.
+                Exports are checked with OpenUSD's <code>usdchecker</code>.</p></li>
+            <li><h3>Rez package</h3>
+              <p><code>rez-build --install</code> puts the app and CLI on <code>PATH</code> and the Python module on
+                <code>PYTHONPATH</code>.</p></li>
+            <li><h3>Headless and farm-ready</h3>
+              <p><code>sculptforge-cli</code> runs every operation without a display: remesh, decimate, LODs, USD, FBX
+                and glTF export. Turntables and review images render offscreen.</p></li>
+            <li><h3>No conflicts with your stack</h3>
+              <p>No Qt, Boost, TBB or OpenEXR to clash with the versions your other tools load. The few dependencies
+                are linked statically.</p></li>
+            <li><h3>Nothing phones home</h3>
+              <p>No licence server, telemetry or account. It runs on air-gapped workstations and farm nodes.</p></li>
+            <li><h3>Make it yours</h3>
+              <p>GPL-3.0: fork it and wire it into your asset system. In-house changes can stay in-house; you only
+                share source if you distribute a modified version outside your organisation.</p></li>
+          </ul>
+          <div class="vfx-code">
+            <pre class="code"><code><span class="c"># Python 3.13, inside your pipeline</span>
+import sculptforge as sf
+
+doc = sf.Document()
+sf.run(doc, "open", path="/show/troll/troll_base.fbx")
+sf.run(doc, "remesh", resolution=320)
+sf.run(doc, "export_usd", path="/show/troll/troll_sculpt.usda")
+verts = doc.vertices            <span class="c"># NumPy (N, 3) float32</span></code></pre>
+            <pre class="code"><code><span class="c"># Deploy with Rez, run anywhere on the farm</span>
+rez-build --install
+rez-env sculptforge -- sculptforge-cli -c \
+  'open path=troll.fbx; export_lods path=troll.glb levels=4'
+rez-env sculptforge -- sculptforge troll.usda \
+  --render review.png --turntable 8</code></pre>
+            <div class="vfx-links">
+              <a class="btn primary" href="https://github.com/islandmed/SculptForge/blob/main/docs/studios.md">Read the studio guide</a>
+              <a class="btn" href="#download">VFX builds</a>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -230,39 +301,6 @@
       </div>
     </section>
 
-    <section id="studios" class="section">
-      <div class="wrap two-col">
-        <div>
-          <h2>Built for studio pipelines</h2>
-          <p>Animation, VFX and game studios run their own pipelines. SculptForge fits into them instead of
-            asking them to fit around it.</p>
-          <ul class="checks">
-            <li><strong>VFX Reference Platform CY2026 &amp; CY2027.</strong> Built and tested on Rocky Linux 8 and 9
-              with GCC 14.2, C++20 and Python 3.13.</li>
-            <li><strong>Python API</strong> (<code>import sculptforge</code>) with NumPy mesh access, plus a
-              <strong>Rez</strong> package for deployment.</li>
-            <li><strong>Native Linux</strong>, a headless CLI, farm rendering, and <strong>no licence server</strong>,
-              seats or accounts.</li>
-            <li><strong>OpenUSD, FBX and glTF</strong> in and out, with blend shapes and LODs.</li>
-          </ul>
-          <p><a href="https://github.com/islandmed/SculptForge/blob/main/docs/studios.md">Read the studio guide →</a></p>
-        </div>
-        <div>
-          <h2>Make it yours</h2>
-          <p>SculptForge is GPL-3.0. Fork it and wire it into your asset system. The GPL only asks you to share
-            source if you <em>distribute</em> a modified version outside your organisation, so in-house changes can
-            stay in-house.</p>
-          <pre class="code"><code>import sculptforge as sf
-
-doc = sf.Document()
-sf.run(doc, "open", path="troll_base.fbx")
-sf.run(doc, "remesh", resolution=320)
-sf.run(doc, "export_usd", path="troll.usda")
-verts = doc.vertices   # NumPy (N, 3)</code></pre>
-        </div>
-      </div>
-    </section>
-
     <section id="download" class="section alt">
       <div class="wrap">
         <h2>Download</h2>
@@ -282,6 +320,10 @@ verts = doc.vertices   # NumPy (N, 3)</code></pre>
             <strong>Any Linux</strong><span>AppImage · runs anywhere</span></a>
           <div class="dl static">
             <strong>Arch Linux</strong><span><code>yay -S sculptforge</code></span></div>
+          <a class="dl vfx-dl" href="https://github.com/islandmed/SculptForge/releases/latest">
+            <strong>VFX Reference Platform</strong><span>CY2026 (Rocky 8) &amp; CY2027 (Rocky 9) · .tar.gz with Python module</span></a>
+          <a class="dl" href="https://github.com/islandmed/SculptForge/blob/main/docs/studios.md#deploying-with-rez">
+            <strong>Rez</strong><span><code>packaging/rez</code> · build and install your own package</span></a>
         </div>
         <p class="fine">The builds aren't code-signed yet. On macOS, right-click the app and choose <em>Open</em>
           the first time. On Windows, if SmartScreen appears, choose <em>More info → Run anyway</em>.
@@ -311,6 +353,12 @@ verts = doc.vertices   # NumPy (N, 3)</code></pre>
             multiresolution subdivision levels, dynamic topology, ZRemesher-class retopology or UV unwrapping, and
             it can't open ZBrush's .ZTL files (use GoZ, or export OBJ or FBX from ZBrush). It's an independent
             project, not affiliated with Maxon.</p></details>
+        <details><summary>Does it fit a VFX studio pipeline?</summary>
+          <p>Yes. Every release includes VFX Reference Platform CY2026 and CY2027 builds (Rocky Linux 8 and 9, GCC
+            14.2, Python 3.13), there's a Rez package, and everything the app does can be scripted from Python or the
+            headless CLI. It reads and writes OpenUSD (USDA/USDZ), FBX and glTF. Binary <code>.usdc</code>, USD
+            references and OpenColorIO aren't supported yet. See the
+            <a href="https://github.com/islandmed/SculptForge/blob/main/docs/studios.md">studio guide</a>.</p></details>
         <details><summary>How can I help?</summary>
           <p>Try it, report bugs, share brushes, and send pull requests. See
             <a href="https://github.com/islandmed/SculptForge/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.</p></details>
@@ -363,7 +411,7 @@ verts = doc.vertices   # NumPy (N, 3)</code></pre>
         if (still) v.controls = true;
       }
       if (still) return;
-      const items = document.querySelectorAll(".section h2, .section-lede, .card, .demo, .two-col > div, .dl, .faq details");
+      const items = document.querySelectorAll(".section h2, .section-lede, .card, .demo, .two-col > div, .dl, .faq details, .spec, .vfx-points li, .vfx-code");
       const reveal = new IntersectionObserver((entries) => {
         for (const e of entries) if (e.isIntersecting) { e.target.classList.add("shown"); reveal.unobserve(e.target); }
       }, { rootMargin: "0px 0px -8% 0px" });
