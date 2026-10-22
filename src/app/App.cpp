@@ -222,6 +222,7 @@ bool App::init(const AppOptions& options) {
     initBrushLibrary(); // before a project can bring its own brushes
     initProject(); // before opening anything, so it lands in the recent files
     initActions(); // the default shortcuts and every command, for keys, help and the command palette
+    initLightBox();
     runCommand("new_sphere");
     if (!options.openPath.empty()) openPath(options.openPath);
     if (!options.script.empty()) {
@@ -257,6 +258,7 @@ void App::shutdown() {
     flushBrushEdits();
     if (refTexture_) gl::DeleteTextures(1, &refTexture_);
     gallery_.reset(); // its preview textures need the GL context
+    thumbs_.clear();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
@@ -612,6 +614,7 @@ void App::onMouseUp() {
 void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
     if (captureShortcutKey(key, mod)) return; // Ctrl+Alt+click a button, then press its new key
     actions_.handleKey(key, mod);             // the shortcut map: Config.cpp initActions()
+    initLightBox();
 }
 
 // ---------------------------------------------------------------------------
@@ -1011,6 +1014,7 @@ void App::updateTitle() {
 void App::drawUi() {
     drawProjectPopups();
     if (hideUi_) return; // demos: clean beauty shots
+    drawLightBoxUi();
     drawMenuBar();
     drawToolPanel();
     if (showSubToolsPanel_) drawSubToolsPanel();
