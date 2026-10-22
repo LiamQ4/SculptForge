@@ -249,8 +249,8 @@ int App::renderHeadless() {
     settings.wireframe = options_.wireframe;
     settings.showPolygroups = settings.showPolygroups || options_.polygroups;
     settings.showMesh = !options_.hideMesh;
-    renderer_.sync(doc_.mesh);
-    renderer_.syncSplats(doc_.splats, doc_.splatsVersion);
+    settings.dimInactive = false; // a beauty shot: every SubTool at full brightness
+    syncScene();
     const std::filesystem::path out(std::u8string(options_.renderPath.begin(), options_.renderPath.end()));
     for (int f = 0; f < frames; ++f) {
         camera_.yaw = glm::radians(options_.yawDegrees + 360.0f * float(f) / float(frames));
@@ -315,11 +315,7 @@ int App::runUiTest(int w, int h, int fps) {
         ImGui::LogFinish();
         ImGui::Render();
 
-        Mesh& shown = displayedMesh();
-        if (&shown != lastDisplayed_) shown.topologyDirty = true;
-        lastDisplayed_ = &shown;
-        renderer_.sync(shown);
-        renderer_.syncSplats(doc_.splats, doc_.splatsVersion);
+        syncScene();
         ++frames;
         const std::string shot = demo_->takeShotRequest();
         if (shot.empty()) continue;
@@ -395,11 +391,7 @@ int App::runRecording() {
         demo_->drawOverlay();
         ImGui::Render();
 
-        Mesh& shown = displayedMesh();
-        if (&shown != lastDisplayed_) shown.topologyDirty = true;
-        lastDisplayed_ = &shown;
-        renderer_.sync(shown);
-        renderer_.syncSplats(doc_.splats, doc_.splatsVersion);
+        syncScene();
         ++frames;
         // While waiting on a model, keep only every Nth frame (marked on screen as sped up).
         if ((frames % demo_->frameStride()) != 0) continue;
@@ -455,11 +447,7 @@ int App::run() {
         drawUi();
         ImGui::Render();
 
-        Mesh& shown = displayedMesh();
-        if (&shown != lastDisplayed_) shown.topologyDirty = true;
-        lastDisplayed_ = &shown;
-        renderer_.sync(shown);
-        renderer_.syncSplats(doc_.splats, doc_.splatsVersion);
+        syncScene();
         renderer_.draw(camera_, fbW, fbH, renderSettings_);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(window_);
@@ -517,6 +505,7 @@ void App::handleEvent(const SDL_Event& e) {
 }
 
 bool App::pick(float x, float y, RayHit& hit) const {
+    if (!doc_.activeSubtoolInfo().visible) return false; // you can't sculpt what you can't see
     int w = 0, h = 0;
     SDL_GetWindowSize(window_, &w, &h);
     glm::vec3 origin, dir;
@@ -536,6 +525,17 @@ void App::onMouseDown(float x, float y, Uint8 button) {
     doc_.syncBvh();
     if (button == SDL_BUTTON_LEFT) {
         if (polygroupMouseDown(x, y, mod)) return;
+        // Alt+click on another SubTool selects it (ZBrush); Alt+drag stays an inverted stroke or a pan.
+        if ((mod & SDL_KMOD_ALT) && !ctrlDown(mod) && !(mod & SDL_KMOD_SHIFT) && doc_.subtoolCount() > 1) {
+            const int target = pickSubtool(x, y);
+            if (target >= 0 && target != doc_.activeSubtool) {
+                drag_ = Drag::SubToolClick;
+                subtoolClickTarget_ = target;
+                subtoolClickX_ = x;
+                subtoolClickY_ = y;
+                return;
+            }
+        }
         RayHit hit;
         const bool maskMod = ctrlDown(mod) && !(mod & SDL_KMOD_SHIFT);
         if (previewLod_ < 0 && pick(x, y, hit)) {
@@ -569,6 +569,7 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     case Drag::Pan: camera_.pan(dx, dy, float(h)); break;
     case Drag::Zoom: camera_.zoom(-dy * 0.05f); break;
     case Drag::MaskCanvas: maskCanvasMove(x, y); break;
+    case Drag::SubToolClick: subtoolClickMove(x, y); break;
     case Drag::None: break;
     }
 }
@@ -577,6 +578,7 @@ void App::onMouseUp() {
     if (hideRectActive_) polygroupMouseUp();
     if (drag_ == Drag::Stroke) endStroke();
     if (drag_ == Drag::MaskCanvas) maskCanvasRelease();
+    if (drag_ == Drag::SubToolClick) subtoolClickRelease();
     drag_ = Drag::None;
 }
 
@@ -828,7 +830,8 @@ void SDLCALL onFileChosen(void* userdata, const char* const* files, int) {
 
 void App::queueFile(FileAction action, std::string path) {
     if (action != FileAction::OpenObj && action != FileAction::LoadBrush && action != FileAction::OpenImage &&
-        !path.empty() && std::filesystem::path(std::u8string(path.begin(), path.end())).extension().empty())
+        action != FileAction::AppendSubtool && !path.empty() &&
+        std::filesystem::path(std::u8string(path.begin(), path.end())).extension().empty())
         path += action == FileAction::SaveObj      ? ".obj"
                 : action == FileAction::SaveBrush  ? ".sfbrush"
                 : action == FileAction::ExportUsd  ? ".usdz"
@@ -882,7 +885,8 @@ void App::saveFileDialog(FileAction action) {
 }
 
 AABB App::sceneBounds() const {
-    AABB b = doc_.mesh.bounds();
+    AABB b = doc_.visibleBounds(); // every SubTool that's shown
+    if (!b.valid()) b = doc_.mesh.bounds();
     if (!doc_.splats.empty() && renderSettings_.showSplats) b.expand(doc_.splats.bounds(0.9f));
     return b;
 }
@@ -918,6 +922,10 @@ void App::processPendingFiles() {
             break;
         }
         case FileAction::SaveProject: saveProjectTo(f.path); break;
+        case FileAction::AppendSubtool:
+            runCommand("subtool_append", {{"path", f.path}});
+            if (lastCommandOk_) camera_.frame(sceneBounds()); // a model can be any size, anywhere
+            break;
         case FileAction::Count: break;
         }
     }
@@ -929,6 +937,22 @@ void App::processPendingFiles() {
 
 Mesh& App::displayedMesh() {
     return previewLod_ >= 0 && previewLod_ < int(lods_.size()) ? lods_[previewLod_] : doc_.mesh;
+}
+
+void App::syncScene() {
+    // The active SubTool's slot shows the LOD being previewed instead of the sculpt.
+    Mesh& shown = displayedMesh();
+    if (&shown != lastDisplayed_) shown.topologyDirty = true;
+    lastDisplayed_ = &shown;
+    std::vector<SceneMesh> scene;
+    scene.reserve(doc_.subtools.size());
+    for (int i = 0; i < doc_.subtoolCount(); ++i) {
+        SubTool& s = doc_.subtools[size_t(i)];
+        const bool active = i == doc_.activeSubtool;
+        scene.push_back({s.id, active ? &shown : &s.mesh, active, s.visible});
+    }
+    renderer_.syncScene(scene);
+    renderer_.syncSplats(doc_.splats, doc_.splatsVersion);
 }
 
 void App::setLayerWeight(int index, float weight) {
@@ -981,6 +1005,8 @@ void App::drawUi() {
     if (hideUi_) return; // demos: clean beauty shots
     drawMenuBar();
     drawToolPanel();
+    if (showSubToolsPanel_) drawSubToolsPanel();
+    drawSubToolPopups();
     if (showLayersPanel_) drawLayersPanel();
     if (showGamePanel_) drawGameExportPanel();
     drawSplatSection();
@@ -1041,6 +1067,7 @@ void App::drawUi() {
                 "Isolate polygroup Ctrl+Shift+click (again: invert)\n"
                 "Hide polygroup    Ctrl+Shift+Alt+click\n"
                 "Show all          Ctrl+Shift+click background\n"
+                "Select SubTool    Alt+click it\n"
                 "Hide outside rect Ctrl+Shift+drag (Alt: inside)\n"
                 "Brush size        [ and ]\n"
                 "Brushes           1-9, 0\n"
@@ -1104,6 +1131,7 @@ void App::drawMenuBar() {
         ImGui::MenuItem("Show Mask", nullptr, &renderSettings_.showMask);
         ImGui::MenuItem("Show Polygroups", nullptr, &renderSettings_.showPolygroups);
         ImGui::Separator();
+        ImGui::MenuItem("SubTools Panel", nullptr, &showSubToolsPanel_);
         ImGui::MenuItem("Layers Panel", nullptr, &showLayersPanel_);
         ImGui::MenuItem("Game Ready Panel", nullptr, &showGamePanel_);
         ImGui::MenuItem("Gaussian Splats", nullptr, &showSplatsPanel_);

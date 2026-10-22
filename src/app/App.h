@@ -56,7 +56,7 @@ public:
     int run(); // returns the process exit code
     void shutdown();
 
-    enum class FileAction { OpenObj, SaveObj, ExportGlb, ExportLods, SaveBrush, LoadBrush, OpenImage, ExportUsd, SaveSplats, ExportUnreal, SaveProject, Count };
+    enum class FileAction { OpenObj, SaveObj, ExportGlb, ExportLods, SaveBrush, LoadBrush, OpenImage, ExportUsd, SaveSplats, ExportUnreal, SaveProject, AppendSubtool, Count };
     struct DialogRequest {
         App* app;
         FileAction action;
@@ -65,7 +65,7 @@ public:
     void queueFile(FileAction action, std::string path);
 
 private:
-    enum class Drag { None, Stroke, Orbit, Pan, Zoom, MaskCanvas };
+    enum class Drag { None, Stroke, Orbit, Pan, Zoom, MaskCanvas, SubToolClick };
 
     void handleEvent(const SDL_Event& e);
     void onMouseDown(float x, float y, Uint8 button);
@@ -73,7 +73,7 @@ private:
     void onMouseUp();
     void onKey(SDL_Keycode key, SDL_Keymod mod);
 
-    bool pick(float x, float y, RayHit& hit) const;
+    bool pick(float x, float y, RayHit& hit) const; // the active SubTool (what brushes work on)
     BrushType activeBrush() const;
     void beginStroke(float x, float y, const RayHit& hit);
     void strokeTo(float x, float y);
@@ -92,6 +92,7 @@ private:
     void generateLods();
     void clearLods();
     Mesh& displayedMesh();
+    void syncScene(); // uploads every SubTool (the active one as displayedMesh()) and the splats to the renderer
 
     void drawUi();
     void drawToolPanel();
@@ -347,6 +348,29 @@ private:
     uint64_t autosaveRevision_ = ~uint64_t(0);
     bool autosaveWritten_ = false;
     std::string windowTitle_;
+    // SubTools (PanelSubTools.cpp): the panel, and Alt+click in the viewport to select one.
+    void drawSubToolsPanel();
+    void drawSubToolPopups();
+    // Index of the nearest visible SubTool under the cursor (-1: none); builds stale BVHs on the way.
+    int pickSubtool(float x, float y, RayHit* hit = nullptr);
+    void subtoolClickMove(float x, float y); // Alt press on another SubTool: dragging turns it into a stroke
+    void subtoolClickRelease();              // ... and releasing without dragging selects it
+    bool showSubToolsPanel_ = true;
+    int subtoolClickTarget_ = -1;
+    float subtoolClickX_ = 0.0f, subtoolClickY_ = 0.0f;
+    uint32_t renamingSubtool_ = 0; // SubTool id being renamed inline (0: none)
+    uint32_t listedActiveSubtool_ = 0; // the list scrolls to the active SubTool when it changes
+    bool focusRename_ = false;
+    char renameBuffer_[128] = "";
+    // Not-undoable SubTool commands wait for a confirmation popup.
+    struct SubToolConfirm {
+        std::string title, message, button, command;
+    };
+    SubToolConfirm subtoolConfirm_;
+    bool openSubtoolConfirm_ = false;
+    // Split by polygroups needs more than one group; counted only when the active mesh changes.
+    uint64_t splitGroupsKey_ = ~uint64_t(0);
+    bool splitGroupsPossible_ = false;
 };
 
 } // namespace sf

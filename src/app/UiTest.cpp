@@ -18,9 +18,13 @@
 //   expect LABEL / expect_not LABEL
 //   expect_text TEXT / expect_no_text TEXT   any text drawn this frame contains TEXT
 //   expect_status TEXT       the status bar message contains TEXT
+//   click_subtool NAME [U V] left-click SubTool NAME in the viewport (with the held modifiers, e.g.
+//                            hold alt to select it); U V: fractions of its on-screen bounds
 //   expect_value NAME OP N   triangles, vertices, layers, brushes, masked, hidden, groups, colored,
-//                            can_undo, dirty, splats, show_polygroups, show_mask, wireframe;
-//                            OP is == != < <= > >=
+//                            can_undo, dirty, splats, show_polygroups, show_mask, wireframe,
+//                            subtools (count), active_subtool (index, 0 = top), visible_subtools,
+//                            edited_subtools (SubTools with undo history); OP is == != < <= > >=
+//   (mesh values are the active SubTool's)
 //   shot NAME                save a screenshot NAME.png (to --ui-out)
 #include "app/App.h"
 #include "app/Demo.h"
@@ -151,6 +155,17 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "show_polygroups") return app_.renderSettings_.showPolygroups ? 1.0 : 0.0;
     if (name == "show_mask") return app_.renderSettings_.showMask ? 1.0 : 0.0;
     if (name == "wireframe") return app_.renderSettings_.wireframe ? 1.0 : 0.0;
+    const Document& doc = app_.doc_;
+    if (name == "subtools") return double(doc.subtoolCount());
+    if (name == "active_subtool") return double(doc.activeSubtool);
+    if (name == "visible_subtools")
+        return double(std::count_if(doc.subtools.begin(), doc.subtools.end(), [](const SubTool& s) { return s.visible; }));
+    if (name == "edited_subtools") { // SubTools with undo history (the active one's lives in doc.undo)
+        int n = 0;
+        for (int i = 0; i < doc.subtoolCount(); ++i)
+            n += (i == doc.activeSubtool ? doc.undo.canUndo() : doc.subtools[size_t(i)].undo.canUndo()) ? 1 : 0;
+        return double(n);
+    }
     if (name == "masked") {
         size_t n = 0;
         for (float v : m.mask) n += v > 0.5f;
@@ -227,6 +242,10 @@ void Demo::testClick(int line, const std::string& label, int button, bool double
 void Demo::testKey(int line, const std::string& combo) {
     std::string keyName;
     const SDL_Keymod mods = parseMods(combo, &keyName);
+    std::string lower = keyName;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    if (lower == "enter") keyName = "Return"; // SDL's name for it
+    else if (lower == "esc") keyName = "Escape";
     const SDL_Keycode key = SDL_GetKeyFromName(keyName.c_str());
     if (key == SDLK_UNKNOWN) {
         run([this, line, keyName] { fail(line, "unknown key \"" + keyName + "\""); });
@@ -313,6 +332,58 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
                           ends->first.y + (ends->second.y - ends->first.y) * u);
         }, seconds);
         run([this] { SDL_SetModState(held_); });
+        wait(0.1f);
+    } else if (verb == "click_subtool") {
+        if (!need(1)) return false;
+        const std::string name = w[1];
+        const float u = num(2, 0.5f), v = num(3, 0.5f);
+        steps_.push_back([this, line, name, u, v](float t) {
+            const int index = app_.doc_.findSubtool(name);
+            if (index < 0) {
+                fail(line, "no SubTool named \"" + name + "\"");
+                return true;
+            }
+            // The point of its on-screen bounds nearest (U, V) where it's the front SubTool and no panel covers it.
+            const AABB b = app_.doc_.subtoolMesh(index).bounds();
+            ImVec2 lo(1e9f, 1e9f), hi(-1e9f, -1e9f);
+            for (int i = 0; i < 8; ++i) {
+                const ImVec2 p = project(glm::vec3((i & 1) ? b.max.x : b.min.x, (i & 2) ? b.max.y : b.min.y,
+                                                   (i & 4) ? b.max.z : b.min.z));
+                lo = ImVec2(std::min(lo.x, p.x), std::min(lo.y, p.y));
+                hi = ImVec2(std::max(hi.x, p.x), std::max(hi.y, p.y));
+            }
+            const ImVec2 want(lo.x + (hi.x - lo.x) * u, lo.y + (hi.y - lo.y) * v);
+            auto covered = [](ImVec2 q) {
+                for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+                    if (w->WasActive && !w->Hidden && w->Rect().Contains(q)) return true;
+                return false;
+            };
+            ImVec2 p;
+            bool found = false;
+            float best = 1e30f;
+            constexpr int kGrid = 16;
+            for (int gy = 0; gy <= kGrid; ++gy) {
+                for (int gx = 0; gx <= kGrid; ++gx) {
+                    const ImVec2 q(lo.x + (hi.x - lo.x) * float(gx) / kGrid, lo.y + (hi.y - lo.y) * float(gy) / kGrid);
+                    const float d = (q.x - want.x) * (q.x - want.x) + (q.y - want.y) * (q.y - want.y);
+                    if (d >= best || covered(q) || app_.pickSubtool(q.x, q.y) != index) continue;
+                    p = q;
+                    best = d;
+                    found = true;
+                }
+            }
+            if (!found) {
+                fail(line, "SubTool \"" + name + "\" can't be clicked (hidden, covered or off screen)");
+                return true;
+            }
+            if (t == 0.0f) { // hover for a frame first
+                mouseMotion(p.x, p.y);
+                return false;
+            }
+            mouseButton(true, SDL_BUTTON_LEFT);
+            mouseButton(false, SDL_BUTTON_LEFT);
+            return true;
+        });
         wait(0.1f);
     } else if (verb == "drag") {
         if (!need(4)) return false;

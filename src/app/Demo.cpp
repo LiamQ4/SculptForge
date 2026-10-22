@@ -53,7 +53,7 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
     }
     items().rects[id] = {bb, clip};
     if (id && ctx && ctx->CurrentWindow && !ctx->CurrentWindow->IDStack.empty()) {
-        std::string window = ctx->CurrentWindow->Name;
+        std::string window = ctx->CurrentWindow->RootWindow->Name; // a child (list, table) counts as its panel
         if (const size_t hash = window.find("##"); hash != std::string::npos) window.resize(hash);
         items().frame.push_back({id, ctx->CurrentWindow->IDStack.back(), std::move(window), {bb, clip}});
     }
@@ -63,7 +63,7 @@ void ImGuiTestEngineHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* lab
     auto it = items().rects.find(id);
     if (!label || it == items().rects.end()) return;
     std::string text(label);
-    std::string window = ctx && ctx->CurrentWindow ? ctx->CurrentWindow->Name : "";
+    std::string window = ctx && ctx->CurrentWindow ? ctx->CurrentWindow->RootWindow->Name : "";
     if (const size_t hash = window.find("##"); hash != std::string::npos) window.resize(hash);
     auto add = [&](const std::string& key) {
         items().byLabel[key] = it->second;

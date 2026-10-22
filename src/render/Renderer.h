@@ -23,22 +23,35 @@ struct RenderSettings {
     bool showMesh = true;
     bool showSplats = true;
     float splatOpacity = 1.0f; // global fade for using a capture as reference
+    bool dimInactive = true;   // SubTools other than the active one render slightly darker (ZBrush style)
+};
+
+// One mesh of the scene for Renderer::syncScene: a SubTool, keyed by its stable id.
+struct SceneMesh {
+    uint32_t id = 0;
+    Mesh* mesh = nullptr;
+    bool active = false; // gets mask darkening, polygroup colours and wireframe; never dimmed
+    bool visible = true; // hidden meshes keep their GPU slot but aren't drawn (or uploaded)
 };
 
 // Display colour of a polygroup id (linear RGB): a stable hash spread over
 // pleasant hues. The mesh shader uses the same formula.
 glm::vec3 polygroupColor(uint32_t id);
 
-// Mesh drawing honours the optional Mesh attributes: colours (polypaint), mask
-// (darkening), polygroups (group colours) and hidden triangles (not drawn).
-// Mark changed vertices dirty for colour/mask edits and set Mesh::facesDirty
-// after changing `hidden` or `polygroups`.
+// Draws every visible SubTool, each from its own GPU buffers (a slot keyed by
+// SubTool id). Mesh drawing honours the optional Mesh attributes: colours
+// (polypaint), mask (darkening), polygroups (group colours) and hidden
+// triangles (not drawn). Mark changed vertices dirty for colour/mask edits and
+// set Mesh::facesDirty after changing `hidden` or `polygroups`. Only what a
+// mesh marks dirty is uploaded, so inactive SubTools upload once.
 class Renderer {
 public:
     bool init(std::string& error);
     void shutdown();
-    // Uploads whatever the mesh marked dirty, then clears its dirty state.
-    void sync(Mesh& mesh);
+    // Makes `scene` what draw() shows, in order: uploads whatever each visible
+    // mesh marked dirty and clears its dirty state (a new slot uploads
+    // everything), and frees the slots of ids no longer listed.
+    void syncScene(const std::vector<SceneMesh>& scene);
     // Re-uploads the splats when `version` differs from the last upload.
     void syncSplats(const SplatCloud& splats, uint64_t version);
     void draw(const Camera& camera, int fbWidth, int fbHeight, const RenderSettings& settings);
@@ -66,19 +79,35 @@ private:
     glm::mat4 lastSortView_{0.0f};
     GLuint captureFbo_[2] = {}, captureRb_[3] = {};
     int captureW_ = 0, captureH_ = 0;
-    GLuint vao_ = 0, emptyVao_ = 0;
-    void updateCurvature(const Mesh& mesh, uint32_t begin, uint32_t end);
-    void uploadFaces(const Mesh& mesh);
-    GLuint posBuffer_ = 0, nrmBuffer_ = 0, curvBuffer_ = 0, indexBuffer_ = 0;
-    GLuint colorBuffer_ = 0, maskBuffer_ = 0;
-    GLuint groupData_ = 0, groupTexture_ = 0; // polygroup id per drawn triangle (texture buffer)
-    bool hasColors_ = false, hasMask_ = false, hasGroups_ = false;
-    std::vector<float> curvature_;
-    std::vector<glm::uvec3> visibleTris_;
+    GLuint emptyVao_ = 0;
+    // The GPU copy of one mesh (one SubTool).
+    struct MeshSlot {
+        uint32_t id = 0;
+        GLuint vao = 0;
+        GLuint posBuffer = 0, nrmBuffer = 0, curvBuffer = 0, indexBuffer = 0;
+        GLuint colorBuffer = 0, maskBuffer = 0;
+        GLuint groupData = 0, groupTexture = 0; // polygroup id per drawn triangle (texture buffer)
+        bool hasColors = false, hasMask = false, hasGroups = false;
+        bool fresh = true; // nothing uploaded yet
+        std::vector<float> curvature;
+        GLsizei indexCount = 0;
+        size_t vertexCapacity = 0;
+    };
+    MeshSlot& slot(uint32_t id); // created on first use
+    static void freeSlot(MeshSlot& s);
+    void sync(MeshSlot& s, Mesh& mesh);
+    static void updateCurvature(MeshSlot& s, const Mesh& mesh, uint32_t begin, uint32_t end);
+    void uploadFaces(MeshSlot& s, const Mesh& mesh);
+    void drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings);
+    std::vector<MeshSlot> slots_;
+    struct DrawItem {
+        uint32_t id;
+        bool active;
+    };
+    std::vector<DrawItem> drawList_;      // visible meshes, in scene order
+    std::vector<glm::uvec3> visibleTris_; // scratch for uploadFaces
     std::vector<uint32_t> visibleGroups_;
-    GLsizei indexCount_ = 0;
     std::vector<GLuint> matcapTextures_; // one per built-in matcap (core/Matcap.h)
-    size_t vertexCapacity_ = 0;
 };
 
 } // namespace sf

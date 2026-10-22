@@ -123,6 +123,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelPolypaint.cpp
     src/app/PanelGoz.cpp
     src/app/PanelProject.cpp
+    src/app/PanelSubTools.cpp
     src/render/GL.cpp
     src/render/Camera.cpp
     src/render/Renderer.cpp
