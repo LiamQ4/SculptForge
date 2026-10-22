@@ -93,9 +93,17 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 - A sketch, a piece of concept art or a description becomes a full 3D model (limbs, back and all), then gets
   remeshed so you can sculpt it straight away.
 - **Free** through the official Hugging Face demos of Hunyuan3D 2 / 2.1, TRELLIS.2 and Stable Fast 3D; or
-  paid with your own fal.ai or Meshy key; or plug in any local model.
+  **your own ComfyUI** (local or a studio GPU server) running any workflow, with ready-made Hunyuan3D 2.1
+  workflows included; or paid with your own fal.ai or Meshy key; or plug in any local model.
   See [AI services & model licences](docs/ai-services.md).
 - Offline tools as well: silhouette blockout, relief, and stamp-from-view.
+
+**ComfyUI, both ways**
+- Generate models in SculptForge with any ComfyUI workflow on your own machine or GPU server
+  ([docs/comfyui.md](docs/comfyui.md)).
+- The **ComfyUI-SculptForge** node pack brings SculptForge into ComfyUI graphs: voxel remesh, decimate, LOD chains,
+  and GLB / FBX / USD / OBJ / STL export, working with ComfyUI's own Hunyuan3D mesh nodes
+  ([integrations/comfyui](integrations/comfyui/ComfyUI-SculptForge)).
 
 **Game & animation pipelines**
 - One-click **LOD chains**; blend shapes survive on every level.

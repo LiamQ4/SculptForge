@@ -6,6 +6,16 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### ComfyUI
+- Generate 3D can run on your own ComfyUI (local or a studio GPU server): any API-format workflow, with
+  ready-made Hunyuan3D 2.1 image-to-3D and FLUX + Hunyuan3D text-to-3D workflows, a connection test, queue
+  progress, cancel, and clear errors (missing nodes or models, UI-format files). `image_to_3d` / `text_to_3d`
+  take `service=comfyui workflow= url=`; new `comfyui_check`. See docs/comfyui.md.
+- ComfyUI-SculptForge node pack (integrations/comfyui): load, inflate image, relief, voxel remesh, decimate,
+  subdivide, LOD chain, export (GLB, FBX, USDA/USDZ, OBJ, STL, PLY), mesh info and open in SculptForge; works
+  with ComfyUI's core MESH type.
+- tools/comfyui-validate-workflow.py and tools/comfyui-smoke.sh check and run workflows against a server.
+
 ### SubTools
 - A scene can hold several meshes (SubTools), like ZBrush: each keeps its own attributes, sculpt layers and undo
   history. Only the active one is sculpted; the others are drawn slightly dimmed.
@@ -19,6 +29,8 @@ All notable changes to SculptForge are listed here. The format follows
 - New cube primitive.
 
 ### Fixed
+- Voxel remesh no longer leaves concentric voxel rings on curved surfaces and lands exactly on the original
+  surface (it meshes the signed distance instead of blurred voxels).
 - Side panels (Brush Lab, Tools, Generate 3D...) never grow past the bottom of the window. They move up
   and scroll instead, so expanded sections such as AI provider are always reachable.
 
