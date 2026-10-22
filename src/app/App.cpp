@@ -1557,14 +1557,17 @@ void App::drawBrushLab() {
     }
     ImGui::TextWrapped("Describe a brush the way you'd describe it to another sculptor.");
 
-    // Conversation
-    if (ImGui::BeginChild("chat", ImVec2(-1, 150 * scale), ImGuiChildFlags_Borders)) {
-        if (chatLog_.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::TextWrapped("Try one of the ideas below, or ask for changes to the selected brush, e.g. "
-                               "\"sharper\", \"less buildup\", \"make it grittier\".");
-            ImGui::PopStyleColor();
-        }
+    // Conversation: just a hint until there is one, then a box that grows with it and scrolls past ~8 lines.
+    if (chatLog_.empty() && !pendingBrush_.valid()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("Try an idea below, or ask for changes to the selected brush, like \"sharper\" or "
+                           "\"less buildup\".");
+        ImGui::PopStyleColor();
+    } else {
+        ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, 150 * scale));
+    }
+    const bool showChat = !chatLog_.empty() || pendingBrush_.valid();
+    if (showChat && ImGui::BeginChild("chat", ImVec2(-1, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY)) {
         for (const auto& line : chatLog_) {
             ImVec4 col = line.kind == ChatLine::Kind::User    ? ImVec4(1.0f, 0.70f, 0.45f, 1.0f)
                          : line.kind == ChatLine::Kind::Error ? ImVec4(1.0f, 0.45f, 0.45f, 1.0f)
@@ -1583,7 +1586,7 @@ void App::drawBrushLab() {
             scrollChat_ = false;
         }
     }
-    ImGui::EndChild();
+    if (showChat) ImGui::EndChild(); // always paired with BeginChild, whatever it returned
 
     // Starter ideas
     for (int i = 0; i < int(std::size(kExamplePrompts)); ++i) {
