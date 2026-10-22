@@ -369,7 +369,7 @@ void App::registerShellActions() {
          "File", "", "", [this] { saveFileDialog(FileAction::ExportUnreal); }, nullptr, nullptr});
     add({"file.save_splats", "Save Splats...", nullptr, "Save the Gaussian splats (PLY, glTF or USD).", "File", "", "",
          [this] { saveFileDialog(FileAction::SaveSplats); }, nullptr, [this] { return !doc_.splats.empty(); }});
-    add({"file.quit", "Quit", ICON_LC_LOG_OUT, "Close SculptForge (asks to save changes first).", "File", "", "",
+    add({"file.quit", "Quit", ICON_LC_LOG_OUT, "Close SculptForge (asks to save changes first).", "File", "Ctrl+Q", "",
          [this] { requestQuit(); }, nullptr, nullptr});
     add({"geometry.remesh", "Voxel Remesh", nullptr,
          "Rebuild as an even, watertight surface (like DynaMesh): merges parts, fixes scans and generated models.",
