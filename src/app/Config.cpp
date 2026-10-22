@@ -692,7 +692,7 @@ void drawInterfaceSection(App& app) {
                  "Opening a palette in the right tray collapses the others when they would not fit.", "Preferences > Interface");
     ImGui::Checkbox("Palettes strictly A-Z (ZBrush order)", &p.alphabeticalPalettes);
     ui::HelpText("Palettes strictly A-Z", nullptr,
-                 "Off: File and Edit come first in the palette bar, then the rest A to Z. On: every palette A to Z, as in "
+                 "Off: File and Edit come first in the palette bar and Help last, the rest A to Z. On: every palette A to Z, as in "
                  "ZBrush.",
                  "Preferences > Interface");
     ImGui::Checkbox("Left-handed layout", &app.layout().leftHanded);

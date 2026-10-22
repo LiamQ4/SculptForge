@@ -782,15 +782,19 @@ void App::drawPaletteBar(const ShellGeometry& g) {
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
     int count = 0;
     const PaletteDef* list = palettes(count);
-    // File and Edit first, where every other desktop app has them, then the rest A to Z. ZBrush purists can
-    // switch to strict alphabetical order in Preferences > Interface.
+    // File and Edit first and Help last, where every other desktop app has them, the rest A to Z in between.
+    // ZBrush purists can switch to strict alphabetical order in Preferences > Interface.
     std::vector<int> order;
     if (!uiPrefs_.alphabeticalPalettes)
         for (const char* first : {"file", "edit"})
             for (int i = 0; i < count; ++i)
                 if (std::string_view(list[i].id) == first) order.push_back(i);
-    for (int i = 0; i < count; ++i)
-        if (std::find(order.begin(), order.end(), i) == order.end()) order.push_back(i);
+    int help = -1;
+    for (int i = 0; i < count; ++i) {
+        if (!uiPrefs_.alphabeticalPalettes && std::string_view(list[i].id) == "help") help = i; // last, as usual
+        else if (std::find(order.begin(), order.end(), i) == order.end()) order.push_back(i);
+    }
+    if (help >= 0) order.push_back(help);
     for (size_t k = 0; k < order.size(); ++k) {
         const int i = int(k);
         const PaletteDef& p = list[order[k]];
@@ -802,7 +806,8 @@ void App::drawPaletteBar(const ShellGeometry& g) {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::headerHover);
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::header);
         ImGui::PushStyleColor(ImGuiCol_Text, inTray ? theme::accent : open ? theme::textOnAccent : theme::text);
-        if (i) ImGui::SameLine(0.0f, k == 2 && !uiPrefs_.alphabeticalPalettes ? 10.0f * s : -1.0f); // gap after File, Edit
+        const bool gap = !uiPrefs_.alphabeticalPalettes && (k == 2 || (help >= 0 && k + 1 == order.size()));
+        if (i) ImGui::SameLine(0.0f, gap ? 10.0f * s : -1.0f); // small gaps after File, Edit and before Help
         const std::string label = std::string(p.name) + "##palette." + p.id;
         // While a drop-down is open, the click that closes it (ImGui swallows that one) opens another palette
         // when it lands on that palette's name, as in a menu bar; on the open palette's own name it just closes.
