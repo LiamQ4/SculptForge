@@ -44,21 +44,6 @@ const char* brushTag(const BrushRecipe& b) {
     return nullptr;
 }
 
-std::string brushOriginText(const BrushRecipe& b) {
-    switch (b.origin.source) {
-    case BrushSource::Builtin: return "Built-in brush";
-    case BrushSource::User:
-        return b.origin.overrides != BrushSource::Session
-                   ? std::string("Your version - replaces the ") + brushSourceName(b.origin.overrides) +
-                         " brush of the same name (delete it to go back)"
-                   : "In your brush library";
-    case BrushSource::Gallery: return "From the community gallery, in your brush library";
-    case BrushSource::Studio: return "Studio brush (shared folder, read-only)";
-    case BrushSource::Project: return "From the open project, not in your brush library";
-    case BrushSource::Session: return "Not saved - refine it in Brush Lab to keep it";
-    }
-    return "";
-}
 
 // `text` shortened with "..." to fit `width` pixels.
 std::string fitText(const std::string& text, float width) {
@@ -85,6 +70,23 @@ std::string fileUrl(const std::string& path) {
 }
 
 } // namespace
+
+// Where a brush comes from, in words (list tooltips, picker Quick Info).
+std::string brushOriginText(const BrushRecipe& b) {
+    switch (b.origin.source) {
+    case BrushSource::Builtin: return "Built-in brush";
+    case BrushSource::User:
+        return b.origin.overrides != BrushSource::Session
+                   ? std::string("Your version - replaces the ") + brushSourceName(b.origin.overrides) +
+                         " brush of the same name (delete it to go back)"
+                   : "In your brush library";
+    case BrushSource::Gallery: return "From the community gallery, in your brush library";
+    case BrushSource::Studio: return "Studio brush (shared folder, read-only)";
+    case BrushSource::Project: return "From the open project, not in your brush library";
+    case BrushSource::Session: return "Not saved - refine it in Brush Lab to keep it";
+    }
+    return "";
+}
 
 void App::initBrushLibrary() {
     BrushLibraryPaths& paths = brushLibraryPaths();

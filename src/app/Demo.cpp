@@ -463,7 +463,7 @@ void Demo::buildShowcase() {
         app_.strength_ = 0.9f;
         // Custom brushes sit on the bottom shelf next to the built-in ones.
         auto& shelf = app_.layout_.bottomShelf;
-        shelf.insert(std::find(shelf.begin(), shelf.end(), "widget.add_brush"), "recipe:Edge Wear");
+        shelf.insert(std::find(shelf.begin(), shelf.end(), "widget.add_brush"), "brush.recipe.Edge Wear");
     });
     click("Edge Wear");
     stroke(line(0.16f, 0.30f, 0.20f, 0.70f), 1.4f);

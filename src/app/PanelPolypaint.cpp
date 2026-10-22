@@ -122,45 +122,9 @@ void App::drawPalette_Color() {
     ImGui::Checkbox("Show polypaint", &renderSettings_.showPolypaint);
 }
 
-// Material palette grid: Studio plus every MatCap, `tile` px square.
-void App::drawMaterialGrid(float tile) {
-    const float scale = uiScale_;
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    const int columns = std::max(1, int((ImGui::GetContentRegionAvail().x + spacing) / (tile + spacing)));
-    tile = (ImGui::GetContentRegionAvail().x - float(columns - 1) * spacing) / float(columns);
-    auto outline = [&](bool selected) {
-        if (!selected && !ImGui::IsItemHovered()) return;
-        ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                                            ImGui::GetColorU32(ImGuiCol_SliderGrab, selected ? 1.0f : 0.6f), 4.0f, 0,
-                                            2.0f * scale);
-    };
-    if (ImGui::Button("Studio##material", ImVec2(tile, tile))) renderSettings_.matcap = -1;
-    ui::HelpText("Studio", nullptr, "Studio lights with the base colour below (polypaint shows on top).", "Material");
-    outline(renderSettings_.matcap < 0);
-    for (int i = 0; i < matcapCount(); ++i) {
-        if ((i + 1) % columns != 0) ImGui::SameLine();
-        const GLuint tex = renderer_.matcapTexture(i);
-        if (!tex) continue;
-        ImGui::PushID(i);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-        // Textures are stored bottom-up: flip V for display.
-        ImTextureID thumb = thumbs_.material(i);
-        if (ImGui::ImageButton(matcapName(i), thumb ? thumb : ImTextureID(uintptr_t(tex)), ImVec2(tile, tile),
-                               thumb ? ImVec2(0, 0) : ImVec2(0, 1), thumb ? ImVec2(1, 1) : ImVec2(1, 0)))
-            renderSettings_.matcap = i;
-        ImGui::PopStyleVar();
-        ImGui::PopID();
-        ui::HelpText(matcapName(i), nullptr, "MatCap material: lighting baked into a sphere picture. Polypaint multiplies it.",
-                     "Material");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", matcapName(i));
-        outline(renderSettings_.matcap == i);
-    }
-}
-
 // Material palette: the material grid and the studio material's colour.
 void App::drawPalette_Material() {
-    drawMaterialGrid(54.0f * uiScale_);
-    ImGui::Text("%s", renderSettings_.matcap < 0 ? "Studio" : matcapName(renderSettings_.matcap));
+    sf::drawMaterialGrid(*this, GridMode::Palette); // Pickers.cpp, as in the material picker (M)
     ImGui::ColorEdit3("Base colour", &renderSettings_.baseColor.x, ImGuiColorEditFlags_NoInputs);
     ui::HelpText("Base colour", nullptr, "Colour of the Studio material (the clay colour).", "Material");
 }

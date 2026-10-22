@@ -212,6 +212,11 @@ bool drawShelfTile(App& app, const Action& a, ImVec2 size) {
     const ImVec2 q0(p0.x + (size.x - pic) * 0.5f, p0.y), q1(q0.x + pic, q0.y + pic);
     dl->AddRectFilled(p0, p1, theme::u32(hovered ? theme::buttonHover : theme::tile, hovered ? 0.55f : 0.0f), 4.0f * s);
     ImTextureID tex = type >= 0 ? app.thumbnails().brush(type) : ImTextureID(0);
+    if (a.id == "draw.paint") { // the Paint brush's own preview (Pickers.cpp)
+        BrushItem paint;
+        paint.kind = BrushItem::Kind::Paint;
+        tex = PickerUi::thumbnail(app, paint);
+    }
     if (tex) {
         dl->AddImageRounded(tex, ImVec2(q0.x + 2 * s, q0.y + 2 * s), ImVec2(q1.x - 2 * s, q1.y - 2 * s), ImVec2(0, 0),
                             ImVec2(1, 1), IM_COL32(255, 255, 255, int(255 * alpha)), 4.0f * s);
@@ -1136,7 +1141,8 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
                         mode == 0 ? "Move" : mode == 1 ? "Zoom" : "Rotate", mode);
     } else if (item == "widget.add_brush") {
         const ImVec2 size(48.0f * s, 54.0f * s);
-        if (ImGui::InvisibleButton("##addbrush", size)) ImGui::OpenPopup("##addtoshelf");
+        if (ImGui::InvisibleButton("##addbrush", size)) // the brush picker in "add to shelf" mode (Pickers.cpp)
+            openBrushPickerForShelf(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y - 8.0f * s));
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1146,9 +1152,8 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
         centredText(dl, fontIcons_, ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r),
                     theme::u32(hovered ? theme::accent : theme::textDim), ICON_LC_PLUS);
         ui::HelpText("Add a brush", nullptr, "Put another brush (built-in or one of yours) on this shelf.", "Bottom shelf");
-        drawAddToShelfPopup();
-    } else if (item.rfind("recipe:", 0) == 0) {
-        const std::string name = item.substr(7);
+    } else if (item.rfind("brush.recipe.", 0) == 0 || item.rfind("recipe:", 0) == 0) {
+        const std::string name = item.substr(item[0] == 'r' ? 7 : 13); // custom brush, by name
         int found = -1;
         for (int i = 0; i < int(doc_.brushes.size()); ++i)
             if (doc_.brushes[size_t(i)].name == name) found = i;
@@ -1178,7 +1183,7 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
                      found >= 0 && !doc_.brushes[size_t(found)].description.empty() ? doc_.brushes[size_t(found)].description.c_str()
                                                                                    : "One of your custom brushes.",
                      "Bottom shelf");
-    } else if (const Action* a = actions_.find(item)) {
+    } else if (const Action* a = actions_.find(item == "brush.paint" ? std::string("draw.paint") : item)) {
         const ui::Look look = shelf != kShelfTop ? ui::Look::Tile : a->icon ? ui::Look::IconLabel : ui::Look::Label;
         const ImVec2 size = shelf == kShelfTop      ? ImVec2(0.0f, rowH)
                             : shelf == kShelfRight  ? ImVec2(44.0f * s, 40.0f * s)
@@ -1235,39 +1240,6 @@ void App::finishShelfDrag() {
         }
     }
     shelfDrag_ = {};
-}
-
-void App::drawAddToShelfPopup() {
-    if (!ImGui::BeginPopup("##addtoshelf")) return;
-    ImGui::TextDisabled("Add to the bottom shelf");
-    ImGui::Separator();
-    auto onShelf = [this](const std::string& id) {
-        return std::find(layout_.bottomShelf.begin(), layout_.bottomShelf.end(), id) != layout_.bottomShelf.end();
-    };
-    auto add = [this](const std::string& id) {
-        auto plus = std::find(layout_.bottomShelf.begin(), layout_.bottomShelf.end(), "widget.add_brush");
-        layout_.bottomShelf.insert(plus, id);
-        noteLayoutChanged();
-    };
-    bool any = false;
-    for (int i = 0; i < int(BrushType::Count); ++i) {
-        const std::string id = brushActionId(BrushType(i));
-        if (onShelf(id)) continue;
-        any = true;
-        if (ImGui::MenuItem(brushName(BrushType(i)))) add(id);
-    }
-    if (!onShelf("draw.paint") && ImGui::MenuItem("Paint")) add("draw.paint");
-    if (!doc_.brushes.empty()) {
-        ImGui::SeparatorText("Custom");
-        for (const auto& b : doc_.brushes) {
-            const std::string id = "recipe:" + b.name;
-            if (onShelf(id)) continue;
-            any = true;
-            if (ImGui::MenuItem((b.name + "##add").c_str())) add(id);
-        }
-    }
-    if (!any) ImGui::TextDisabled("Every brush is on the shelf");
-    ImGui::EndPopup();
 }
 
 // Right-shelf Move / Zoom / Rotate: drag on the button to navigate, as in ZBrush.
@@ -1436,13 +1408,12 @@ void App::drawMaterialTile(const char* id, ImVec2 size) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
     const float r = (b.x - a.x) * 0.4f;
-    ImTextureID tex = thumbs_.material(m);
-    if (!tex && m >= 0)
-        if (const GLuint t = renderer_.matcapTexture(m)) tex = ImTextureID(uintptr_t(t));
-    if (tex) {
-        // Matcaps are spheres already; textures are stored bottom-up.
-        dl->AddImageRounded(tex, ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), ImVec2(0, m >= 0 ? 1.0f : 0.0f),
-                            ImVec2(1, m >= 0 ? 0.0f : 1.0f), IM_COL32_WHITE, r);
+    if (ImTextureID thumb = thumbs_.material(m)) { // a rendered sphere on a transparent background
+        dl->AddImage(thumb, ImVec2(a.x + 2 * s, a.y + 2 * s), ImVec2(b.x - 2 * s, b.y - 2 * s));
+    } else if (const GLuint t = m >= 0 ? renderer_.matcapTexture(m) : 0) {
+        // Until then the raw matcap (a sphere picture already; stored bottom-up).
+        dl->AddImageRounded(ImTextureID(uintptr_t(t)), ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), ImVec2(0, 1),
+                            ImVec2(1, 0), IM_COL32_WHITE, r);
     } else {
         const glm::vec3 base = linearToSrgb(renderSettings_.baseColor);
         constexpr int kLayers = 16;

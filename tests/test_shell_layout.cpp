@@ -98,7 +98,7 @@ TEST(shell_tray_width_and_layout_json) {
     CHECK(l.rightTray.size() == 1 && l.rightTray[0] == "tool");
     l.leftTray = {"brush", "stroke"};
     l.leftTrayOpen = true;
-    l.bottomShelf.push_back("recipe:Dragon Scales");
+    l.bottomShelf.push_back("brush.recipe.Dragon Scales");
     UiLayout back;
     std::string err;
     CHECK(fromJson(toJson(l), back, err));

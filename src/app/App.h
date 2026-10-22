@@ -4,6 +4,7 @@
 
 #include "ai/BrushAssistant.h"
 #include "app/Actions.h"
+#include "app/AssetLibrary.h"
 #include "app/CommandPalette.h"
 #include "app/Config.h"
 #include "app/Console.h"
@@ -471,7 +472,6 @@ private:
     void drawAlphaTile(const char* id, ImVec2 size);
     void drawMaterialTile(const char* id, ImVec2 size);
     void drawColorWidget(float width);
-    void drawAddToShelfPopup();
     // Palettes.cpp: every palette body, also used by the trays and drop-downs.
     bool subpalette(const char* id, const char* title); // Tool sub-palette header; true while open
     void drawPalette_Alpha();
@@ -490,9 +490,7 @@ private:
     void drawPalette_Stroke();
     void drawPalette_Tool();
     void drawPalette_Transform();
-    void drawStrokeSection();
     void drawAlphaSection();
-    void drawMaterialGrid(float tile);
     void drawLayersContents();
     void drawGameExportContents();
     void drawVisibilitySection();
@@ -524,6 +522,17 @@ private:
     // ---- LightBox (B): LightBox, thumbnails, pickers ----
     LightBox lightbox_;
     ThumbnailCache thumbs_;
+    friend struct PickerUi;
+    friend void drawAlphaGrid(App&, GridMode);
+    friend void drawMaterialGrid(App&, GridMode);
+    friend void drawStrokeGrid(App&, GridMode);
+    void initLightBox();   // end of init(): library folders, thumbnail cache, actions, project thumbnails
+    void drawLightBoxUi(); // every frame from drawUi: thumbnails, the LightBox, pickers, size / strength pop-ups
+    // The LightBox / picker shortcuts (, B M S I) until the action registry dispatches keys.
+    bool lightBoxKey(SDL_Keycode key, SDL_Keymod mod);
+    void quickSave();                  // file.quicksave: a timestamped project in <library>/QuickSave
+    LibraryRoots library_;
+    FolderScanner libraryScanner_;
     // ---- end LightBox (B) ----
 
     // ---- Help/Console/Config (C): actions, help, command palette, console, config ----

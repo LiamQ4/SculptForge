@@ -40,40 +40,6 @@ void App::pollAlphaFile() {
     if (!alphaPath.empty()) runCommand("brush_set_alpha", {{"path", alphaPath}, {"invert", alphaInvert_}});
 }
 
-// Stroke palette (and the stroke picker's settings): how dabs follow the cursor.
-void App::drawStrokeSection() {
-    static const char* const kHelp[] = {
-        "Even dabs along the path.",
-        "Click and drag one stamp: the drag's length is the size, its direction the rotation.",
-        "Scattered dabs of random size and strength.",
-        "The brush trails the cursor on a string, for smooth lines.",
-    };
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const float half = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
-    for (int i = 0; i < int(StrokeType::Count); ++i) {
-        const bool on = strokeType_ == StrokeType(i);
-        if (on) {
-            ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_SliderGrab]);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, style.Colors[ImGuiCol_SliderGrabActive]);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
-        }
-        if (i % 2) ImGui::SameLine();
-        if (ImGui::Button((std::string(strokeTypeName(StrokeType(i))) + "##stroke").c_str(), ImVec2(half, 0)))
-            strokeType_ = StrokeType(i);
-        if (on) ImGui::PopStyleColor(3);
-        ui::HelpText(strokeTypeName(StrokeType(i)), nullptr, kHelp[i < int(std::size(kHelp)) ? i : 0], "Stroke");
-    }
-    if (strokeType_ == StrokeType::Spray) {
-        ImGui::SetNextItemWidth(-1);
-        ui::SliderInside("##scatter", &sprayScatter_, 0.0f, 2.0f, "Scatter %.2f");
-        ui::HelpText("Scatter", nullptr, "How far spray dabs jump from the path, as a fraction of the brush size.", "Stroke");
-    } else if (strokeType_ == StrokeType::LazyMouse) {
-        ImGui::SetNextItemWidth(-1);
-        ui::SliderInside("##lazy", &lazyMouse_.radius, 1.0f, 300.0f, "Lazy Radius %.0f px");
-        ui::HelpText("Lazy Radius", nullptr, "Length of the string the brush is pulled on; longer = smoother lines.", "Stroke");
-    }
-}
-
 // Alpha palette: the stamp that shapes the brush (ZBrush alpha).
 void App::drawAlphaSection() {
     const BrushAlpha& alpha = doc_.brushAlpha;
@@ -103,25 +69,7 @@ void App::drawAlphaSection() {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - nameSize.x) * 0.5f);
     ImGui::TextUnformatted(alpha.name.c_str());
 
-    // Built-in alphas as small tiles.
-    static const BrushAlpha kBuiltins[] = {BrushAlpha::round(), BrushAlpha::square(), BrushAlpha::noise()};
-    const float tile = 52.0f * s;
-    for (int i = 0; i < 3; ++i) {
-        const BrushAlpha& a = kBuiltins[i];
-        if (i) ImGui::SameLine();
-        ImGui::PushID(i);
-        const ImVec2 t0 = ImGui::GetCursorScreenPos();
-        if (ImGui::InvisibleButton((a.name + "##alpha").c_str(), ImVec2(tile, tile)))
-            runCommand("brush_set_alpha", {{"name", a.name}});
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        if (ImTextureID tex = thumbs_.alpha(a)) dl->AddImage(tex, t0, ImVec2(t0.x + tile, t0.y + tile));
-        else preview(dl, a, t0, tile, 20);
-        if (alpha.name == a.name || ImGui::IsItemHovered())
-            dl->AddRect(t0, ImVec2(t0.x + tile, t0.y + tile), ImGui::GetColorU32(ImGuiCol_SliderGrab, alpha.name == a.name ? 1.0f : 0.6f),
-                        3.0f, 0, 2.0f * s);
-        ui::HelpText(a.name.c_str(), nullptr, "Use this built-in alpha.", "Alpha");
-        ImGui::PopID();
-    }
+    drawAlphaGrid(*this, GridMode::Palette); // built-in and library alphas (Pickers.cpp), as in the alpha picker
     if (ImGui::Button("Load image...##alpha", ImVec2(-1, 0)))
         SDL_ShowOpenFileDialog(onAlphaChosen, this, window_, kAlphaFilters, 2, nullptr, false);
     ui::HelpText("Load image", nullptr, "Use a grayscale image as the alpha: white = full effect, black = none.", "Alpha");

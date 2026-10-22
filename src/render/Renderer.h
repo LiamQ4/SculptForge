@@ -74,6 +74,12 @@ public:
     // Texture of built-in matcap `index` (sRGB RGBA8, rows bottom-up) for UI previews; 0 if none.
     GLuint matcapTexture(int index) const;
 
+    // --- Thumbnails (LightBox / pickers) ---
+    // Renders `mesh` alone (not the synced scene, which is left as it was) into a `size` x `size`
+    // top-down RGBA8 image with a transparent background. Keeps the caller's framebuffer and viewport.
+    bool renderMeshThumbnail(Mesh& mesh, const Camera& camera, int size, const RenderSettings& settings,
+                             std::vector<uint8_t>& rgba, std::string& error);
+
 private:
     void drawSplats(const glm::mat4& view, const glm::mat4& proj, int fbWidth, int fbHeight, float opacity);
 
@@ -88,6 +94,7 @@ private:
     GLuint captureFbo_[2] = {}, captureRb_[3] = {};
     int captureW_ = 0, captureH_ = 0;
     GLuint emptyVao_ = 0;
+    bool thumbnailPass_ = false; // draw(): transparent background, no gradient (renderMeshThumbnail)
     // The GPU copy of one mesh (one SubTool).
     struct MeshSlot {
         uint32_t id = 0;

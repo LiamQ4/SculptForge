@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <system_error>
 
@@ -22,6 +23,12 @@ namespace {
 
 constexpr const char* kFormatName = "SculptForge project";
 constexpr const char* kManifestName = "manifest.json";
+constexpr const char* kThumbnailName = "thumbnail.png";
+
+ProjectThumbnailProvider& thumbnailProvider() {
+    static ProjectThumbnailProvider provider;
+    return provider;
+}
 // Top-level manifest keys owned by the core (mesh, layers and active_layer are
 // version 1); every other key belongs to
 // Document::projectSettings (camera, render, brush, symmetry, ...).
@@ -297,6 +304,13 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
 
     const std::string text = manifest.dump(true);
     w.entries.insert(w.entries.begin(), ZipEntry{kManifestName, std::vector<uint8_t>(text.begin(), text.end())});
+    // The preview goes second, so loadProjectThumbnail finds it after reading two local headers.
+    if (const ProjectThumbnailProvider& provider = thumbnailProvider()) {
+        Image thumb;
+        std::vector<uint8_t> png;
+        if (provider(doc, thumb) && !thumb.empty() && thumb.encodePng(png))
+            w.entries.insert(w.entries.begin() + 1, ZipEntry{kThumbnailName, std::move(png)});
+    }
 
     // Write next to the target and rename, so a failed save never destroys the previous file.
     const std::string tmp = path + ".tmp";
@@ -432,6 +446,36 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     doc.path = path;
     doc.markClean();
     return true;
+}
+
+void setProjectThumbnailProvider(ProjectThumbnailProvider provider) { thumbnailProvider() = std::move(provider); }
+
+bool loadProjectThumbnail(const std::string& path, Image& out, std::string& error) {
+    std::ifstream f(fsPath(path), std::ios::binary);
+    if (!f) {
+        error = "Cannot open " + path;
+        return false;
+    }
+    // Walk the local file headers from the start: the thumbnail is the second entry when present,
+    // so this reads a few hundred bytes plus the PNG instead of the whole project.
+    for (int entry = 0; entry < 4; ++entry) {
+        uint8_t h[30];
+        if (!f.read(reinterpret_cast<char*>(h), sizeof h) || get32(h) != 0x04034B50) break;
+        const uint32_t method = uint32_t(h[8]) | uint32_t(h[9]) << 8;
+        const uint32_t size = get32(h + 18);
+        const size_t nameLen = size_t(h[26]) | size_t(h[27]) << 8, extraLen = size_t(h[28]) | size_t(h[29]) << 8;
+        std::string name(nameLen, '\0');
+        if (!f.read(name.data(), std::streamsize(nameLen))) break;
+        f.seekg(std::streamoff(extraLen), std::ios::cur);
+        if (name == kThumbnailName && method == 0) {
+            std::vector<uint8_t> png(size);
+            if (!f.read(reinterpret_cast<char*>(png.data()), std::streamsize(size))) break;
+            return Image::decode(png.data(), png.size(), out, error);
+        }
+        f.seekg(std::streamoff(size), std::ios::cur);
+    }
+    error = path + " has no thumbnail";
+    return false;
 }
 
 CommandResult openProjectCommand(Document& doc, const std::string& path) {

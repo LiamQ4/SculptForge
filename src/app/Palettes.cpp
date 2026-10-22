@@ -155,10 +155,11 @@ bool App::subpalette(const char* id, const char* title) {
 void App::drawPalette_Alpha() { drawAlphaSection(); }
 
 void App::drawPalette_Brush() {
-    drawBrushGrid(*this, GridMode::Palette); // the picker's grid (Pickers.cpp)
-    drawCustomBrushes();                     // PanelBrushLibrary.cpp: list, right-click menu
+    // Your brushes first (PanelBrushLibrary.cpp: tags, and the right-click menu to share, rename or delete),
+    // then every brush as thumbnails (Pickers.cpp, the same grid as the B picker).
     actionRow(*this, {"ui.brush_lab", "ui.brush_gallery"});
     actionRow(*this, {"brush.paste"});
+    drawCustomBrushes();
     ImGui::Checkbox("Front faces only", &frontFacesOnly_);
     ui::HelpAction(*this, "draw.front_faces");
     ImGui::SameLine();
@@ -175,6 +176,7 @@ void App::drawPalette_Brush() {
             }
         }
     }
+    drawBrushGrid(*this, GridMode::Palette);
 }
 
 void App::drawPalette_Draw() {
@@ -326,7 +328,7 @@ void App::drawPalette_Script() {
              "sculptforge-cli tool.");
 }
 
-void App::drawPalette_Stroke() { drawStrokeSection(); }
+void App::drawPalette_Stroke() { drawStrokeGrid(*this, GridMode::Palette); } // Pickers.cpp, as in the stroke picker
 
 void App::drawPalette_Tool() {
     const float s = uiScale_;

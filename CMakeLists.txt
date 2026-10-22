@@ -128,7 +128,6 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/Actions.cpp
     src/app/Ui.cpp
     src/app/UiLayout.cpp
-    src/app/LightBoxStubs.cpp
     src/app/Shell.cpp
     src/app/ShellGeometry.cpp
     src/app/Palettes.cpp
@@ -136,6 +135,10 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/CommandPalette.cpp
     src/app/Console.cpp
     src/app/Config.cpp
+    src/app/LightBox.cpp
+    src/app/Thumbnails.cpp
+    src/app/Pickers.cpp
+    src/app/AssetLibrary.cpp
     src/app/PanelMasking.cpp
     src/app/PanelPolygroups.cpp
     src/app/PanelBrushes.cpp
@@ -312,8 +315,8 @@ endif()
 if(SCULPTFORGE_BUILD_TESTS)
   # tests/test_main.cpp plus every tests/test_*.cpp (add a file to add tests; see tests/TestHarness.h).
   file(GLOB SCULPTFORGE_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.cpp)
-  add_executable(sculptforge_tests ${SCULPTFORGE_TEST_SOURCES} src/cli/McpServer.cpp src/app/UiLayout.cpp
-                                   src/app/ShellGeometry.cpp)
+  add_executable(sculptforge_tests ${SCULPTFORGE_TEST_SOURCES} src/cli/McpServer.cpp src/app/AssetLibrary.cpp
+                                   src/app/UiLayout.cpp src/app/ShellGeometry.cpp)
   target_include_directories(sculptforge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(sculptforge_tests PRIVATE sculptforge_core sculptforge_ai)
   if(SCULPTFORGE_BUILD_APP) # the action registry (key chords, shortcut overrides) needs SDL's key names

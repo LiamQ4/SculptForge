@@ -231,6 +231,7 @@ bool App::init(const AppOptions& options) {
     initBrushLibrary(); // before a project can bring its own brushes
     initProject(); // before opening anything, so it lands in the recent files
     initActions(); // the default shortcuts and every command, for keys, help and the command palette
+    initLightBox();
     runCommand("new_sphere");
     if (!options.openPath.empty()) openPath(options.openPath);
     if (!options.script.empty()) {
@@ -266,6 +267,7 @@ void App::shutdown() {
     flushBrushEdits();
     if (refTexture_) gl::DeleteTextures(1, &refTexture_);
     gallery_.reset(); // its preview textures need the GL context
+    thumbs_.clear();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
@@ -618,6 +620,7 @@ void App::onMouseUp() {
 
 void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
     if (captureShortcutKey(key, mod)) return; // Ctrl+Alt+click a button, then press its new key
+    if (lightBoxKey(key, mod)) return;        // , LightBox, B / M pickers, S / I pop-ups (LightBox.cpp)
     actions_.handleKey(key, mod);             // the shortcut map: Config.cpp initActions()
 }
 
@@ -1014,7 +1017,7 @@ void App::drawUi() {
     if (hideUi_) return; // demos: clean beauty shots
     // Draw order (ui-spec §12): shells, LightBox, floating windows, then pop-ups and help.
     drawShell();
-    lightbox_.draw(*this, canvasRect());
+    drawLightBoxUi(); // thumbnails, the LightBox over the canvas, pickers, size / strength pop-ups
     drawSubToolPopups();
     if (showBrushLab_) drawBrushLab();
     drawBrushGallery();
@@ -1033,7 +1036,6 @@ void App::drawUi() {
         drawBrushCursor();
     drawPolygroupOverlay();
     drawBrushLibraryPopups();
-    drawPickers(*this);
     autosaveBrush();
 
     if (showAbout_) {

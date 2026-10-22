@@ -508,6 +508,14 @@ void App::drawHelpConsoleUi() {
                 console_.queueScriptFile(path);
             } else if (kind == kLibraryFolder) {
                 uiPrefs_.libraryFolder = path;
+                std::string libErr;
+                if (ensureUserLibrary(path, libErr)) { // the LightBox's User folder, from now on
+                    library_.user = path;
+                    libraryScanner_.invalidate();
+                    status_ = "Library folder: " + path + " (Store Config keeps it)";
+                } else {
+                    status_ = libErr;
+                }
             }
         }
     }

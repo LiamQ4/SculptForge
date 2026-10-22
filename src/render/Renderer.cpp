@@ -694,7 +694,8 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
         gl::Enable(GL_SCISSOR_TEST);
     }
     const int fbWidth = inset ? viewport.w : targetWidth, fbHeight = inset ? viewport.h : targetHeight;
-    gl::ClearColor(0.1f, 0.1f, 0.11f, 1.0f);
+    if (thumbnailPass_) gl::ClearColor(0.0f, 0.0f, 0.0f, 0.0f); // renderMeshThumbnail: transparent background
+    else gl::ClearColor(0.1f, 0.1f, 0.11f, 1.0f);
     gl::Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     gl::Enable(GL_MULTISAMPLE);
     struct ScissorOff {
@@ -708,7 +709,7 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
     gl::Disable(GL_DEPTH_TEST);
     gl::UseProgram(bgProgram_);
     gl::BindVertexArray(emptyVao_);
-    gl::DrawArrays(GL_TRIANGLES, 0, 3);
+    if (!thumbnailPass_) gl::DrawArrays(GL_TRIANGLES, 0, 3);
 
     glm::mat4 view = camera.view(), proj = camera.projection();
     gl::Enable(GL_DEPTH_TEST);
@@ -787,6 +788,40 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, const RenderSettings& se
     gl::BindTexture(GL_TEXTURE_BUFFER, s.hasGroups ? s.groupTexture : 0);
     gl::ActiveTexture(GL_TEXTURE0);
     gl::DrawElements(GL_TRIANGLES, s.indexCount, GL_UNSIGNED_INT, nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Thumbnails (LightBox / pickers)
+// ---------------------------------------------------------------------------
+
+bool Renderer::renderMeshThumbnail(Mesh& mesh, const Camera& camera, int size, const RenderSettings& settings,
+                                   std::vector<uint8_t>& rgba, std::string& error) {
+    constexpr GLenum kFramebufferBinding = 0x8CA6, kViewport = 0x0BA2;
+    GLint fbo = 0, viewport[4] = {};
+    gl::GetIntegerv(kFramebufferBinding, &fbo);
+    gl::GetIntegerv(kViewport, viewport);
+
+    // A scratch slot outside the SubTool id range; the scene's draw list is put back afterwards.
+    constexpr uint32_t kThumbnailSlot = 0xFFFFFFF0u;
+    mesh.topologyDirty = true;
+    sync(slot(kThumbnailSlot), mesh);
+    std::vector<DrawItem> scene;
+    scene.swap(drawList_);
+    drawList_.push_back({kThumbnailSlot, true});
+    thumbnailPass_ = true;
+    const bool ok = renderToImage(camera, size, size, settings, rgba, error);
+    thumbnailPass_ = false;
+    drawList_.swap(scene);
+    for (size_t i = 0; i < slots_.size(); ++i)
+        if (slots_[i].id == kThumbnailSlot) {
+            freeSlot(slots_[i]);
+            slots_.erase(slots_.begin() + std::ptrdiff_t(i));
+            break;
+        }
+
+    gl::BindFramebuffer(GL_FRAMEBUFFER, GLuint(fbo));
+    gl::Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+    return ok;
 }
 
 } // namespace sf

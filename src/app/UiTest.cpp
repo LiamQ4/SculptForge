@@ -12,11 +12,12 @@
 //   hold MODS                ctrl / shift / alt / ctrl+shift ... or none (for strokes and drags)
 //   stroke U0 V0 U1 V1 [S]   brush stroke across the model (fractions of its on-screen bounds)
 //   drag X0 Y0 X1 Y1 [S]     left-drag in window fractions (rectangle hide, sliders...)
+//   drag_item LABEL DX DY [S] left-drag from the item by DX DY pixels (scrubbing, dragging a tile out)
 //   orbit DX DY              right-drag on the background, in pixels
 //   run COMMANDS             sculptforge-cli commands, e.g. run new_sphere subdivisions=4
 //   drop FILE                as if FILE were dropped onto the window (relative to the script's folder)
 //   env NAME VALUE           set an environment variable; $SCRIPT_DIR is the script's folder
-//   wait SECONDS / wait_idle [TIMEOUT] (AI requests and background jobs) / wait_for LABEL [TIMEOUT]
+//   wait SECONDS / wait_idle [TIMEOUT] (AI requests, thumbnails and other background jobs) / wait_for LABEL [TIMEOUT]
 //   expect LABEL / expect_not LABEL
 //   expect_text TEXT / expect_no_text TEXT   any text drawn this frame contains TEXT
 //   expect_status TEXT       the status bar message contains TEXT
@@ -450,6 +451,31 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             return false;
         });
         wait(0.1f);
+    } else if (verb == "drag_item") {
+        if (!need(3)) return false;
+        const std::string label = w[1];
+        const float dx = num(2, 0), dy = num(3, 0), seconds = num(4, 0.4f);
+        auto from = std::make_shared<ImVec2>();
+        steps_.push_back([this, line, label, from](float t) {
+            if (findItem(label, *from)) {
+                mouseMotion(from->x, from->y);
+                return true;
+            }
+            if (t > 3.0f) fail(line, notFound(label));
+            return t > 3.0f;
+        });
+        steps_.push_back([this, from, dx, dy, seconds](float t) {
+            if (t == 0.0f) return false; // a frame of hover first
+            if (!buttonDown_ && t < seconds) mouseButton(true, SDL_BUTTON_LEFT);
+            const float u = std::min(t / seconds, 1.0f);
+            mouseMotion(from->x + dx * u, from->y + dy * u);
+            if (t >= seconds) {
+                mouseButton(false, SDL_BUTTON_LEFT);
+                return true;
+            }
+            return false;
+        });
+        wait(0.1f);
     } else if (verb == "orbit") {
         if (!need(2)) return false;
         orbit(num(1, 0), num(2, 0), 0.4f);
@@ -491,7 +517,8 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
         const float timeout = num(1, 120.0f);
         steps_.push_back([this, line, timeout](float t) {
             const bool idle = !busy(app_.pendingBrush_) && !busy(app_.pendingGenerator_) && !busy(app_.pendingModels_) &&
-                              !busy(app_.pendingUnreal_) && !busy(app_.pendingComfyCheck_) && !app_.galleryBusy();
+                              !busy(app_.pendingUnreal_) && !busy(app_.pendingComfyCheck_) && !app_.galleryBusy() &&
+                              !app_.thumbs_.busy() && !app_.libraryScanner_.busy();
             if (idle) return true;
             SDL_Delay(10); // real work runs in real time
             if (t > timeout) fail(line, "still busy after " + number(timeout) + " s");
