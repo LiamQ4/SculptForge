@@ -97,6 +97,9 @@ p { margin: 0 0 1em; }
 .pair .arrow { font-size: 1.8rem; color: var(--accent); }
 
 .two-col { display: grid; grid-template-columns: 1fr 1.2fr; gap: 56px; }
+/* Stacked: text, then a full-width table (the comparison has six columns). */
+.two-col.stack { grid-template-columns: 1fr; }
+.two-col.stack > :first-child { max-width: 860px; }
 .checks { padding-left: 1.2em; color: #cfcfd6; }
 .checks li { margin-bottom: 0.6em; }
 .fine { color: var(--muted); font-size: 0.85rem; }
