@@ -7,7 +7,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <chrono>
 #include <iterator>
+#include <thread>
 
 namespace sf::ai {
 
@@ -16,7 +18,10 @@ namespace {
 constexpr const char* kAnthropicUrl = "https://api.anthropic.com/v1/messages";
 constexpr const char* kAnthropicModel = "claude-opus-5-5";
 constexpr const char* kOllamaUrl = "http://localhost:11434/v1/chat/completions";
-constexpr const char* kOllamaModel = "llama3.1";
+constexpr const char* kOllamaModel = "qwen3:4b-instruct"; // 2.5 GB, fine on CPU; see docs/local-ai.md
+// Free tier: anonymous, rate limited to roughly one request every few seconds per IP.
+constexpr const char* kFreeUrl = "https://text.pollinations.ai/openai";
+constexpr const char* kFreeModel = "openai";
 
 std::filesystem::path utf8Path(const std::string& s) { return std::filesystem::path(std::u8string(s.begin(), s.end())); }
 
@@ -65,7 +70,10 @@ std::string apiErrorMessage(const Json& j) {
 AiSettings AiSettings::defaults(Provider provider) {
     AiSettings s;
     s.provider = provider;
-    if (provider == Provider::Anthropic) {
+    if (provider == Provider::Free) {
+        s.endpoint = kFreeUrl;
+        s.model = kFreeModel;
+    } else if (provider == Provider::Anthropic) {
         s.endpoint = kAnthropicUrl;
         s.model = kAnthropicModel;
     } else {
@@ -75,7 +83,20 @@ AiSettings AiSettings::defaults(Provider provider) {
     return s;
 }
 
+AiSettings::Provider AiSettings::providerFromName(const std::string& name) {
+    if (name == "anthropic") return Provider::Anthropic;
+    if (name == "openai-compatible") return Provider::OpenAICompatible;
+    return Provider::Free;
+}
+
+const char* AiSettings::providerName(Provider provider) {
+    return provider == Provider::Anthropic          ? "anthropic"
+           : provider == Provider::OpenAICompatible ? "openai-compatible"
+                                                    : "free";
+}
+
 std::string AiSettings::resolvedKey() const {
+    if (provider == Provider::Free) return {};
     if (!apiKey.empty()) return apiKey;
     const char* env = std::getenv(provider == Provider::Anthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY");
     return env ? env : "";
@@ -102,7 +123,7 @@ std::string AiSettings::resolvedMeshyKey() const {
 
 Json AiSettings::toJson() const {
     Json j = Json::object();
-    j.set("provider", provider == Provider::Anthropic ? "anthropic" : "openai-compatible");
+    j.set("provider", providerName(provider));
     j.set("endpoint", endpoint);
     j.set("model", model);
     j.set("apiKey", apiKey);
@@ -121,10 +142,16 @@ Json AiSettings::toJson() const {
 }
 
 AiSettings AiSettings::fromJson(const Json& j) {
-    Provider p = j["provider"].asString() == "openai-compatible" ? Provider::OpenAICompatible : Provider::Anthropic;
+    // Settings saved before the free tier existed defaulted to Anthropic; without
+    // a key they never worked, so those move to Free.
+    Provider p = providerFromName(j["provider"].asString());
+    if (p == Provider::Anthropic && j["apiKey"].asString().empty() && !std::getenv("ANTHROPIC_API_KEY") &&
+        j["endpoint"].asString() == kAnthropicUrl)
+        p = Provider::Free;
     AiSettings s = defaults(p);
-    if (!j["endpoint"].asString().empty()) s.endpoint = j["endpoint"].asString();
-    if (!j["model"].asString().empty()) s.model = j["model"].asString();
+    const bool keepEndpoint = p == providerFromName(j["provider"].asString());
+    if (keepEndpoint && !j["endpoint"].asString().empty()) s.endpoint = j["endpoint"].asString();
+    if (keepEndpoint && !j["model"].asString().empty()) s.model = j["model"].asString();
     s.apiKey = j["apiKey"].asString();
     if (!j["effort"].asString().empty()) s.effort = j["effort"].asString();
     s.generatorCommand = j["generatorCommand"].asString();
@@ -172,11 +199,11 @@ AiSettings AiSettings::load(const std::string& path) {
         }
     }
     std::ifstream f(utf8Path(path), std::ios::binary);
-    if (!f) return defaults(Provider::Anthropic);
+    if (!f) return defaults(Provider::Free);
     std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     Json j;
     std::string err;
-    if (!Json::parse(text, j, err)) return defaults(Provider::Anthropic);
+    if (!Json::parse(text, j, err)) return defaults(Provider::Free);
     return fromJson(j);
 }
 
@@ -267,6 +294,12 @@ std::string buildRequestBody(const AiSettings& s, const std::vector<ChatMessage>
         outputConfig.set("format", format);
         body.set("output_config", outputConfig);
     } else {
+        if (s.provider == AiSettings::Provider::Free) {
+            Json format = Json::object();
+            format.set("type", "json_object");
+            body.set("response_format", format);
+            body.set("referrer", "sculptforge");
+        }
         Json sys = Json::object();
         sys.set("role", "system");
         sys.set("content", brushSystemPrompt());
@@ -329,14 +362,82 @@ BrushSuggestion parseResponse(const AiSettings& s, long httpStatus, const std::s
     return out;
 }
 
+std::string modelsUrl(const std::string& chatEndpoint) {
+    std::string base = chatEndpoint;
+    const std::string suffix = "/chat/completions";
+    if (base.size() >= suffix.size() && base.compare(base.size() - suffix.size(), suffix.size(), suffix) == 0)
+        base.resize(base.size() - suffix.size());
+    while (!base.empty() && base.back() == '/') base.pop_back();
+    return base + "/models";
+}
+
+std::vector<std::string> listModels(const AiSettings& s, std::string& error) {
+    std::vector<std::string> out;
+    HttpResponse r = httpRequest("GET", modelsUrl(s.endpoint), requestHeaders(s), {}, 5);
+    if (!r.error.empty()) {
+        error = "Nothing is answering at " + s.endpoint + " - is Ollama or LM Studio running? (" + r.error + ")";
+        return out;
+    }
+    Json j;
+    if (r.status != 200 || !Json::parse(r.body, j, error)) {
+        error = "HTTP " + std::to_string(r.status) + " from " + modelsUrl(s.endpoint);
+        return out;
+    }
+    for (const auto& m : j["data"].items())
+        if (m["id"].isString()) out.push_back(m["id"].asString());
+    if (out.empty()) error = "The server is running but has no models yet - try: ollama pull " + std::string(kOllamaModel);
+    return out;
+}
+
+std::string smallestOllamaModel(std::string& error) {
+    HttpResponse r = httpRequest("GET", "http://localhost:11434/api/tags", {}, {}, 2);
+    Json j;
+    if (r.status != 200 || !Json::parse(r.body, j, error)) return {};
+    std::string best;
+    double bestSize = 0;
+    for (const auto& m : j["models"].items()) {
+        const double size = m["size"].asNumber();
+        if (m["name"].isString() && (best.empty() || size < bestSize)) {
+            best = m["name"].asString();
+            bestSize = size;
+        }
+    }
+    return best;
+}
+
 BrushSuggestion requestBrush(const AiSettings& s, const std::vector<ChatMessage>& history,
                              std::string* rawAssistantJson) {
     if (s.provider == AiSettings::Provider::Anthropic && s.resolvedKey().empty()) {
         BrushSuggestion out;
-        out.error = "No Anthropic API key - add one in AI settings or set ANTHROPIC_API_KEY.";
+        out.error = "No Anthropic API key - add one in AI settings or set ANTHROPIC_API_KEY, or switch to Free.";
         return out;
     }
-    HttpResponse r = httpPostJson(requestUrl(s), requestHeaders(s), buildRequestBody(s, history));
+    const std::string body = buildRequestBody(s, history);
+    HttpResponse r = httpPostJson(requestUrl(s), requestHeaders(s), body);
+    if (s.provider == AiSettings::Provider::Free) {
+        // The anonymous tier allows a request every few seconds; one patient retry covers a quick second ask.
+        if (r.status == 429) {
+            std::this_thread::sleep_for(std::chrono::seconds(6));
+            r = httpPostJson(requestUrl(s), requestHeaders(s), body);
+        }
+        BrushSuggestion out = r.error.empty() ? parseResponse(s, r.status, r.body, rawAssistantJson) : BrushSuggestion{};
+        if (out.ok) return out;
+        // Offline or the free service is down: use a local Ollama if one is running.
+        std::string err;
+        const std::string localModel = smallestOllamaModel(err);
+        if (!localModel.empty()) {
+            AiSettings local = AiSettings::defaults(AiSettings::Provider::OpenAICompatible);
+            local.model = localModel;
+            HttpResponse lr = httpPostJson(requestUrl(local), requestHeaders(local), buildRequestBody(local, history));
+            if (lr.error.empty()) {
+                BrushSuggestion localOut = parseResponse(local, lr.status, lr.body, rawAssistantJson);
+                if (localOut.ok) return localOut;
+            }
+        }
+        if (!r.error.empty()) out.error = "Could not reach the free AI service: " + r.error;
+        out.error += " (Free tier: try again in a moment, run Ollama locally, or add your own provider.)";
+        return out;
+    }
     if (!r.error.empty()) {
         BrushSuggestion out;
         out.error = "Could not reach " + s.endpoint + ": " + r.error;

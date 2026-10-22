@@ -4,6 +4,17 @@ All notable changes to SculptForge are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### AI
+- Brush Lab is free out of the box: the new default **Free** provider uses an open model hosted by
+  Pollinations.ai with no account or key, and falls back to a running local Ollama. Key-less Anthropic
+  settings from earlier versions switch to Free automatically.
+- Local models made easy: Ollama and LM Studio presets, **Find models** (checks the connection and lists
+  installed models), and setup steps for your OS in the AI provider panel. New guide:
+  [Run AI on your own computer](docs/local-ai.md). The default local model is now `qwen3:4b-instruct`.
+- Switching the Brush Lab provider no longer resets your image-to-3D settings.
+
 ## [0.2.0] - 2026-10-21
 
 ### Sculpting

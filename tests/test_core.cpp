@@ -509,6 +509,41 @@ TEST(ai_request_and_response_parsing) {
     CHECK(s2.ok && s2.recipe.name == "Grit" && s2.recipe.pattern == BrushRecipe::Pattern::Noise);
 }
 
+TEST(ai_free_provider_is_the_default) {
+    using namespace sf::ai;
+    AiSettings s;
+    CHECK(s.provider == AiSettings::Provider::Free);
+    AiSettings free = AiSettings::defaults(AiSettings::Provider::Free);
+    free.apiKey = "ignored";
+    CHECK(free.endpoint.find("pollinations") != std::string::npos);
+    auto headers = requestHeaders(free);
+    CHECK(headers.size() == 1); // no key is ever sent
+    Json req;
+    std::string err;
+    CHECK(Json::parse(buildRequestBody(free, {composeUserMessage("dry cracked mud", nullptr)}), req, err));
+    CHECK(req["response_format"]["type"].asString() == "json_object");
+    CHECK(req["messages"][0]["role"].asString() == "system");
+
+    // Saved settings round-trip; key-less Anthropic settings from older versions become Free.
+    CHECK(AiSettings::fromJson(free.toJson()).provider == AiSettings::Provider::Free);
+    Json missing = Json::object();
+    CHECK(AiSettings::fromJson(missing).provider == AiSettings::Provider::Free);
+    if (!std::getenv("ANTHROPIC_API_KEY")) {
+        AiSettings old = AiSettings::defaults(AiSettings::Provider::Anthropic);
+        AiSettings migrated = AiSettings::fromJson(old.toJson());
+        CHECK(migrated.provider == AiSettings::Provider::Free && migrated.model == "openai");
+    }
+    AiSettings keyed = AiSettings::defaults(AiSettings::Provider::Anthropic);
+    keyed.apiKey = "k";
+    CHECK(AiSettings::fromJson(keyed.toJson()).provider == AiSettings::Provider::Anthropic);
+    AiSettings ollama = AiSettings::defaults(AiSettings::Provider::OpenAICompatible);
+    ollama.model = "qwen3:4b-instruct";
+    AiSettings back = AiSettings::fromJson(ollama.toJson());
+    CHECK(back.provider == AiSettings::Provider::OpenAICompatible && back.model == "qwen3:4b-instruct");
+    CHECK(modelsUrl("http://localhost:11434/v1/chat/completions") == "http://localhost:11434/v1/models");
+    CHECK(modelsUrl("http://localhost:1234/v1/") == "http://localhost:1234/v1/models");
+}
+
 namespace {
 
 Image makeImage(int w, int h, const std::function<glm::vec4(float, float)>& f) {

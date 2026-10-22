@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Bring-your-own-AI brush designer: turns an artist's description ("sharp
-// wrinkles that fade out", "make it grittier") into a BrushRecipe. Works with
+// wrinkles that fade out", "make it grittier") into a BrushRecipe. Free out of
+// the box (a hosted open model, no account or key), or bring your own:
 // Anthropic's API or any OpenAI-compatible endpoint (OpenAI, Ollama, LM
 // Studio, OpenRouter, ...). The model only ever returns recipe data.
 #pragma once
@@ -15,11 +16,13 @@
 namespace sf::ai {
 
 struct AiSettings {
-    enum class Provider { Anthropic, OpenAICompatible };
-    Provider provider = Provider::Anthropic;
+    // Free: Pollinations' anonymous OpenAI-compatible endpoint (open models, no
+    // key), falling back to a local Ollama if it is running.
+    enum class Provider { Free, Anthropic, OpenAICompatible };
+    Provider provider = Provider::Free;
     std::string endpoint;
     std::string model;
-    std::string apiKey; // empty = use ANTHROPIC_API_KEY / OPENAI_API_KEY from the environment
+    std::string apiKey; // Free: unused; empty = use ANTHROPIC_API_KEY / OPENAI_API_KEY from the environment
     std::string effort = "low";
     // Image to 3D. service: "huggingface" (free Spaces), "fal", "meshy",
     // "command" (generatorCommand with {input}/{output}) or "inflate" (offline).
@@ -38,6 +41,8 @@ struct AiSettings {
     std::string resolvedMeshyKey() const;
 
     static AiSettings defaults(Provider provider);
+    static Provider providerFromName(const std::string& name); // "free", "anthropic", "openai-compatible"
+    static const char* providerName(Provider provider);
     std::string resolvedKey() const;
 
     Json toJson() const;
@@ -74,6 +79,13 @@ std::string buildRequestBody(const AiSettings& s, const std::vector<ChatMessage>
 // `rawAssistantJson` receives the model's JSON text, to append to the history.
 BrushSuggestion parseResponse(const AiSettings& s, long httpStatus, const std::string& body,
                               std::string* rawAssistantJson = nullptr);
+
+// Local model servers (blocking). `chatEndpoint` is an OpenAI-compatible
+// .../v1/chat/completions URL; the model list comes from .../v1/models.
+std::string modelsUrl(const std::string& chatEndpoint);
+std::vector<std::string> listModels(const AiSettings& s, std::string& error);
+// The smallest model a local Ollama has installed, or empty if none is running.
+std::string smallestOllamaModel(std::string& error);
 
 // Blocking (run on a worker thread): sends the conversation, whose last
 // message must be the user's, and returns a recipe.

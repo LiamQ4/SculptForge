@@ -16,18 +16,17 @@ namespace sf::ai {
 void registerAiCommands(CommandRegistry& registry, std::function<AiSettings()> settings) {
     using T = ParamSpec::Type;
     registry.add({"brush_ai",
-                  "Design a brush from a description using your configured AI provider "
-                  "(ANTHROPIC_API_KEY, or provider=openai-compatible endpoint=... model=... for Ollama etc.).",
+                  "Design a brush from a description. Free by default (a hosted open model, no key); or "
+                  "provider=anthropic (ANTHROPIC_API_KEY), or provider=openai-compatible endpoint=... model=... "
+                  "for OpenAI, Ollama, LM Studio etc.",
                   {{"prompt", T::String, "What the brush should do, in an artist's words.", true},
-                   {"provider", T::String, "'anthropic' or 'openai-compatible' (default: your saved settings).", false},
+                   {"provider", T::String, "'free', 'anthropic' or 'openai-compatible' (default: your saved settings).", false},
                    {"endpoint", T::String, "Override the API endpoint URL.", false},
                    {"model", T::String, "Override the model name.", false}},
                   [settings](Document& doc, const Args& a) -> CommandResult {
                       AiSettings s = settings();
                       if (a.contains("provider"))
-                          s = AiSettings::defaults(argString(a, "provider") == "openai-compatible"
-                                                       ? AiSettings::Provider::OpenAICompatible
-                                                       : AiSettings::Provider::Anthropic);
+                          s = AiSettings::defaults(AiSettings::providerFromName(argString(a, "provider")));
                       if (a.contains("endpoint")) s.endpoint = argString(a, "endpoint");
                       if (a.contains("model")) s.model = argString(a, "model");
                       std::vector<ChatMessage> history = {composeUserMessage(argString(a, "prompt"), nullptr)};

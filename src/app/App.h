@@ -183,6 +183,13 @@ private:
         std::string raw;
     };
     std::future<BrushReply> pendingBrush_;
+    struct ModelList {
+        std::vector<std::string> models;
+        std::string error;
+    };
+    std::future<ModelList> pendingModels_; // "Find models" on a local server
+    ModelList localModels_;
+    bool modelsChecked_ = false;
     float busyTime_ = 0.0f;
     bool scrollChat_ = false;
     // Image to 3D

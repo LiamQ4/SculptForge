@@ -1296,13 +1296,16 @@ void App::drawRecipeEditor(BrushRecipe& recipe) {
 
 void App::drawAiSettings() {
     using P = ai::AiSettings::Provider;
-    const char* providers[] = {"Anthropic (Claude)", "OpenAI-compatible (OpenAI, Ollama, LM Studio...)"};
+    const char* providers[] = {"Free - no account or key", "Anthropic (Claude) - your key",
+                               "OpenAI-compatible (OpenAI, Ollama, LM Studio...)"};
     int provider = int(aiSettings_.provider);
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::Combo("##provider", &provider, providers, 2)) {
-        std::string key = aiSettings_.apiKey;
-        aiSettings_ = ai::AiSettings::defaults(P(provider));
-        aiSettings_.apiKey = key;
+    if (ImGui::Combo("##provider", &provider, providers, 3)) {
+        // Only the brush provider changes; the image-to-3D settings stay.
+        const ai::AiSettings d = ai::AiSettings::defaults(P(provider));
+        aiSettings_.provider = d.provider;
+        aiSettings_.endpoint = d.endpoint;
+        aiSettings_.model = d.model;
     }
     auto textField = [](const char* label, std::string& value, ImGuiInputTextFlags flags = 0) {
         char buf[512];
@@ -1310,9 +1313,84 @@ void App::drawAiSettings() {
         ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Endpoint").x - ImGui::GetStyle().ItemInnerSpacing.x);
         if (ImGui::InputText(label, buf, sizeof buf, flags)) value = buf;
     };
-    textField("Endpoint", aiSettings_.endpoint);
-    textField("Model", aiSettings_.model);
-    textField("API key", aiSettings_.apiKey, ImGuiInputTextFlags_Password);
+    if (aiSettings_.provider == P::OpenAICompatible) {
+        // One-click presets for the two common local servers.
+        const float third = (ImGui::GetContentRegionAvail().x - 2 * ImGui::GetStyle().ItemSpacing.x) / 3;
+        if (ImGui::Button("Ollama", ImVec2(third, 0))) {
+            aiSettings_.endpoint = "http://localhost:11434/v1/chat/completions";
+            modelsChecked_ = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("LM Studio", ImVec2(third, 0))) {
+            aiSettings_.endpoint = "http://localhost:1234/v1/chat/completions";
+            modelsChecked_ = false;
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(pendingModels_.valid());
+        if (ImGui::Button(pendingModels_.valid() ? "Checking..." : "Find models", ImVec2(third, 0))) {
+            auto promise = std::make_shared<std::promise<ModelList>>();
+            pendingModels_ = promise->get_future();
+            std::thread([promise, settings = aiSettings_] {
+                ModelList list;
+                list.models = ai::listModels(settings, list.error);
+                promise->set_value(std::move(list));
+            }).detach();
+        }
+        ImGui::EndDisabled();
+        if (pendingModels_.valid() && pendingModels_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            localModels_ = pendingModels_.get();
+            modelsChecked_ = true;
+            if (!localModels_.models.empty() &&
+                std::find(localModels_.models.begin(), localModels_.models.end(), aiSettings_.model) ==
+                    localModels_.models.end())
+                aiSettings_.model = localModels_.models.front();
+        }
+    }
+    if (aiSettings_.provider != P::Free) {
+        textField("Endpoint", aiSettings_.endpoint);
+        if (aiSettings_.provider == P::OpenAICompatible && modelsChecked_ && !localModels_.models.empty()) {
+            ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Endpoint").x - ImGui::GetStyle().ItemInnerSpacing.x);
+            if (ImGui::BeginCombo("Model", aiSettings_.model.c_str())) {
+                for (const auto& m : localModels_.models)
+                    if (ImGui::Selectable(m.c_str(), m == aiSettings_.model)) aiSettings_.model = m;
+                ImGui::EndCombo();
+            }
+        } else {
+            textField("Model", aiSettings_.model);
+        }
+        textField("API key", aiSettings_.apiKey, ImGuiInputTextFlags_Password);
+    }
+    if (aiSettings_.provider == P::OpenAICompatible && modelsChecked_) {
+        if (localModels_.error.empty())
+            ImGui::TextColored(ImVec4(0.45f, 0.8f, 0.5f, 1), "Connected - %d model%s installed",
+                               int(localModels_.models.size()), localModels_.models.size() == 1 ? "" : "s");
+        else
+            ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.4f, 1), "%s", localModels_.error.c_str());
+    }
+    if (aiSettings_.provider == P::OpenAICompatible && ImGui::TreeNode("Run a model on this computer")) {
+        // Steps for the platform we're on; the guide covers the others.
+#if defined(_WIN32)
+        ImGui::TextWrapped("1. Install Ollama: download it from ollama.com/download, or in PowerShell run\n"
+                           "   winget install Ollama.Ollama\n"
+                           "2. In a terminal, run:  ollama pull qwen3:4b-instruct\n"
+                           "3. Ollama runs in the system tray. Click Ollama above, then Find models.");
+#elif defined(__APPLE__)
+        ImGui::TextWrapped("1. Install Ollama: download it from ollama.com/download and drag it to Applications.\n"
+                           "2. In Terminal, run:  ollama pull qwen3:4b-instruct\n"
+                           "3. Ollama runs in the menu bar. Click Ollama above, then Find models.");
+#else
+        ImGui::TextWrapped("1. Install Ollama:  curl -fsSL https://ollama.com/install.sh | sh\n"
+                           "   (or your package manager, e.g. sudo pacman -S ollama)\n"
+                           "2. Start it if needed:  sudo systemctl enable --now ollama\n"
+                           "3. Run:  ollama pull qwen3:4b-instruct\n"
+                           "4. Click Ollama above, then Find models.");
+#endif
+        ImGui::TextWrapped("The 2.5 GB model needs about 4 GB of free memory and works without a graphics card "
+                           "(10-20 s per brush on a laptop CPU, a few seconds with a GPU).");
+        if (ImGui::SmallButton("Full guide: Windows, macOS, Linux, LM Studio"))
+            SDL_OpenURL("https://github.com/islandmed/SculptForge/blob/main/docs/local-ai.md");
+        ImGui::TreePop();
+    }
     if (aiSettings_.provider == P::Anthropic) {
         const char* efforts[] = {"low", "medium", "high"};
         int e = aiSettings_.effort == "high" ? 2 : aiSettings_.effort == "medium" ? 1 : 0;
@@ -1325,9 +1403,14 @@ void App::drawAiSettings() {
                                                                                      : "AI settings saved";
     }
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("Opt-in and private: requests go only to the endpoint above. Keys are stored on this "
-                       "computer only (owner-readable ai.json); leave empty to use ANTHROPIC_API_KEY / "
-                       "OPENAI_API_KEY. For free, offline use, run Ollama and pick OpenAI-compatible.");
+    if (aiSettings_.provider == P::Free)
+        ImGui::TextWrapped("Free: an open model (GPT-OSS 20B) hosted by Pollinations.ai, no sign-up. Only your "
+                           "brush description and settings are sent. Rate limited to a request every few seconds; "
+                           "if it can't be reached, a running Ollama is used instead.");
+    else
+        ImGui::TextWrapped("Requests go only to the endpoint above. Keys are stored on this computer only "
+                           "(owner-readable ai.json); leave empty to use ANTHROPIC_API_KEY / OPENAI_API_KEY. "
+                           "For private, offline use, run Ollama and pick OpenAI-compatible.");
     ImGui::PopStyleColor();
 }
 

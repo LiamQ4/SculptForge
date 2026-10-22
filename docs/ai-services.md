@@ -8,13 +8,23 @@ telemetry, no account and no servers of its own. When you use an AI feature, Scu
 
 | Feature | Service (your choice) | What is sent | Key |
 |---|---|---|---|
-| Brush Lab | Anthropic (Claude), or any OpenAI-compatible endpoint such as a local Ollama / LM Studio | Your brush description and the current brush settings (text only) | Your API key; none for local models |
+| Brush Lab | Free (default): Pollinations.ai's hosted open models, falling back to a running local Ollama. Or Anthropic (Claude), or any OpenAI-compatible endpoint such as a local Ollama / LM Studio | Your brush description and the current brush settings (text only) | None for Free and local models; your API key otherwise |
 | Generate 3D (image) | Hugging Face Spaces (free), fal.ai, Meshy, or your own command | The image you chose, cropped and resized to at most 1024 px | Optional HF token; your fal.ai / Meshy key |
 | Generate 3D (text) | Hugging Face Spaces (free), fal.ai, Meshy | Your text description | As above |
 | Send to Unreal | Your own Unreal Editor (local network) | The exported FBX | None |
 
 Keys are stored in your local settings file (`ai.json`, owner-only permissions) or read from
 environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `HF_TOKEN`, `FAL_KEY`, `MESHY_API_KEY`).
+
+## The free Brush Lab model
+
+The **Free** provider sends your brush request to [Pollinations.ai](https://pollinations.ai)'s
+anonymous, OpenAI-compatible text endpoint (currently GPT-OSS 20B, an Apache-2.0 open model). There's
+no sign-up and no key, and it only ever receives text: your description and the brush values. The
+anonymous tier allows about one request every few seconds, which is plenty for a chat. If the service
+can't be reached and Ollama is running on your machine, SculptForge uses your first local model
+instead. For fully private use, pick **OpenAI-compatible** and point it at Ollama or LM Studio:
+see [Run AI on your own computer](local-ai.md) for step-by-step setup on Windows, macOS and Linux.
 
 ## The free image-to-3D and text-to-3D models
 

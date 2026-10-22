@@ -78,8 +78,10 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 **Free built-in AI: Brush Lab (describe a brush, AI builds it)**
 - "Dry cracked mud", "overlapping dragon scales", then "make it sharper". Brushes are recipes (data, never
   code), with every value exposed as a slider. Share them as `.sfbrush` files.
-- Works with Claude (Anthropic API) or any OpenAI-compatible endpoint, including **local models through
-  Ollama or LM Studio**.
+- **Free out of the box**: no account or key. It uses an open model (GPT-OSS 20B) hosted by Pollinations.ai,
+  and falls back to a local Ollama when you're offline.
+- Or bring your own: Claude (Anthropic API) or any OpenAI-compatible endpoint, including **private local
+  models through Ollama or LM Studio** ([5-minute setup for Windows, macOS and Linux](docs/local-ai.md)).
 
 **Free built-in AI: Generate 3D from an image or text**
 - A sketch, a piece of concept art or a description becomes a full 3D model (limbs, back and all), then gets
@@ -184,8 +186,11 @@ sculptforge-cli -c 'open path=statue.obj; unreal_send destination=/Game/Props he
 # Phone capture -> watertight base mesh
 sculptforge-cli -c 'open path=scan.ply; splat_transform rotate_x=180 fit=true; splat_clean; splat_to_mesh resolution=256; export_glb path=base.glb'
 
-# Design a brush with a local model and save it for the team
-sculptforge-cli -c 'brush_ai prompt="weathered stone edges" provider=openai-compatible model=qwen3:4b-instruct; brush_save path=stone.sfbrush'
+# Design a brush (free, no key) and save it for the team
+sculptforge-cli -c 'brush_ai prompt="weathered stone edges"; brush_save path=stone.sfbrush'
+
+# ...or with a private local model
+sculptforge-cli -c 'brush_ai prompt="weathered stone edges" provider=openai-compatible model=qwen3:4b-instruct'
 
 # Review-sheet turntable (8 frames)
 sculptforge model.glb --render review/model.png --turntable 8 --size 1024x1024
