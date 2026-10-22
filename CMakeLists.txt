@@ -133,6 +133,9 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/ShellGeometry.cpp
     src/app/Palettes.cpp
     src/app/Theme.cpp
+    src/app/CommandPalette.cpp
+    src/app/Console.cpp
+    src/app/Config.cpp
     src/app/PanelMasking.cpp
     src/app/PanelPolygroups.cpp
     src/app/PanelBrushes.cpp
@@ -313,6 +316,11 @@ if(SCULPTFORGE_BUILD_TESTS)
                                    src/app/ShellGeometry.cpp)
   target_include_directories(sculptforge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(sculptforge_tests PRIVATE sculptforge_core sculptforge_ai)
+  if(SCULPTFORGE_BUILD_APP) # the action registry (key chords, shortcut overrides) needs SDL's key names
+    target_sources(sculptforge_tests PRIVATE src/app/Actions.cpp)
+    target_link_libraries(sculptforge_tests PRIVATE SDL3::SDL3)
+    target_compile_definitions(sculptforge_tests PRIVATE SF_TEST_ACTIONS)
+  endif()
   if(MSVC)
     target_compile_options(sculptforge_tests PRIVATE /utf-8)
   endif()
@@ -340,5 +348,8 @@ if(SCULPTFORGE_BUILD_TESTS)
     add_test(NAME ui_shell_layout_1080 COMMAND sculptforge --ui-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/shell_layout.sfui
              --size 1920x1080 --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/shell_layout_1080)
     set_tests_properties(ui_shell_layout_1080 PROPERTIES LABELS ui TIMEOUT 300)
+    add_test(NAME ui_help_console_1080 COMMAND sculptforge --ui-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/help_console.sfui
+             --size 1920x1080 --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/help_console_1080)
+    set_tests_properties(ui_help_console_1080 PROPERTIES LABELS ui TIMEOUT 300)
   endif()
 endif()

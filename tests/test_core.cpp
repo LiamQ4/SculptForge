@@ -324,6 +324,23 @@ TEST(script_windows_paths) {
     CHECK(parseScript(quoted, st, err) && std::get<std::string>(st[0].args["prompt"]) == "say \"hi\"");
 }
 
+TEST(script_format_round_trip) {
+    // formatStatement is parseScript's inverse: the console echoes every command this way.
+    CHECK(formatStatement("subdivide", {}) == "subdivide");
+    CHECK(formatStatement("remesh", {{"resolution", 200.0}}) == "remesh resolution=200");
+    CHECK(formatStatement("layer_add", {{"name", std::string("Big Smile")}}) == "layer_add name=\"Big Smile\"");
+    const Args args = {{"name", std::string("Big \"Smile\" C:\\x")}, {"ratio", 0.1}, {"third", 1.0 / 3.0},
+                       {"flag", true}, {"off", false}, {"count", -42.0}, {"word", std::string("plain")},
+                       {"numeric_text", std::string("12")}, {"bool_text", std::string("true")},
+                       {"empty", std::string()}, {"semi", std::string("a;b#c")}, {"big", 1.5e20}};
+    std::vector<ScriptStatement> st;
+    std::string err;
+    const std::string text = formatStatement("brush_create", args) + "; " + formatStatement("subdivide", {{"levels", 2.0}});
+    CHECK(parseScript(text, st, err));
+    CHECK(st.size() == 2 && st[0].command == "brush_create" && st[0].args == args);
+    CHECK(st.size() == 2 && st[1].command == "subdivide" && std::get<double>(st[1].args["levels"]) == 2.0);
+}
+
 TEST(script_parser_and_pipeline) {
     std::vector<ScriptStatement> st;
     std::string err;

@@ -161,7 +161,7 @@ bool segmentPair(const std::string& a, const std::string& b) {
     auto group = [](const std::string& id) {
         if (id == "draw.sculpt" || id == "draw.paint") return 1;
         if (id == "draw.zadd" || id == "draw.zsub") return 2;
-        if (id.rfind("transform.sym_", 0) == 0) return 3;
+        if (id.rfind("transform.symmetry_", 0) == 0) return 3;
         if (id.rfind("draw.pressure_", 0) == 0) return 4;
         return 0;
     };
@@ -180,27 +180,12 @@ int brushTypeOfAction(std::string_view id) {
 // Button looks (ui::ActionButton)
 // ---------------------------------------------------------------------------
 
-bool drawActionLook(App& app, const Action& a, ImVec2 size, int look) {
+bool drawShelfTile(App& app, const Action& a, ImVec2 size) {
     const bool on = a.checked && a.checked();
     const std::string id = a.label + "##" + a.id;
     const float s = app.uiScale_;
-    if (look == int(ui::Look::Label) || look == int(ui::Look::Icon)) {
-        if (on) {
-            ImGui::PushStyleColor(ImGuiCol_Button, theme::accent);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::accentHover);
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::textOnAccent);
-        }
-        bool clicked;
-        if (look == int(ui::Look::Icon) && a.icon) {
-            const float h = size.y > 0.0f ? size.y : ImGui::GetFrameHeight();
-            clicked = ImGui::Button((std::string(a.icon) + "##" + a.id).c_str(), ImVec2(size.x > 0.0f ? size.x : h, h));
-        } else {
-            const std::string text = a.icon ? std::string(a.icon) + " " + id : id;
-            clicked = ImGui::Button(text.c_str(), size);
-        }
-        if (on) ImGui::PopStyleColor(3);
-        return clicked;
-    }
+    const int type = brushTypeOfAction(a.id);
+    const int look = type >= 0 || a.id == "draw.paint" ? 3 : 2; // picture tile, or icon over caption
     // Icon over a caption (right shelf) and thumbnail tiles (left and bottom shelves).
     if (size.x <= 0.0f) size.x = 44.0f * s;
     if (size.y <= 0.0f) size.y = 40.0f * s;
@@ -226,7 +211,6 @@ bool drawActionLook(App& app, const Action& a, ImVec2 size, int look) {
     const float pic = std::min(size.x, size.y - capH);
     const ImVec2 q0(p0.x + (size.x - pic) * 0.5f, p0.y), q1(q0.x + pic, q0.y + pic);
     dl->AddRectFilled(p0, p1, theme::u32(hovered ? theme::buttonHover : theme::tile, hovered ? 0.55f : 0.0f), 4.0f * s);
-    const int type = brushTypeOfAction(a.id);
     ImTextureID tex = type >= 0 ? app.thumbnails().brush(type) : ImTextureID(0);
     if (tex) {
         dl->AddImageRounded(tex, ImVec2(q0.x + 2 * s, q0.y + 2 * s), ImVec2(q1.x - 2 * s, q1.y - 2 * s), ImVec2(0, 0),
@@ -315,17 +299,13 @@ void App::registerShellActions() {
     flag("draw.rgb", "Rgb", nullptr, "Draw", "", &paintRgb_, "Sculpt brushes also paint the colour (ZBrush Rgb with Zadd).");
     flag("draw.front_faces", "Front", nullptr, "Brush", "", &frontFacesOnly_,
          "Front faces only: brushes leave the far side of thin parts alone.");
-    flag("draw.pressure_strength", "Pressure > Str", nullptr, "Draw > Tablet", "", &pressureStrength_,
+    flag("draw.pressure_strength", "Pressure > Strength", nullptr, "Draw > Tablet", "", &pressureStrength_,
          "Pen pressure scales the brush strength.");
     flag("draw.pressure_size", "Pressure > Size", nullptr, "Draw > Tablet", "", &pressureSize_,
          "Pen pressure scales the brush size.");
-    add({"draw.size_down", "Smaller brush", nullptr, "Make the brush 10% smaller.", "Draw", "[", "",
-         [this] { radiusPx_ = std::max(2.0f, radiusPx_ / 1.1f); }, nullptr, nullptr});
-    add({"draw.size_up", "Larger brush", nullptr, "Make the brush 10% larger.", "Draw", "]", "",
-         [this] { radiusPx_ = std::min(800.0f, radiusPx_ * 1.1f); }, nullptr, nullptr});
-    flag("transform.sym_x", "X", nullptr, "Transform", "X", &symmetry_.x, "Mirror strokes across X (left and right).");
-    flag("transform.sym_y", "Y", nullptr, "Transform", "", &symmetry_.y, "Mirror strokes across Y (top and bottom).");
-    flag("transform.sym_z", "Z", nullptr, "Transform", "", &symmetry_.z, "Mirror strokes across Z (front and back).");
+    flag("transform.symmetry_x", "X", nullptr, "Transform", "X", &symmetry_.x, "Mirror strokes across X (left and right).");
+    flag("transform.symmetry_y", "Y", nullptr, "Transform", "", &symmetry_.y, "Mirror strokes across Y (top and bottom).");
+    flag("transform.symmetry_z", "Z", nullptr, "Transform", "", &symmetry_.z, "Mirror strokes across Z (front and back).");
     flag("ui.brush_lab", "AI Brush", ICON_LC_SPARKLES, "Brush", "", &showBrushLab_,
          "Brush Lab: describe a brush in words and AI builds it; tweak the recipe with sliders.");
     flag("ui.generate3d", "Generate 3D", ICON_LC_WAND_SPARKLES, "Generate", "", &showImageTo3D_,
@@ -333,12 +313,10 @@ void App::registerShellActions() {
     flag("ui.brush_gallery", "Community brushes", ICON_LC_GLOBE, "Brush", "", &showBrushGallery_,
          "Browse, search and install brushes other sculptors shared.");
 
-    // View (right shelf, Render palette).
-    add({"view.frame", "Frame", ICON_LC_SCAN, "Frame the visible model in the view.", "Transform", "F", "",
+    // View (right shelf, Render palette). Frame keeps F; its short label fits the right shelf.
+    add({"view.frame", "Frame", ICON_LC_SCAN, "Fit the whole model in the view.", "Transform", "F", "",
          [this] { camera_.frame(sceneBounds()); }, nullptr, nullptr});
-    flag("view.wireframe", "Wireframe", ICON_LC_GRID_3X3, "Render", "W", &renderSettings_.wireframe,
-         "Show the polygons of the active SubTool.");
-    flag("view.polyf", "PolyF", ICON_LC_GRID_3X3, "Render", "Shift+F", &renderSettings_.wireframe,
+        flag("view.polyf", "PolyF", ICON_LC_GRID_3X3, "Render", "", &renderSettings_.wireframe,
          "Polyframe: show the polygons of the active SubTool (same as W).");
     flag("view.polygroups", "Groups", ICON_LC_SHAPES, "Render", "", &renderSettings_.showPolygroups,
          "Colour each polygroup of the active SubTool.");
@@ -365,16 +343,6 @@ void App::registerShellActions() {
          "Transform", "", "", nullptr, nullptr, nullptr});
 
     // Files and editing (File / Edit palettes).
-    add({"file.new_sphere", "New Sphere", ICON_LC_FILE_PLUS, "Start over with a sphere.", "File", "Ctrl+N", "new_sphere",
-         [this] { confirmDiscard([this] { runCommand("new_sphere"); }); }, nullptr, nullptr});
-    add({"file.new_plane", "New Plane", nullptr, "Start over with a flat plane (reliefs, tiles).", "File", "", "new_plane",
-         [this] { confirmDiscard([this] { runCommand("new_plane"); }); }, nullptr, nullptr});
-    add({"file.open", "Open...", ICON_LC_FOLDER_OPEN, "Open a project, model or splat capture.", "File", "Ctrl+O", "",
-         [this] { confirmDiscard([this] { openFileDialog(); }); }, nullptr, nullptr});
-    add({"file.save", "Save", ICON_LC_SAVE, "Save the project (.sfproj): every SubTool, layer, brush and setting.", "File",
-         "Ctrl+S", "", [this] { saveProjectAs(false); }, nullptr, nullptr});
-    add({"file.save_as", "Save As...", nullptr, "Save the project under a new name.", "File", "Ctrl+Shift+S", "",
-         [this] { saveProjectAs(true); }, nullptr, nullptr});
     add({"file.import", "Import", ICON_LC_IMPORT, "Add a model file as a new SubTool.", "Tool", "", "",
          [this] {
              static const SDL_DialogFileFilter filters[] = {
@@ -388,29 +356,16 @@ void App::registerShellActions() {
          nullptr, nullptr});
     add({"file.export_obj", "Export OBJ...", nullptr, "Save the visible SubTools as Wavefront OBJ.", "File", "", "",
          [this] { saveFileDialog(FileAction::SaveObj); }, nullptr, nullptr});
-    add({"file.export_glb", "Export GLB (blend shapes)...", nullptr, "glTF binary with layers as blend shapes.", "File",
-         "Ctrl+E", "", [this] { saveFileDialog(FileAction::ExportGlb); }, nullptr, nullptr});
     add({"file.export_lods", "Export LOD Chain...", nullptr, "One GLB per level of detail.", "File", "", "",
          [this] { saveFileDialog(FileAction::ExportLods); }, nullptr, nullptr});
     add({"file.export_usd", "Export USD / USDZ...", nullptr, "OpenUSD for Apple, Omniverse and film pipelines.", "File",
          "", "", [this] { saveFileDialog(FileAction::ExportUsd); }, nullptr, nullptr});
     add({"file.export_fbx", "Export FBX for Unreal...", nullptr, "FBX sized and named for Unreal Engine, with LODs.",
          "File", "", "", [this] { saveFileDialog(FileAction::ExportUnreal); }, nullptr, nullptr});
-    add({"file.send_unreal", "Send to Unreal", ICON_LC_SEND, "Import (or update) the model in the open Unreal Editor.",
-         "File", "Ctrl+U", "", [this] { sendToUnreal(); }, nullptr, [this] { return !pendingUnreal_.valid(); }});
     add({"file.save_splats", "Save Splats...", nullptr, "Save the Gaussian splats (PLY, glTF or USD).", "File", "", "",
          [this] { saveFileDialog(FileAction::SaveSplats); }, nullptr, [this] { return !doc_.splats.empty(); }});
     add({"file.quit", "Quit", ICON_LC_LOG_OUT, "Close SculptForge (asks to save changes first).", "File", "", "",
          [this] { requestQuit(); }, nullptr, nullptr});
-    add({"edit.undo", "Undo", ICON_LC_UNDO_2, "Undo the last change of the active SubTool.", "Edit", "Ctrl+Z", "undo",
-         [this] { runCommand("undo"); }, nullptr, [this] { return doc_.undo.canUndo(); }});
-    add({"edit.redo", "Redo", ICON_LC_REDO_2, "Redo what was undone.", "Edit", "Ctrl+Shift+Z", "redo",
-         [this] { runCommand("redo"); }, nullptr, [this] { return doc_.undo.canRedo(); }});
-    add({"brush.paste", "Paste brush", nullptr,
-         "Install a brush someone shared: a brush code (sfbrush1:...) or .sfbrush text on the clipboard.", "Brush",
-         "Ctrl+V", "", [this] { pasteBrush(); }, nullptr, nullptr});
-    add({"geometry.subdivide", "Subdivide", nullptr, "", "Tool > Geometry", "Ctrl+D", "subdivide",
-         [this] { runCommand("subdivide"); }, nullptr, nullptr});
     add({"geometry.remesh", "Voxel Remesh", nullptr,
          "Rebuild as an even, watertight surface (like DynaMesh): merges parts, fixes scans and generated models.",
          "Tool > Remesh", "", "remesh", [this] { runCommand("remesh", {{"resolution", double(voxelResolution_)}}); },
@@ -419,14 +374,6 @@ void App::registerShellActions() {
          "mesh_to_splats", [this] { runCommand("mesh_to_splats"); }, nullptr, nullptr});
     add({"color.fill", "Fill", ICON_LC_PAINT_BUCKET, "Fill the unmasked area with the colour (FillObject).", "Color", "",
          "paint_fill", [this] { runCommand("paint_fill", {{"color", colorToHex(doc_.paintColor)}}); }, nullptr, nullptr});
-    add({"color.pick", "Pick colour", ICON_LC_PIPETTE, "Take the colour under the cursor.", "Color", "C", "",
-         [this] { pickColorUnderCursor(); }, nullptr, nullptr});
-    flag("help.controls", "Controls", ICON_LC_KEYBOARD, "Help", "F1", &showHelp_, "Mouse, tablet and keyboard controls.");
-    flag("help.about", "About SculptForge", ICON_LC_INFO, "Help", "", &showAbout_, "Version, licence and credits.");
-    add({"help.website", "Website & documentation", ICON_LC_EXTERNAL_LINK, "Guides and the manual, in your browser.", "Help",
-         "", "", [] { SDL_OpenURL("https://islandmed.github.io/SculptForge/"); }, nullptr, nullptr});
-    add({"help.report", "Report a problem", ICON_LC_BUG, "Open the issue tracker in your browser.", "Help", "", "",
-         [] { SDL_OpenURL("https://github.com/islandmed/SculptForge/issues"); }, nullptr, nullptr});
 
     // The shell itself.
     add({"ui.toggle_shelves", "Shelves", ICON_LC_MAXIMIZE, "Hide or show the shelves and trays around the canvas.", "Preferences",
@@ -535,12 +482,9 @@ void App::updateCameraAspect() {
     camera_.aspect = c.w / std::max(c.h, 1.0f);
 }
 
-void App::noteLayoutChanged() {
-    if (layoutHintShown_ || !interactive()) return;
-    layoutHintShown_ = true;
-    status_ = "Layout changed - Ctrl+Shift+I (Store Config) keeps it";
-    lastCommandOk_ = true;
-}
+// The one-time "Layout changed - Ctrl+Shift+I to keep it" hint comes from watchLayoutChanges (Config.cpp),
+// which compares the layout with the stored one; shell edits only need to change layout_.
+void App::noteLayoutChanged() {}
 
 void App::applyPreset(int preset) {
     UiLayout l = standardLayout();
@@ -572,7 +516,7 @@ void App::removePaletteFromTrays(const std::string& id) {
 }
 
 void App::autoCollapseTray(bool right, const std::string& keep) {
-    if (!autoCollapse_[right ? 1 : 0]) return;
+    if (!(right ? uiPrefs_.autoCollapseRight : uiPrefs_.autoCollapseLeft)) return;
     for (const std::string& other : right ? layout_.rightTray : layout_.leftTray)
         if (other != keep && std::find(collapsedPalettes_.begin(), collapsedPalettes_.end(), other) == collapsedPalettes_.end())
             collapsedPalettes_.push_back(other);
@@ -725,7 +669,7 @@ void App::drawTitleStrip(const ShellGeometry& g) {
         ImGui::SameLine(0.0f, 2.0f * s);
     }
     ImGui::SameLine(0.0f, 8.0f * s);
-    ui::ActionButton(*this, "ui.menus", ImVec2(0, buttonH));
+    ui::ActionButton(*this, "ui.menus", ImVec2(0, buttonH), ui::Look::IconLabel);
     ImGui::SameLine(0.0f, 8.0f * s);
     // Search: a field-looking button that opens the command palette (F3).
     {
@@ -1057,7 +1001,7 @@ void App::drawShelf(int shelf, const CanvasRect& r) {
                    4.0f * s);
     // Customize: drop items between the shelf's items (an accent line shows where).
     const ImGuiPayload* payload = ImGui::GetDragDropPayload();
-    if (payload && payload->IsDataType("SF_UIITEM") && window->Rect().Contains(ImGui::GetIO().MousePos)) {
+    if (payload && payload->IsDataType(ui::kUiItemPayload) && window->Rect().Contains(ImGui::GetIO().MousePos)) {
         const ImVec2 m = ImGui::GetIO().MousePos;
         int insert = int(list.size());
         ImVec2 a, b;
@@ -1078,20 +1022,20 @@ void App::drawShelf(int shelf, const CanvasRect& r) {
         }
         if (ImGui::BeginDragDropTargetCustom(window->Rect(), ImGui::GetID("##shelfdrop"))) {
             ImGui::GetForegroundDrawList()->AddLine(a, b, theme::u32(theme::accent), 2.0f * s);
-            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("SF_UIITEM", ImGuiDragDropFlags_AcceptNoDrawDefaultRect)) {
-                UiItemPayload item;
+            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(ui::kUiItemPayload, ImGuiDragDropFlags_AcceptNoDrawDefaultRect)) {
+                ui::UiItemPayload item;
                 std::memcpy(&item, p->Data, std::min(size_t(p->DataSize), sizeof item));
-                item.item[sizeof item.item - 1] = 0;
+                item.id[sizeof item.id - 1] = 0;
                 std::vector<std::string>* from = item.fromShelf == kShelfTop      ? &layout_.topShelf
                                                  : item.fromShelf == kShelfLeft   ? &layout_.leftShelf
                                                  : item.fromShelf == kShelfRight  ? &layout_.rightShelf
                                                  : item.fromShelf == kShelfBottom ? &layout_.bottomShelf
                                                                                   : nullptr;
-                if (from && item.fromIndex >= 0 && item.fromIndex < int(from->size()) && (*from)[size_t(item.fromIndex)] == item.item) {
+                if (from && item.fromIndex >= 0 && item.fromIndex < int(from->size()) && (*from)[size_t(item.fromIndex)] == item.id) {
                     from->erase(from->begin() + item.fromIndex);
                     if (from == &items && item.fromIndex < insert) --insert;
                 }
-                items.insert(items.begin() + std::clamp(insert, 0, int(items.size())), std::string(item.item));
+                items.insert(items.begin() + std::clamp(insert, 0, int(items.size())), std::string(item.id));
                 shelfDrag_.accepted = true;
                 noteLayoutChanged();
             }
@@ -1235,16 +1179,16 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
                                                                                    : "One of your custom brushes.",
                      "Bottom shelf");
     } else if (const Action* a = actions_.find(item)) {
-        const ui::Look look = shelf == kShelfTop ? ui::Look::Label : shelf == kShelfRight ? ui::Look::IconLabel : ui::Look::Tile;
+        const ui::Look look = shelf != kShelfTop ? ui::Look::Tile : a->icon ? ui::Look::IconLabel : ui::Look::Label;
         const ImVec2 size = shelf == kShelfTop      ? ImVec2(0.0f, rowH)
                             : shelf == kShelfRight  ? ImVec2(44.0f * s, 40.0f * s)
                             : shelf == kShelfBottom ? ImVec2(bottomTileW_, 54.0f * s)
                                                     : ImVec2(winW - 2.0f * padX, 60.0f * s);
         centre(size.x);
         if (shelf == kShelfTop) ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * s, (rowH - ImGui::GetFontSize()) * 0.5f));
+        ui::SetNextItemOrigin(shelf, index); // ActionButton is the Ctrl+Alt drag source, from this shelf slot
         ui::ActionButton(*this, a->id.c_str(), size, look);
         if (shelf == kShelfTop) ImGui::PopStyleVar();
-        ui::HelpAction(*this, a->id.c_str());
     } else {
         ImGui::Dummy(ImVec2(0, 0)); // an id this version doesn't know: keep its place in the list
     }
@@ -1259,26 +1203,18 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
         }
         ImGui::EndPopup();
     }
-    // Customize mode: Ctrl+Alt+drag moves the item to another place, or off the shelf to remove it.
-    const SDL_Keymod mods = SDL_GetModState();
-    if (layout_.customize && (mods & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) && (mods & SDL_KMOD_ALT) && item != "sep" &&
-        ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-        UiItemPayload payload;
-        std::snprintf(payload.item, sizeof payload.item, "%s", item.c_str());
-        payload.fromShelf = shelf;
-        payload.fromIndex = index;
-        ImGui::SetDragDropPayload("SF_UIITEM", &payload, sizeof payload);
-        const Action* a = actions_.find(item);
-        ImGui::TextUnformatted(a ? a->label.c_str() : item.c_str());
-        ImGui::EndDragDropSource();
+    // Customize mode: widgets (sliders, tiles, readouts) are Ctrl+Alt drag sources too.
+    if (item != "sep" && !actions_.find(item)) {
+        ui::SetNextItemOrigin(shelf, index);
+        ui::UiItemDragSource(*this, item.c_str(), item.c_str());
     }
     ImGui::PopID();
 }
 
 void App::finishShelfDrag() {
     const ImGuiPayload* payload = ImGui::GetDragDropPayload();
-    if (payload && payload->IsDataType("SF_UIITEM")) {
-        UiItemPayload item;
+    if (payload && payload->IsDataType(ui::kUiItemPayload)) {
+        ui::UiItemPayload item;
         std::memcpy(&item, payload->Data, std::min(size_t(payload->DataSize), sizeof item));
         shelfDrag_.active = true;
         shelfDrag_.shelf = item.fromShelf;
@@ -1543,7 +1479,7 @@ void App::drawColorWidget(float width) {
                                ImVec2(sw, 22.0f * s));
     ui::HelpText("Second colour", nullptr, "Click to swap it with the main colour (ZBrush Alternate).", "Left shelf");
     if (swap) std::swap(doc_.paintColor, secondaryColor_);
-    ui::ActionButton(*this, "color.fill", ImVec2(width, 0));
+    ui::ActionButton(*this, "color.fill", ImVec2(width, 0), ui::Look::IconLabel);
     ui::HelpAction(*this, "color.fill");
     ImGui::EndGroup();
 }

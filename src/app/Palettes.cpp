@@ -8,6 +8,7 @@
 // Display sub-palettes.
 #include "app/App.h"
 
+#include "app/Config.h"
 #include "app/Demo.h"
 #include "app/Shell.h"
 #include "app/Theme.h"
@@ -66,8 +67,8 @@ void actionRow(App& app, std::initializer_list<const char*> ids) {
     const float w = (ImGui::GetContentRegionAvail().x - spacing * float(present.size() - 1)) / float(present.size());
     for (size_t i = 0; i < present.size(); ++i) {
         if (i) ImGui::SameLine();
-        ui::ActionButton(app, present[i], ImVec2(w, 0));
-        ui::HelpAction(app, present[i]);
+        const Action* a = app.actions().find(present[i]);
+        ui::ActionButton(app, present[i], ImVec2(w, 0), a && a->icon ? ui::Look::IconLabel : ui::Look::Label);
     }
 }
 
@@ -135,7 +136,7 @@ bool App::subpalette(const char* id, const char* title) {
         if (isOpen) {
             open.erase(std::remove(open.begin(), open.end(), id), open.end());
         } else {
-            if (oneSubpalette_ && !(SDL_GetModState() & SDL_KMOD_SHIFT)) {
+            if (uiPrefs_.oneSubpalette && !(SDL_GetModState() & SDL_KMOD_SHIFT)) {
                 // Close the siblings: sub-palettes that share this one's palette prefix ("tool.").
                 const std::string prefix = std::string(id).substr(0, std::string(id).find('.') + 1);
                 open.erase(std::remove_if(open.begin(), open.end(), [&](const std::string& o) { return o.rfind(prefix, 0) == 0; }),
@@ -276,50 +277,18 @@ void App::drawPalette_Help() {
 }
 
 void App::drawPalette_Preferences() {
+    // The sub-palettes come from Config.cpp (Store / Restore UI, interface preferences, hotkeys, LightBox).
     if (subpalette("preferences.config", "Config")) {
-        // Store / Restore / Load / Save UI come from the config actions when they're registered.
-        ImGui::Checkbox("Enable Customize", &layout_.customize);
-        ui::HelpText("Enable Customize", nullptr,
-                     "Ctrl+Alt+drag shelf items to move them, onto another shelf to copy them, or off the shelves to "
-                     "remove them.",
-                     "Preferences > Config");
-        actionRow(*this, {"config.store", "config.restore_custom"});
-        actionRow(*this, {"config.restore_standard"});
-        actionRow(*this, {"config.save", "config.load"});
+        config::drawConfigSection(*this);
         ImGui::TextDisabled("Layout");
-        ImGui::SameLine();
         for (int i = 1; i <= 3; ++i) {
             ImGui::SameLine();
             ui::ActionButton(*this, ("ui.preset." + std::to_string(i)).c_str(), ImVec2(ImGui::GetFrameHeight() * 1.4f, 0));
-            ui::HelpAction(*this, ("ui.preset." + std::to_string(i)).c_str());
         }
     }
-    if (subpalette("preferences.interface", "Interface")) {
-        ImGui::Checkbox("One sub-palette open", &oneSubpalette_);
-        ui::HelpText("One sub-palette open", nullptr, "Opening a sub-palette closes the others (Shift+click keeps them).",
-                     "Preferences > Interface");
-        ImGui::Checkbox("Auto collapse left tray", &autoCollapse_[0]);
-        ui::HelpText("Auto collapse", nullptr, "Opening a palette in the tray collapses the others there.", "Preferences > Interface");
-        ImGui::Checkbox("Auto collapse right tray", &autoCollapse_[1]);
-        ui::HelpText("Auto collapse right tray", nullptr, "Opening a palette in the right tray collapses the others there.",
-                     "Preferences > Interface");
-        if (ImGui::Checkbox("Left-handed layout", &layout_.leftHanded)) noteLayoutChanged();
-        ui::HelpText("Left-handed layout", nullptr, "Mirror the shelves and trays left to right.", "Preferences > Interface");
-        bool shelves = layout_.shelvesVisible;
-        if (ImGui::Checkbox("Shelves (Tab)", &shelves)) layout_.shelvesVisible = shelves;
-        ui::HelpAction(*this, "ui.toggle_shelves");
-        bool menus = layout_.paletteBarVisible;
-        if (ImGui::Checkbox("Palette bar (Menus)", &menus)) layout_.paletteBarVisible = menus;
-        ui::HelpAction(*this, "ui.menus");
-    }
-    if (subpalette("preferences.lightbox", "LightBox")) {
-        ImGui::SetNextItemWidth(-1);
-        ImGui::SliderInt("##lightboxrows", &layout_.lightboxRows, 1, 4, "Rows %d");
-        ui::HelpText("LightBox rows", nullptr, "How many rows of thumbnails the LightBox shows.", "Preferences > LightBox");
-        ImGui::Checkbox("Show at the bottom", &layout_.lightboxBottom);
-        ui::HelpText("LightBox placement", nullptr, "Show the LightBox along the bottom of the canvas instead of the top.",
-                     "Preferences > LightBox");
-    }
+    if (subpalette("preferences.interface", "Interface")) config::drawInterfaceSection(*this);
+    if (subpalette("preferences.hotkeys", "Hotkeys")) config::drawHotkeysSection(*this);
+    if (subpalette("preferences.lightbox", "LightBox")) config::drawLightBoxSection(*this);
     if (subpalette("preferences.autosave", "Autosave")) {
         ImGui::SetNextItemWidth(-1);
         ImGui::SliderInt("##autosave", &autosaveMinutes_, 0, 60, autosaveMinutes_ ? "Every %d min" : "Autosave off");
@@ -351,7 +320,7 @@ void App::drawPalette_Script() {
     const bool any = actions_.find("ui.console") || actions_.find("script.run_file");
     actionRow(*this, {"ui.console"});
     actionRow(*this, {"script.run_file"});
-    actionRow(*this, {"script.copy_session", "script.clear"});
+    actionRow(*this, {"script.copy_session", "script.clear_console"});
     if (!any)
         hint("Every action is a script command: run them with --script \"subdivide; remesh resolution=200\" or the "
              "sculptforge-cli tool.");
@@ -429,7 +398,7 @@ void App::drawPalette_Tool() {
 
 void App::drawPalette_Transform() {
     ImGui::TextDisabled("Symmetry");
-    segmented(*this, {"transform.sym_x", "transform.sym_y", "transform.sym_z"});
+    segmented(*this, {"transform.symmetry_x", "transform.symmetry_y", "transform.symmetry_z"});
     actionRow(*this, {"view.frame", "subtool.solo"});
     actionRow(*this, {"view.polyf"});
 }

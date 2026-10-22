@@ -18,6 +18,8 @@
 
 namespace sf {
 
+class CommandRegistry;
+
 struct Action {
     std::string id;          // "geometry.subdivide", "ui.lightbox", "brush.clay", "view.wireframe"
     std::string label;       // "Subdivide"
@@ -30,6 +32,21 @@ struct Action {
     std::function<bool()> checked; // toggles; null = not a toggle
     std::function<bool()> enabled; // null = always
 };
+
+// A key chord: "Ctrl+Shift+Z", "Shift+F", ",", "F3". Ctrl also matches Cmd (macOS).
+struct Chord {
+    SDL_Keycode key = SDLK_UNKNOWN;
+    bool ctrl = false, shift = false, alt = false;
+    bool operator==(const Chord& o) const { return key == o.key && ctrl == o.ctrl && shift == o.shift && alt == o.alt; }
+};
+bool parseChord(std::string_view text, Chord& out);
+// An action may have several chords, separated by " / " ("Ctrl+Shift+Z / Ctrl+Y").
+std::vector<Chord> parseChords(std::string_view text);
+std::string chordText(const Chord& chord); // canonical spelling, e.g. "Ctrl+Shift+Z"
+Chord chordFromEvent(SDL_Keycode key, SDL_Keymod mods);
+bool isModifierKey(SDL_Keycode key);
+// The individual keys of a chord, for drawing keycaps: "Ctrl+Shift+Z" -> {"Ctrl", "Shift", "Z"}.
+std::vector<std::string> chordKeys(std::string_view chord);
 
 class ActionRegistry {
 public:
@@ -44,11 +61,31 @@ public:
     void overridesFromJson(const Json& j);
     void touch(std::string_view id); // most-recently-used, for the command palette
     const std::vector<std::string>& recent() const { return recent_; }
+    void setRecent(std::vector<std::string> ids) { recent_ = std::move(ids); }
+
+    // Like setShortcut, but takes CHORD away from any other action that has it (ZBrush reassigns
+    // on conflict). Returns the label of the action that lost it, or "".
+    std::string assignShortcut(std::string_view id, const std::string& chord);
+    bool hasOverride(std::string_view id) const;
+    void clearOverrides();
+    // The action that CHORD runs (enabled or not), or nullptr.
+    const Action* actionForChord(const Chord& chord) const;
+    // Every command becomes "cmd.<name>". Commands with required parameters are listed too: `prefill`
+    // is called for them (the console opens with the name typed), `run` for the others. Commands that
+    // another action already runs (Action::command) are skipped by the command palette, not here.
+    void registerCommands(const CommandRegistry& commands, std::function<void(const std::string&)> run,
+                          std::function<void(const std::string&)> prefill);
+    // Bumped whenever actions or shortcuts change (lets views cache derived data).
+    unsigned revision() const { return revision_; }
 
 private:
+    const std::vector<Chord>& chordsOf(size_t index) const;
     std::vector<Action> actions_;
     std::vector<std::pair<std::string, std::string>> overrides_; // id -> chord
     std::vector<std::string> recent_;
+    unsigned revision_ = 0;
+    mutable unsigned chordsRevision_ = ~0u;
+    mutable std::vector<std::vector<Chord>> chords_; // parsed effective chords, per action
 };
 
 } // namespace sf

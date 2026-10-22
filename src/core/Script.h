@@ -23,4 +23,10 @@ struct ScriptStatement {
 
 bool parseScript(const std::string& text, std::vector<ScriptStatement>& out, std::string& error);
 
+// The inverse of parseScript: `remesh resolution=200`, `layer_add name="Big Smile"`. Strings are quoted
+// when they contain spaces or would otherwise read back as a number or bool; numbers use the shortest
+// form that reads back exactly.
+std::string formatValue(const ArgValue& value);
+std::string formatStatement(const std::string& command, const Args& args);
+
 } // namespace sf

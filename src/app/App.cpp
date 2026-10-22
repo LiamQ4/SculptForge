@@ -151,7 +151,6 @@ bool App::init(const AppOptions& options) {
     }
     ai::registerAiCommands(commands_, [this] { return aiSettings_; });
     registerPaintUiCommands();
-    registerShellActions();
     std::snprintf(falKey_, sizeof falKey_, "%s", aiSettings_.falKey.c_str());
     std::snprintf(falModel_, sizeof falModel_, "%s", aiSettings_.falModel.c_str());
     std::snprintf(meshyKey_, sizeof meshyKey_, "%s", aiSettings_.meshyKey.c_str());
@@ -162,6 +161,8 @@ bool App::init(const AppOptions& options) {
     float density = SDL_GetWindowPixelDensity(window_);
     float scale = SDL_GetWindowDisplayScale(window_) / (density > 0.0f ? density : 1.0f);
     if (scale <= 0.0f) scale = 1.0f;
+    initUiConfig(headless || !options.demo.empty()); // ui.json (layout, shortcuts, UI scale); never for tests and videos
+    if (!headless && uiPrefs_.uiScale > 0.0f) scale = uiPrefs_.uiScale;
     if (recording) scale = float(options.height) / 900.0f; // UI sized for the video, not this screen
     uiScale_ = scale;
     theme::applyStyle();
@@ -212,6 +213,7 @@ bool App::init(const AppOptions& options) {
         fontIcons_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontLucide), int(assets::fontLucide_size),
                                                     20.0f * scale, &big, kIconRanges);
     }
+    addHelpFonts(scale); // Ctrl-help titles (Inter SemiBold) and the console (ProggyClean)
     if (recording) {
         fontCaption_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontSemiBold),
                                                       int(assets::fontSemiBold_size), float(options.height) * 0.042f,
@@ -228,6 +230,7 @@ bool App::init(const AppOptions& options) {
     for (int i = 0; i < int(FileAction::Count); ++i) dialogRequests_[i] = {this, FileAction(i)};
     initBrushLibrary(); // before a project can bring its own brushes
     initProject(); // before opening anything, so it lands in the recent files
+    initActions(); // the default shortcuts and every command, for keys, help and the command palette
     runCommand("new_sphere");
     if (!options.openPath.empty()) openPath(options.openPath);
     if (!options.script.empty()) {
@@ -614,50 +617,8 @@ void App::onMouseUp() {
 }
 
 void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
-    if (actions_.handleKey(key, mod)) return;
-    const bool ctrl = ctrlDown(mod);
-    const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
-    if (ctrl) {
-        switch (key) {
-        case SDLK_Z: runCommand(shift ? "redo" : "undo"); break;
-        case SDLK_Y: runCommand("redo"); break;
-        case SDLK_D: runCommand("subdivide"); break;
-        case SDLK_O: confirmDiscard([this] { openFileDialog(); }); break;
-        case SDLK_S: saveProjectAs(shift); break;
-        case SDLK_N: confirmDiscard([this] { runCommand("new_sphere"); }); break;
-        case SDLK_E: saveFileDialog(FileAction::ExportGlb); break;
-        case SDLK_U: sendToUnreal(); break;
-        case SDLK_V: pasteBrush(); break; // a brush code or .sfbrush text
-        default: break;
-        }
-        return;
-    }
-    switch (key) {
-    case SDLK_LEFTBRACKET: radiusPx_ = std::max(2.0f, radiusPx_ / 1.1f); break;
-    case SDLK_RIGHTBRACKET: radiusPx_ = std::min(800.0f, radiusPx_ * 1.1f); break;
-    case SDLK_X: symmetry_.x = !symmetry_.x; break;
-    case SDLK_W: renderSettings_.wireframe = !renderSettings_.wireframe; break;
-    case SDLK_F:
-        if (shift) renderSettings_.wireframe = !renderSettings_.wireframe; // ZBrush PolyF
-        else camera_.frame(sceneBounds());
-        break;
-    case SDLK_TAB:
-        if (const Action* a = actions_.find("ui.toggle_shelves")) a->run();
-        break;
-    case SDLK_F1: showHelp_ = !showHelp_; break;
-    case SDLK_P: paintMode_ = !paintMode_; break; // the colour picker is on the left shelf
-    case SDLK_C: pickColorUnderCursor(); break;
-    default:
-        // 1-9 pick the first nine brushes, 0 the tenth.
-        if (key >= SDLK_1 && key <= SDLK_9) {
-            brush_ = BrushType(key - SDLK_1);
-            paintMode_ = false;
-        } else if (key == SDLK_0) {
-            brush_ = BrushType(9);
-            paintMode_ = false;
-        }
-        break;
-    }
+    if (captureShortcutKey(key, mod)) return; // Ctrl+Alt+click a button, then press its new key
+    actions_.handleKey(key, mod);             // the shortcut map: Config.cpp initActions()
 }
 
 // ---------------------------------------------------------------------------
@@ -851,6 +812,7 @@ void App::runCommand(const std::string& name, const Args& args) {
     afterCommand(name, args, r);
     watchActiveBrush();
     updateTitle();
+    consoleEcho(name, args, r); // the console shows every command as a script line
 }
 
 namespace {
@@ -1099,40 +1061,7 @@ void App::drawUi() {
         }
         ImGui::End();
     }
-    if (showHelp_) {
-        ImGui::SetNextWindowSize(ImVec2(440, 0), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Controls", &showHelp_)) {
-            ImGui::TextUnformatted(
-                "Sculpt            Left drag on the model\n"
-                "Invert (subtract) Hold Alt while sculpting\n"
-                "Smooth            Hold Shift while sculpting\n"
-                "Rotate            Left drag on background / right drag\n"
-                "Pan               Alt + left drag background / middle drag\n"
-                "Zoom              Mouse wheel / Ctrl + middle drag\n"
-                "                  (Ctrl + left drag background when nothing is masked)\n"
-                "Paint mask        Hold Ctrl while stroking (Ctrl+Alt erases)\n"
-                "Invert mask       Ctrl + click background\n"
-                "Clear mask        Ctrl + drag background\n"
-                "Isolate polygroup Ctrl+Shift+click (again: invert)\n"
-                "Hide polygroup    Ctrl+Shift+Alt+click\n"
-                "Show all          Ctrl+Shift+click background\n"
-                "Select SubTool    Alt+click it\n"
-                "Hide outside rect Ctrl+Shift+drag (Alt: inside)\n"
-                "Brush size        [ and ]\n"
-                "Brushes           1-9, 0\n"
-                "Paint brush       P (colour only; Alt paints white)\n"
-                "Pick colour       C over the model\n"
-                "Symmetry X        X\n"
-                "Wireframe         W\n"
-                "Frame model       F\n"
-                "Subdivide         Ctrl+D\n"
-                "Undo / Redo       Ctrl+Z / Ctrl+Shift+Z\n"
-                "Open / Save       Ctrl+O / Ctrl+S (project; Shift: Save As)\n"
-                "Tablet pressure is used automatically when a pen is detected.\n"
-                "Drop a model (.obj/.glb), brush (.sfbrush) or image onto the window.");
-        }
-        ImGui::End();
-    }
+    drawHelpConsoleUi(); // console, command palette, Controls (F1), Ctrl-hover help: last, on top
 }
 
 void App::drawLayersContents() {

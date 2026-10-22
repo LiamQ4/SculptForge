@@ -29,7 +29,7 @@ UiLayout standardLayout() {
     l.topShelf = {"ui.lightbox",       "sep",           "draw.sculpt",          "draw.paint",          "sep",
                   "draw.zadd",         "draw.zsub",     "draw.rgb",             "sep",                 "widget.draw_size",
                   "widget.strength",   "row",           "ui.brush_lab",         "draw.front_faces",    "sep",
-                  "transform.sym_x",   "transform.sym_y", "transform.sym_z",    "sep",                 "draw.pressure_strength",
+                  "transform.symmetry_x",   "transform.symmetry_y", "transform.symmetry_z",    "sep",                 "draw.pressure_strength",
                   "draw.pressure_size", "widget.points"};
     l.leftShelf = {"widget.tile.brush", "widget.tile.stroke", "widget.tile.alpha", "widget.tile.material", "widget.color"};
     l.rightShelf = {"view.frame", "widget.nav.move", "widget.nav.zoom", "widget.nav.rotate", "sep",
