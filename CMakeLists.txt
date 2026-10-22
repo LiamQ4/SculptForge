@@ -114,6 +114,7 @@ if(SCULPTFORGE_BUILD_APP)
   embed_files(${CMAKE_CURRENT_BINARY_DIR}/EmbeddedFonts.cpp sf::assets
     fontRegular ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf
     fontSemiBold ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Inter-SemiBold.ttf
+    fontLucide ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/lucide.ttf
     appIcon ${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/sculptforge-256.png)
   add_executable(sculptforge
     ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedFonts.cpp
@@ -121,6 +122,10 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/App.cpp
     src/app/Demo.cpp
     src/app/UiTest.cpp
+    src/app/Actions.cpp
+    src/app/Ui.cpp
+    src/app/UiLayout.cpp
+    src/app/LightBoxStubs.cpp
     src/app/PanelMasking.cpp
     src/app/PanelPolygroups.cpp
     src/app/PanelBrushes.cpp
@@ -134,6 +139,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/render/Renderer.cpp
   )
   target_link_libraries(sculptforge PRIVATE sculptforge_core sculptforge_ai imgui SDL3::SDL3)
+  target_include_directories(sculptforge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lucide)
   target_compile_definitions(sculptforge PRIVATE SCULPTFORGE_VERSION="${PROJECT_VERSION}")
   if(MSVC)
     target_compile_options(sculptforge PRIVATE /W4 /utf-8 /permissive-)

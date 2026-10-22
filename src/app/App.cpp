@@ -5,6 +5,8 @@
 #include "ai/AiCommands.h"
 #include "app/Demo.h"
 
+#include <IconsLucide.h>
+
 #include <imgui_internal.h>
 #include "ai/Generator3D.h"
 #include "core/EnginePresets.h"
@@ -33,6 +35,8 @@ namespace sf {
 namespace assets {
 extern const unsigned char fontRegular[];
 extern const unsigned long long fontRegular_size;
+extern const unsigned char fontLucide[];
+extern const unsigned long long fontLucide_size;
 extern const unsigned char fontSemiBold[];
 extern const unsigned long long fontSemiBold_size;
 extern const unsigned char appIcon[];
@@ -186,6 +190,18 @@ bool App::init(const AppOptions& options) {
     fontConfig.OversampleH = 2;
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontRegular), int(assets::fontRegular_size),
                                    15.0f * scale, &fontConfig);
+    // Lucide icons (ISC/MIT) merged into the UI font, so ICON_LC_* strings work in any label.
+    {
+        static const ImWchar kIconRanges[] = {ICON_MIN_LC, ICON_MAX_LC, 0};
+        ImFontConfig icons;
+        icons.MergeMode = true;
+        icons.PixelSnapH = true;
+        icons.FontDataOwnedByAtlas = false;
+        icons.GlyphMinAdvanceX = 15.0f * scale;
+        icons.GlyphOffset = ImVec2(0, 2.0f * scale);
+        io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontLucide), int(assets::fontLucide_size),
+                                       15.0f * scale, &icons, kIconRanges);
+    }
     if (recording) {
         fontCaption_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontSemiBold),
                                                       int(assets::fontSemiBold_size), float(options.height) * 0.042f,

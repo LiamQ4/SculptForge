@@ -3,6 +3,11 @@
 #pragma once
 
 #include "ai/BrushAssistant.h"
+#include "app/Actions.h"
+#include "app/LightBox.h"
+#include "app/Pickers.h"
+#include "app/Thumbnails.h"
+#include "app/UiLayout.h"
 #include "ai/ComfyUI.h"
 #include "ai/ImageTo3DService.h"
 #include "core/Commands.h"
@@ -49,12 +54,22 @@ class Demo;
 
 class App {
     friend class Demo;
+    // ZBrush-style shell modules (see ui-spec): they read and drive the app's state directly.
+    friend class LightBox;
+    friend class ThumbnailCache;
+    friend void openPicker(Picker, ImVec2);
+    friend void drawPickers(App&);
+    friend void drawBrushGrid(App&, GridMode);
 
 public:
     App();
     ~App();
     bool init(const AppOptions& options);
     int run(); // returns the process exit code
+
+    ActionRegistry& actions() { return actions_; }
+    UiLayout& layout() { return layout_; }
+    ThumbnailCache& thumbnails() { return thumbs_; }
     void shutdown();
 
     enum class FileAction { OpenObj, SaveObj, ExportGlb, ExportLods, SaveBrush, LoadBrush, OpenImage, ExportUsd, SaveSplats, ExportUnreal, SaveProject, AppendSubtool, ComfyWorkflow, Count };
@@ -414,6 +429,19 @@ private:
     // Split by polygroups needs more than one group; counted only when the active mesh changes.
     uint64_t splitGroupsKey_ = ~uint64_t(0);
     bool splitGroupsPossible_ = false;
+
+    // ---- Shell (A): layout, shelves, palettes, trays, theme ----
+    UiLayout layout_ = standardLayout();
+    // ---- end Shell (A) ----
+
+    // ---- LightBox (B): LightBox, thumbnails, pickers ----
+    LightBox lightbox_;
+    ThumbnailCache thumbs_;
+    // ---- end LightBox (B) ----
+
+    // ---- Help/Console/Config (C): actions, help, command palette, console, config ----
+    ActionRegistry actions_;
+    // ---- end Help/Console/Config (C) ----
 };
 
 } // namespace sf
