@@ -48,6 +48,7 @@ const SDL_DialogFileFilter kFbxFilters[] = {{"FBX", "fbx"}, {"All files", "*"}};
 const SDL_DialogFileFilter kUsdFilters[] = {{"USDZ package", "usdz"}, {"USD text", "usda"}};
 const SDL_DialogFileFilter kSplatFilters[] = {{"Gaussian splats (PLY)", "ply"}, {"glTF splats", "glb"}, {"OpenUSD", "usda;usdz"}};
 const SDL_DialogFileFilter kImageFilters[] = {{"Images", "png;jpg;jpeg;bmp;tga;psd;gif"}, {"All files", "*"}};
+const SDL_DialogFileFilter kWorkflowFilters[] = {{"ComfyUI API workflow", "json"}, {"All files", "*"}};
 
 const char* kExamplePrompts[] = {
     "Sharp wrinkles that fade out at the ends",
@@ -168,6 +169,7 @@ bool App::init(const AppOptions& options) {
     std::snprintf(falModel_, sizeof falModel_, "%s", aiSettings_.falModel.c_str());
     std::snprintf(meshyKey_, sizeof meshyKey_, "%s", aiSettings_.meshyKey.c_str());
     std::snprintf(hfToken_, sizeof hfToken_, "%s", aiSettings_.hfToken.c_str());
+    std::snprintf(comfyUrl_, sizeof comfyUrl_, "%s", aiSettings_.comfyUrl.c_str());
     // Pixel density (Retina / Wayland scaling) is handled by the backend via the
     // framebuffer scale; only scale the UI for any additional content scaling.
     float density = SDL_GetWindowPixelDensity(window_);
@@ -833,7 +835,7 @@ void SDLCALL onFileChosen(void* userdata, const char* const* files, int) {
 
 void App::queueFile(FileAction action, std::string path) {
     if (action != FileAction::OpenObj && action != FileAction::LoadBrush && action != FileAction::OpenImage &&
-        action != FileAction::AppendSubtool && !path.empty() &&
+        action != FileAction::AppendSubtool && action != FileAction::ComfyWorkflow && !path.empty() &&
         std::filesystem::path(std::u8string(path.begin(), path.end())).extension().empty())
         path += action == FileAction::SaveObj      ? ".obj"
                 : action == FileAction::SaveBrush  ? ".sfbrush"
@@ -940,6 +942,7 @@ void App::processPendingFiles() {
             runCommand("subtool_append", {{"path", f.path}});
             if (lastCommandOk_) camera_.frame(sceneBounds()); // a model can be any size, anywhere
             break;
+        case FileAction::ComfyWorkflow: setComfyWorkflow(f.path, comfyPickingText_); break;
         case FileAction::Count: break;
         }
     }
@@ -1686,13 +1689,18 @@ void App::startGenerator() {
     aiSettings_.falModel = falModel_;
     aiSettings_.meshyKey = meshyKey_;
     aiSettings_.hfToken = hfToken_;
+    aiSettings_.comfyUrl = comfyUrl_;
+    // With no workflow chosen, ComfyUI runs the bundled one the panel shows (not saved, so updates reach it).
+    ai::AiSettings settings = aiSettings_;
+    if (settings.comfyImageWorkflow.empty()) settings.comfyImageWorkflow = comfyDefaultWorkflow(false);
+    if (settings.comfyTextWorkflow.empty()) settings.comfyTextWorkflow = comfyDefaultWorkflow(true);
     auto stem = (std::filesystem::temp_directory_path() / ("sculptforge_generated_" + std::to_string(SDL_GetTicksNS()))).u8string();
     generatorTime_ = 0.0f;
     generatorProgress_ = std::make_shared<ai::GenerationProgress>();
     generatorProgress_->setStatus("Starting...");
     auto promise = std::make_shared<std::promise<ai::GeneratorResult>>();
     pendingGenerator_ = promise->get_future();
-    std::thread([promise, settings = aiSettings_, in = refImagePath_, text = textMode_ ? std::string(textPrompt_) : std::string(),
+    std::thread([promise, settings, in = refImagePath_, text = textMode_ ? std::string(textPrompt_) : std::string(),
                  out = std::string(stem.begin(), stem.end()), progress = generatorProgress_] {
         promise->set_value(text.empty() ? ai::generate3D(settings, in, out, progress.get())
                                         : ai::generate3DFromText(settings, text, out, progress.get()));
@@ -1719,6 +1727,92 @@ void App::pollGenerator() {
     updateTitle();
 }
 
+std::string App::comfyDefaultWorkflow(bool text) {
+    if (!comfyWorkflowsScanned_) {
+        comfyWorkflows_ = ai::comfy::bundledWorkflows();
+        comfyWorkflowsScanned_ = true;
+    }
+    for (const auto& w : comfyWorkflows_)
+        if (w.kind == (text ? "text" : "image")) return w.path;
+    return {};
+}
+
+void App::setComfyWorkflow(const std::string& path, bool text) {
+    (text ? aiSettings_.comfyTextWorkflow : aiSettings_.comfyImageWorkflow) = path;
+    comfyWorkflowError_.clear();
+    Json workflow;
+    if (!ai::comfy::loadWorkflow(path, workflow, comfyWorkflowError_)) return;
+    const std::string kind = ai::comfy::workflowKind(workflow);
+    if (!text && kind != "image")
+        comfyWorkflowError_ = "This workflow has no Load Image node, so it can't take the picture - is it a text-to-3D workflow?";
+    else if (text && kind == "image")
+        comfyWorkflowError_ = "This workflow starts from a picture - use it from the From image tab";
+}
+
+void App::drawComfyUi() {
+    auto hint = [](const char* text) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", text);
+        ImGui::PopStyleColor();
+    };
+    hint("Runs a workflow on your own ComfyUI - this computer or a studio GPU server - with whatever models it has "
+         "(Hunyuan3D, TRELLIS and more). Nothing goes anywhere else.");
+    ImGui::InputText("Server", comfyUrl_, sizeof comfyUrl_);
+    ImGui::BeginDisabled(pendingComfyCheck_.valid());
+    if (ImGui::Button(pendingComfyCheck_.valid() ? "Connecting..." : "Test connection", ImVec2(-1, 0))) {
+        auto promise = std::make_shared<std::promise<ComfyCheck>>();
+        pendingComfyCheck_ = promise->get_future();
+        std::thread([promise, url = std::string(comfyUrl_)] {
+            ComfyCheck check;
+            ai::comfy::ServerInfo info;
+            check.ok = ai::comfy::checkServer(url, info, check.message);
+            if (check.ok) check.message = "Connected: " + info.summary();
+            promise->set_value(std::move(check));
+        }).detach();
+    }
+    ImGui::EndDisabled();
+    if (pendingComfyCheck_.valid() && pendingComfyCheck_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        comfyCheck_ = pendingComfyCheck_.get();
+        comfyChecked_ = true;
+    }
+    if (comfyChecked_) {
+        ImGui::PushStyleColor(ImGuiCol_Text, comfyCheck_.ok ? ImVec4(0.45f, 0.8f, 0.5f, 1) : ImVec4(0.95f, 0.6f, 0.4f, 1));
+        ImGui::TextWrapped("%s", comfyCheck_.message.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    // Workflow: a bundled one, or any API-format file.
+    const std::string& chosen = textMode_ ? aiSettings_.comfyTextWorkflow : aiSettings_.comfyImageWorkflow;
+    const std::string current = chosen.empty() ? comfyDefaultWorkflow(textMode_) : chosen;
+    std::string preview = "Choose a workflow file...";
+    if (!current.empty()) {
+        const auto name = std::filesystem::path(std::u8string(current.begin(), current.end())).stem().u8string();
+        preview.assign(name.begin(), name.end());
+    }
+    auto browse = [this] {
+        comfyPickingText_ = textMode_;
+        SDL_ShowOpenFileDialog(onFileChosen, &dialogRequests_[int(FileAction::ComfyWorkflow)], window_, kWorkflowFilters, 2,
+                               nullptr, false);
+    };
+    if (ImGui::BeginCombo("Workflow", preview.c_str())) {
+        for (const auto& w : comfyWorkflows_) {
+            if (w.kind != (textMode_ ? "text" : "image")) continue;
+            if (ImGui::Selectable((w.name + " (bundled)").c_str(), current == w.path)) setComfyWorkflow(w.path, textMode_);
+        }
+        if (ImGui::Selectable("Other file (API format)...")) browse();
+        ImGui::EndCombo();
+    }
+    if (!comfyWorkflowError_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.6f, 0.4f, 1));
+        ImGui::TextWrapped("%s", comfyWorkflowError_.c_str());
+        ImGui::PopStyleColor();
+    }
+    hint(textMode_ ? "In ComfyUI use Workflow > Export (API). The node titled sf_prompt gets the description; the "
+                     "first mesh it saves is imported. See docs/comfyui.md."
+                   : "In ComfyUI use Workflow > Export (API). The Load Image node (title it sf_image) gets the picture; "
+                     "the first mesh it saves is imported. See docs/comfyui.md.");
+}
+
 void App::drawImageTo3D() {
     const float scale = uiScale_;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -1728,6 +1822,7 @@ void App::drawImageTo3D() {
         return;
     }
     if (ImGui::BeginTabBar("##source")) {
+        const bool wasText = textMode_;
         if (ImGui::BeginTabItem("From image")) {
             textMode_ = false;
             ImGui::EndTabItem();
@@ -1736,6 +1831,7 @@ void App::drawImageTo3D() {
             textMode_ = true;
             ImGui::EndTabItem();
         }
+        if (textMode_ != wasText) comfyWorkflowError_.clear(); // it was about the other tab's workflow
         ImGui::EndTabBar();
     }
     if (textMode_) {
@@ -1773,18 +1869,21 @@ void App::drawImageTo3D() {
     const float labelW = ImGui::CalcTextSize("Resolution").x + ImGui::GetStyle().ItemInnerSpacing.x;
 
     ImGui::SeparatorText(textMode_ ? "Text to 3D (AI)" : "Full 3D model (AI reconstruction)");
-    hint("Builds the whole model - limbs, face, back - from one picture with a reconstruction model, then makes it "
-         "sculptable. Characters on a transparent background work best.");
+    hint(textMode_ ? "Builds a whole model from the description with a generative 3D model, then makes it sculptable."
+                   : "Builds the whole model - limbs, face, back - from one picture with a reconstruction model, then "
+                     "makes it sculptable. Characters on a transparent background work best.");
     static const char* services[] = {"Hugging Face - free models", "fal.ai - paid, your key", "Meshy - paid, your key",
-                                     "My generator command", "Offline blockout (inflate silhouette)"};
-    static const char* serviceIds[] = {"huggingface", "fal", "meshy", "command", "inflate"};
+                                     "ComfyUI - your server", "My generator command", "Offline blockout (inflate silhouette)"};
+    static const char* serviceIds[] = {"huggingface", "fal", "meshy", "comfyui", "command", "inflate"};
+    constexpr int kServices = int(std::size(serviceIds));
     int service = 0;
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < kServices; ++i)
         if (aiSettings_.generatorService == serviceIds[i]) service = i;
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::Combo("##service", &service, services, 5)) aiSettings_.generatorService = serviceIds[service];
+    if (ImGui::Combo("##service", &service, services, kServices)) aiSettings_.generatorService = serviceIds[service];
+    const std::string serviceId = serviceIds[service];
     ImGui::PushItemWidth(-labelW);
-    if (service == 0) {
+    if (serviceId == "huggingface") {
         const auto& presets = ai::hfPresets();
         const char* preview = presets[0].label;
         for (const auto& p : presets)
@@ -1799,7 +1898,7 @@ void App::drawImageTo3D() {
                  ? "Runs on Hugging Face's shared GPUs with your account's free daily allowance."
                  : "Runs free on Hugging Face's shared GPUs with a small daily allowance. A free token "
                    "(huggingface.co/settings/tokens, read access) raises it; TRELLIS.2 needs one.");
-    } else if (service == 1) {
+    } else if (serviceId == "fal") {
         const auto& models = ai::falModels();
         const char* preview = falModel_;
         for (const auto& m : models)
@@ -1813,11 +1912,13 @@ void App::drawImageTo3D() {
         ImGui::InputText("Model id", falModel_, sizeof falModel_);
         ImGui::InputText("API key", falKey_, sizeof falKey_, ImGuiInputTextFlags_Password);
         if (!falKey_[0]) hint(std::getenv("FAL_KEY") ? "Using FAL_KEY from the environment." : "Get a key at fal.ai/dashboard/keys");
-    } else if (service == 2) {
+    } else if (serviceId == "meshy") {
         ImGui::InputText("API key", meshyKey_, sizeof meshyKey_, ImGuiInputTextFlags_Password);
         if (!meshyKey_[0])
             hint(std::getenv("MESHY_API_KEY") ? "Using MESHY_API_KEY from the environment." : "Get a key at meshy.ai (API settings)");
-    } else if (service == 3) {
+    } else if (serviceId == "comfyui") {
+        drawComfyUi();
+    } else if (serviceId == "command") {
         hint("Any local model or script: {input} = image, {output} = .glb/.obj to write. See docs/generators.md.");
         ImGui::SetNextItemWidth(-1);
         ImGui::InputTextMultiline("##generator", generatorCommand_, sizeof generatorCommand_,
@@ -1825,7 +1926,7 @@ void App::drawImageTo3D() {
     } else {
         hint("Offline and instant, but only a puffy blockout of the outline - not a real reconstruction.");
     }
-    if (service != 4) {
+    if (serviceId != "inflate") {
         ImGui::Checkbox("Remesh for sculpting", &remeshGenerated_);
         if (remeshGenerated_) ImGui::SliderInt("Resolution", &remeshResolution_, 96, 400);
     }
@@ -1845,6 +1946,7 @@ void App::drawImageTo3D() {
         aiSettings_.falModel = falModel_;
         aiSettings_.meshyKey = meshyKey_;
         aiSettings_.hfToken = hfToken_;
+        aiSettings_.comfyUrl = comfyUrl_;
         std::string err;
         status_ = !aiSettingsPath_.empty() && aiSettings_.save(aiSettingsPath_, err) ? "Image to 3D settings saved"
                                                                                         : "Save failed " + err;

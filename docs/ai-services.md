@@ -9,8 +9,8 @@ telemetry, no account and no servers of its own. When you use an AI feature, Scu
 | Feature | Service (your choice) | What is sent | Key |
 |---|---|---|---|
 | Brush Lab | Free (default): Pollinations.ai's hosted open models, falling back to a running local Ollama. Or Anthropic (Claude), or any OpenAI-compatible endpoint such as a local Ollama / LM Studio | Your brush description and the current brush settings (text only) | None for Free and local models; your API key otherwise |
-| Generate 3D (image) | Hugging Face Spaces (free), fal.ai, Meshy, or your own command | The image you chose, cropped and resized to at most 1024 px | Optional HF token; your fal.ai / Meshy key |
-| Generate 3D (text) | Hugging Face Spaces (free), fal.ai, Meshy | Your text description | As above |
+| Generate 3D (image) | Hugging Face Spaces (free), fal.ai, Meshy, your own ComfyUI, or your own command | The image you chose, cropped and resized to at most 1024 px | Optional HF token; your fal.ai / Meshy key; none for ComfyUI |
+| Generate 3D (text) | Hugging Face Spaces (free), fal.ai, Meshy, your own ComfyUI | Your text description | As above |
 | Send to Unreal | Your own Unreal Editor (local network) | The exported FBX | None |
 
 Keys are stored in your local settings file (`ai.json`, owner-only permissions) or read from
@@ -44,6 +44,15 @@ token raises the allowance.
 These summaries are for convenience only. Read the licences linked above before using outputs
 commercially, and check where you are. If you're in the EU, UK or South Korea, choose TRELLIS.2,
 Stable Fast 3D or a paid service instead of Hunyuan3D.
+
+## Your own ComfyUI
+
+With **ComfyUI - your server**, the image or description goes only to the ComfyUI address you
+enter: your own computer, or a GPU server at your studio. It runs there with whatever models that
+server has, and nothing is sent to anyone else. The picture is saved in ComfyUI's `input` folder and
+the result in its `output` folder, as ComfyUI does with any job. The licences of the models in your
+workflow apply as usual; the Hunyuan3D terms above apply to the bundled Hunyuan3D workflows too.
+See [Generate 3D with your own ComfyUI](comfyui.md).
 
 ## Paid services
 

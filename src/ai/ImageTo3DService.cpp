@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ai/ImageTo3DService.h"
 
+#include "ai/ComfyUI.h"
 #include "ai/GradioClient.h"
 #include "ai/Http.h"
 #include "core/Image.h"
@@ -503,6 +504,7 @@ GeneratorResult generate3D(const AiSettings& s, const std::string& imagePath, co
     }
     if (s.generatorService == "inflate") return runInflate(imagePath, outputStem, progress);
     if (s.generatorService == "fal") return runFal(s, imagePath, outputStem, progress);
+    if (s.generatorService == "comfyui") return comfy::run(s, {}, imagePath, {}, outputStem, progress);
     return runHuggingFace(s, imagePath, {}, outputStem, progress);
 }
 
@@ -531,8 +533,9 @@ GeneratorResult generate3DFromText(const AiSettings& s, const std::string& promp
     if (s.generatorService == "meshy") return runMeshyRequest(s, "/openapi/v2/text-to-3d", meshyTextBody(s.meshyModel, prompt), outputStem, progress);
     if (s.generatorService == "fal")
         return runFalRequest(s, "fal-ai/hunyuan-3d/v3.1/rapid/text-to-3d", falTextBody(prompt), outputStem, progress);
+    if (s.generatorService == "comfyui") return comfy::run(s, {}, {}, prompt, outputStem, progress);
     if (s.generatorService == "command" || s.generatorService == "inflate") {
-        result.error = "Text to 3D needs Hugging Face (free), fal.ai or Meshy - pick one of those services";
+        result.error = "Text to 3D needs Hugging Face (free), fal.ai, Meshy or ComfyUI - pick one of those services";
         return result;
     }
     return runHuggingFace(s, {}, prompt, outputStem, progress);

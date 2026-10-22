@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ai/Http.h"
 
+#include <chrono>
+#include <random>
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -22,6 +25,21 @@ HttpResponse httpRequest(const std::string& method, const std::string& url, cons
     });
     r.body = std::move(received);
     return r;
+}
+
+std::string multipartBody(const std::vector<MultipartField>& fields, std::string& contentTypeHeader) {
+    std::random_device rd;
+    std::mt19937_64 rng((uint64_t(rd()) << 32) ^ rd() ^ uint64_t(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::string boundary = "----sculptforge";
+    for (int i = 0; i < 16; ++i) boundary += "0123456789abcdef"[rng() % 16];
+    contentTypeHeader = "Content-Type: multipart/form-data; boundary=" + boundary;
+    std::string body;
+    for (const auto& f : fields) {
+        body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + f.name + "\"";
+        if (!f.fileName.empty()) body += "; filename=\"" + f.fileName + "\"\r\nContent-Type: " + f.contentType;
+        body += "\r\n\r\n" + f.value + "\r\n";
+    }
+    return body + "--" + boundary + "--\r\n";
 }
 
 #if defined(_WIN32)

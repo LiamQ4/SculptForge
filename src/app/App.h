@@ -3,6 +3,7 @@
 #pragma once
 
 #include "ai/BrushAssistant.h"
+#include "ai/ComfyUI.h"
 #include "ai/ImageTo3DService.h"
 #include "core/Commands.h"
 #include "core/Image.h"
@@ -56,7 +57,7 @@ public:
     int run(); // returns the process exit code
     void shutdown();
 
-    enum class FileAction { OpenObj, SaveObj, ExportGlb, ExportLods, SaveBrush, LoadBrush, OpenImage, ExportUsd, SaveSplats, ExportUnreal, SaveProject, AppendSubtool, Count };
+    enum class FileAction { OpenObj, SaveObj, ExportGlb, ExportLods, SaveBrush, LoadBrush, OpenImage, ExportUsd, SaveSplats, ExportUnreal, SaveProject, AppendSubtool, ComfyWorkflow, Count };
     struct DialogRequest {
         App* app;
         FileAction action;
@@ -102,6 +103,9 @@ private:
     void drawGameExportPanel();
     void drawBrushLab();
     void drawImageTo3D();
+    void drawComfyUi();
+    std::string comfyDefaultWorkflow(bool text);
+    void setComfyWorkflow(const std::string& path, bool text);
     bool loadReferenceImage(const std::string& path);
     void projectImageFromView();
     void startGenerator();
@@ -216,6 +220,19 @@ private:
     bool projectInvert_ = false;
     char generatorCommand_[1024] = "";
     char falKey_[256] = "", falModel_[256] = "", meshyKey_[256] = "", hfToken_[256] = "";
+    // ComfyUI: "Test connection" result, bundled workflows, the chosen file's problem (UI format...)
+    char comfyUrl_[256] = "";
+    struct ComfyCheck {
+        bool ok = false;
+        std::string message;
+    };
+    std::future<ComfyCheck> pendingComfyCheck_;
+    ComfyCheck comfyCheck_;
+    bool comfyChecked_ = false;
+    std::vector<ai::comfy::BundledWorkflow> comfyWorkflows_;
+    bool comfyWorkflowsScanned_ = false;
+    bool comfyPickingText_ = false;
+    std::string comfyWorkflowError_;
     bool remeshGenerated_ = true;
     int voxelResolution_ = 200;
     int splatMeshResolution_ = 192;

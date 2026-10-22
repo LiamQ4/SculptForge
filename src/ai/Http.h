@@ -28,6 +28,16 @@ HttpResponse httpRequestStream(const std::string& method, const std::string& url
                                const std::string& body, int timeoutSeconds,
                                const std::function<bool(const char* data, size_t size)>& onData);
 
+// One part of a multipart/form-data body: a plain field, or a file when `fileName` is set.
+struct MultipartField {
+    std::string name;
+    std::string value;
+    std::string fileName;
+    std::string contentType = "application/octet-stream";
+};
+// Builds the body; `contentTypeHeader` receives the matching "Content-Type: multipart/form-data; boundary=..." header.
+std::string multipartBody(const std::vector<MultipartField>& fields, std::string& contentTypeHeader);
+
 inline HttpResponse httpPostJson(const std::string& url, const std::vector<std::string>& headers, const std::string& body,
                                  int timeoutSeconds = 120) {
     return httpRequest("POST", url, headers, body, timeoutSeconds);
