@@ -103,7 +103,8 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
   ([docs/comfyui.md](docs/comfyui.md)).
 - The **ComfyUI-SculptForge** node pack brings SculptForge into ComfyUI graphs: voxel remesh, decimate, LOD chains,
   and GLB / FBX / USD / OBJ / STL export, working with ComfyUI's own Hunyuan3D mesh nodes
-  ([integrations/comfyui](integrations/comfyui/ComfyUI-SculptForge)).
+  ([islandmed/ComfyUI-SculptForge](https://github.com/islandmed/ComfyUI-SculptForge); in ComfyUI-Manager use
+  *Install via Git URL*).
 
 **Game & animation pipelines**
 - One-click **LOD chains**; blend shapes survive on every level.
