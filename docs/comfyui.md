@@ -37,7 +37,7 @@ SculptForge ships these in `integrations/comfyui/workflows/` (installed under
 |---|---|---|
 | `hunyuan3d-image-to-3d` | From image | The Hunyuan3D 2.1 checkpoint (7.4 GB) and a GPU (Tencent quotes about 10 GB of VRAM) |
 | `text-to-3d` | From text | FLUX.1 schnell, BiRefNet and Hunyuan3D 2.1 (about 25 GB of downloads) and a GPU |
-| `sculptforge-inflate` | From image | The [ComfyUI-SculptForge](../integrations/comfyui/ComfyUI-SculptForge) node pack. No GPU: a quick inflated blockout, handy for checking your setup |
+| `sculptforge-inflate` | From image | The [ComfyUI-SculptForge](https://github.com/islandmed/ComfyUI-SculptForge) node pack (ComfyUI-Manager: *Install via Git URL*). No GPU: a quick inflated blockout, handy for checking your setup |
 
 When you haven't chosen a workflow, SculptForge uses the first bundled one that fits the tab.
 
