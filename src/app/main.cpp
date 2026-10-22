@@ -4,6 +4,7 @@
 
 #include <SDL3/SDL_main.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +22,7 @@ void usage() {
         "  --turntable N            With --render: N frames around the model (out_000.png ...)\n"
         "  --size WxH               Render size (default 1024x1024)\n"
         "  --view YAW,PITCH         Camera angles in degrees (default -30,-15)\n"
+        "  --zoom F                 Move the camera F times closer than the framed view (default 1)\n"
         "  --wireframe              Render with wireframe overlay\n"
         "  --polygroups             Render with polygroup colours\n"
         "  --hide-mesh              Render only the Gaussian splats\n"
@@ -72,6 +74,7 @@ int main(int argc, char** argv) {
         else if (a == "--turntable") options.turntable = std::atoi(next().c_str());
         else if (a == "--size") sizeGiven = std::sscanf(next().c_str(), "%dx%d", &options.width, &options.height) == 2;
         else if (a == "--view") std::sscanf(next().c_str(), "%f,%f", &options.yawDegrees, &options.pitchDegrees);
+        else if (a == "--zoom") options.zoom = std::max(0.05f, float(std::atof(next().c_str())));
         else if (a == "--wireframe") options.wireframe = true;
         else if (a == "--polygroups") options.polygroups = true;
         else if (a == "--hide-mesh") options.hideMesh = true;

@@ -37,6 +37,7 @@ struct AppOptions {
     std::string renderPath; // headless: render a PNG and exit
     int width = 1024, height = 1024;
     float yawDegrees = -30.0f, pitchDegrees = -15.0f;
+    float zoom = 1.0f; // headless: camera this many times closer than the framed view
     int turntable = 0; // headless: render N frames around the model (<path>_000.png ...)
     bool wireframe = false;
     bool polygroups = false; // headless: colour each polygroup
@@ -429,6 +430,14 @@ private:
     // Split by polygroups needs more than one group; counted only when the active mesh changes.
     uint64_t splitGroupsKey_ = ~uint64_t(0);
     bool splitGroupsPossible_ = false;
+    // Community brushes window (PanelBrushGallery.cpp): browse, search and install shared brushes.
+    void drawBrushGallery(); // also finishes background downloads while the window is closed
+    void refreshBrushGallery();
+    void pollBrushGallery();
+    bool galleryBusy() const; // UI tests: wait_idle
+    static void destroyBrushGallery(struct BrushGalleryState* state);
+    bool showBrushGallery_ = false;
+    std::unique_ptr<struct BrushGalleryState, void (*)(struct BrushGalleryState*)> gallery_{nullptr, &destroyBrushGallery};
 
     // ---- Shell (A): layout, shelves, palettes, trays, theme ----
     UiLayout layout_ = standardLayout();

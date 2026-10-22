@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ai/AiCommands.h"
 
+#include "ai/BrushGalleryClient.h"
 #include "ai/ComfyUI.h"
 #include "ai/ImageTo3DService.h"
 #include "core/EnginePresets.h"
@@ -26,6 +27,7 @@ std::optional<uint64_t> comfySeed(const Args& a) {
 
 void registerAiCommands(CommandRegistry& registry, std::function<AiSettings()> settings) {
     using T = ParamSpec::Type;
+    registerBrushGalleryCommands(registry); // brush_gallery_search, brush_gallery_install (BrushGalleryClient.cpp)
     registry.add({"brush_ai",
                   "Design a brush from a description. Free by default (a hosted open model, no key); or "
                   "provider=anthropic (ANTHROPIC_API_KEY), or provider=openai-compatible endpoint=... model=... "

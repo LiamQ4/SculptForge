@@ -114,7 +114,7 @@ private:
     bool testing_ = false;
     std::vector<std::string> failures_;
     std::string frameText_, shotRequest_, shotDir_, scriptName_, lineText_;
-    std::string scriptDir_; // relative `drop` paths start here
+    std::string scriptDir_; // the .sfui script's folder: relative `drop` paths, $SCRIPT_DIR in env steps
     SDL_Keymod held_ = SDL_KMOD_NONE; // modifiers held by `hold` (Ctrl to mask, Ctrl+Shift to hide...)
 };
 
