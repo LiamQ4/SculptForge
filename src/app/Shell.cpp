@@ -638,18 +638,32 @@ void App::drawTitleStrip(const ShellGeometry& g) {
         verts += doc_.subtoolMesh(i).vertexCount();
     }
     char info[256];
-    std::snprintf(info, sizeof info, "Verts %s   Tris %s   SubTool %s (%d/%d)   Layer %s%s%s   %.0f fps",
+    std::snprintf(info, sizeof info, "Verts %s   Tris %s   SubTool %s (%d/%d)   Layer %s%s%s",
                   shortCount(verts).c_str(), shortCount(tris).c_str(), doc_.activeSubtoolInfo().name.c_str(),
                   doc_.activeSubtool + 1, doc_.subtoolCount(),
                   doc_.activeLayer >= 0 && doc_.activeLayer < int(doc_.mesh.layers.size())
                       ? doc_.mesh.layers[size_t(doc_.activeLayer)].name.c_str()
                       : "Base",
-                  doc_.splats.empty() ? "" : "   Splats ", doc_.splats.empty() ? "" : shortCount(doc_.splats.size()).c_str(),
-                  ImGui::GetIO().Framerate);
+                  doc_.splats.empty() ? "" : "   Splats ", doc_.splats.empty() ? "" : shortCount(doc_.splats.size()).c_str());
+    // The frame rate gets a fixed-width slot, refreshed twice a second: a number that changes width every frame
+    // would make everything after it (the status message) jitter.
+    if (ImGui::GetTime() - fpsShownAt_ > 0.5 || fpsShown_ < 0.0f) {
+        fpsShown_ = ImGui::GetIO().Framerate;
+        fpsShownAt_ = ImGui::GetTime();
+    }
+    char fps[32];
+    std::snprintf(fps, sizeof fps, "%.0f fps", fpsShown_);
+    const float fpsSlot = ImGui::CalcTextSize("0000 fps").x;
     const float avail = rightX - infoX - 16.0f * s;
-    const float infoW = ImGui::CalcTextSize(info).x;
+    const float infoW = ImGui::CalcTextSize(info).x + 18.0f * s + fpsSlot;
     if (infoW < avail) {
         ImGui::TextDisabled("%s", info);
+        ImGui::SameLine(0.0f, 18.0f * s);
+        const float slotX = ImGui::GetCursorPosX();
+        ImGui::SetCursorPosX(slotX + fpsSlot - ImGui::CalcTextSize(fps).x); // right-aligned in the slot
+        ImGui::TextDisabled("%s", fps);
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::SetCursorPosX(slotX + fpsSlot);
         const std::string& msg = layout_.customize ? std::string("Customize: Ctrl+Alt+drag to move or remove items") : status_;
         if (!msg.empty() && avail - infoW > 60.0f * s) {
             ImGui::SameLine(0.0f, 20.0f * s);

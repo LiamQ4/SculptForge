@@ -432,6 +432,8 @@ private:
     std::unique_ptr<struct BrushGalleryState, void (*)(struct BrushGalleryState*)> gallery_{nullptr, &destroyBrushGallery};
 
     // ---- Shell (A): layout, shelves, palettes, trays, theme ----
+    float fpsShown_ = -1.0f; // title-strip frame rate, refreshed twice a second
+    double fpsShownAt_ = 0.0;
 public:
     // The part of the window the 3D view uses (logical px); the whole window while the UI is hidden.
     CanvasRect canvasRect() const;
