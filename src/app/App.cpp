@@ -814,6 +814,9 @@ void App::runCommand(const std::string& name, const Args& args) {
                  name == "image_relief" || name == "image_inflate" || name == "splat_to_mesh" ||
                  (name == "splat_transform" && args.contains("fit"))))
         camera_.frame(sceneBounds());
+    // A new SubTool lands beside the model: bring it into view only if it isn't already.
+    if (r.ok && (name == "subtool_append" || name == "subtool_duplicate") && !onScreen(doc_.mesh.bounds()))
+        camera_.frame(sceneBounds());
     afterCommand(name, args, r);
     updateTitle();
 }
@@ -882,6 +885,17 @@ void App::saveFileDialog(FileAction action) {
     }
     SDL_ShowSaveFileDialog(onFileChosen, &dialogRequests_[int(action)], window_, filters, count,
                            suggestion.empty() ? nullptr : suggestion.c_str());
+}
+
+bool App::onScreen(const AABB& box) const {
+    if (!box.valid()) return true;
+    const glm::mat4 viewProj = camera_.projection() * camera_.view();
+    for (int i = 0; i < 8; ++i) {
+        const glm::vec3 c((i & 1) ? box.max.x : box.min.x, (i & 2) ? box.max.y : box.min.y, (i & 4) ? box.max.z : box.min.z);
+        const glm::vec4 p = viewProj * glm::vec4(c, 1.0f);
+        if (p.w <= 0.0f || std::abs(p.x / p.w) > 0.95f || std::abs(p.y / p.w) > 0.95f) return false;
+    }
+    return true;
 }
 
 AABB App::sceneBounds() const {

@@ -84,6 +84,7 @@ private:
     void openFileDialog();
     void saveFileDialog(FileAction action);
     AABB sceneBounds() const; // mesh plus the main body of any splats
+    bool onScreen(const AABB& box) const; // whole box inside the viewport
     void drawSplatSection();
     void processPendingFiles();
 

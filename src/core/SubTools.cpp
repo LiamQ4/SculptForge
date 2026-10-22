@@ -197,7 +197,7 @@ void registerSubToolCommands(CommandRegistry& reg) {
              {{"type", T::String, "'sphere' (default), 'cube' or 'plane'.", false},
               {"path", T::String, "Model file to append instead of a primitive (.obj, .glb, .fbx, .ply, .stl, .usd...).", false},
               {"name", T::String, "Name for the new SubTool.", false},
-              {"size", T::Number, "Primitive size relative to the visible model (0.05-2). Default 0.35.", false}},
+              {"size", T::Number, "Primitive size relative to the largest visible SubTool (0.05-2). Default 0.35.", false}},
              [](Document& doc, const Args& a) -> CommandResult {
                  Mesh m;
                  std::string name;
@@ -212,8 +212,17 @@ void registerSubToolCommands(CommandRegistry& reg) {
                      name = fileStem(path);
                  } else {
                      const std::string type = argString(a, "type", "sphere");
+                     // Sized from the largest visible SubTool (so repeated appends neither grow nor shrink),
+                     // placed beside everything shown.
                      const AABB scene = doc.visibleBounds();
-                     const float extent = scene.valid() ? std::max({scene.extent().x, scene.extent().y, scene.extent().z}) : 2.0f;
+                     float extent = 0.0f;
+                     for (int i = 0; i < doc.subtoolCount(); ++i) {
+                         const Mesh& sm = doc.subtoolMesh(i);
+                         if (!doc.subtools[size_t(i)].visible || !sm.vertexCount()) continue;
+                         const glm::vec3 e = sm.bounds().extent();
+                         extent = std::max({extent, e.x, e.y, e.z});
+                     }
+                     if (extent <= 0.0f) extent = 2.0f;
                      const float size = extent * float(std::clamp(argNumber(a, "size", 0.35), 0.05, 2.0));
                      if (type == "sphere") m = makeIcosphere(5, size * 0.5f);
                      else if (type == "cube") m = makeCube(48, size);
