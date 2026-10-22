@@ -46,6 +46,9 @@ add_library(sculptforge_core STATIC
   src/core/Masking.cpp
   src/core/BrushAlpha.cpp
   src/core/Stroke.cpp
+  src/core/PathStroke.cpp
+  src/core/Sha256.cpp
+  src/core/BrushGallery.cpp
   src/core/Polypaint.cpp
   src/core/Matcap.cpp
   src/core/Project.cpp
@@ -79,7 +82,7 @@ endif()
 
 # --- Bring-your-own-AI (brush assistant). HTTPS via WinHTTP or libcurl. ---
 add_library(sculptforge_ai STATIC src/ai/Http.cpp src/ai/BrushAssistant.cpp src/ai/Generator3D.cpp
-  src/ai/ImageTo3DService.cpp src/ai/GradioClient.cpp src/ai/AiCommands.cpp src/link/Socket.cpp src/link/UnrealLink.cpp)
+  src/ai/ImageTo3DService.cpp src/ai/GradioClient.cpp src/ai/AiCommands.cpp src/ai/BrushGalleryClient.cpp src/link/Socket.cpp src/link/UnrealLink.cpp)
 find_package(Threads REQUIRED)
 target_link_libraries(sculptforge_ai PUBLIC sculptforge_core Threads::Threads)
 if(WIN32)
@@ -120,6 +123,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelMasking.cpp
     src/app/PanelPolygroups.cpp
     src/app/PanelBrushes.cpp
+    src/app/PanelBrushGallery.cpp
     src/app/PanelPolypaint.cpp
     src/app/PanelGoz.cpp
     src/app/PanelProject.cpp
@@ -288,6 +292,15 @@ if(SCULPTFORGE_BUILD_TESTS)
     target_compile_options(sculptforge_tests PRIVATE /utf-8)
   endif()
   add_test(NAME sculptforge_tests COMMAND sculptforge_tests)
+
+  # The seeded community brush gallery (tools/brush-gallery/repo) must stay valid
+  # and its index.json current: every brush is round-tripped through sculptforge-cli.
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME brush_gallery_index
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/brush-gallery/build_index.py
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/brush-gallery/repo --check --cli $<TARGET_FILE:sculptforge-cli>)
+  endif()
 
   # UI tests: each tests/ui/*.sfui script drives the real app headless (needs an
   # OpenGL 3.3 context; CI runs them on Linux under Xvfb with Mesa). Label "ui".

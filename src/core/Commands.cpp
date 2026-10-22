@@ -7,6 +7,7 @@
 #include "core/EnginePresets.h"
 #include "core/ImageTo3D.h"
 #include "core/Masking.h"
+#include "core/PathStroke.h"
 #include "core/Polygroups.h"
 #include "core/SubTools.h"
 #include "core/Polypaint.h"
@@ -538,6 +539,75 @@ CommandRegistry::CommandRegistry() {
              return {true, "Loaded brush '" + doc.brushes[doc.activeBrush].name + "'"};
          }});
     registerBrushCommands(*this); // brush_set_alpha (BrushAlpha.cpp)
+
+    add({"stroke",
+         "Apply a brush along a path on the active SubTool, like dragging the cursor in the viewport (one undo "
+         "step). Each point is projected onto the surface along the view direction, so points drawn in the "
+         "camera's plane give a screen-space stroke. Used for scripted detailing and brush preview renders.",
+         {{"points", T::String,
+           "World-space path: \"x,y,z x,y,z ...\" (or separated by '|'). One point stamps a single dab.", true},
+          {"brush", T::String,
+           "Custom brush (library name) or built-in brush (Standard, Clay, Crease, Inflate, ...). Default: the "
+           "active brush.",
+           false},
+          {"view", T::String, "Direction the path is projected along, \"x,y,z\" (default 0,0,-1: front view).", false},
+          {"radius", T::Number, "Brush radius in world units (default 4% of the mesh size).", false},
+          {"strength", T::Number, "Strength 0-1 (default 0.5).", false},
+          {"pressure", T::Number, "Constant pen pressure 0-1 (default 1).", false},
+          {"invert", T::Bool, "Invert the brush (carve instead of build, like holding Alt).", false},
+          {"curve", T::Bool, "Smooth curve through the points (default true); false = straight segments.", false},
+          {"spacing", T::Number, "Dab spacing as a fraction of the radius (default: the brush's own).", false},
+          {"symmetry", T::String, "Mirror axes, e.g. \"x\" or \"xz\" (default none).", false},
+          {"seed", T::Number, "Random seed for brush jitter (default 1).", false}},
+         [](Document& doc, const Args& a) -> CommandResult {
+             PathStroke st;
+             std::string err;
+             if (!parsePathPoints(argString(a, "points"), st.points, err)) return {false, err};
+             const std::string view = argString(a, "view");
+             if (!view.empty() && !parseVec3(view, st.view)) return {false, "Bad view '" + view + "' (expected x,y,z)"};
+             st.radius = float(argNumber(a, "radius", 0.0));
+             st.strength = float(argNumber(a, "strength", 0.5));
+             st.pressure = float(argNumber(a, "pressure", 1.0));
+             st.invert = argBool(a, "invert", false);
+             st.curve = argBool(a, "curve", true);
+             st.spacing = float(argNumber(a, "spacing", -1.0));
+             st.seed = uint32_t(std::max(argNumber(a, "seed", 1.0), 0.0));
+             for (char c : argString(a, "symmetry")) {
+                 const char l = char(std::tolower(static_cast<unsigned char>(c)));
+                 if (l == 'x') st.symmetry.x = true;
+                 else if (l == 'y') st.symmetry.y = true;
+                 else if (l == 'z') st.symmetry.z = true;
+                 else return {false, "symmetry takes the axes x, y and z"};
+             }
+
+             // Resolve the brush: a library recipe (exact name, then any case), then a built-in type.
+             const std::string name = argString(a, "brush");
+             auto lower = [](std::string s) {
+                 std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+                 return s;
+             };
+             const BrushRecipe* recipe = nullptr;
+             BrushType type = BrushType::Standard;
+             if (name.empty()) {
+                 if (doc.activeBrush >= 0 && doc.activeBrush < int(doc.brushes.size())) recipe = &doc.brushes[doc.activeBrush];
+             } else {
+                 for (const auto& b : doc.brushes)
+                     if (b.name == name) recipe = &b;
+                 for (const auto& b : doc.brushes)
+                     if (!recipe && lower(b.name) == lower(name)) recipe = &b;
+                 if (!recipe) {
+                     int found = -1;
+                     for (int i = 0; i < int(BrushType::Count); ++i)
+                         if (lower(brushName(BrushType(i))) == lower(name)) found = i;
+                     if (found < 0) return {false, "No such brush: " + name};
+                     type = BrushType(found);
+                 }
+             }
+             const int dabs = strokePath(doc, recipe, type, st, err);
+             if (dabs < 0) return {false, err};
+             if (dabs == 0) return {false, "The path never crosses the surface (check the points and view)"};
+             return {true, "Stroked " + std::to_string(dabs) + " dabs with " + (recipe ? recipe->name : brushName(type))};
+         }});
 
     add({"splat_info", "Report the loaded Gaussian splats.", {},
          [](Document& doc, const Args&) -> CommandResult {

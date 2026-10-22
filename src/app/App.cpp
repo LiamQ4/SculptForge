@@ -231,6 +231,7 @@ bool App::init(const AppOptions& options) {
 
 void App::shutdown() {
     if (refTexture_) gl::DeleteTextures(1, &refTexture_);
+    gallery_.reset(); // its preview textures need the GL context
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
@@ -245,6 +246,7 @@ int App::renderHeadless() {
     camera_.frame(options_.hideMesh && !doc_.splats.empty() ? doc_.splats.bounds(0.9f) : sceneBounds());
     camera_.aspect = float(options_.width) / float(std::max(options_.height, 1));
     camera_.pitch = glm::radians(options_.pitchDegrees);
+    camera_.distance /= options_.zoom;
     RenderSettings settings = renderSettings_;
     settings.wireframe = options_.wireframe;
     settings.showPolygroups = settings.showPolygroups || options_.polygroups;
@@ -1025,6 +1027,7 @@ void App::drawUi() {
     if (showGamePanel_) drawGameExportPanel();
     drawSplatSection();
     if (showBrushLab_) drawBrushLab();
+    drawBrushGallery();
     if (showImageTo3D_) drawImageTo3D();
     if (showPolypaintPanel_) drawPolypaintPanel();
     if (previewLod_ >= 0) {
@@ -1150,6 +1153,7 @@ void App::drawMenuBar() {
         ImGui::MenuItem("Game Ready Panel", nullptr, &showGamePanel_);
         ImGui::MenuItem("Gaussian Splats", nullptr, &showSplatsPanel_);
         ImGui::MenuItem("Brush Lab", nullptr, &showBrushLab_);
+        ImGui::MenuItem("Community brushes", nullptr, &showBrushGallery_);
         ImGui::MenuItem("Polypaint & Materials", nullptr, &showPolypaintPanel_);
         ImGui::MenuItem("Generate 3D", nullptr, &showImageTo3D_);
         ImGui::MenuItem("Show Splats", nullptr, &renderSettings_.showSplats, !doc_.splats.empty());
