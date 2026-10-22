@@ -54,6 +54,7 @@ struct AppOptions {
     int fps = 30;
     std::string uiTest;   // run this .sfui UI test script headless and exit (see UiTest.cpp)
     std::string uiOutDir; // where UI tests save screenshots
+    bool fullscreen = false; // start fullscreen (F11 toggles)
 };
 
 class Demo;
@@ -432,6 +433,7 @@ private:
     std::unique_ptr<struct BrushGalleryState, void (*)(struct BrushGalleryState*)> gallery_{nullptr, &destroyBrushGallery};
 
     // ---- Shell (A): layout, shelves, palettes, trays, theme ----
+    float topInset() const;  // window px kept clear at the top (camera notch)
     float fpsShown_ = -1.0f; // title-strip frame rate, refreshed twice a second
     double fpsShownAt_ = 0.0;
 public:

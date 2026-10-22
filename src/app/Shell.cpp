@@ -24,6 +24,8 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 
 namespace sf {
 
@@ -329,6 +331,10 @@ void App::registerShellActions() {
     flag("view.polypaint", "Paint", ICON_LC_PALETTE, "Render", "", &renderSettings_.showPolypaint,
          "Show polypaint colours (off: plain material).");
     flag("view.mesh", "Show Mesh", ICON_LC_BOX, "Render", "", &renderSettings_.showMesh, "Draw the sculpt.");
+    add({"view.fullscreen", "Fullscreen", ICON_LC_MAXIMIZE, "Fill the screen with SculptForge (again: back to a window).",
+         "Render", "F11", "",
+         [this] { SDL_SetWindowFullscreen(window_, !(SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN)); },
+         [this] { return (SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN) != 0; }, nullptr});
     add({"view.splats", "Splats", ICON_LC_SPARKLE, "Show the Gaussian splat capture.", "Render", "", "",
          [this] { renderSettings_.showSplats = !renderSettings_.showSplats; },
          [this] { return renderSettings_.showSplats; }, [this] { return !doc_.splats.empty(); }});
@@ -447,17 +453,42 @@ void App::registerShellActions() {
 // Layout
 // ---------------------------------------------------------------------------
 
+float App::topInset() const {
+    // Laptop camera notches cover the top of a window that fills the screen (MacBooks since 2021).
+    if (uiPrefs_.cameraNotch == 2 || hideUi_ || !options_.uiTest.empty() || !options_.recordPath.empty()) return 0.0f;
+    // macOS (and any platform that knows) reports the safe area itself.
+    SDL_Rect safe{};
+    if (SDL_GetWindowSafeArea(window_, &safe) && safe.y > 0) return float(safe.y);
+    // Linux on Apple laptops (Asahi): notched MacBooks are 16:10 plus the band beside the notch, so a display
+    // taller than 16:10 has that band at its top. Only a window covering the whole display reaches it.
+    static const bool appleLaptop = [] {
+        std::ifstream f("/proc/device-tree/model", std::ios::binary);
+        std::string model((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        return model.find("MacBook") != std::string::npos;
+    }();
+    SDL_Rect bounds{};
+    int ww = 0, wh = 0;
+    const SDL_DisplayID display = SDL_GetDisplayForWindow(window_);
+    if (!display || !SDL_GetDisplayBounds(display, &bounds)) return 0.0f;
+    SDL_GetWindowSize(window_, &ww, &wh);
+    const float band = float(bounds.h) - float(bounds.w) * 10.0f / 16.0f;
+    const bool coversDisplay = ww >= bounds.w && wh >= bounds.h;
+    const bool notched = band > bounds.h * 0.02f && band < bounds.h * 0.06f;
+    if (uiPrefs_.cameraNotch == 1) return notched ? band : 32.0f * uiScale_;
+    return appleLaptop && notched && coversDisplay ? band : 0.0f;
+}
+
 ShellGeometry App::shellGeometry() const {
     int w = 0, h = 0;
     SDL_GetWindowSize(window_, &w, &h);
-    return computeShell(layout_, float(w), float(h), uiScale_);
+    return computeShell(layout_, float(w), float(h), uiScale_, topInset());
 }
 
 CanvasRect App::canvasRect() const {
     int w = 0, h = 0;
     SDL_GetWindowSize(window_, &w, &h);
     if (hideUi_) return {0.0f, 0.0f, float(std::max(w, 1)), float(std::max(h, 1))};
-    return computeShell(layout_, float(w), float(h), uiScale_).canvas;
+    return computeShell(layout_, float(w), float(h), uiScale_, topInset()).canvas;
 }
 
 void App::canvasRay(float x, float y, glm::vec3& origin, glm::vec3& dir) const {
@@ -554,7 +585,10 @@ void App::drawCanvasFrame() {
 
 void App::drawShell() {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    shell_ = computeShell(layout_, vp->Size.x, vp->Size.y, uiScale_);
+    shell_ = computeShell(layout_, vp->Size.x, vp->Size.y, uiScale_, topInset());
+    if (shell_.notchBand.h > 0.0f) // the band beside the camera: plain shell colour, so it reads as part of the bezel
+        ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2(shell_.notchBand.w, shell_.notchBand.h),
+                                                      theme::u32(theme::shellBg));
     // Splats arriving (file, command or AI agent) bring their palette into the right tray.
     if (doc_.splatsVersion != seenSplatsVersion_) {
         seenSplatsVersion_ = doc_.splatsVersion;

@@ -315,7 +315,7 @@ void App::drawPalette_Render() {
     ImGui::Checkbox("Show Splats", &renderSettings_.showSplats);
     ImGui::EndDisabled();
     ui::HelpAction(*this, "view.splats");
-    actionRow(*this, {"view.frame"});
+    actionRow(*this, {"view.frame", "view.fullscreen"});
 }
 
 void App::drawPalette_Script() {

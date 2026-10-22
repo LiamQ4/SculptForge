@@ -107,3 +107,16 @@ TEST(shell_tray_width_and_layout_json) {
     CHECK(back.bottomShelf == l.bottomShelf);
     CHECK(back.topShelf == l.topShelf);
 }
+
+TEST(shell_camera_notch_inset) {
+    // A 16-inch MacBook Pro filled edge to edge: 1728x1117 logical, a 37 px band beside the notch.
+    const UiLayout l = standardLayout();
+    const ShellGeometry plain = computeShell(l, 1728, 1117, 1.0f);
+    const ShellGeometry g = computeShell(l, 1728, 1117, 1.0f, 37.0f);
+    CHECK(plain.notchBand.h == 0.0f && plain.title.y == 0.0f);
+    CHECK(g.notchBand.h == 37.0f && g.title.y == 37.0f);
+    CHECK(g.paletteBar.y == 37.0f + g.title.h);
+    CHECK(g.canvas.y == plain.canvas.y + 37.0f && g.canvas.h == plain.canvas.h - 37.0f);
+    CHECK(g.rightTray.y == plain.rightTray.y + 37.0f);
+    CHECK(computeShell(l, 1728, 1117, 1.0f, 5000.0f).notchBand.h <= 1117.0f * 0.25f); // never eats the window
+}

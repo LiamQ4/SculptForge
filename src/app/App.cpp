@@ -92,7 +92,8 @@ bool App::init(const AppOptions& options) {
     SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
 
     const SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
-                                  (headless ? SDL_WINDOW_HIDDEN : 0);
+                                  (headless ? SDL_WINDOW_HIDDEN : 0) |
+                                  (options.fullscreen && !headless ? SDL_WINDOW_FULLSCREEN : 0);
     const int winW = recording ? options.width : 1600, winH = recording ? options.height : 960;
     window_ = SDL_CreateWindow("SculptForge", winW, winH, flags);
     if (!window_) {

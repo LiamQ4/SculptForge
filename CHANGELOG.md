@@ -7,6 +7,11 @@ All notable changes to SculptForge are listed here. The format follows
 ## [Unreleased]
 
 ### A ZBrush-style interface
+- Laptop camera notches: when SculptForge fills the screen, the interface stays below the camera notch of
+  MacBooks (macOS reports the safe area; on Linux a notched MacBook display is recognised), with a plain band
+  beside the notch. Preferences > Interface > Camera notch: Automatic / Always reserve / Off.
+- Fullscreen toggle (F11, Render palette; `--fullscreen` on the command line), and minimise / close buttons at
+  the far right of the title strip (close asks to save changes; Ctrl+Q quits).
 - The canvas is framed by shelves, as in ZBrush: a top shelf (LightBox, Sculpt/Paint, Zadd/Zsub, Draw Size,
   Strength, symmetry, pressure), a left shelf of Brush / Stroke / Alpha / Material pickers with the colour picker,
   a right shelf of navigation (drag Move / Zoom / Rotate) and display toggles, and a bottom shelf of your most-used

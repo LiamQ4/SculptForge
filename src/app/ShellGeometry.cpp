@@ -13,17 +13,19 @@ float trayWidth(float stored, float logicalWindowWidth) {
     return std::clamp(stored, kTrayMinW, kTrayMaxW);
 }
 
-ShellGeometry computeShell(const UiLayout& l, float W, float H, float s) {
+ShellGeometry computeShell(const UiLayout& l, float W, float H, float s, float topInset) {
     ShellGeometry g;
     g.scale = s;
     const float logicalW = s > 0.0f ? W / s : W;
     g.narrow = logicalW < kNarrowWidth;
     g.shelves = l.shelvesVisible;
 
-    g.title = {0, 0, W, kTitleH * s};
+    const float inset = std::clamp(topInset, 0.0f, H * 0.25f);
+    g.notchBand = {0, 0, W, inset};
+    g.title = {0, inset, W, kTitleH * s};
     const float barH = l.paletteBarVisible ? kPaletteBarH * s : 0.0f;
-    g.paletteBar = {0, g.title.h, W, barH};
-    const float top = g.title.h + barH;
+    g.paletteBar = {0, inset + g.title.h, W, barH};
+    const float top = inset + g.title.h + barH;
 
     float left = 0.0f, right = W; // the span between the dividers
     if (g.shelves) {

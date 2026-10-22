@@ -12,6 +12,7 @@
 namespace sf {
 
 struct ShellGeometry {
+    CanvasRect notchBand;               // h 0 unless the top of the window is unsafe (camera notch)
     CanvasRect title, paletteBar;
     CanvasRect topShelf, leftShelf, rightShelf, bottomShelf;
     CanvasRect console;                 // h 0 when closed
@@ -34,6 +35,7 @@ constexpr float kConsoleMinH = 100, kConsoleMaxH = 400, kNarrowWidth = 1280, kWi
 // windows 1920 logical px wide or more.
 float trayWidth(float stored, float logicalWindowWidth);
 
-ShellGeometry computeShell(const UiLayout& layout, float width, float height, float scale);
+// `topInset` (window px) keeps everything below a camera notch or other unsafe band at the top.
+ShellGeometry computeShell(const UiLayout& layout, float width, float height, float scale, float topInset = 0.0f);
 
 } // namespace sf

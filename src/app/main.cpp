@@ -32,7 +32,8 @@ void usage() {
         "  --demo-output FILE       Save the demo's result (e.g. creature.glb)\n"
         "  --fps N                  Recording frame rate (default 30)\n"
         "  --ui-test FILE.sfui      Run a UI test script headless and exit (0 = pass); settings are isolated\n"
-        "  --ui-out DIR             Where UI tests save screenshots");
+        "  --ui-out DIR             Where UI tests save screenshots\n"
+        "  --fullscreen             Start filling the screen (F11 toggles)");
 }
 
 // UI tests must never read or change the user's real settings, recent files or
@@ -84,6 +85,7 @@ int main(int argc, char** argv) {
         else if (a == "--demo-output") options.demoOutput = next();
         else if (a == "--fps") options.fps = std::atoi(next().c_str());
         else if (a == "--ui-test") options.uiTest = next();
+        else if (a == "--fullscreen") options.fullscreen = true;
         else if (a == "--ui-out") options.uiOutDir = next();
         else if (a == "-h" || a == "--help") {
             usage();

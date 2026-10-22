@@ -42,6 +42,7 @@ Json toJson(const UiPrefs& p) {
     j.set("uiScale", double(p.uiScale));
     j.set("lightboxAtStartup", p.lightboxAtStartup);
     j.set("libraryFolder", p.libraryFolder);
+    j.set("cameraNotch", double(p.cameraNotch));
     return j;
 }
 
@@ -56,6 +57,7 @@ void fromJson(const Json& j, UiPrefs& p) {
     p.uiScale = std::clamp(float(j["uiScale"].asNumber(p.uiScale)), 0.0f, 3.0f);
     p.lightboxAtStartup = j["lightboxAtStartup"].asBool(p.lightboxAtStartup);
     if (j["libraryFolder"].isString()) p.libraryFolder = j["libraryFolder"].asString();
+    p.cameraNotch = std::clamp(int(j["cameraNotch"].asNumber(p.cameraNotch)), 0, 2);
 }
 
 namespace {
@@ -703,6 +705,17 @@ void drawInterfaceSection(App& app) {
     ui::HelpText("UI scale", nullptr,
                  "Size of text and controls. Automatic follows the display. Takes effect the next time SculptForge starts "
                  "(Store Config to keep it).",
+                 "Preferences > Interface");
+    static const char* kNotch[] = {"Automatic", "Always reserve", "Off"};
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo("##camera_notch", (std::string("Camera notch: ") + kNotch[std::clamp(p.cameraNotch, 0, 2)]).c_str())) {
+        for (int i = 0; i < 3; ++i)
+            if (ImGui::Selectable(kNotch[i], i == p.cameraNotch)) p.cameraNotch = i;
+        ImGui::EndCombo();
+    }
+    ui::HelpText("Camera notch", nullptr,
+                 "Keeps the interface below the camera notch of MacBooks (and other laptops) when SculptForge fills the "
+                 "screen. Automatic asks the system (macOS) or recognises a notched MacBook display (Linux).",
                  "Preferences > Interface");
 }
 
