@@ -8,13 +8,21 @@
 // real buttons rather than calling functions behind the UI's back.
 //
 //   sculptforge --demo sculpt --record sculpt.mp4 --size 1920x1080
+//
+// The same machinery runs UI tests: a .sfui script of clicks, typing, strokes
+// and expectations against the real interface, with screenshots (UiTest.cpp).
+//
+//   sculptforge --ui-test tests/ui/brush_lab.sfui --ui-out shots/
 #pragma once
 
 #include <glm/glm.hpp>
 #include <imgui.h>
 
+#include <SDL3/SDL.h>
+
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sf {
@@ -33,9 +41,21 @@ public:
     bool finished() const { return step_ >= steps_.size(); }
     int frameStride() const { return stride_; } // >1 while fast-forwarding through waits
 
-    // Screen rect of the most recent UI item with this label (text before "##" also matches).
-    bool findItem(const std::string& label, ImVec2& center) const;
+    // Screen rect of the most recent UI item with this label (text before "##" also matches;
+    // "Window/label" picks the item in one window).
+    bool findItem(const std::string& label, ImVec2& center, bool* visible = nullptr, ImVec4* clip = nullptr) const;
     static void beginFrame(); // clears the item table (called before ImGui::NewFrame)
+    static std::vector<std::string> similarItems(const std::string& label); // for test failure messages
+
+    // UI tests (UiTest.cpp). Steps that fail stop the run; failures() lists why.
+    bool loadScript(const std::string& path, std::string& error);
+    bool testing() const { return testing_; }
+    const std::vector<std::string>& failures() const { return failures_; }
+    int stepsRun() const { return int(step_); }
+    // Every piece of text drawn in the last frame (ImGui log capture), for expect_text.
+    void setFrameText(std::string text) { frameText_ = std::move(text); }
+    // A screenshot requested by a `shot` step: the frame loop saves the next frame there.
+    std::string takeShotRequest() { return std::exchange(shotRequest_, std::string()); }
 
 private:
     using Step = std::function<bool(float t)>; // returns true when done; t = seconds since the step began
@@ -51,6 +71,14 @@ private:
     void type(char* buffer, size_t size, const std::string& text, float seconds);
     void run(std::function<void()> action);
     void waitUntil(std::function<bool()> done, float timeout, int stride);
+
+    // UI test steps.
+    void fail(int line, const std::string& message);
+    bool parseStep(int line, const std::vector<std::string>& words, std::string& error);
+    void testClick(int line, const std::string& label, int button, bool doubleClick);
+    void testKey(int line, const std::string& combo);
+    void testKeyNow(SDL_Keycode key, SDL_Keymod mods);
+    double query(const std::string& name, bool& known) const;
 
     void buildShowcase();
     void buildSculpt();
@@ -82,6 +110,11 @@ private:
     };
     std::vector<Caption> captions_;
     float clock_ = 0.0f;
+
+    bool testing_ = false;
+    std::vector<std::string> failures_;
+    std::string frameText_, shotRequest_, shotDir_, scriptName_, lineText_;
+    SDL_Keymod held_ = SDL_KMOD_NONE; // modifiers held by `hold` (Ctrl to mask, Ctrl+Shift to hide...)
 };
 
 } // namespace sf

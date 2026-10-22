@@ -40,6 +40,8 @@ struct AppOptions {
     std::string demoAsset;  // file the demo opens (image or model)
     std::string demoOutput; // where the demo saves its result (optional)
     int fps = 30;
+    std::string uiTest;   // run this .sfui UI test script headless and exit (see UiTest.cpp)
+    std::string uiOutDir; // where UI tests save screenshots
 };
 
 class Demo;
@@ -106,13 +108,15 @@ private:
     void openPath(const std::string& path);
     void drawRecipeEditor(BrushRecipe& recipe);
     void drawAiSettings();
+    bool beginPanel(const char* name, bool* open, float width); // ImGui::Begin for auto-sized side panels
     void sendBrushRequest(const std::string& text);
     void pollBrushRequest();
     const BrushRecipe* activeRecipe() const;
     void drawBrushCursor();
     void updateTitle();
 
-    int runRecording();
+    int runRecording(); // also runs UI tests (options_.uiTest)
+    int runUiTest(int width, int height, int fps);
     std::unique_ptr<Demo> demo_;
     float uiScale_ = 1.0f; // UI layout scale (fonts are rasterised at this scale)
     ImFont* fontCaption_ = nullptr;
@@ -151,6 +155,7 @@ private:
     glm::vec3 grabPlanePoint_{0.0f}, grabLast_{0.0f};
 
     std::string status_;
+    bool lastCommandOk_ = true; // result of the last runCommand (UI tests check it)
     bool showHelp_ = false;
     bool showAbout_ = false;
 

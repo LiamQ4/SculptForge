@@ -6,6 +6,14 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Side panels (Brush Lab, Tools, Generate 3D...) never grow past the bottom of the window. They move up
+  and scroll instead, so expanded sections such as AI provider are always reachable.
+
+### Development
+- UI tests: `sculptforge --ui-test script.sfui` drives the real interface (clicks, typing, strokes,
+  shortcuts), checks what it shows and saves screenshots. They run in CI on Linux.
+
 ### AI
 - Brush Lab is free out of the box: the new default **Free** provider uses an open model hosted by
   Pollinations.ai with no account or key, and falls back to a running local Ollama. Key-less Anthropic

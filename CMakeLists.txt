@@ -115,6 +115,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/main.cpp
     src/app/App.cpp
     src/app/Demo.cpp
+    src/app/UiTest.cpp
     src/app/PanelMasking.cpp
     src/app/PanelPolygroups.cpp
     src/app/PanelBrushes.cpp
@@ -285,4 +286,15 @@ if(SCULPTFORGE_BUILD_TESTS)
     target_compile_options(sculptforge_tests PRIVATE /utf-8)
   endif()
   add_test(NAME sculptforge_tests COMMAND sculptforge_tests)
+
+  # UI tests: each tests/ui/*.sfui script drives the real app headless (needs an
+  # OpenGL 3.3 context; CI runs them on Linux under Xvfb with Mesa). Label "ui".
+  if(SCULPTFORGE_BUILD_APP)
+    file(GLOB SCULPTFORGE_UI_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/*.sfui)
+    foreach(script ${SCULPTFORGE_UI_TESTS})
+      get_filename_component(name ${script} NAME_WE)
+      add_test(NAME ui_${name} COMMAND sculptforge --ui-test ${script} --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/${name})
+      set_tests_properties(ui_${name} PROPERTIES LABELS ui TIMEOUT 300)
+    endforeach()
+  endif()
 endif()

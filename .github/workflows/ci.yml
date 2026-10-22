@@ -42,7 +42,20 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
       - name: Test (C++ and Python API)
-        run: ctest --test-dir build -C Release --output-on-failure
+        run: ctest --test-dir build -C Release --output-on-failure -LE ui
+      - name: UI tests (real app, Xvfb + Mesa)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y xvfb libgl1-mesa-dri
+          xvfb-run -a -s "-screen 0 1920x1080x24" env LIBGL_ALWAYS_SOFTWARE=1 \
+            ctest --test-dir build -C Release --output-on-failure -L ui
+      - name: UI test screenshots
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-shots-${{ matrix.os }}
+          path: build/ui-shots
+          if-no-files-found: ignore
 
   # VFX Reference Platform (vfxplatform.com): GCC 14.2 with glibc 2.28 (CY2026, EL8)
   # or glibc 2.34 (CY2027, EL9), C++20, Python 3.13.
@@ -73,7 +86,7 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF \
             -DSCULPTFORGE_BUILD_PYTHON=ON -DPython_EXECUTABLE="$PYTHON313"
           cmake --build build --parallel
-          ctest --test-dir build --output-on-failure
+          ctest --test-dir build --output-on-failure -LE ui
       - name: Check binary compatibility (glibc <= ${{ matrix.glibc }})
         run: |
           for f in build/sculptforge build/sculptforge-cli build/sculptforge*.so; do

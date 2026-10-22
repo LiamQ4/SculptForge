@@ -21,9 +21,22 @@
 
 namespace {
 
+struct Placed {
+    ImRect rect;
+    ImRect clip; // the part of the screen the item's window shows
+};
+
 struct ItemTable {
-    std::map<ImGuiID, ImRect> rects;
-    std::map<std::string, ImRect> byLabel;
+    std::map<ImGuiID, Placed> rects;
+    std::map<std::string, Placed> byLabel;
+    // Every item drawn this frame with the ID-stack seed it was created under, so
+    // items that never report a label (combo boxes) can be matched by hashing one.
+    struct Seeded {
+        ImGuiID id, seed;
+        std::string window;
+        Placed placed;
+    };
+    std::vector<Seeded> frame;
 };
 ItemTable& items() {
     static ItemTable t;
@@ -32,17 +45,32 @@ ItemTable& items() {
 
 } // namespace
 
-void ImGuiTestEngineHook_ItemAdd(ImGuiContext*, ImGuiID id, const ImRect& bb, const ImGuiLastItemData*) {
-    items().rects[id] = bb;
+void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb, const ImGuiLastItemData*) {
+    ImRect clip = bb;
+    if (ctx && ctx->CurrentWindow) {
+        clip = ctx->CurrentWindow->ClipRect;
+        clip.ClipWith(ImRect(ImVec2(0, 0), ctx->IO.DisplaySize));
+    }
+    items().rects[id] = {bb, clip};
+    if (id && ctx && ctx->CurrentWindow && !ctx->CurrentWindow->IDStack.empty()) {
+        std::string window = ctx->CurrentWindow->Name;
+        if (const size_t hash = window.find("##"); hash != std::string::npos) window.resize(hash);
+        items().frame.push_back({id, ctx->CurrentWindow->IDStack.back(), std::move(window), {bb, clip}});
+    }
 }
 
-void ImGuiTestEngineHook_ItemInfo(ImGuiContext*, ImGuiID id, const char* label, ImGuiItemStatusFlags) {
+void ImGuiTestEngineHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* label, ImGuiItemStatusFlags) {
     auto it = items().rects.find(id);
     if (!label || it == items().rects.end()) return;
     std::string text(label);
-    items().byLabel[text] = it->second;
-    if (const size_t hash = text.find("##"); hash != std::string::npos && hash > 0)
-        items().byLabel.try_emplace(text.substr(0, hash), it->second);
+    std::string window = ctx && ctx->CurrentWindow ? ctx->CurrentWindow->Name : "";
+    if (const size_t hash = window.find("##"); hash != std::string::npos) window.resize(hash);
+    auto add = [&](const std::string& key) {
+        items().byLabel[key] = it->second;
+        if (!window.empty()) items().byLabel[window + "/" + key] = it->second;
+    };
+    add(text);
+    if (const size_t hash = text.find("##"); hash != std::string::npos && hash > 0) add(text.substr(0, hash));
 }
 
 void ImGuiTestEngineHook_Log(ImGuiContext*, const char*, ...) {}
@@ -69,13 +97,44 @@ glm::vec3 onSphere(float latDeg, float lonDeg, float r = 1.0f) {
 
 } // namespace
 
-void Demo::beginFrame() { items().byLabel.clear(); }
+void Demo::beginFrame() {
+    items().byLabel.clear();
+    items().frame.clear();
+}
 
-bool Demo::findItem(const std::string& label, ImVec2& center) const {
+std::vector<std::string> Demo::similarItems(const std::string& label) {
+    auto lower = [](std::string s) {
+        for (auto& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    std::string want = lower(label);
+    if (const size_t hash = want.find_first_not_of('#'); hash != std::string::npos) want = want.substr(hash);
+    std::vector<std::string> out;
+    for (const auto& [name, rect] : items().byLabel)
+        if (lower(name).find(want) != std::string::npos && out.size() < 8) out.push_back(name);
+    return out;
+}
+
+bool Demo::findItem(const std::string& label, ImVec2& center, bool* visible, ImVec4* clipOut) const {
+    auto found = [&](const Placed& p) {
+        center = p.rect.GetCenter();
+        if (visible) *visible = p.clip.Contains(center);
+        if (clipOut) *clipOut = ImVec4(p.clip.Min.x, p.clip.Min.y, p.clip.Max.x, p.clip.Max.y);
+        return true;
+    };
     auto it = items().byLabel.find(label);
-    if (it == items().byLabel.end()) return false;
-    center = it->second.GetCenter();
-    return true;
+    if (it != items().byLabel.end()) return found(it->second);
+    // Unlabelled items: hash the label the way ImGui's GetID() would.
+    std::string window, name = label;
+    if (const size_t slash = label.find('/'); slash != std::string::npos && slash > 0 && label.compare(0, 2, "##") != 0) {
+        window = label.substr(0, slash);
+        name = label.substr(slash + 1);
+    }
+    for (auto s = items().frame.rbegin(); s != items().frame.rend(); ++s) {
+        if (!window.empty() && s->window != window) continue;
+        if (ImHashStr(name.c_str(), 0, s->seed) == s->id) return found(s->placed);
+    }
+    return false;
 }
 
 std::vector<std::string> Demo::names() { return {"showcase", "sculpt", "image-to-3d", "brush-lab", "game-ready", "splats"}; }

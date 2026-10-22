@@ -73,8 +73,7 @@ void App::drawPolypaintPanel() {
     const float scale = uiScale_;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + 270 * scale, vp->Pos.y + 34 * scale), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(250 * scale, 0), ImVec2(250 * scale, FLT_MAX));
-    if (!ImGui::Begin("Polypaint & Materials", &showPolypaintPanel_, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!beginPanel("Polypaint & Materials", &showPolypaintPanel_, 250 * scale)) {
         ImGui::End();
         return;
     }

@@ -88,7 +88,7 @@ App::~App() = default;
 
 bool App::init(const AppOptions& options) {
     options_ = options;
-    const bool recording = !options.recordPath.empty();
+    const bool recording = !options.recordPath.empty() || !options.uiTest.empty();
     const bool headless = !options.renderPath.empty() || recording;
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
@@ -278,14 +278,83 @@ int App::renderHeadless() {
     return 0;
 }
 
+int App::runUiTest(int w, int h, int fps) {
+    // Same frame loop as a recording, but frames are only read back for screenshots.
+    std::vector<uint8_t> rgba;
+    std::string err;
+    const float dt = 1.0f / float(fps);
+    int frames = 0;
+    bool finalFrame = false;
+    while (frames < fps * 60 * 30) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+        } // the script provides all input
+        if (demo_->finished()) {
+            if (finalFrame) break;
+            finalFrame = true; // one more frame, for a failure screenshot
+        }
+        demo_->update(dt);
+        processPendingFiles();
+        animateLayers(dt);
+        pollBrushRequest();
+        pollUnreal();
+        pollGenerator();
+        camera_.aspect = float(w) / float(h);
+
+        Demo::beginFrame();
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(float(w), float(h));
+        io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+        io.DeltaTime = dt;
+        ImGui::NewFrame();
+        ImGui::LogToBuffer(0); // capture every drawn string (0: don't auto-open tree nodes)
+        drawUi();
+        if (ImGuiContext* g = ImGui::GetCurrentContext()) demo_->setFrameText(g->LogBuffer.c_str());
+        ImGui::LogFinish();
+        ImGui::Render();
+
+        Mesh& shown = displayedMesh();
+        if (&shown != lastDisplayed_) shown.topologyDirty = true;
+        lastDisplayed_ = &shown;
+        renderer_.sync(shown);
+        renderer_.syncSplats(doc_.splats, doc_.splatsVersion);
+        ++frames;
+        const std::string shot = demo_->takeShotRequest();
+        if (shot.empty()) continue;
+        if (!renderer_.beginCapture(w, h, err)) {
+            SDL_Log("%s", err.c_str());
+            return 1;
+        }
+        renderer_.draw(camera_, w, h, renderSettings_);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        renderer_.endCapture(rgba);
+        Image img;
+        img.width = w;
+        img.height = h;
+        img.rgba = rgba;
+        for (size_t i = 3; i < img.rgba.size(); i += 4) img.rgba[i] = 255;
+        if (!img.savePng(shot, err)) SDL_Log("%s", err.c_str());
+        else SDL_Log("Screenshot %s", shot.c_str());
+    }
+    for (const auto& f : demo_->failures()) std::fprintf(stderr, "FAIL %s\n", f.c_str());
+    if (demo_->failures().empty())
+        std::printf("PASS %s (%d frames)\n", options_.uiTest.c_str(), frames);
+    return demo_->failures().empty() ? 0 : 1;
+}
+
 int App::runRecording() {
     demo_ = std::make_unique<Demo>(*this);
     std::string err;
-    if (!demo_->load(options_.demo.empty() ? "sculpt" : options_.demo, err)) {
+    const bool testing = !options_.uiTest.empty();
+    if (testing ? !demo_->loadScript(options_.uiTest, err)
+                : !demo_->load(options_.demo.empty() ? "sculpt" : options_.demo, err)) {
         SDL_Log("%s", err.c_str());
         return 1;
     }
     const int w = options_.width, h = options_.height, fps = std::max(options_.fps, 1);
+    if (testing) return runUiTest(w, h, fps);
     // Frames go straight to ffmpeg as raw RGBA.
     std::string cmd = "ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s " + std::to_string(w) + "x" + std::to_string(h) +
                       " -r " + std::to_string(fps) +
@@ -356,7 +425,7 @@ int App::runRecording() {
 
 int App::run() {
     if (!options_.renderPath.empty()) return renderHeadless();
-    if (!options_.recordPath.empty()) return runRecording();
+    if (!options_.recordPath.empty() || !options_.uiTest.empty()) return runRecording();
     Uint64 lastTicks = SDL_GetTicksNS();
     while (running_) {
         Uint64 now = SDL_GetTicksNS();
@@ -728,6 +797,7 @@ void App::runCommand(const std::string& name, const Args& args) {
     if (name == "save_project") storeProjectSettings();
     CommandResult r = commands_.execute(doc_, name, args);
     status_ = r.message;
+    lastCommandOk_ = r.ok;
     if (r.ok && name != "export_glb" && name != "export_lods" && name != "export_usd" && name != "export_fbx" &&
         name != "export_unreal" && name.rfind("unreal_", 0) != 0 && name != "save_obj" && name != "save_project" &&
         name != "mesh_info" && name.rfind("brush_", 0) != 0 && name.rfind("splat_", 0) != 0 && name != "mesh_to_splats" &&
@@ -1058,8 +1128,7 @@ void App::drawLayersPanel() {
     const float scale = uiScale_;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 290 * scale, vp->Pos.y + 34 * scale), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(280 * scale, 0), ImVec2(280 * scale, FLT_MAX));
-    if (!ImGui::Begin("Layers / Blend Shapes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!beginPanel("Layers / Blend Shapes", nullptr, 280 * scale)) {
         ImGui::End();
         return;
     }
@@ -1146,8 +1215,7 @@ void App::drawGameExportPanel() {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 290 * scale, vp->Pos.y + 330 * scale),
                             ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(280 * scale, 0), ImVec2(280 * scale, FLT_MAX));
-    if (!ImGui::Begin("Game Ready", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!beginPanel("Game Ready", nullptr, 280 * scale)) {
         ImGui::End();
         return;
     }
@@ -1294,6 +1362,19 @@ void App::drawRecipeEditor(BrushRecipe& recipe) {
                                nullptr, false);
 }
 
+bool App::beginPanel(const char* name, bool* open, float width) {
+    // Auto-sized panels grow with their content (an opened section, a long chat):
+    // never taller than the screen (they scroll instead), and never off its bottom edge.
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float margin = 6.0f * uiScale_;
+    ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0), ImVec2(width, std::max(100.0f, vp->WorkSize.y - 2 * margin)));
+    const bool visible = ImGui::Begin(name, open, ImGuiWindowFlags_AlwaysAutoResize);
+    const ImVec2 pos = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
+    const float bottom = vp->WorkPos.y + vp->WorkSize.y - margin;
+    if (pos.y + size.y > bottom) ImGui::SetWindowPos(ImVec2(pos.x, std::max(vp->WorkPos.y + margin, bottom - size.y)));
+    return visible;
+}
+
 void App::drawAiSettings() {
     using P = ai::AiSettings::Provider;
     const char* providers[] = {"Free - no account or key", "Anthropic (Claude) - your key",
@@ -1361,28 +1442,35 @@ void App::drawAiSettings() {
         textField("API key", aiSettings_.apiKey, ImGuiInputTextFlags_Password);
     }
     if (aiSettings_.provider == P::OpenAICompatible && modelsChecked_) {
-        if (localModels_.error.empty())
-            ImGui::TextColored(ImVec4(0.45f, 0.8f, 0.5f, 1), "Connected - %d model%s installed",
-                               int(localModels_.models.size()), localModels_.models.size() == 1 ? "" : "s");
+        const bool ok = localModels_.error.empty();
+        ImGui::PushStyleColor(ImGuiCol_Text, ok ? ImVec4(0.45f, 0.8f, 0.5f, 1) : ImVec4(0.95f, 0.6f, 0.4f, 1));
+        if (ok)
+            ImGui::TextWrapped("Connected - %d model%s installed", int(localModels_.models.size()),
+                               localModels_.models.size() == 1 ? "" : "s");
         else
-            ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.4f, 1), "%s", localModels_.error.c_str());
+            ImGui::TextWrapped("%s", localModels_.error.c_str());
+        ImGui::PopStyleColor();
     }
     if (aiSettings_.provider == P::OpenAICompatible && ImGui::TreeNode("Run a model on this computer")) {
         // Steps for the platform we're on; the guide covers the others.
 #if defined(_WIN32)
-        ImGui::TextWrapped("1. Install Ollama: download it from ollama.com/download, or in PowerShell run\n"
-                           "   winget install Ollama.Ollama\n"
-                           "2. In a terminal, run:  ollama pull qwen3:4b-instruct\n"
+        ImGui::TextWrapped("1. Install Ollama from ollama.com/download, or in PowerShell:\n"
+                           "      winget install Ollama.Ollama\n"
+                           "2. Download the model (in PowerShell):\n"
+                           "      ollama pull qwen3:4b-instruct\n"
                            "3. Ollama runs in the system tray. Click Ollama above, then Find models.");
 #elif defined(__APPLE__)
-        ImGui::TextWrapped("1. Install Ollama: download it from ollama.com/download and drag it to Applications.\n"
-                           "2. In Terminal, run:  ollama pull qwen3:4b-instruct\n"
+        ImGui::TextWrapped("1. Install Ollama from ollama.com/download and drag it to Applications.\n"
+                           "2. Download the model (in Terminal):\n"
+                           "      ollama pull qwen3:4b-instruct\n"
                            "3. Ollama runs in the menu bar. Click Ollama above, then Find models.");
 #else
-        ImGui::TextWrapped("1. Install Ollama:  curl -fsSL https://ollama.com/install.sh | sh\n"
-                           "   (or your package manager, e.g. sudo pacman -S ollama)\n"
-                           "2. Start it if needed:  sudo systemctl enable --now ollama\n"
-                           "3. Run:  ollama pull qwen3:4b-instruct\n"
+        ImGui::TextWrapped("1. Install Ollama (or use your package manager, e.g. sudo pacman -S ollama):\n"
+                           "      curl -fsSL https://ollama.com/install.sh | sh\n"
+                           "2. Start it if needed:\n"
+                           "      sudo systemctl enable --now ollama\n"
+                           "3. Download the model:\n"
+                           "      ollama pull qwen3:4b-instruct\n"
                            "4. Click Ollama above, then Find models.");
 #endif
         ImGui::TextWrapped("The 2.5 GB model needs about 4 GB of free memory and works without a graphics card "
@@ -1421,8 +1509,7 @@ void App::drawBrushLab() {
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + 270 * scale, std::max(vp->Pos.y + 34 * scale,
                                                                      vp->Pos.y + vp->Size.y - 470 * scale)),
                             ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(420 * scale, 0), ImVec2(420 * scale, FLT_MAX));
-    if (!ImGui::Begin("Brush Lab", &showBrushLab_, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!beginPanel("Brush Lab", &showBrushLab_, 420 * scale)) {
         ImGui::End();
         return;
     }
@@ -1591,8 +1678,7 @@ void App::drawImageTo3D() {
     const float scale = uiScale_;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 590 * scale, vp->Pos.y + 34 * scale), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(290 * scale, 0), ImVec2(290 * scale, FLT_MAX));
-    if (!ImGui::Begin("Generate 3D", &showImageTo3D_, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!beginPanel("Generate 3D", &showImageTo3D_, 290 * scale)) {
         ImGui::End();
         return;
     }
@@ -1766,8 +1852,7 @@ void App::drawImageTo3D() {
 void App::drawToolPanel() {
     const float scale = uiScale_;
     ImGui::SetNextWindowPos(ImVec2(10 * scale, 34 * scale), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(250 * scale, 0), ImVec2(250 * scale, FLT_MAX));
-    if (!ImGui::Begin("Tools", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!beginPanel("Tools", nullptr, 250 * scale)) {
         ImGui::End();
         return;
     }
@@ -1862,8 +1947,7 @@ void App::drawSplatSection() {
     const float scale = uiScale_;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 590 * scale, vp->Pos.y + 34 * scale), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(280 * scale, 0), ImVec2(280 * scale, FLT_MAX));
-    if (!ImGui::Begin("Gaussian Splats", &showSplatsPanel_, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!beginPanel("Gaussian Splats", &showSplatsPanel_, 280 * scale)) {
         ImGui::End();
         return;
     }

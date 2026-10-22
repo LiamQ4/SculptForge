@@ -33,6 +33,24 @@ See [README.md#building](README.md#building). On Linux, `packaging/linux/install
 build dependencies. `ctest` runs the unit tests; `cpack` in the build folder makes the platform's packages.
 Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed.
 
+### UI tests
+
+UI changes need a UI test. `tests/ui/*.sfui` scripts drive the real app the way a person does: they click
+buttons by their labels, type into fields, draw brush strokes, press shortcuts, and then check the result
+(on-screen text, the status bar, mesh values). They also save screenshots, so you can look at what the
+test saw.
+
+```sh
+./build/sculptforge --ui-test tests/ui/sculpt_basics.sfui --ui-out /tmp/shots   # one script
+ctest --test-dir build -L ui                                                  # all of them
+```
+
+The step reference is at the top of `src/app/UiTest.cpp`. Tests run headless on simulated time, so most
+take under a second. They use a throwaway settings folder and never touch your own. A failing step stops
+the script and saves `FAIL-line-N.png`, and clicking a missing item lists similarly named items. Clicks
+scroll panels as needed, and clicking an item a person couldn't reach (off screen) fails. CI runs the UI
+tests on Linux under Xvfb and uploads the screenshots as an artifact.
+
 ## Demo videos
 
 The website's videos are real recordings made by the app itself:
