@@ -66,6 +66,16 @@ bool computeAutoUv(const std::vector<glm::vec3>& positions, const std::vector<gl
         return false;
     }
     xatlas::ChartOptions charts;
+    // Charts of at most about kChartFaces triangles (by area): flattening a chart costs more than linearly in its
+    // size, so a dense, smooth sculpt cut into a few huge charts took minutes (a 1.3M-triangle sphere: about
+    // 8 minutes; 16 s with the cap). Detailed sculpts get smaller charts than that anyway.
+    constexpr double kChartFaces = 4000.0;
+    if (double(triangles.size()) > kChartFaces) {
+        double area = 0.0;
+        for (const glm::uvec3& t : triangles)
+            area += 0.5 * double(glm::length(glm::cross(positions[t.y] - positions[t.x], positions[t.z] - positions[t.x])));
+        charts.maxChartArea = float(area * kChartFaces / double(triangles.size()));
+    }
     xatlas::PackOptions pack;
     pack.resolution = uint32_t(std::clamp(resolution, 256, 8192));
     pack.padding = uint32_t(kTextureGutter); // the painter pads islands by this much

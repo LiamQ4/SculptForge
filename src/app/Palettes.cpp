@@ -383,14 +383,27 @@ void App::drawPalette_Tool() {
     }
     if (subpalette("tool.remesh", "Remesh")) {
         const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-        ui::ActionButton(*this, "geometry.remesh", ImVec2(half, 0));
-        ui::HelpAction(*this, "geometry.remesh");
+        if (voxelRemesh_) { // remeshing a painted SubTool in the background (PanelRetopo.cpp)
+            ImGui::ProgressBar(voxelRemesh_->progress->load(), ImVec2(half, 0), "Remeshing...");
+            ui::HelpText("Voxel Remesh", nullptr,
+                         "Remeshing and keeping the texture in the background (Auto UV of the new surface, then the "
+                         "texture projected onto it). The result replaces the SubTool when it's done.",
+                         "Tool > Remesh");
+        } else {
+            ui::ActionButton(*this, "geometry.remesh", ImVec2(half, 0));
+            ui::HelpAction(*this, "geometry.remesh");
+        }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
         ImGui::SliderInt("##voxres", &voxelResolution_, 64, 400, "Resolution %d");
         ui::HelpText("Resolution", nullptr, "Voxels across the model: higher keeps more detail and makes more triangles.",
                      "Tool > Remesh");
-        if (hasTexture(doc_.mesh)) drawKeepTextureCheckbox("Tool > Remesh"); // only for a painted SubTool
+        if (voxelRemesh_) {
+            if (ImGui::Button("Cancel##voxelremesh", ImVec2(half, 0))) voxelRemesh_->cancel->store(true);
+            ui::HelpText("Cancel", nullptr, "Stop the remesh; the SubTool stays as it is.", "Tool > Remesh");
+        } else if (hasTexture(doc_.mesh)) {
+            drawKeepTextureCheckbox("Keep Texture##remesh", "Tool > Remesh"); // only for a painted SubTool
+        }
     }
     if (subpalette("tool.masking", "Masking")) drawMaskingSection();
     if (subpalette("tool.polygroups", "Polygroups")) drawPolygroupsSection();

@@ -233,12 +233,12 @@ std::string setUvsKeepingTexture(Mesh& mesh, std::vector<glm::vec2> uvs, bool ke
             const size_t layers = moved->layers.size();
             mesh.texture = std::move(moved);
             char buf[160];
-            std::snprintf(buf, sizeof buf, " (the texture%s moved onto the new UVs in %.1f s)",
-                          layers ? (" and its " + std::to_string(layers) + " layer" + (layers > 1 ? "s" : "")).c_str() : "",
+            std::snprintf(buf, sizeof buf, "; paint moved to the new UVs (%s%.1f s)",
+                          layers ? (std::to_string(layers) + " layer" + (layers > 1 ? "s, " : ", ")).c_str() : "",
                           st.transferSeconds);
             note = buf;
         } else {
-            note = " (the texture was painted on the old UVs, so it no longer lines up; undo to get them back)";
+            note = "; the texture was left on the old layout, so it no longer lines up (undo to get the old UVs back)";
         }
     }
     mesh.uvs = std::move(uvs);

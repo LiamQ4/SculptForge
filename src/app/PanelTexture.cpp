@@ -156,8 +156,8 @@ void App::registerTextureUiActions() {
     for (int i = 0; i < 2; ++i) g_dialogs[i] = {this, TextureFile(i)};
 }
 
-void App::drawKeepTextureCheckbox(const char* path) {
-    ImGui::Checkbox("Keep Texture", &keepTexture_);
+void App::drawKeepTextureCheckbox(const char* id, const char* path) {
+    ImGui::Checkbox(id, &keepTexture_);
     ui::HelpText("Keep Texture", nullptr,
                  "Keep the painted texture: the new mesh gets Auto UVs and the texture (every layer) is projected onto "
                  "it from the old surface, in the same undo step (it adds the Auto UV time). Off: the texture is "

@@ -41,7 +41,7 @@ std::shared_ptr<PaintTexture> retargetTexture(const Mesh& mesh, const std::vecto
                                               TextureTransferStats* stats = nullptr);
 
 // Gives `mesh` new UVs (Auto UV), moving its texture and layers onto them (retargetTexture) unless `keep` is
-// false. Returns the status text to add (" (texture moved onto the new UVs)"), empty without a texture.
+// false. Returns the status text to add (" (texture moved to the new UVs)"), empty without a texture.
 std::string setUvsKeepingTexture(Mesh& mesh, std::vector<glm::vec2> uvs, bool keep = true);
 
 // Gives `target` (which must have UVs) a texture of `source`'s size whose texels take the colour of the closest

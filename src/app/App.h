@@ -430,7 +430,22 @@ private:
     void drawQRemeshContents();
     void drawProjectContents();
     void startQRemesh();
-    void drawKeepTextureCheckbox(const char* path); // Keep Texture under Remesh and QRemesh (PanelTexture.cpp)
+    void drawKeepTextureCheckbox(const char* id, const char* path); // Keep Texture under Remesh and QRemesh (PanelTexture.cpp)
+    // Voxel Remesh of a painted SubTool with Keep Texture: the remesh, Auto UV and texture transfer run on a
+    // worker thread (PanelRetopo.cpp); otherwise Voxel Remesh is the plain remesh command.
+    void startVoxelRemesh();
+    void pollVoxelRemesh();
+    struct VoxelRemeshJob {
+        std::future<bool> done;
+        std::shared_ptr<std::atomic<float>> progress;
+        std::shared_ptr<std::atomic<bool>> cancel;
+        std::shared_ptr<Mesh> result;
+        std::shared_ptr<std::string> error, note;
+        uint32_t subtool = 0;
+        size_t triangles = 0;
+        int resolution = 200;
+    };
+    std::unique_ptr<VoxelRemeshJob> voxelRemesh_;
     void pollQRemesh();
     struct QRemeshJob {
         std::future<bool> done;

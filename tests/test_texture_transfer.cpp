@@ -124,7 +124,7 @@ TEST(texture_transfer_auto_uv_keeps_the_paint) {
     CommandRegistry reg;
     const CommandResult r = reg.execute(doc, "uv_auto", {{"resolution", 2048.0}}); // packed differently
     CHECK(r.ok);
-    CHECK(r.message.find("moved onto the new UVs") != std::string::npos);
+    CHECK(r.message.find("moved to the new UVs") != std::string::npos);
     CHECK(doc.mesh.uvs != oldUvs);
     CHECK(hasTexture(doc.mesh));
     CHECK(doc.mesh.texture != oldTexture);
@@ -294,6 +294,28 @@ TEST(texture_transfer_pads_the_new_islands) {
         }
     CHECK(border > 0);
     CHECK(white * 100 < border); // the pattern never reaches pure white
+}
+
+TEST(texture_transfer_auto_uv_of_a_dense_sphere_does_not_fold) {
+    // xatlas chained the near-coplanar faces of a dense smooth mesh into one "planar" chart, folded in two (every
+    // texel covered twice), or crashed on it. Now: separate islands, no texel covered twice.
+    Mesh m = makeIcosphere(6); // 82k triangles
+    AutoUvResult r;
+    std::string err;
+    CHECK(computeAutoUv(m, r, err));
+    CHECK(r.charts > 4);
+    std::vector<uint8_t> hits(1024 * 1024, 0);
+    size_t twice = 0, covered = 0;
+    for (size_t t = 0; t < m.triangleCount(); ++t)
+        rasterizeUvTriangle(r.uvs[t * 3], r.uvs[t * 3 + 1], r.uvs[t * 3 + 2], 1024, 1024, [&](int x, int y, float, float, float) {
+            uint8_t& h = hits[size_t(y) * 1024 + size_t(x)];
+            covered += h == 0;
+            twice += h == 1;
+            h = uint8_t(std::min(h + 1, 2));
+        });
+    std::printf("  dense sphere Auto UV: %d islands, %zu texels covered, %zu twice\n", r.charts, covered, twice);
+    CHECK(covered > 1024 * 1024 / 3);
+    CHECK(twice < covered / 1000);
 }
 
 TEST(texture_transfer_speed_at_4k_on_a_million_triangles) {

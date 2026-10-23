@@ -396,12 +396,7 @@ void App::registerShellActions() {
     add({"geometry.remesh", "Voxel Remesh", nullptr,
          "Rebuild as an even, watertight surface (like DynaMesh): merges parts, fixes scans and generated models.",
          "Tool > Remesh", "", "remesh",
-         [this] {
-             Args a{{"resolution", double(voxelResolution_)}};
-             if (!keepTexture_ && hasTexture(doc_.mesh)) a["keep_texture"] = false; // Keep Texture off
-             runCommand("remesh", a);
-         },
-         nullptr, nullptr});
+         [this] { startVoxelRemesh(); }, nullptr, [this] { return !voxelRemesh_; }});
     add({"geometry.to_splats", "Sculpt to Splats", nullptr, "Turn the sculpt into Gaussian splats.", "Splats", "",
          "mesh_to_splats", [this] { runCommand("mesh_to_splats"); }, nullptr, nullptr});
     add({"color.fill", "Fill", ICON_LC_PAINT_BUCKET, "Fill the unmasked area with the colour (FillObject).", "Color", "",
