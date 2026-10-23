@@ -6,6 +6,14 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-23
+
+### Fixed
+- Graphics tablets: the brush ring no longer flickers between two places, which looked like a second brush
+  blinking on the model (most noticeable while masking with Ctrl or smoothing with Shift). Windows Ink and some
+  tablet drivers send mouse events of their own beside the pen's, often at an old position; while the pen is
+  in range only the pen now moves the cursor, and the mouse takes over again once the pen goes quiet.
+
 ## [0.4.0] - 2026-10-22
 
 Shaped by feedback from a working ZBrush modeler and a survey of ZBrush and Mudbox forums.
@@ -240,7 +248,8 @@ First public release.
 - Rez package (`packaging/rez`).
 - Headless thumbnail/turntable rendering and scripted demo recording.
 
-[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/islandmed/SculptForge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/islandmed/SculptForge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/islandmed/SculptForge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/islandmed/SculptForge/compare/v0.1.0...v0.2.0

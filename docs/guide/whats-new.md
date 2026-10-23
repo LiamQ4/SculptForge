@@ -5,6 +5,13 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Version 0.4.1
+
+A fix for graphics tablets: the brush ring no longer flickers between two places on the model (it looked like
+a second brush blinking, most often while masking or smoothing). Some tablet drivers, Windows Ink among them,
+send extra mouse movements beside the pen's; now, while the pen is in range, only the pen moves the brush. See
+[Pen tablets](troubleshooting.md#pen-tablets) if your pen still misbehaves.
+
 ## Version 0.4
 
 Version 0.4 is about making SculptForge feel like home to ZBrush artists. It was shaped by feedback from a
