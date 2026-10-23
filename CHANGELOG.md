@@ -6,6 +6,44 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+Shaped by feedback from a working ZBrush modeler and a survey of ZBrush and Mudbox forums.
+
+### Feels like ZBrush
+- Free rotation by default: the model follows the cursor and can roll over the top, as in ZBrush. Hold Shift
+  while rotating to snap to the nearest front, side, top or bottom view. Preferences > Interface > Rotation:
+  Turntable keeps the model upright (Blender / Maya style).
+- Alt+drag pans and letting go of Alt mid-drag zooms; right-drag follows ZBrush's right-click navigation
+  (Alt pans, Ctrl zooms, Shift snaps). Projects remember the view's roll.
+- MaskLasso and MaskRect (Tool > Masking): Ctrl+drag a lasso or rectangle to mask what's inside, Ctrl+Alt to
+  unmask, starting on the model or the background.
+- SelectLasso (Tool > Visibility): Ctrl+Shift+drag a free-hand lasso to keep what's inside (Alt: hide it),
+  alongside SelectRect. New script commands `mask_rect`, `mask_lasso` and `hide_lasso`.
+- New Sculpt material, the default: neutral clay under a strong key light with crisp highlights and deep
+  cavity shading, so small strokes stay readable. Projects keep the material they were saved with.
+
+### Quads
+- Models opened from ZBrush (GoZ), OBJ, FBX, PLY or USD keep their quads: PolyF shows them as quads and
+  OBJ / FBX / PLY / USD / GoZ export writes them back as quads, through sculpting, layers, undo, SubTools and
+  projects.
+- Subdivide turns each quad into four quads, voxel remesh produces an even quad grid (like DynaMesh), and the
+  Plane and Cube primitives are quads. Decimate still produces triangles.
+
+### Paint layers
+- Photoshop-style polypaint layers per SubTool (Tool > Paint Layers): name, visibility, opacity, lock and ten
+  blend modes (Multiply, Screen, Overlay, Soft Light, Add, ...). Painting is non-destructive and undoable;
+  merge down, flatten, duplicate and reorder work as in Photoshop. Something ZBrush never had.
+- Exports use the composited colours; projects keep the layers (older versions open them flattened). New
+  `paint_layer_*` script commands.
+
+### Install
+- `install/`: direct download links that always get the newest build, what to do after downloading, and
+  one-command installers (`install.sh` for macOS / Linux, `install.ps1` for Windows) that verify checksums.
+  Releases also carry version-less copies of each file (e.g. `SculptForge-macos.dmg`).
+
+### Development
+- Windows testing: `tools/wintest.sh` cross-compiles for Windows and runs every test under Wine; CI now runs
+  the UI tests on Windows too (Mesa's software OpenGL). Release builds run the UI tests under Xvfb.
+
 ## [0.3.0] - 2026-10-22
 
 ### User guide

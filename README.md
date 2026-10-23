@@ -50,7 +50,9 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 | Image or text → sculptable 3D model | **Built in** (free models) | No |
 | Gaussian splats, OpenUSD / USDZ | **Built in** | No |
 | AI agents (MCP), headless scripting | **Built in** | ZScript |
-| Masking, polygroups, visibility (Ctrl / Ctrl+Shift), polypaint, MatCaps | **Yes** | Yes |
+| Masking, polygroups, visibility (Ctrl / Ctrl+Shift, lasso or rectangle), polypaint, MatCaps | **Yes** | Yes |
+| Polypaint layers with blend modes (Multiply, Overlay, Screen...) | **Yes** (new) | Opacity only |
+| Quads kept from import, shown and exported as quads | **Yes** (new) | Yes |
 | SubTools (separate meshes: append, split, merge, solo, Alt+click to select) | **Yes** (new in 0.3) | Yes |
 | GoZ exchange with ZBrush | **Yes** (new in 0.2; not yet tested against a live ZBrush) | Yes |
 | Multiresolution (subdivision levels), dynamic topology, ZRemesher-class retopology, UV unwrapping | Not yet ([roadmap](ROADMAP.md)) | Yes |
