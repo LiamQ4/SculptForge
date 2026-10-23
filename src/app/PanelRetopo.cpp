@@ -9,6 +9,9 @@
 #include "app/Demo.h"
 #include "app/Ui.h"
 
+#include "core/TextureTransfer.h"
+#include "core/Voxel.h"
+
 #include <algorithm>
 #include <thread>
 
@@ -87,15 +90,29 @@ void App::startQRemesh() {
     if (o.usePolypaint) job->args["use_polypaint"] = true;
     if (o.symmetryAxis >= 0) job->args["symmetry"] = std::string(1, char('x' + o.symmetryAxis));
     if (job->keepOriginal) job->args["keep_original"] = true;
+    const bool keepTexture = keepTexture_;
+    if (!keepTexture && hasTexture(doc_.mesh)) job->args["keep_texture"] = false;
+    job->textureNote = std::make_shared<std::string>();
 
     std::promise<bool> promise;
     job->done = promise.get_future();
     std::thread([promise = std::move(promise), source = std::make_shared<Mesh>(doc_.mesh), o, progress = job->progress,
-                 cancel = job->cancel, result = job->result, stats = job->stats, error = job->error]() mutable {
-        const bool ok = qremesh(*source, o, *result, *error, [&](float f) {
-            progress->store(f);
+                 cancel = job->cancel, result = job->result, stats = job->stats, error = job->error,
+                 note = job->textureNote, keepTexture]() mutable {
+        // With a texture to keep, QRemesh takes the first 80% of the bar and Auto UV + transfer the rest.
+        const float share = hasTexture(*source) && keepTexture ? 0.8f : 1.0f;
+        bool ok = qremesh(*source, o, *result, *error, [&](float f) {
+            progress->store(f * share);
             return !cancel->load();
         }, stats.get());
+        if (ok) *note = carryTextureNote(*source, *result, keepTexture, [&](float f) {
+            progress->store(share + (1.0f - share) * f);
+            return !cancel->load();
+        });
+        if (ok && cancel->load()) {
+            ok = false;
+            *error = "QRemesh cancelled";
+        }
         promise.set_value(ok);
     }).detach();
     qremesh_ = std::move(job);
@@ -103,7 +120,82 @@ void App::startQRemesh() {
               " quads...";
 }
 
+void App::startVoxelRemesh() {
+    if (voxelRemesh_) return;
+    Args args{{"resolution", double(voxelResolution_)}};
+    if (!hasTexture(doc_.mesh) || !keepTexture_) {
+        if (hasTexture(doc_.mesh)) args["keep_texture"] = false; // Keep Texture off
+        runCommand("remesh", args);
+        return;
+    }
+    // Keeping a texture adds Auto UV of the result, which takes seconds to minutes: run it all in the background.
+    if (doc_.sculptor.strokeActive()) endStroke();
+    auto job = std::make_unique<VoxelRemeshJob>();
+    job->progress = std::make_shared<std::atomic<float>>(0.0f);
+    job->cancel = std::make_shared<std::atomic<bool>>(false);
+    job->result = std::make_shared<Mesh>();
+    job->error = std::make_shared<std::string>();
+    job->note = std::make_shared<std::string>();
+    job->subtool = doc_.activeSubtoolInfo().id;
+    job->triangles = doc_.mesh.triangleCount();
+    job->resolution = std::clamp(voxelResolution_, 32, 512);
+    std::promise<bool> promise;
+    job->done = promise.get_future();
+    std::thread([promise = std::move(promise), source = std::make_shared<Mesh>(doc_.mesh), res = job->resolution,
+                 progress = job->progress, cancel = job->cancel, result = job->result, error = job->error,
+                 note = job->note]() mutable {
+        progress->store(0.02f);
+        *result = voxelRemesh(*source, res, error.get());
+        bool ok = result->triangleCount() > 0;
+        progress->store(0.15f);
+        if (ok) *note = carryTextureNote(*source, *result, true, [&](float f) {
+            progress->store(0.15f + 0.85f * f);
+            return !cancel->load();
+        });
+        if (ok && cancel->load()) {
+            ok = false;
+            *error = "Voxel Remesh cancelled";
+        }
+        promise.set_value(ok);
+    }).detach();
+    voxelRemesh_ = std::move(job);
+    status_ = "Voxel Remesh: remeshing and keeping the texture...";
+}
+
+void App::pollVoxelRemesh() {
+    if (!voxelRemesh_) return;
+    if (voxelRemesh_->done.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        status_ = "Voxel Remesh (keeping the texture): " + std::to_string(int(voxelRemesh_->progress->load() * 100.0f)) + "%";
+        return;
+    }
+    const std::unique_ptr<VoxelRemeshJob> job = std::move(voxelRemesh_);
+    if (!job->done.get()) {
+        status_ = *job->error;
+        return;
+    }
+    int index = -1;
+    for (int i = 0; i < doc_.subtoolCount(); ++i)
+        if (doc_.subtools[size_t(i)].id == job->subtool) index = i;
+    if (index < 0 || doc_.subtoolMesh(index).triangleCount() != job->triangles) {
+        status_ = "Voxel Remesh skipped: the SubTool changed while it was being remeshed";
+        return;
+    }
+    if (index != doc_.activeSubtool) doc_.selectSubtool(index);
+    if (doc_.sculptor.strokeActive()) endStroke();
+    doc_.replaceMeshUndoable(std::move(*job->result), "Remesh"); // as the remesh command
+    CommandResult r{true, "Remeshed to " + std::to_string(doc_.mesh.triangleCount()) + " triangles" + *job->note};
+    if (const std::string notice = doc_.takeNotice(); !notice.empty()) r.message += ". " + notice; // levels dropped
+    status_ = r.message;
+    lastCommandOk_ = true;
+    clearLods();
+    playingLayer_ = -1;
+    uvLinesKey_ = 0;
+    updateTitle();
+    consoleEcho("remesh", {{"resolution", double(job->resolution)}}, r);
+}
+
 void App::pollQRemesh() {
+    pollVoxelRemesh(); // polled with QRemesh, its sibling rebuild job
     if (!qremesh_) return;
     if (qremesh_->done.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
         status_ = "QRemesh: " + std::to_string(int(qremesh_->progress->load() * 100.0f)) + "%";
@@ -124,7 +216,7 @@ void App::pollQRemesh() {
     }
     if (index != doc_.activeSubtool) doc_.selectSubtool(index);
     if (doc_.sculptor.strokeActive()) endStroke();
-    CommandResult r{true, applyQRemesh(doc_, std::move(*job->result), job->keepOriginal, *job->stats)};
+    CommandResult r{true, applyQRemesh(doc_, std::move(*job->result), job->keepOriginal, *job->stats) + *job->textureNote};
     if (const std::string notice = doc_.takeNotice(); !notice.empty()) r.message += ". " + notice; // levels dropped
     status_ = r.message;
     lastCommandOk_ = true;
@@ -205,6 +297,10 @@ void App::drawQRemeshContents() {
                  "Keep the SubTool as it was, hidden, right below the new one (\"<name> Original\"), ready to "
                  "ProjectAll its detail back. Off: replace it, as ZBrush does (undo brings it back).",
                  kQRemeshPath);
+    if (hasTexture(doc_.mesh)) { // only matters for a painted SubTool
+        ImGui::SameLine(half + style.ItemSpacing.x);
+        drawKeepTextureCheckbox("Keep Texture##qremesh", kQRemeshPath);
+    }
 }
 
 void App::drawProjectContents() {

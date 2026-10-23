@@ -12,6 +12,7 @@
 #include "app/Ui.h"
 
 #include "core/Polypaint.h"
+#include "core/TextureTransfer.h"
 
 #include <IconsLucide.h>
 
@@ -146,7 +147,22 @@ void App::registerTextureUiActions() {
     add("texture.delete", "Delete Texture", kPath, [this] { runCommand("texture_delete"); }, nullptr,
         [this] { return doc_.mesh.texture != nullptr; },
         "Remove the SubTool's texture (undoable). Painting goes back to the vertices.", "texture_delete");
+    add("geometry.keep_texture", "Keep Texture", "Tool > Remesh", [this] { keepTexture_ = !keepTexture_; },
+        [this] { return keepTexture_; }, nullptr,
+        "Voxel Remesh and QRemesh keep a painted texture: the new mesh gets Auto UVs and the texture (every layer) "
+        "is projected onto it from the old surface, in the same undo step. Off: the texture is dropped. Merging "
+        "SubTools keeps textures too. Shown under Remesh and QRemesh when the SubTool has a texture.",
+        "");
     for (int i = 0; i < 2; ++i) g_dialogs[i] = {this, TextureFile(i)};
+}
+
+void App::drawKeepTextureCheckbox(const char* id, const char* path) {
+    ImGui::Checkbox(id, &keepTexture_);
+    ui::HelpText("Keep Texture", nullptr,
+                 "Keep the painted texture: the new mesh gets Auto UVs and the texture (every layer) is projected onto "
+                 "it from the old surface, in the same undo step (it adds the Auto UV time). Off: the texture is "
+                 "dropped. Scripts: keep_texture=false.",
+                 path);
 }
 
 void App::startAutoUv() {
@@ -203,15 +219,14 @@ void App::pollAutoUv() {
     }
     if (index != doc_.activeSubtool) doc_.selectSubtool(index);
     if (doc_.sculptor.strokeActive()) endStroke();
-    const bool repainted = doc_.mesh.texture != nullptr;
     Mesh m = doc_.mesh;
-    m.uvs = std::move(job->result->uvs);
+    // A painted texture and its layers move onto the new UVs, in the same undo step (core/TextureTransfer.h).
+    const std::string note = setUvsKeepingTexture(m, std::move(job->result->uvs));
     doc_.replaceMeshUndoable(std::move(m), "Auto UV");
     uvLinesKey_ = 0;
     updateTitle();
     status_ = "Auto UV: " + std::to_string(job->result->charts) + " UV islands" +
-              (repainted ? " (the texture was painted on the old UVs; undo to get them back)"
-                         : hasTexture(doc_.mesh) ? "" : ". Now make a texture: Tool > Texture Map > New Texture");
+              (!note.empty() ? note : hasTexture(doc_.mesh) ? "" : ". Now make a texture: Tool > Texture Map > New Texture");
 }
 
 void App::drawTextureMapContents() {

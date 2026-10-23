@@ -2241,7 +2241,18 @@ public:
 	// If vertices are empty, the boundary vertices are used.
 	void compute(ConstArrayView<Vector2> vertices = ConstArrayView<Vector2>())
 	{
-		XA_DEBUG_ASSERT(!m_boundaryVertices.isEmpty());
+		// SculptForge: a chart without boundary vertices (it happens on dense spheres) used to crash in
+		// convexHull; take the hull of all of its vertices instead.
+		if (m_boundaryVertices.isEmpty()) {
+			for (uint32_t v = 0; v < vertices.length; v++)
+				m_boundaryVertices.push_back(vertices[v]);
+			if (m_boundaryVertices.isEmpty()) {
+				majorAxis = Vector2(1.0f, 0.0f);
+				minorAxis = Vector2(0.0f, 1.0f);
+				minCorner = maxCorner = Vector2(0.0f);
+				return;
+			}
+		}
 		if (vertices.length == 0)
 			vertices = m_boundaryVertices;
 		convexHull(m_boundaryVertices, m_hull, 0.00001f);
@@ -5205,6 +5216,11 @@ struct PlanarCharts
 						continue; // Already in a chart.
 					if (!equal(dot(m_data.faceNormals[face], m_data.faceNormals[oface]), 1.0f, kEpsilon))
 						continue; // Not coplanar.
+					// SculptForge: also coplanar with the region's first face. Comparing neighbours only chains
+					// faces across any dense, smoothly curved surface (a subdivided sphere, a sculpt), which
+					// then became one "planar" chart projected flat onto itself (folded, overlapping UVs).
+					if (!equal(dot(m_data.faceNormals[f], m_data.faceNormals[oface]), 1.0f, kEpsilon))
+						continue;
 					const uint32_t next = m_nextRegionFace[face];
 					m_nextRegionFace[face] = oface;
 					m_nextRegionFace[oface] = next;

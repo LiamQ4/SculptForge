@@ -38,6 +38,7 @@ Both steps are single undo steps (<kbd>Ctrl</kbd>+<kbd>Z</kbd>).
 | **Use Polypaint** | Paint where you want density: red areas get up to four times the quads, blue areas down to a quarter, white areas are unchanged |
 | **Symmetry** | Remesh one half and mirror it, welded on the seam, for exactly symmetric topology. It mirrors across the plane through the origin on the axis chosen in the **Transform** palette (X if none) |
 | **Keep Original** | Keep the SubTool as it was, hidden, below the new one, ready for ProjectAll. Off: the SubTool is replaced, as in ZBrush (undo brings it back) |
+| **Keep Texture** | Shown when the SubTool has a painted texture (on by default): Auto UV the result and project the texture onto it. Off: the texture is dropped |
 
 What happens to your data:
 
@@ -47,8 +48,10 @@ What happens to your data:
 - Sculpt layers are baked into the surface: the result has no layers.
 - Mask and polypaint are interpolated from the closest point of the sculpt (polypaint is blurred to the new
   resolution until you project it back onto a divided copy).
-- Polygroups are kept with **Keep Groups**; otherwise the result is one polygroup. UVs and the texture are
-  dropped: unwrap again with **Tool > Texture Map > Auto UV**.
+- Polygroups are kept with **Keep Groups**; otherwise the result is one polygroup. The old UVs are dropped. A
+  painted texture is kept with **Keep Texture** (on by default): the result gets Auto UVs and the texture, every
+  layer of it, is projected onto them from the old surface, in the same undo step. See
+  [Texture painting](texture-painting.md#uvs-and-geometry).
 - Hidden parts are remeshed too. Very small separate pieces (smaller than a quad or two) can disappear; raise
   the target or QRemesh them separately.
 
@@ -102,7 +105,7 @@ straight along the normal, it takes the closest point within **Dist**.
 
 | Command | Options |
 |---|---|
-| `qremesh` | `target` (16 to 2,000,000, default 5000), `adaptive` (0-1, default 0.5), `keep_groups`, `detect_edges` (default true), `use_polypaint`, `symmetry` (`x`, `y` or `z`), `keep_original`, `smooth` (relaxation passes, default 6), `seed` |
+| `qremesh` | `target` (16 to 2,000,000, default 5000), `adaptive` (0-1, default 0.5), `keep_groups`, `detect_edges` (default true), `use_polypaint`, `symmetry` (`x`, `y` or `z`), `keep_original`, `smooth` (relaxation passes, default 6), `seed`, `keep_texture` (default true) |
 | `project_all` | `distance` (0.001-1, default 0.02), `mean`, `blur` (0-20), `geometry` (default true), `polypaint` (default true), `source` (one SubTool's name instead of all visible ones) |
 
 ```sh

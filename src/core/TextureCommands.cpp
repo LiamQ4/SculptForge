@@ -6,6 +6,7 @@
 #include "core/AutoUv.h"
 #include "core/Polypaint.h"
 #include "core/Texture.h"
+#include "core/TextureTransfer.h"
 #include "core/Undo.h"
 
 #include <algorithm>
@@ -202,10 +203,12 @@ CommandResult textureLayerCommand(Document& doc, const std::string& verb, const 
 void registerTextureCommands(CommandRegistry& reg) {
     reg.add({"uv_auto",
              "Unwrap the active SubTool automatically (xatlas): cuts it into UV islands and packs them into the 0-1 "
-             "square, so it can carry a painted texture. Replaces any existing UVs (undoable). Can take a while on "
-             "millions of triangles.",
+             "square, so it can carry a painted texture. Replaces any existing UVs; a painted texture and its layers "
+             "are moved onto the new UVs (one undo step). Can take a while on millions of triangles.",
              {{"resolution", T::Number, "Texture size the islands are packed for (padding in texels). Default: the "
-                                        "texture's size, or 2048.", false}},
+                                        "texture's size, or 2048.", false},
+              {"keep_texture", T::Bool, "Move a painted texture onto the new UVs. Default true; false leaves the "
+                                        "texels where they are (they no longer line up).", false}},
              [](Document& doc, const Args& a) -> CommandResult {
                  if (doc.mesh.triangleCount() == 0) return {false, "There is no mesh to unwrap"};
                  AutoUvResult result;
@@ -214,12 +217,10 @@ void registerTextureCommands(CommandRegistry& reg) {
                                  : doc.mesh.texture                ? std::max(doc.mesh.texture->width, doc.mesh.texture->height)
                                                                    : kDefaultTextureSize;
                  if (!computeAutoUv(doc.mesh.positions, doc.mesh.triangles, res, result, err)) return {false, err};
-                 const bool repainted = doc.mesh.texture != nullptr;
                  Mesh m = doc.mesh;
-                 m.uvs = std::move(result.uvs);
+                 const std::string note = setUvsKeepingTexture(m, std::move(result.uvs), argBool(a, "keep_texture", true));
                  doc.replaceMeshUndoable(std::move(m), "Auto UV");
-                 return {true, "Auto UV: " + std::to_string(result.charts) + " UV islands" +
-                                   (repainted ? " (the texture was painted on the old UVs; undo to get them back)" : "")};
+                 return {true, "Auto UV: " + std::to_string(result.charts) + " UV islands" + note};
              }});
 
     reg.add({"texture_create",

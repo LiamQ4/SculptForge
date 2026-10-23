@@ -6,6 +6,7 @@
 #include "core/Multires.h"
 #include "core/Polygroups.h"
 #include "core/Primitives.h"
+#include "core/TextureTransfer.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -360,34 +361,44 @@ void registerSubToolCommands(CommandRegistry& reg) {
 
     reg.add({"subtool_merge_down",
              "Merge the active SubTool with the one below it into one mesh (not undoable). Each keeps its own "
-             "polygroups, so subtool_split_groups can separate them again.", {},
-             [](Document& doc, const Args&) -> CommandResult {
+             "polygroups, so subtool_split_groups can separate them again. Painted textures are kept in one new "
+             "texture on new Auto UVs.",
+             {{"keep_texture", T::Bool, "Keep painted textures (Auto UV the result and copy them in). Default true.", false}},
+             [](Document& doc, const Args& a) -> CommandResult {
                  const int i = doc.activeSubtool;
                  if (i + 1 >= doc.subtoolCount()) return {false, "There's no SubTool below " + doc.activeSubtoolInfo().name};
                  Mesh merged = mergeMeshes({&doc.subtoolMesh(i), &doc.subtoolMesh(i + 1)});
+                 const std::string texture = carryMergedTexturesNote({&doc.subtoolMesh(i), &doc.subtoolMesh(i + 1)}, merged,
+                                                                     argBool(a, "keep_texture", true));
                  for (int k : {i, i + 1}) noteSubtoolLevelsDropped(doc, k); // merged at their current levels
                  const std::string name = doc.subtools[size_t(i)].name, below = doc.subtools[size_t(i + 1)].name;
                  doc.removeSubtool(i + 1);
                  doc.replaceActiveMesh(std::move(merged));
-                 return {true, "Merged " + below + " into " + name + " (" + countText(doc.mesh.triangleCount()) + ")"};
+                 return {true, "Merged " + below + " into " + name + " (" + countText(doc.mesh.triangleCount()) + ")" + texture};
              }});
 
     reg.add({"subtool_merge_visible",
              "Merge every visible SubTool into one new SubTool, replacing them (not undoable). Hidden SubTools stay "
-             "as they are.", {},
-             [](Document& doc, const Args&) -> CommandResult {
+             "as they are. Painted textures are kept in one new texture on new Auto UVs.",
+             {{"keep_texture", T::Bool, "Keep painted textures (Auto UV the result and copy them in). Default true.", false}},
+             [](Document& doc, const Args& a) -> CommandResult {
                  std::vector<int> visible;
                  for (int i = 0; i < doc.subtoolCount(); ++i)
                      if (doc.subtools[size_t(i)].visible) visible.push_back(i);
                  if (visible.size() < 2) return {false, "Show at least two SubTools to merge"};
                  Mesh merged = mergedVisibleMesh(doc);
+                 std::vector<const Mesh*> parts; // as mergedVisibleMesh gathers them
+                 for (int i : visible)
+                     if (doc.subtoolMesh(i).triangleCount()) parts.push_back(&doc.subtoolMesh(i));
+                 const std::string texture =
+                     parts.size() > 1 ? carryMergedTexturesNote(parts, merged, argBool(a, "keep_texture", true)) : std::string();
                  for (int k : visible) noteSubtoolLevelsDropped(doc, k); // merged at their current levels
                  const size_t tris = merged.triangleCount();
                  const int at = visible.front();
                  doc.addSubtool(std::move(merged), "Merged", true, at);
                  for (auto it = visible.rbegin(); it != visible.rend(); ++it) doc.removeSubtool(*it + 1);
                  return {true, "Merged " + std::to_string(visible.size()) + " SubTools into " +
-                                   doc.activeSubtoolInfo().name + " (" + countText(tris) + ")"};
+                                   doc.activeSubtoolInfo().name + " (" + countText(tris) + ")" + texture};
              }});
 
     reg.add({"subtool_split_groups", "Split the active SubTool into one SubTool per polygroup (not undoable).", {},

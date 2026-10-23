@@ -96,6 +96,10 @@ matches sculpt layers by name. The merged SubTool starts with an empty undo hist
 [subdivision levels](subdivision-levels.md) is merged (or split) at the level it is on, which becomes the base of
 the result; the status line names the SubTools that lost their levels.
 
+Painted textures are kept too: the merged SubTool gets new Auto UVs and one texture, the size of the largest,
+holding each part's paint exactly (texture layers are flattened; parts without a texture are white). On big
+meshes the Auto UV takes a while. Scripts can skip it with `keep_texture=false`, which drops the textures.
+
 > **Tip:** Merge first when you want one [voxel remesh](geometry.md#voxel-remesh) to fuse several pieces into a
 > single watertight surface.
 

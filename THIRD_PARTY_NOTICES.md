@@ -12,7 +12,7 @@ licenses require.
 | [GLM](https://github.com/g-truc/glm) | 1.0.1 | MIT License (or The Happy Bunny License) | Vector and matrix math. |
 | [stb_image / stb_image_write](https://github.com/nothings/stb) | commit 013ac3be | MIT License or Public Domain (Unlicense), at your choice | Image loading and PNG writing. Vendored in third_party/stb. |
 | [ufbx](https://github.com/ufbx/ufbx) | 0.23.1 (commit 5955c5c) | MIT License or Public Domain (Unlicense), at your choice | FBX import. Vendored in third_party/ufbx. |
-| [xatlas](https://github.com/jpcy/xatlas) | commit f700c77 | MIT License | Automatic UV unwrapping (UV > Auto UV) for texture painting. Vendored in third_party/xatlas. |
+| [xatlas](https://github.com/jpcy/xatlas) | commit f700c77 (two local fixes, see third_party/xatlas/SOURCE.txt) | MIT License | Automatic UV unwrapping (UV > Auto UV) for texture painting. Vendored in third_party/xatlas. |
 | [MikkTSpace](https://github.com/mmikk/MikkTSpace) | commit 3e895b4 | zlib License | Tangent frames for baked tangent-space normal maps (Tool > Bake), matching Blender, Unreal, Unity and Godot. Vendored in third_party/mikktspace. |
 | [Instant Meshes](https://github.com/wjakob/instant-meshes) | formulas only, nothing vendored | BSD 3-Clause License | QRemesh (Tool > Geometry): the field formulas in src/core/QRemesh.cpp (extrinsic 4-RoSy orientation / position compatibility, the middle point of two tangent planes, lattice rounding) follow its reference code. The rest of QRemesh is our own. |
 | [Inter typeface](https://github.com/rsms/inter) | 4.1 | SIL Open Font License 1.1 | User interface font, embedded in the desktop app. Vendored in assets/fonts. |

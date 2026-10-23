@@ -770,7 +770,7 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             const bool idle = !busy(app_.pendingBrush_) && !busy(app_.pendingGenerator_) && !busy(app_.pendingModels_) &&
                               !busy(app_.pendingUnreal_) && !busy(app_.pendingComfyCheck_) && !app_.galleryBusy() &&
                               !app_.thumbs_.busy() && !app_.libraryScanner_.busy() && !app_.autoUv_ &&
-                              !app_.bakeBusy() && !app_.qremesh_;
+                              !app_.bakeBusy() && !app_.qremesh_ && !app_.voxelRemesh_;
             *idleFrames = idle ? *idleFrames + 1 : 0;
             if (*idleFrames >= 4) return true;
             if (idle) return false;
