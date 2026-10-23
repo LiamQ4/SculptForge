@@ -40,6 +40,11 @@ void ThreadPool::workerLoop() {
     uint64_t seen = 0;
     std::unique_lock lock(mutex_);
     for (;;) {
+        // Brush strokes run one job after another: spin a little before sleeping, so the next dab's job
+        // doesn't wait for the thread to wake up.
+        lock.unlock();
+        for (int i = 0; i < 1000 && generation_.load(std::memory_order_relaxed) == seen; ++i) std::this_thread::yield();
+        lock.lock();
         wake_.wait(lock, [&] { return stop_ || generation_ != seen; });
         if (stop_) return;
         seen = generation_;

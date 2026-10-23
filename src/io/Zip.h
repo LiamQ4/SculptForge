@@ -18,10 +18,12 @@ struct ZipEntry {
 
 uint32_t crc32(const uint8_t* data, size_t size);
 
-// Writes entries in order with each file's data aligned to `alignment` bytes.
-bool writeStoredZip(const std::string& path, const std::vector<ZipEntry>& entries, size_t alignment, std::string& error);
+// Writes entries in order with each file's data aligned to `alignment` bytes, streaming them to the file.
+// Entries or archives past 4 GB use ZIP64 records (`forceZip64`: always, for tests).
+bool writeStoredZip(const std::string& path, const std::vector<ZipEntry>& entries, size_t alignment, std::string& error,
+                    bool forceZip64 = false);
 
-// Reads a ZIP whose entries are stored (uncompressed), as USDZ requires.
+// Reads a ZIP (or ZIP64) whose entries are stored (uncompressed), as USDZ requires.
 bool readStoredZip(const std::string& path, std::vector<ZipEntry>& entries, std::string& error);
 
 } // namespace sf

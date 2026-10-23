@@ -6,8 +6,7 @@
 //
 // poolFor() splits [0, n) into fixed-size blocks: which block a thread takes varies, but the blocks
 // themselves, and so any per-block partial results combined in block order, don't depend on the thread
-// count, so results are deterministic. A range of one block runs inline on the calling thread, exactly as
-// a plain loop would.
+// count, so results are deterministic. Small ranges run inline on the calling thread.
 #pragma once
 
 #include <algorithm>
@@ -58,20 +57,21 @@ private:
     std::mutex mutex_;
     std::condition_variable wake_, done_;
     Run* current_ = nullptr;
-    uint64_t generation_ = 0;
+    std::atomic<uint64_t> generation_{0};
     bool stop_ = false;
     std::atomic<bool> serial_{false};
 };
 
 // Calls fn(begin, end) for the blocks [b * block, min(n, (b + 1) * block)) of [0, n) on the shared pool.
-// Each block is one call, so per-block partial results indexed by begin / block are deterministic.
+// Each block is one call, so per-block partial results indexed by begin / block are deterministic. Fewer than
+// `minBlocks` blocks run inline, in order (waking threads would cost more than the work).
 template <class F>
-void poolFor(size_t n, F&& fn, size_t block = 4096) {
+void poolFor(size_t n, F&& fn, size_t block = 4096, size_t minBlocks = 4) {
     if (n == 0) return;
     block = std::max<size_t>(block, 1);
     const size_t blocks = (n + block - 1) / block;
-    if (blocks == 1) {
-        fn(size_t(0), n);
+    if (blocks < std::max<size_t>(minBlocks, 2)) {
+        for (size_t b = 0; b < blocks; ++b) fn(b * block, std::min(n, (b + 1) * block));
         return;
     }
     const std::function<void(size_t)> job = [&](size_t b) { fn(b * block, std::min(n, (b + 1) * block)); };

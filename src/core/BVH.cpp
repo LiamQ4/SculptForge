@@ -54,7 +54,7 @@ void BVH::build(const Mesh& mesh) {
     triIndices_.resize(nt);
     triLeaf_.assign(nt, 0);
     vertStamp_.assign(mesh.vertexCount(), 0);
-    vertStampValue_ = 0;
+    queryEpoch_ = 0;
     if (nt == 0) return;
 
     std::vector<glm::vec3> centroids(nt);
@@ -252,30 +252,101 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
     out.clear();
     if (nodes_.empty()) return;
     const float r2 = radius * radius;
-    const uint32_t s = nextStamp(vertStamp_, vertStampValue_);
+    // vertStamp_ holds (epoch << 16) | code: kDone once a vertex is output in this query; while splitting
+    // over threads, the code of the earliest subtree (in traversal order) holding it, kTaskCode - task.
+    constexpr uint32_t kDone = 0xFFFF, kTaskCode = 0xFFFE;
+    if (++queryEpoch_ == 0x10000) {
+        std::fill(vertStamp_.begin(), vertStamp_.end(), 0);
+        queryEpoch_ = 1;
+    }
+    const uint32_t epoch = queryEpoch_ << 16, done = epoch | kDone;
+    auto inside = [&](uint32_t v) {
+        const glm::vec3 d = mesh.positions[v] - center;
+        return glm::dot(d, d) <= r2;
+    };
 
-    stack_.clear();
-    stack_.push_back(0);
-    while (!stack_.empty()) {
-        const Node& n = nodes_[stack_.back()];
-        stack_.pop_back();
+    // The subtrees the sphere touches at a fixed depth, in the order a depth-first traversal reaches them.
+    constexpr int kTaskDepth = 9;
+    std::vector<uint32_t>& tasks = queryTasks_;
+    tasks.clear();
+    std::vector<std::pair<uint32_t, int>> stack{{0u, 0}};
+    while (!stack.empty()) {
+        const auto [ni, depth] = stack.back();
+        stack.pop_back();
+        const Node& n = nodes_[ni];
         if (!sphereBox(n.box, center, r2)) continue;
-        if (n.count > 0) {
+        if (n.count > 0 || depth == kTaskDepth) {
+            tasks.push_back(ni);
+            continue;
+        }
+        stack.push_back({n.first, depth + 1});
+        stack.push_back({n.first + 1, depth + 1});
+    }
+    // Visits the vertices of the triangles under node `root` that the sphere's boxes touch, depth first.
+    auto walk = [&](uint32_t root, std::vector<uint32_t>& nodeStack, auto&& visit) {
+        nodeStack.assign(1, root);
+        while (!nodeStack.empty()) {
+            const Node& n = nodes_[nodeStack.back()];
+            nodeStack.pop_back();
+            if (!sphereBox(n.box, center, r2)) continue;
+            if (n.count == 0) {
+                nodeStack.push_back(n.first);
+                nodeStack.push_back(n.first + 1);
+                continue;
+            }
             for (uint32_t i = n.first; i < n.first + n.count; ++i) {
                 const auto& t = mesh.triangles[triIndices_[i]];
-                for (int c = 0; c < 3; ++c) {
-                    uint32_t v = t[c];
-                    if (vertStamp_[v] == s) continue;
-                    vertStamp_[v] = s;
-                    glm::vec3 d = mesh.positions[v] - center;
-                    if (glm::dot(d, d) <= r2) out.push_back(v);
-                }
+                visit(t.x);
+                visit(t.y);
+                visit(t.z);
             }
-        } else {
-            stack_.push_back(n.first);
-            stack_.push_back(n.first + 1);
         }
+    };
+
+    if (tasks.size() < 8 || tasks.size() > kTaskCode || ThreadPool::shared().serial()) {
+        for (uint32_t root : tasks)
+            walk(root, stack_, [&](uint32_t v) {
+                if (vertStamp_[v] == done) return;
+                vertStamp_[v] = done;
+                if (inside(v)) out.push_back(v);
+            });
+        return;
     }
+    // In parallel, with the serial order: each subtree lists the vertices inside the sphere and claims them
+    // (the earliest subtree's code wins: an atomic max); then each lists the ones it owns, in the order it
+    // first met them, and the lists are joined in subtree order.
+    if (queryParts_.size() < tasks.size()) queryParts_.resize(tasks.size());
+    poolFor(tasks.size(), [&](size_t b, size_t e) {
+        std::vector<uint32_t> nodeStack;
+        for (size_t k = b; k < e; ++k) {
+            const uint32_t mine = epoch | (kTaskCode - uint32_t(k));
+            std::vector<uint32_t>& found = queryParts_[k];
+            found.clear();
+            walk(tasks[k], nodeStack, [&](uint32_t v) {
+                std::atomic_ref<uint32_t> owner(vertStamp_[v]);
+                if (owner.load(std::memory_order_relaxed) == mine || !inside(v)) return;
+                found.push_back(v);
+                for (uint32_t cur = owner.load(std::memory_order_relaxed);
+                     cur < mine && !owner.compare_exchange_weak(cur, mine, std::memory_order_relaxed);) {
+                }
+            });
+        }
+    }, 1, 2);
+    poolFor(tasks.size(), [&](size_t b, size_t e) {
+        for (size_t k = b; k < e; ++k) {
+            const uint32_t mine = epoch | (kTaskCode - uint32_t(k));
+            std::vector<uint32_t>& found = queryParts_[k];
+            size_t kept = 0;
+            for (uint32_t v : found) {
+                std::atomic_ref<uint32_t> owner(vertStamp_[v]);
+                if (owner.load(std::memory_order_relaxed) != mine) continue;
+                owner.store(done, std::memory_order_relaxed);
+                found[kept++] = v;
+            }
+            found.resize(kept);
+        }
+    }, 1, 2);
+    for (size_t k = 0; k < tasks.size(); ++k) out.insert(out.end(), queryParts_[k].begin(), queryParts_[k].end());
 }
 
 void BVH::refit(const Mesh& mesh, std::span<const uint32_t> movedVerts) {

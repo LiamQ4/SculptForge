@@ -3,7 +3,8 @@
 //
 // Performance work (docs/performance.md): the thread pool, brushes / normals / BVH refits that run on it give
 // the same result as running serially, partial GPU uploads (core/UploadOrder.h) cover every changed vertex, the
-// parallel BVH build answers like the serial one, undo after a big stroke is exact, and the benchmark runs.
+// parallel BVH build answers like the serial one, undo after a big stroke is exact, project archives stream
+// (and use ZIP64 past 4 GB), and the benchmark runs.
 #include "TestHarness.h"
 
 #include "core/Benchmark.h"
@@ -11,6 +12,7 @@
 #include "core/Primitives.h"
 #include "core/ThreadPool.h"
 #include "core/UploadOrder.h"
+#include "io/Zip.h"
 
 #include <atomic>
 #include <cmath>
@@ -295,4 +297,27 @@ TEST(benchmark_smoke) {
     CHECK(report.find("failed") == std::string::npos);
     const Mesh m = makeBenchSphere(50000);
     CHECK(m.triangleCount() > 40000 && m.triangleCount() < 60000);
+}
+
+TEST(zip_round_trip_and_zip64) {
+    // Stored ZIPs stream to disk; ZIP64 records (used past 4 GB) read back the same.
+    std::vector<ZipEntry> entries;
+    entries.push_back({"manifest.json", std::vector<uint8_t>{'{', '}'}});
+    std::vector<uint8_t> big(300001);
+    for (size_t i = 0; i < big.size(); ++i) big[i] = uint8_t(i * 7 + (i >> 9));
+    entries.push_back({"data/big.bin", big});
+    entries.push_back({"empty.bin", {}});
+    CHECK(crc32(reinterpret_cast<const uint8_t*>("123456789"), 9) == 0xCBF43926u); // the standard check value
+    for (bool zip64 : {false, true}) {
+        const std::string path = tempPath(zip64 ? "sf-zip64.zip" : "sf-zip32.zip");
+        std::string error;
+        CHECK(writeStoredZip(path, entries, 64, error, zip64));
+        std::vector<ZipEntry> back;
+        CHECK(readStoredZip(path, back, error));
+        CHECK(back.size() == entries.size());
+        bool same = back.size() == entries.size();
+        for (size_t i = 0; same && i < back.size(); ++i) same = back[i].name == entries[i].name && back[i].data == entries[i].data;
+        CHECK(same);
+        std::filesystem::remove(path);
+    }
 }

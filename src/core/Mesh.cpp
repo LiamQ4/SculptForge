@@ -249,10 +249,10 @@ void Mesh::updateNormals(std::span<const uint32_t> verts) {
     const size_t nv = positions.size();
     if (vertStamp_.size() != nv) return; // no topology
     growDirtyBlocks((nv + kDirtyBlock - 1) / kDirtyBlock);
-    const uint32_t s = nextStamp();
     constexpr size_t kBlock = 4096;
     scratchVerts_.clear();
-    if (verts.size() <= kBlock) {
+    if (verts.size() <= 4 * kBlock || ThreadPool::shared().serial()) {
+        const uint32_t s = nextStamp();
         auto claim = [&](uint32_t u) {
             if (vertStamp_[u] == s) return;
             vertStamp_[u] = s;
@@ -263,22 +263,35 @@ void Mesh::updateNormals(std::span<const uint32_t> verts) {
             for (uint32_t u : neighbors(v)) claim(u);
         }
     } else {
-        // Threads claim vertices with an atomic exchange of the stamp: which part lists a shared neighbour
-        // varies, but the gathered set and every normal computed from it don't.
+        // In parallel: first the moved vertices themselves (stamp `own`), then the ring around them that isn't
+        // one of them (stamp `ring`, claimed with an atomic exchange: only the ring is shared between blocks).
+        // Which block lists a ring vertex varies, but the set, and every normal computed from it, doesn't.
+        if (stamp_ >= 0xFFFFFFF0u) { // two stamps in a row: start over first, so they can't wrap in between
+            std::fill(vertStamp_.begin(), vertStamp_.end(), 0);
+            stamp_ = 0;
+        }
+        const uint32_t own = nextStamp(), ring = nextStamp();
         const size_t parts = (verts.size() + kBlock - 1) / kBlock;
-        if (scratchParts_.size() < parts) scratchParts_.resize(parts);
+        if (scratchParts_.size() < 2 * parts) scratchParts_.resize(2 * parts);
         poolFor(verts.size(), [&](size_t b, size_t e) {
             std::vector<uint32_t>& out = scratchParts_[b / kBlock];
             out.clear();
-            auto claim = [&](uint32_t u) {
-                if (std::atomic_ref<uint32_t>(vertStamp_[u]).exchange(s, std::memory_order_relaxed) != s) out.push_back(u);
-            };
-            for (size_t i = b; i < e; ++i) {
-                claim(verts[i]);
-                for (uint32_t u : neighbors(verts[i])) claim(u);
-            }
+            for (size_t i = b; i < e; ++i)
+                if (std::atomic_ref<uint32_t>(vertStamp_[verts[i]]).exchange(own, std::memory_order_relaxed) != own)
+                    out.push_back(verts[i]);
         }, kBlock);
-        for (size_t p = 0; p < parts; ++p) scratchVerts_.insert(scratchVerts_.end(), scratchParts_[p].begin(), scratchParts_[p].end());
+        poolFor(verts.size(), [&](size_t b, size_t e) {
+            std::vector<uint32_t>& out = scratchParts_[parts + b / kBlock];
+            out.clear();
+            for (size_t i = b; i < e; ++i)
+                for (uint32_t u : neighbors(verts[i])) {
+                    std::atomic_ref<uint32_t> stamp(vertStamp_[u]);
+                    const uint32_t seen = stamp.load(std::memory_order_relaxed);
+                    if (seen == own || seen == ring) continue;
+                    if (stamp.exchange(ring, std::memory_order_relaxed) != ring) out.push_back(u);
+                }
+        }, kBlock);
+        for (size_t p = 0; p < 2 * parts; ++p) scratchVerts_.insert(scratchVerts_.end(), scratchParts_[p].begin(), scratchParts_[p].end());
     }
 
     const size_t n = scratchVerts_.size();
