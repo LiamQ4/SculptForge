@@ -5,6 +5,7 @@
 #include "core/Matcap.h"
 #include "core/Texture.h"
 #include "core/ThreadPool.h"
+#include "core/UploadOrder.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -217,7 +218,7 @@ void main() {
     float spec = pow(max(dot(n, h), 0.0), 40.0) * 0.18;
     float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.3;
     float facing = smoothstep(-0.2, 0.6, dot(n, v));
-    // vCurvature > 0 in creases, < 0 on ridges (see Renderer::updateCurvature).
+    // vCurvature > 0 in creases, < 0 on ridges (see curvatureAt in Renderer.cpp).
     float crease = smoothstep(0.0, 0.16, vCurvature);
     float ridge = smoothstep(0.0, 0.2, -vCurvature);
     float cavity = 1.0 - 0.62 * crease;
@@ -587,32 +588,57 @@ void Renderer::drawSplats(const glm::mat4& view, const glm::mat4& proj, int fbWi
     gl::BindTexture(GL_TEXTURE_BUFFER, 0);
 }
 
-// Signed curvature per vertex: how far the neighbour average sits above (crease, > 0) or below
-// (ridge, < 0) the surface, relative to the local edge length.
-void Renderer::updateCurvature(MeshSlot& s, const Mesh& mesh, uint32_t begin, uint32_t end) {
-    s.curvature.resize(mesh.vertexCount(), 0.0f);
-    end = std::min(end, uint32_t(mesh.vertexCount()));
-    if (begin >= end) return;
-    poolFor(end - begin, [&](size_t b, size_t e) {
-    for (uint32_t v = begin + uint32_t(b); v < begin + uint32_t(e); ++v) {
-        const auto ring = mesh.neighbors(v);
-        if (ring.empty()) {
-            s.curvature[v] = 0.0f;
-            continue;
-        }
-        glm::vec3 avg(0.0f);
-        float edge = 0.0f;
-        const glm::vec3 p = mesh.positions[v];
-        for (uint32_t n : ring) {
-            avg += mesh.positions[n];
-            edge += glm::distance(mesh.positions[n], p);
-        }
-        avg /= float(ring.size());
-        edge /= float(ring.size());
-        s.curvature[v] = edge > 0.0f ? glm::dot(mesh.normals[v], avg - p) / edge : 0.0f;
+namespace {
+
+// Signed curvature at vertex `v`: how far the neighbour average sits above (crease, > 0) or below (ridge, < 0)
+// the surface, relative to the local edge length.
+float curvatureAt(const Mesh& mesh, uint32_t v) {
+    const auto ring = mesh.neighbors(v);
+    if (ring.empty()) return 0.0f;
+    glm::vec3 avg(0.0f);
+    float edge = 0.0f;
+    const glm::vec3 p = mesh.positions[v];
+    for (uint32_t n : ring) {
+        avg += mesh.positions[n];
+        edge += glm::distance(mesh.positions[n], p);
     }
-    }, 1 << 14);
+    avg /= float(ring.size());
+    edge /= float(ring.size());
+    return edge > 0.0f ? glm::dot(mesh.normals[v], avg - p) / edge : 0.0f;
 }
+
+using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
+
+// Uploads the GPU index ranges `runs` of one vertex array (bound to GL_ARRAY_BUFFER first; `allocate` sizes it
+// to `count` elements): fill(begin, end, dst) writes those elements, in GPU order, to dst. Big ranges go in
+// chunks through `staging`, so a full upload never copies the whole array.
+template <class Fill>
+void uploadGathered(std::vector<uint8_t>& staging, GLuint buffer, size_t elementSize, size_t count, bool allocate,
+                    const Runs& runs, const Fill& fill) {
+    constexpr uint32_t kChunk = 1u << 18;
+    gl::BindBuffer(GL_ARRAY_BUFFER, buffer);
+    if (allocate) gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(count * elementSize), nullptr, GL_DYNAMIC_DRAW);
+    for (const auto& [b, e] : runs)
+        for (uint32_t c = b; c < e; c += kChunk) {
+            const uint32_t ce = std::min(e, c + kChunk);
+            staging.resize(size_t(ce - c) * elementSize);
+            fill(c, ce, staging.data());
+            gl::BufferSubData(GL_ARRAY_BUFFER, GLintptr(size_t(c) * elementSize), GLsizeiptr(staging.size()), staging.data());
+        }
+}
+
+// fill() for uploadGathered: copies src[order[i]] in parallel.
+template <class T>
+auto gatherFrom(const T* src, std::span<const uint32_t> order) {
+    return [src, order](uint32_t b, uint32_t e, void* dst) {
+        T* out = static_cast<T*>(dst);
+        poolFor(e - b, [&](size_t i0, size_t i1) {
+            for (size_t i = i0; i < i1; ++i) out[i] = src[order[b + i]];
+        }, 1 << 14);
+    };
+}
+
+} // namespace
 
 // Index buffer without hidden triangles, plus the polygroup id of every drawn
 // triangle in draw order (looked up by gl_PrimitiveID). Meshes with quads
@@ -622,18 +648,17 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs) {
     const size_t nt = mesh.triangleCount();
     const bool hidden = mesh.hidden.size() == nt && nt > 0;
     const bool groups = mesh.polygroups.size() == nt && nt > 0;
-    const glm::uvec3* tris = mesh.triangles.data();
+    // Indices are remapped to the slot's vertex order (core/UploadOrder.h) and uploaded in chunks.
+    auto gpu = [&](const glm::uvec3& t) { return glm::uvec3(s.order.toGpu(t.x), s.order.toGpu(t.y), s.order.toGpu(t.z)); };
     size_t drawn = nt;
     visibleGroups_.clear();
     if (hidden) {
-        visibleTris_.clear();
+        drawn = 0;
         for (size_t t = 0; t < nt; ++t) {
             if (mesh.hidden[t]) continue;
-            visibleTris_.push_back(mesh.triangles[t]);
+            ++drawn;
             if (groups) visibleGroups_.push_back(mesh.polygroups[t]);
         }
-        tris = visibleTris_.data();
-        drawn = visibleTris_.size();
     } else if (groups) {
         visibleGroups_ = mesh.polygroups;
     }
@@ -644,19 +669,35 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs) {
             // The diagonal stays visible where the other half of the quad is hidden (it is the visible edge).
             const uint32_t u = mesh.quadPartnerAt(t);
             const int diagonal = u != Mesh::kNoQuad && !mesh.triangleHidden(u) ? mesh.quadDiagonal(t, u) : -1;
-            const glm::uvec3& tri = mesh.triangles[t];
+            const glm::uvec3 tri = gpu(mesh.triangles[t]);
             for (int e = 0; e < 3; ++e)
                 if (e != diagonal) wireLines_.insert(wireLines_.end(), {tri[e], tri[(e + 1) % 3]});
         }
     }
     const GLsizeiptr triBytes = GLsizeiptr(drawn * sizeof(glm::uvec3));
     gl::BindVertexArray(s.vao);
-    gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, triBytes + GLsizeiptr(wireLines_.size() * sizeof(uint32_t)),
-                   wireLines_.empty() ? tris : nullptr, GL_STATIC_DRAW);
-    if (!wireLines_.empty()) {
-        gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, triBytes, tris);
-        gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, triBytes, GLsizeiptr(wireLines_.size() * sizeof(uint32_t)), wireLines_.data());
+    gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, triBytes + GLsizeiptr(wireLines_.size() * sizeof(uint32_t)), nullptr, GL_STATIC_DRAW);
+    constexpr size_t kChunk = size_t(1) << 18;
+    size_t written = 0;
+    for (size_t t0 = 0; t0 < nt; t0 += kChunk) {
+        const size_t t1 = std::min(nt, t0 + kChunk);
+        visibleTris_.clear();
+        if (hidden) {
+            for (size_t t = t0; t < t1; ++t)
+                if (!mesh.hidden[t]) visibleTris_.push_back(gpu(mesh.triangles[t]));
+        } else {
+            visibleTris_.resize(t1 - t0);
+            poolFor(t1 - t0, [&](size_t b, size_t e) {
+                for (size_t i = b; i < e; ++i) visibleTris_[i] = gpu(mesh.triangles[t0 + i]);
+            }, 1 << 14);
+        }
+        if (visibleTris_.empty()) continue;
+        gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(written * sizeof(glm::uvec3)),
+                          GLsizeiptr(visibleTris_.size() * sizeof(glm::uvec3)), visibleTris_.data());
+        written += visibleTris_.size();
     }
+    if (!wireLines_.empty())
+        gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, triBytes, GLsizeiptr(wireLines_.size() * sizeof(uint32_t)), wireLines_.data());
     gl::BindVertexArray(0);
     s.indexCount = GLsizei(drawn * 3);
     s.lineCount = GLsizei(wireLines_.size());
@@ -730,39 +771,43 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap) {
         normalMap = nullptr; // made for another mesh
     const bool wantUvs = hasTexture(mesh) || normalMap;
     const bool full = s.fresh || mesh.topologyDirty || nv != s.vertexCapacity;
-    // Partial updates upload only the dirty blocks (Mesh::dirtyRuns): a dab with symmetry on a subdivided
-    // mesh touches a few small, far-apart index ranges, and one range spanning them all could be most of it.
-    if (!full) mesh.dirtyRuns(dirtyRuns_);
-    const bool ranged = !full && !dirtyRuns_.empty();
+    // The GPU keeps the vertices in the slot's upload order (core/UploadOrder.h), so a dab re-sends a few short
+    // ranges holding what it changed, gathered from the mesh arrays.
     if (full) {
-        updateCurvature(s, mesh, 0, uint32_t(nv));
-        gl::BindBuffer(GL_ARRAY_BUFFER, s.posBuffer);
-        gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(glm::vec3)), mesh.positions.data(), GL_DYNAMIC_DRAW);
-        gl::BindBuffer(GL_ARRAY_BUFFER, s.nrmBuffer);
-        gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(glm::vec3)), mesh.normals.data(), GL_DYNAMIC_DRAW);
-        gl::BindBuffer(GL_ARRAY_BUFFER, s.curvBuffer);
-        gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(float)), s.curvature.data(), GL_DYNAMIC_DRAW);
+        s.order.build(mesh);
+        dirtyRuns_.assign(1, {0u, uint32_t(nv)});
+    } else {
+        s.order.dirtyRuns(mesh, dirtyRuns_);
+    }
+    const bool ranged = !full && !dirtyRuns_.empty();
+    const std::span<const uint32_t> order = s.order.fromGpu();
+    if (full || ranged) {
+        uploadGathered(staging_, s.posBuffer, sizeof(glm::vec3), nv, full, dirtyRuns_, gatherFrom(mesh.positions.data(), order));
+        uploadGathered(staging_, s.nrmBuffer, sizeof(glm::vec3), nv, full, dirtyRuns_, gatherFrom(mesh.normals.data(), order));
+        uploadGathered(staging_, s.curvBuffer, sizeof(float), nv, full, dirtyRuns_, [&](uint32_t b, uint32_t e, void* dst) {
+            float* out = static_cast<float*>(dst);
+            poolFor(e - b, [&](size_t i0, size_t i1) {
+                for (size_t i = i0; i < i1; ++i) out[i] = curvatureAt(mesh, order[b + i]);
+            }, 1 << 12);
+        });
+    }
+    if (full) {
         uploadFaces(s, mesh, wantUvs);
         s.vertexCapacity = nv;
-    } else if (ranged) {
-        for (const auto& [b, e] : dirtyRuns_) updateCurvature(s, mesh, b, e);
-        uploadRuns(s.posBuffer, mesh.positions.data(), sizeof(glm::vec3));
-        uploadRuns(s.nrmBuffer, mesh.normals.data(), sizeof(glm::vec3));
-        uploadRuns(s.curvBuffer, s.curvature.data(), sizeof(float));
     }
     if (!full && (mesh.facesDirty || wantUvs != s.hasUvs)) uploadFaces(s, mesh, wantUvs);
     syncTexture(s, mesh);
     syncNormalMap(s, mesh, normalMap);
 
     // Optional per-vertex attributes: a full upload when they appear (or the
-    // mesh changed), the dirty range otherwise, and a disabled array when absent.
-    auto syncAttribute = [&](GLuint buffer, GLuint location, bool& uploaded, const void* data, size_t elementSize,
-                             bool present) {
+    // mesh changed), the dirty runs otherwise, and a disabled array when absent.
+    const Runs everything{{0u, uint32_t(nv)}};
+    auto syncAttribute = [&](GLuint buffer, GLuint location, bool& uploaded, auto gather, size_t elementSize, bool present) {
         gl::BindBuffer(GL_ARRAY_BUFFER, buffer);
         if (present && (full || !uploaded)) {
-            gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * elementSize), data, GL_DYNAMIC_DRAW);
+            uploadGathered(staging_, buffer, elementSize, nv, true, everything, gather);
         } else if (present && ranged) {
-            uploadRuns(buffer, data, elementSize);
+            uploadGathered(staging_, buffer, elementSize, nv, false, dirtyRuns_, gather);
         } else if (!present && uploaded) {
             gl::BufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
         }
@@ -774,19 +819,14 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap) {
         }
         uploaded = present;
     };
-    syncAttribute(s.colorBuffer, 3, s.hasColors, mesh.colors.data(), sizeof(glm::vec3), nv > 0 && mesh.colors.size() == nv);
-    syncAttribute(s.maskBuffer, 4, s.hasMask, mesh.mask.data(), sizeof(float), nv > 0 && mesh.mask.size() == nv);
+    syncAttribute(s.colorBuffer, 3, s.hasColors, gatherFrom(mesh.colors.data(), order), sizeof(glm::vec3),
+                  nv > 0 && mesh.colors.size() == nv);
+    syncAttribute(s.maskBuffer, 4, s.hasMask, gatherFrom(mesh.mask.data(), order), sizeof(float), nv > 0 && mesh.mask.size() == nv);
+    // Scratch only: don't keep a big upload's staging copy around.
+    if (staging_.capacity() > (size_t(1) << 22)) std::vector<uint8_t>().swap(staging_);
     gl::BindBuffer(GL_ARRAY_BUFFER, 0);
     s.fresh = false;
     mesh.clearDirty();
-}
-
-// Uploads the vertex ranges in dirtyRuns_ of a per-vertex array to `buffer` (bound as GL_ARRAY_BUFFER).
-void Renderer::uploadRuns(GLuint buffer, const void* data, size_t elementSize) {
-    gl::BindBuffer(GL_ARRAY_BUFFER, buffer);
-    for (const auto& [b, e] : dirtyRuns_)
-        gl::BufferSubData(GL_ARRAY_BUFFER, GLintptr(size_t(b) * elementSize), GLsizeiptr(size_t(e - b) * elementSize),
-                          static_cast<const uint8_t*>(data) + size_t(b) * elementSize);
 }
 
 // The painted texture (core/Texture.h): a full upload when it is new or replaced, then only the rectangle

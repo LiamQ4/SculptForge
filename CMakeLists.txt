@@ -28,6 +28,7 @@ add_library(sculptforge_core STATIC
   src/core/Mesh.cpp
   src/core/BVH.cpp
   src/core/ThreadPool.cpp
+  src/core/UploadOrder.cpp
   src/core/Benchmark.cpp
   src/core/Sculpt.cpp
   src/core/Undo.cpp

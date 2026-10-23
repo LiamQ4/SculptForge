@@ -9,6 +9,7 @@
 #include "core/Primitives.h"
 #include "core/Project.h"
 #include "core/ThreadPool.h"
+#include "core/UploadOrder.h"
 
 #include <algorithm>
 #include <chrono>
@@ -67,12 +68,12 @@ struct BenchBrush {
 
 struct StrokeStats {
     int dabs = 0;
-    double verts = 0, kernel = 0, normals = 0, bvh = 0, pick = 0, upload = 0, total = 0;
+    double verts = 0, uploaded = 0, runs = 0, kernel = 0, normals = 0, bvh = 0, pick = 0, upload = 0, total = 0;
     double endStroke = 0, undo = 0, redo = 0;
     size_t undoBytes = 0;
 };
 
-StrokeStats runStroke(Document& doc, const BenchBrush& b, int dabs, const BenchGpu* gpu) {
+StrokeStats runStroke(Document& doc, const BenchBrush& b, int dabs, const BenchGpu* gpu, UploadOrder& order) {
     StrokeStats st;
     Mesh& m = doc.mesh;
     Sculptor& sc = doc.sculptor;
@@ -88,6 +89,8 @@ StrokeStats runStroke(Document& doc, const BenchBrush& b, int dabs, const BenchG
     // Dabs 0.15 radius apart (the app's spacing) along a line across the front of the sphere.
     const float step = 0.15f * b.radius;
     glm::vec3 last(0.0f);
+    std::vector<std::pair<uint32_t, uint32_t>> runs;
+    m.clearDirty();
     const auto stroke0 = Clock::now();
     for (int i = 0; i < dabs; ++i) {
         const float x = 0.15f + std::fmod(float(i) * step, 0.6f), y = 0.2f + 0.1f * std::sin(float(i) * 0.3f);
@@ -115,7 +118,12 @@ StrokeStats runStroke(Document& doc, const BenchBrush& b, int dabs, const BenchG
         case Kind::Mask: sc.dabMask(m, doc.bvh, p, sym); break;
         case Kind::Paint: paintDab(sc, m, doc.bvh, p, glm::vec3(0.6f, 0.1f, 0.1f), sym); break;
         }
+        // What a partial upload of this dab sends (as the renderer finds it), then the upload itself.
+        order.dirtyRuns(m, runs);
+        for (const auto& [b, e] : runs) st.uploaded += double(e - b);
+        st.runs += double(runs.size());
         if (gpu && gpu->upload) st.upload += gpu->upload(m);
+        else m.clearDirty();
         ++st.dabs;
     }
     st.total = msSince(stroke0);
@@ -123,6 +131,8 @@ StrokeStats runStroke(Document& doc, const BenchBrush& b, int dabs, const BenchG
     st.normals = sc.timings.normalsMs;
     st.bvh = sc.timings.bvhMs;
     st.verts = double(sc.timings.vertices) / double(std::max(st.dabs, 1)); // per step (both mirrors)
+    st.uploaded /= double(std::max(st.dabs, 1));
+    st.runs /= double(std::max(st.dabs, 1));
 
     auto t = Clock::now();
     UndoRecord r = sc.endStroke();
@@ -241,6 +251,8 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         if (gpu && gpu->upload) uploadAll = gpu->upload(m);
         const size_t meshBytes = m.memoryBytes(), bvhBytes = doc.bvh.memoryBytes(), stackBytes = subdivBytes(m);
         const size_t rss = residentBytes();
+        UploadOrder order;
+        order.build(m);
 
         md << "### " << millions(nt) << " triangles (" << millions(nv) << " vertices, "
            << subdivLevelCount(m) << " subdivision levels)\n\n";
@@ -257,14 +269,15 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         if (rss) md << "| Process memory (RSS) | " << fmt("%.0f MB", double(rss) / 1e6) << " (+" << fmt("%.0f", double(rss - std::min(rss, rss0)) / 1e6) << " MB) |\n";
         md << "\n";
 
-        md << "| Brush | verts/dab | kernel | normals | BVH refit | pick | " << (gpu ? "GPU upload | " : "")
+        md << "| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | " << (gpu ? "GPU upload | " : "")
            << "**dab total** | stroke end (undo record) | undo | redo | undo step |\n";
-        md << "|---|---:|---:|---:|---:|---:|" << (gpu ? "---:|" : "") << "---:|---:|---:|---:|---:|\n";
+        md << "|---|---:|---:|---:|---:|---:|---:|" << (gpu ? "---:|" : "") << "---:|---:|---:|---:|---:|\n";
         for (const BenchBrush& b : brushes) {
             log("  " + b.name);
-            const StrokeStats s = runStroke(doc, b, o.dabsPerStroke, gpu);
+            const StrokeStats s = runStroke(doc, b, o.dabsPerStroke, gpu, order);
             const double d = std::max(s.dabs, 1);
-            md << "| " << b.name << " | " << millions(s.verts) << " | " << fmt("%.2f", s.kernel / d) << " | "
+            md << "| " << b.name << " | " << millions(s.verts) << " | " << millions(s.uploaded) << " (" << fmt("%.0f", s.runs)
+               << ") | " << fmt("%.2f", s.kernel / d) << " | "
                << fmt("%.2f", s.normals / d) << " | " << fmt("%.2f", s.bvh / d) << " | " << fmt("%.2f", s.pick / d) << " | ";
             if (gpu) md << fmt("%.2f", s.upload / d) << " | ";
             md << "**" << fmt("%.2f", s.total / d) << "** | " << fmt("%.2f", s.endStroke) << " | " << fmt("%.1f", s.undo)

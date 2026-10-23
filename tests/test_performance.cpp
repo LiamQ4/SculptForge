@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Performance work (docs/performance.md): the thread pool, brushes / normals / BVH refits that run on it give
-// the same result as running serially, partial GPU uploads (Mesh::dirtyRuns) cover every changed vertex, the
+// the same result as running serially, partial GPU uploads (core/UploadOrder.h) cover every changed vertex, the
 // parallel BVH build answers like the serial one, undo after a big stroke is exact, and the benchmark runs.
 #include "TestHarness.h"
 
@@ -10,6 +10,7 @@
 #include "core/BrushRecipe.h"
 #include "core/Primitives.h"
 #include "core/ThreadPool.h"
+#include "core/UploadOrder.h"
 
 #include <atomic>
 #include <cmath>
@@ -142,55 +143,70 @@ TEST(parallel_normals_match_full_recompute) {
     CHECK(worst < 1e-5f);
 }
 
-TEST(dirty_runs_cover_changed_vertices) {
-    Mesh m = makeIcosphere(6);
-    m.clearDirty();
-    std::vector<std::pair<uint32_t, uint32_t>> runs;
-    m.dirtyRuns(runs);
-    CHECK(runs.empty());
-    // Two far-apart vertices: two short runs, not one span over the mesh between them.
-    const uint32_t a = 10, b = uint32_t(m.vertexCount()) - 10;
-    m.markDirty(a);
-    m.markDirty(b);
-    m.dirtyRuns(runs);
-    CHECK(runs.size() == 2);
-    size_t covered = 0;
-    for (const auto& [lo, hi] : runs) {
-        CHECK(lo < hi && hi <= m.vertexCount());
-        covered += hi - lo;
-    }
-    CHECK(covered <= 2 * Mesh::kDirtyBlock);
-    CHECK(runs.front().first <= a && a < runs.front().second);
-    CHECK(runs.back().first <= b && b < runs.back().second);
-    // A brush dab: every vertex whose normal changed is inside a run.
-    m.clearDirty();
+TEST(upload_runs_cover_changed_vertices) {
+    // A subdivided mesh, whose vertex numbering scatters any region over the index range.
+    Mesh m = makeBenchSphere(200000);
     BVH bvh;
     bvh.build(m);
+    UploadOrder order;
+    order.build(m);
+    // A permutation: every vertex once.
+    std::vector<uint8_t> seen(m.vertexCount(), 0);
+    bool perm = order.size() == m.vertexCount();
+    for (uint32_t i = 0; perm && i < order.size(); ++i) {
+        const uint32_t v = order.fromGpu()[i];
+        perm = v < m.vertexCount() && !seen[v] && order.toGpu(v) == i;
+        seen[v] = 1;
+    }
+    CHECK(perm);
+
+    m.clearDirty();
+    std::vector<std::pair<uint32_t, uint32_t>> runs;
+    order.dirtyRuns(m, runs);
+    CHECK(runs.empty());
+    CHECK(!m.vertexDirty(0));
+    // A brush dab with symmetry: every vertex whose normal changed is in a run, and the runs hold not much
+    // more than the dab touched.
     Sculptor s;
     s.beginStroke(m, "Standard");
     const std::vector<glm::vec3> before = m.normals;
     DabParams p;
     p.center = glm::normalize(glm::vec3(0.5f, 0.5f, 0.7f));
-    p.radius = 0.3f;
+    p.radius = 0.2f;
     s.dab(m, bvh, BrushType::Standard, p, Symmetry{});
-    m.dirtyRuns(runs);
+    order.dirtyRuns(m, runs);
     std::vector<uint8_t> inRun(m.vertexCount(), 0);
-    for (const auto& [lo, hi] : runs)
-        for (uint32_t v = lo; v < hi; ++v) inRun[v] = 1;
+    size_t uploaded = 0;
+    for (size_t i = 0; i < runs.size(); ++i) {
+        CHECK(runs[i].first < runs[i].second && runs[i].second <= m.vertexCount());
+        if (i) CHECK(runs[i - 1].second < runs[i].first);
+        uploaded += runs[i].second - runs[i].first;
+        for (uint32_t g = runs[i].first; g < runs[i].second; ++g) inRun[order.fromGpu()[g]] = 1;
+    }
     bool allCovered = true;
-    size_t changed = 0;
-    for (uint32_t v = 0; v < m.vertexCount(); ++v)
+    size_t changed = 0, dirty = 0;
+    for (uint32_t v = 0; v < m.vertexCount(); ++v) {
+        dirty += m.vertexDirty(v);
         if (m.normals[v] != before[v]) {
             ++changed;
-            allCovered = allCovered && inRun[v];
+            allCovered = allCovered && inRun[v] && m.vertexDirty(v);
         }
+    }
     CHECK(changed > 1000);
     CHECK(allCovered);
+    // In mesh order, the 2048-vertex blocks holding them would be several times more.
+    size_t meshOrder = 0;
+    for (size_t b = 0; b < m.dirtyBlocks.size(); ++b) meshOrder += m.dirtyBlocks[b] ? Mesh::kDirtyBlock : 0;
+    CHECK(uploaded * 3 < meshOrder);
     m.clearDirty();
-    m.dirtyRuns(runs);
+    order.dirtyRuns(m, runs);
     CHECK(runs.empty());
+    CHECK(!m.vertexDirty(order.fromGpu()[0]));
+    // Ranges mark per vertex too; most of the mesh dirty uploads everything as one range.
+    m.markDirtyRange(70, 200);
+    CHECK(!m.vertexDirty(69) && m.vertexDirty(70) && m.vertexDirty(199) && !m.vertexDirty(200));
     m.markAllDirty();
-    m.dirtyRuns(runs);
+    order.dirtyRuns(m, runs);
     CHECK(runs.size() == 1 && runs[0].first == 0 && runs[0].second == m.vertexCount());
 }
 

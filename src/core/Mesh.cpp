@@ -169,6 +169,7 @@ void Mesh::rebuildTopology() {
     stamp_ = 0;
     normals.resize(nv);
     dirtyBlocks.assign((nv + kDirtyBlock - 1) / kDirtyBlock, 0);
+    dirtyBits.assign(dirtyBlocks.size() * (kDirtyBlock / 64), 0);
     if (dirtyBegin < dirtyEnd) markDirtyRange(dirtyBegin, std::min(dirtyEnd, uint32_t(nv)));
     topologyDirty = true;
     facesDirty = true;
@@ -182,8 +183,9 @@ uint32_t Mesh::nextStamp() {
     return stamp_;
 }
 
-void Mesh::growDirtyBlocks(size_t count) {
-    if (dirtyBlocks.size() < count) dirtyBlocks.resize(count, 0);
+void Mesh::growDirtyBlocks(size_t blocks) {
+    if (dirtyBlocks.size() < blocks) dirtyBlocks.resize(blocks, 0);
+    if (dirtyBits.size() < blocks * (kDirtyBlock / 64)) dirtyBits.resize(blocks * (kDirtyBlock / 64), 0);
 }
 
 void Mesh::markDirtyRange(uint32_t begin, uint32_t end) {
@@ -193,31 +195,32 @@ void Mesh::markDirtyRange(uint32_t begin, uint32_t end) {
     const size_t last = (end - 1) >> kDirtyBlockShift;
     growDirtyBlocks(last + 1);
     std::fill(dirtyBlocks.begin() + (begin >> kDirtyBlockShift), dirtyBlocks.begin() + last + 1, uint8_t(1));
+    // Bits: the partial words at both ends, whole words between.
+    const size_t w0 = begin >> 6, w1 = (end - 1) >> 6;
+    const uint64_t head = ~uint64_t(0) << (begin & 63), tail = ~uint64_t(0) >> (63 - ((end - 1) & 63));
+    if (w0 == w1) {
+        dirtyBits[w0] |= head & tail;
+        return;
+    }
+    dirtyBits[w0] |= head;
+    std::fill(dirtyBits.begin() + w0 + 1, dirtyBits.begin() + w1, ~uint64_t(0));
+    dirtyBits[w1] |= tail;
 }
 
 void Mesh::clearDirty() {
     if (dirtyBegin < dirtyEnd) {
+        constexpr size_t kWords = kDirtyBlock / 64;
         const size_t b = dirtyBegin >> kDirtyBlockShift, e = std::min(dirtyBlocks.size(), size_t((dirtyEnd - 1) >> kDirtyBlockShift) + 1);
-        if (b < e) std::fill(dirtyBlocks.begin() + b, dirtyBlocks.begin() + e, uint8_t(0));
+        for (size_t i = b; i < e; ++i) {
+            if (!dirtyBlocks[i]) continue;
+            dirtyBlocks[i] = 0;
+            std::fill(dirtyBits.begin() + std::ptrdiff_t(i * kWords), dirtyBits.begin() + std::ptrdiff_t((i + 1) * kWords), 0);
+        }
     }
     dirtyBegin = std::numeric_limits<uint32_t>::max();
     dirtyEnd = 0;
     topologyDirty = false;
     facesDirty = false;
-}
-
-void Mesh::dirtyRuns(std::vector<std::pair<uint32_t, uint32_t>>& out, uint32_t mergeGap) const {
-    out.clear();
-    const uint32_t end = std::min(dirtyEnd, uint32_t(positions.size()));
-    if (dirtyBegin >= end) return;
-    const size_t lastBlock = std::min(dirtyBlocks.size(), size_t((end - 1) >> kDirtyBlockShift) + 1);
-    for (size_t b = dirtyBegin >> kDirtyBlockShift; b < lastBlock; ++b) {
-        if (!dirtyBlocks[b]) continue;
-        const uint32_t lo = std::max(dirtyBegin, uint32_t(b << kDirtyBlockShift));
-        const uint32_t hi = std::min(end, uint32_t((b + 1) << kDirtyBlockShift));
-        if (!out.empty() && lo - out.back().second <= mergeGap) out.back().second = hi;
-        else out.emplace_back(lo, hi);
-    }
 }
 
 void Mesh::recomputeAllNormals() {
@@ -291,6 +294,7 @@ void Mesh::updateNormals(std::span<const uint32_t> verts) {
             lo = std::min(lo, v);
             hi = std::max(hi, v);
             std::atomic_ref<uint8_t>(dirtyBlocks[v >> kDirtyBlockShift]).store(1, std::memory_order_relaxed);
+            std::atomic_ref<uint64_t>(dirtyBits[v >> 6]).fetch_or(uint64_t(1) << (v & 63), std::memory_order_relaxed);
         }
         bounds[b / kBlock] = {lo, hi + 1};
     }, kBlock);
@@ -364,7 +368,7 @@ size_t Mesh::memoryBytes() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(v[0]); };
     size_t n = bytes(positions) + bytes(normals) + bytes(triangles) + bytes(mask) + bytes(colors) + bytes(polygroups) +
                bytes(hidden) + bytes(uvs) + bytes(quadPartners) + bytes(base) + bytes(paintBase) + bytes(adjOffsets_) +
-               bytes(adjList_) + bytes(vtOffsets_) + bytes(vtList_) + bytes(vertStamp_) + bytes(scratchVerts_) + bytes(dirtyBlocks);
+               bytes(adjList_) + bytes(vtOffsets_) + bytes(vtList_) + bytes(vertStamp_) + bytes(scratchVerts_) + bytes(dirtyBlocks) + bytes(dirtyBits);
     for (const auto& l : layers) n += bytes(l.delta);
     for (const auto& l : paintLayers) n += bytes(l.color) + bytes(l.alpha);
     return n;

@@ -4,6 +4,7 @@
 
 #include "core/Mesh.h"
 #include "core/Splats.h"
+#include "core/UploadOrder.h"
 #include "render/Camera.h"
 #include "render/GL.h"
 
@@ -127,7 +128,7 @@ private:
         bool hasTangents = false, tangentsStale = true, normalFlipGreen = false;
         bool hasColors = false, hasMask = false, hasGroups = false, hasUvs = false;
         bool fresh = true; // nothing uploaded yet
-        std::vector<float> curvature;
+        UploadOrder order; // the vertices' order in the GPU buffers
         GLsizei indexCount = 0;
         GLsizei lineCount = 0; // wireframe edge indices after the triangles (meshes with quads; 0 = draw triangles)
         size_t vertexCapacity = 0;
@@ -136,10 +137,9 @@ private:
     static void freeSlot(MeshSlot& s);
     void sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap = nullptr);
     void syncNormalMap(MeshSlot& s, const Mesh& mesh, const NormalMapView* normalMap);
-    static void updateCurvature(MeshSlot& s, const Mesh& mesh, uint32_t begin, uint32_t end);
     void uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs);
-    void uploadRuns(GLuint buffer, const void* data, size_t elementSize);
-    std::vector<std::pair<uint32_t, uint32_t>> dirtyRuns_; // scratch for sync: Mesh::dirtyRuns
+    std::vector<std::pair<uint32_t, uint32_t>> dirtyRuns_; // scratch for sync: UploadOrder::dirtyRuns
+    std::vector<uint8_t> staging_;                         // scratch for sync: gathered vertex data
     void syncTexture(MeshSlot& s, Mesh& mesh);
     void drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings);
     std::vector<MeshSlot> slots_;
