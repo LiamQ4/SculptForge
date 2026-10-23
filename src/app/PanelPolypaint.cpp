@@ -18,11 +18,13 @@ namespace sf {
 
 void App::registerPaintUiCommands() {
     // A view setting, so it lives with the app (scripts: --script "set_material name=Chrome").
-    std::string names = "studio";
-    for (int i = 0; i < matcapCount(); ++i) names += std::string(", ") + matcapName(i);
+    std::string names;
+    for (int i = 0; i < matcapCount(); ++i) names += std::string(matcapName(i)) + ", ";
+    names += "studio";
     commands_.add({"set_material",
-                   "Viewport material: studio (default clay lighting) or a built-in MatCap. Polypaint multiplies "
-                   "the matcap; cavity shading stays on.",
+                   "Viewport material: a built-in MatCap (Sculpt, the default, is made for reading strokes) or "
+                   "studio (soft clay lighting in the Base colour). Polypaint multiplies the matcap; cavity "
+                   "shading stays on.",
                    {{"name", ParamSpec::Type::String, "One of: " + names + ".", true}},
                    [this, names](Document&, const Args& a) -> CommandResult {
                        const std::string name = argString(a, "name");

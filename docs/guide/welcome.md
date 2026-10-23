@@ -26,7 +26,7 @@ the GPL covers the program, not your models.
   polygroup. See [Masking](masking.md) and [Polygroups and visibility](polygroups.md).
 - **Keep separate meshes** as SubTools (body, eyes, teeth, armour), each with its own undo history. See
   [SubTools](subtools.md).
-- **Paint colour** on the surface (polypaint) and look at the model through six MatCap materials. See
+- **Paint colour** on the surface (polypaint) and look at the model through seven MatCap materials. See
   [Polypaint and materials](polypaint.md).
 - **Sculpt layers** that double as blend shapes (morph targets), with live weights. See [Sculpt layers and
   blend shapes](layers.md).

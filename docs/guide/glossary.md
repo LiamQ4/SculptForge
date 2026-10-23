@@ -34,7 +34,7 @@ for what is planned.
 | Mask by Cavity | **Tool > Masking > By cavity** (`mask_by_cavity`) |
 | Masking (Ctrl) | Hold <kbd>Ctrl</kbd> to paint the mask, <kbd>Ctrl</kbd>+<kbd>Alt</kbd> to erase. See [Masking](masking.md) |
 | Mask Lasso, Select Lasso | Not yet. Rectangle hide works: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag |
-| MatCap | **Material**: Studio plus six MatCaps (<kbd>M</kbd>). Custom MatCap images not yet. See [Polypaint](polypaint.md) |
+| MatCap | **Material**: seven MatCaps, Sculpt the default, plus Studio (<kbd>M</kbd>). Custom MatCap images not yet. See [Polypaint](polypaint.md) |
 | Morph target | A [sculpt layer](layers.md); exported as glTF morph targets and FBX/USD blend shapes |
 | Mrgb, M (material channel) | Not yet: there is no per-vertex material channel |
 | Polyframe (PolyF, Shift+F) | **PolyF** on the right shelf, <kbd>W</kbd> or <kbd>Shift</kbd>+<kbd>F</kbd> |

@@ -118,7 +118,7 @@ the ones you will use most:
 | Edit | `undo`, `redo` | |
 
 A few commands exist only inside the app, because they change the view rather than the model: `set_material`
-(`name=` Studio or a MatCap) and `new_cube`.
+(`name=` a MatCap such as Sculpt, or Studio) and `new_cube`.
 
 ## sculptforge-cli
 

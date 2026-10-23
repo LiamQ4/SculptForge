@@ -62,7 +62,7 @@ Interface > Palettes strictly A-Z (ZBrush order)**.
 | **Color** | The Paint brush, RGB while sculpting, the paint colour and swatches, Fill, Fill masked, Cavity, Clear, Show polypaint |
 | **Draw** | Draw Size, Strength, Sculpt/Paint, Zadd/Zsub, Rgb, Front, and the tablet options (Pressure > strength, Pressure > size) with a pen readout |
 | **Generate** | Generate 3D (image or text to 3D), Relief, Inflate and Stamp from an image, and the AI brush provider settings |
-| **Material** | Studio and the six MatCap materials, Base colour |
+| **Material** | The seven MatCap materials (Sculpt, the default, first) and Studio, Base colour |
 | **Preferences** | Config, Interface, Hotkeys, LightBox and Autosave sub-palettes (see [Customizing the interface](#customizing-the-interface)) |
 | **Render** | Wireframe, Show Mesh, Show Polypaint, Show Mask, Show Polygroups, Show Splats, Frame, Fullscreen |
 | **Script** | Console, Run script file, Copy session as script, Clear console |
@@ -214,7 +214,7 @@ brushes](brush-lab.md)).
   radius for LazyMouse. See [Sculpting and brushes](sculpting.md).
 - **Alpha** (click the Alpha tile): Round, Square and Noise, the image alpha you loaded, images in your
   library's Alphas folder, **Load image...** and **Invert loaded image**.
-- **Material** (<kbd>M</kbd>, or click the Material tile): Studio and the MatCaps. Point at a material to
+- **Material** (<kbd>M</kbd>, or click the Material tile): the MatCaps and Studio. Point at a material to
   preview it on the model; click to keep it. Closing the picker without clicking puts the old material back.
   See [Polypaint and materials](polypaint.md).
 
@@ -239,7 +239,7 @@ start-up (see [Preferences](#interface-preferences)).
 | **Tool** | Sphere, Plane and Cube, and model files in your library | Open (replaces the scene) |
 | **Brush** | Every brush: built-in, custom and `.sfbrush` files | Select or load the brush |
 | **Alpha** | Round, Square, Noise and images in your Alphas folder | Use as the brush alpha |
-| **Material** | Studio and the MatCaps | Use the material |
+| **Material** | The MatCaps and Studio | Use the material |
 | **Image** | Reference images in your library | A menu: Generate 3D, relief, inflate, project onto the model, use as alpha |
 | **Splats** | Gaussian splat captures (`.ply`, `.splat`) | Open the capture as a reference |
 | **QuickSave** | The autosave and your QuickSaves, newest first | Open it |

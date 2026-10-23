@@ -237,11 +237,10 @@ void App::applyProjectSettings() {
         readBool(r, "show_mesh", renderSettings_.showMesh);
         readBool(r, "show_splats", renderSettings_.showSplats);
         readFloat(r, "splat_opacity", renderSettings_.splatOpacity);
-        if (r["matcap"].isString()) {
-            renderSettings_.matcap = -1; // unknown or empty name: studio lighting
-            for (int i = 0; i < matcapCount(); ++i)
-                if (r["matcap"].asString() == matcapName(i)) renderSettings_.matcap = i;
-        }
+        // Unknown, empty or missing (projects from before MatCaps): studio lighting, as they were saved.
+        renderSettings_.matcap = -1;
+        for (int i = 0; i < matcapCount(); ++i)
+            if (r["matcap"].isString() && r["matcap"].asString() == matcapName(i)) renderSettings_.matcap = i;
     }
     if (const Json& b = s["brush"]; b.isObject()) {
         for (int i = 0; i < int(BrushType::Count); ++i)

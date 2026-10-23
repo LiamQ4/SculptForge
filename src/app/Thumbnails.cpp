@@ -5,6 +5,7 @@
 #include "app/AssetLibrary.h"
 #include "core/Commands.h"
 #include "core/Document.h"
+#include "core/Matcap.h"
 #include "core/PathStroke.h"
 #include "core/Primitives.h"
 #include "core/Project.h"
@@ -311,7 +312,9 @@ ImTextureID ThumbnailCache::alpha(const BrushAlpha& alpha) {
 }
 
 ImTextureID ThumbnailCache::material(int matcap) {
-    const std::string key = "material|" + std::to_string(matcap) + "|" + std::to_string(kThumbnailVersion);
+    // By name: the built-in list can grow or change order between versions.
+    const std::string key =
+        "material|" + std::string(matcap < 0 ? "Studio" : matcapName(matcap)) + "|" + std::to_string(kThumbnailVersion);
     return request(
         hex64(fnv1a64(key)),
         [matcap] {
