@@ -229,6 +229,57 @@ bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& e
     return true;
 }
 
+// Paint layers (core/PaintLayer.h) are their own SubTool key, "paint_layers", next to "mesh":
+// readers that don't know it load `mesh.colors`, the composited (flattened) paint.
+Json writePaintLayers(Writer& w, const std::string& prefix, const Mesh& m) {
+    Json out = Json::object();
+    out.set("active", m.activePaintLayer);
+    out.set("base", w.vec3s(prefix + "paint/base.bin", m.paintBase));
+    Json layers = Json::array();
+    for (size_t i = 0; i < m.paintLayers.size(); ++i) {
+        const PaintLayer& pl = m.paintLayers[i];
+        Json l = Json::object();
+        l.set("name", pl.name);
+        l.set("opacity", double(pl.opacity));
+        l.set("blend", blendModeId(pl.blend));
+        l.set("visible", pl.visible);
+        l.set("locked", pl.locked);
+        l.set("color", w.vec3s(prefix + "paint/" + std::to_string(i) + "_color.bin", pl.color));
+        l.set("alpha", w.floats(prefix + "paint/" + std::to_string(i) + "_alpha.bin", pl.alpha.data(), pl.alpha.size(), 1));
+        layers.push(std::move(l));
+    }
+    out.set("layers", std::move(layers));
+    return out;
+}
+
+bool readPaintLayers(Reader& r, const Json& pj, Mesh& m, std::string& error) {
+    if (!pj.isObject() || pj["layers"].size() == 0) return true;
+    const size_t nv = m.vertexCount();
+    r.vec3s(pj["base"], "paint base layer", nv, m.paintBase);
+    for (size_t i = 0; i < pj["layers"].size() && r.error.empty(); ++i) {
+        const Json& lj = pj["layers"][i];
+        PaintLayer l;
+        l.name = lj["name"].asString();
+        if (l.name.empty()) l.name = "Layer " + std::to_string(i + 1);
+        l.opacity = std::clamp(float(lj["opacity"].asNumber(1.0)), 0.0f, 1.0f);
+        if (!parseBlendMode(lj["blend"].asString(), l.blend)) l.blend = BlendMode::Normal; // a newer mode
+        l.visible = lj["visible"].asBool(true);
+        l.locked = lj["locked"].asBool(false);
+        r.vec3s(lj["color"], "paint layer colours", nv, l.color);
+        l.alpha.resize(nv);
+        r.floats(lj["alpha"], "paint layer coverage", nv, 1, l.alpha.data());
+        m.paintLayers.push_back(std::move(l));
+    }
+    if (!r.error.empty()) {
+        error = r.error;
+        return false;
+    }
+    const double active = pj["active"].asNumber(-1);
+    m.activePaintLayer = active >= 0 && active < double(m.paintLayers.size()) ? int(active) : -1;
+    sanitizePaintLayers(m); // recomposites if `colors` was missing
+    return true;
+}
+
 // A SubTool read from a project, before it joins the document.
 struct LoadedSubtool {
     std::string name, gozName;
@@ -263,6 +314,8 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
         st.set("visible", s.visible);
         writeMesh(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i), st);
         st.set("active_layer", active ? doc.activeLayer : s.activeLayer);
+        if (hasPaintLayers(doc.subtoolMesh(i)))
+            st.set("paint_layers", writePaintLayers(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
         const std::string& gozName = active ? doc.gozName : s.gozName;
         if (!gozName.empty()) st.set("goz_name", gozName);
         subtools.push(std::move(st));
@@ -375,6 +428,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
             s.visible = sj["visible"].asBool(true);
             s.gozName = sj["goz_name"].asString();
             if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error)) return false;
+            if (!readPaintLayers(r, sj["paint_layers"], s.mesh, error)) return false;
             s.activeLayer = int(sj["active_layer"].asNumber(-1));
             subtools.push_back(std::move(s));
         }

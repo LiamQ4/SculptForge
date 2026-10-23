@@ -47,7 +47,7 @@ size_t paintFromCavity(Mesh& mesh, const glm::vec3& color, float strength, int s
 // Colour under a surface point: barycentric blend of the hit triangle's vertex colours.
 glm::vec3 sampleColor(const Mesh& mesh, uint32_t triangle, const glm::vec3& point);
 
-// set_color, paint_fill, paint_clear, paint_from_cavity, export_ply.
+// set_color, paint_fill, paint_clear, paint_from_cavity, export_ply and the paint_layer_* commands.
 void registerPaintCommands(CommandRegistry& registry);
 
 } // namespace sf

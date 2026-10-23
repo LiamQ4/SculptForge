@@ -133,6 +133,18 @@ key escape
 run undo
 run undo
 
+# Paint layers: bone Base, cavity dirt on a Multiply layer, warm tint on a Soft Light layer.
+run paint_fill color=bone
+run paint_layer_add name=Dirt blend=multiply opacity=0.85
+run paint_from_cavity color=4a2c18 strength=0.9
+run paint_layer_add name=Tint blend=soft_light opacity=0.6
+run paint_fill color=c86432
+run paint_layer_add name=Freckles
+click "Tool/Paint Layers"
+wait 0.2
+shot paint-layers
+run paint_clear
+
 # Sculpt layers.
 run layer_add name=Smile
 run layer_add name=BrowRaise

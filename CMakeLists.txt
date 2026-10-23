@@ -51,6 +51,7 @@ add_library(sculptforge_core STATIC
   src/core/Sha256.cpp
   src/core/BrushGallery.cpp
   src/core/Polypaint.cpp
+  src/core/PaintLayer.cpp
   src/core/Matcap.cpp
   src/core/Project.cpp
   src/core/Guide.cpp
@@ -151,6 +152,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelBrushLibrary.cpp
     src/app/PanelBrushGallery.cpp
     src/app/PanelPolypaint.cpp
+    src/app/PanelPaintLayers.cpp
     src/app/PanelGoz.cpp
     src/app/PanelProject.cpp
     src/app/PanelSubTools.cpp

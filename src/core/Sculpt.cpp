@@ -169,7 +169,17 @@ void Sculptor::recordMask(const Mesh& mesh, uint32_t v) {
 void Sculptor::recordColor(const Mesh& mesh, uint32_t v) {
     if (!active_ || colorStamp_[v] == stamp_) return;
     colorStamp_[v] = stamp_;
-    record_.colors.add(v, mesh.colorAt(v));
+    // With paint layers the stroke paints the active layer (colour and coverage).
+    const int layer = mesh.paintLayers.empty() ? -1 : mesh.activePaintLayer;
+    record_.paintLayer = layer;
+    if (mesh.paintLayers.empty()) {
+        record_.colors.add(v, mesh.colorAt(v));
+    } else if (layer < 0) {
+        record_.colors.add(v, mesh.paintBase[v]);
+    } else {
+        record_.colors.add(v, mesh.paintLayers[size_t(layer)].color[v]);
+        record_.paintAlpha.add(v, mesh.paintLayers[size_t(layer)].alpha[v]);
+    }
 }
 
 // Moves a vertex and attributes the offset to the active layer. Masked and
@@ -533,10 +543,14 @@ void Sculptor::restoreStroke(Mesh& mesh, BVH& bvh) {
     // Polypaint laid down by the stroke so far (Paint brush / RGB while sculpting).
     if (!record_.colors.empty() && mesh.hasColors()) {
         const auto& ci = record_.colors.indices;
-        for (size_t i = 0; i < ci.size(); ++i) {
-            mesh.colors[ci[i]] = record_.colors.values[i];
-            mesh.markDirty(ci[i]); // paint-only strokes return before updateNormals marks anything
-        }
+        const int layer = record_.paintLayer;
+        PaintLayer* pl = layer >= 0 && layer < int(mesh.paintLayers.size()) ? &mesh.paintLayers[size_t(layer)] : nullptr;
+        auto& target = mesh.paintLayers.empty() ? mesh.colors : pl ? pl->color : mesh.paintBase;
+        for (size_t i = 0; i < ci.size(); ++i) target[ci[i]] = record_.colors.values[i];
+        if (pl)
+            for (size_t i = 0; i < record_.paintAlpha.indices.size(); ++i)
+                pl->alpha[record_.paintAlpha.indices[i]] = record_.paintAlpha.values[i];
+        compositePaint(mesh, ci); // marks dirty: paint-only strokes return before updateNormals marks anything
     }
     if (record_.positions.empty()) return;
     auto& target = mesh.layerTarget(layer_);

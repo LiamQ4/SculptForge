@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "core/PaintLayer.h"
+
 #include <glm/glm.hpp>
 
 #include <cstdint>
@@ -102,6 +104,13 @@ public:
     void evaluate(std::span<const uint32_t> verts);
     void evaluateAll();
     const std::vector<glm::vec3>& basePositions() const { return layers.empty() ? positions : base; }
+
+    // Paint layers (core/PaintLayer.h). While any exist, `paintBase` holds the
+    // Base layer and `colors` the composited stack; `activePaintLayer` is the
+    // layer painting writes into (-1 = Base). Empty = plain polypaint in `colors`.
+    std::vector<glm::vec3> paintBase;
+    std::vector<PaintLayer> paintLayers;
+    int activePaintLayer = -1;
 
     size_t vertexCount() const { return positions.size(); }
     size_t triangleCount() const { return triangles.size(); }

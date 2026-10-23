@@ -31,11 +31,32 @@ struct UndoChannel {
     size_t bytes() const { return indices.size() * (sizeof(uint32_t) + sizeof(T)); }
 };
 
+// The paint-layer stack (core/PaintLayer.h) before a layer edit; applying swaps
+// it with the mesh's, so it then holds the inverse. `propertiesOnly` steps
+// (opacity, blend, visibility, lock, name) keep just the layer settings and
+// the active layer; the others keep every layer's pixels too.
+struct PaintStackUndo {
+    bool propertiesOnly = false;
+    std::vector<glm::vec3> colors, base;
+    std::vector<PaintLayer> layers;
+    int active = -1;
+
+    static PaintStackUndo capture(const Mesh& mesh, bool propertiesOnly = false);
+    void swapWith(Mesh& mesh);
+    size_t bytes() const;
+};
+
+// "The active paint layer" for UndoRecord::captureColors.
+inline constexpr int kActivePaintLayer = -2;
+
 // One undoable step: any mix of sparse channels, or a full mesh snapshot
 // (topology/layer-set changes; the snapshot holds every attribute).
 //  - positions: the stroke's target array (positions, layer base or a layer's
 //    offsets; see Mesh::layerTarget), selected by `layer`
-//  - mask / colors: per-vertex mask and polypaint
+//  - mask / colors: per-vertex mask and polypaint. `colors` holds the paint
+//    target of `paintLayer` (Mesh::colors without paint layers, else Base for
+//    -1 or that layer's colours, with its coverage in `paintAlpha`)
+//  - paint: the whole paint-layer stack (layer add / delete / merge / settings)
 //  - hidden / polygroups: per-triangle visibility and group ids
 // Record old values before changing them (ensureX() the attribute first);
 // undo allocates a missing attribute so values can always be restored.
@@ -45,19 +66,25 @@ struct UndoRecord {
     UndoChannel<glm::vec3> positions;
     UndoChannel<float> mask;
     UndoChannel<glm::vec3> colors;
+    int paintLayer = -1;
+    UndoChannel<float> paintAlpha;
+    std::unique_ptr<PaintStackUndo> paint;
     UndoChannel<uint8_t> hidden;
     UndoChannel<uint32_t> polygroups;
     std::unique_ptr<Mesh> mesh;
 
     bool empty() const {
-        return positions.empty() && mask.empty() && colors.empty() && hidden.empty() && polygroups.empty() && !mesh;
+        return positions.empty() && mask.empty() && colors.empty() && paintAlpha.empty() && hidden.empty() &&
+               polygroups.empty() && !mesh && !paint;
     }
     size_t approxBytes() const;
 
     // Convenience snapshots of whole attributes (or of `elements` only), e.g.
     // before "mask all", "invert mask", "fill color" or "hide group".
     static UndoRecord captureMask(const Mesh& mesh, std::string label, std::span<const uint32_t> verts = {});
-    static UndoRecord captureColors(const Mesh& mesh, std::string label, std::span<const uint32_t> verts = {});
+    // captureColors records the paint target of `paintLayer` (default: the active paint layer).
+    static UndoRecord captureColors(const Mesh& mesh, std::string label, std::span<const uint32_t> verts = {},
+                                    int paintLayer = kActivePaintLayer);
     static UndoRecord captureHidden(const Mesh& mesh, std::string label, std::span<const uint32_t> tris = {});
     static UndoRecord capturePolygroups(const Mesh& mesh, std::string label, std::span<const uint32_t> tris = {});
 };

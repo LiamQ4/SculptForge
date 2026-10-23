@@ -46,6 +46,7 @@ CROPS = {
     "masking": ("masking", (420, 46, 1600, 800), 960),
     "polypaint": ("polypaint", (190, 20, 900, 800), 710),
     "layers": ("layers", (1276, 46, 1600, 560), 324),
+    "paint-layers": ("paint-layers", (420, 46, 1600, 800), 960),
     "subtools": ("subtools", (380, 46, 1600, 900), 960),
     "polygroups": ("polygroups", (300, 100, 1600, 860), 960),
     "splats": ("splats", (420, 46, 1600, 900), 960),

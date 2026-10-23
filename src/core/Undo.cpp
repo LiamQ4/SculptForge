@@ -7,13 +7,18 @@
 namespace sf {
 
 size_t UndoRecord::approxBytes() const {
-    size_t bytes = positions.bytes() + mask.bytes() + colors.bytes() + hidden.bytes() + polygroups.bytes();
+    size_t bytes = positions.bytes() + mask.bytes() + colors.bytes() + paintAlpha.bytes() + hidden.bytes() +
+                   polygroups.bytes() + (paint ? paint->bytes() : 0);
     if (mesh)
         bytes += mesh->vertexCount() * ((2 + (mesh->base.empty() ? 0 : 1 + mesh->layers.size())) * sizeof(glm::vec3) +
                                         8 * sizeof(uint32_t)) +
                  mesh->triangleCount() * (sizeof(glm::uvec3) + sizeof(glm::vec3) + 4 * sizeof(uint32_t)) +
                  mesh->mask.size() * sizeof(float) + mesh->colors.size() * sizeof(glm::vec3) +
                  mesh->polygroups.size() * sizeof(uint32_t) + mesh->hidden.size() + mesh->uvs.size() * sizeof(glm::vec2);
+    if (mesh) {
+        bytes += mesh->paintBase.size() * sizeof(glm::vec3);
+        for (const auto& l : mesh->paintLayers) bytes += l.color.size() * sizeof(glm::vec3) + l.alpha.size() * sizeof(float);
+    }
     return bytes;
 }
 
@@ -43,11 +48,76 @@ UndoRecord UndoRecord::captureMask(const Mesh& mesh, std::string label, std::spa
     return r;
 }
 
-UndoRecord UndoRecord::captureColors(const Mesh& mesh, std::string label, std::span<const uint32_t> verts) {
+UndoRecord UndoRecord::captureColors(const Mesh& mesh, std::string label, std::span<const uint32_t> verts,
+                                     int paintLayer) {
     UndoRecord r;
     r.label = std::move(label);
-    captureChannel(r.colors, mesh.vertexCount(), verts, [&](uint32_t v) { return mesh.colorAt(v); });
+    if (mesh.paintLayers.empty()) {
+        captureChannel(r.colors, mesh.vertexCount(), verts, [&](uint32_t v) { return mesh.colorAt(v); });
+        return r;
+    }
+    if (paintLayer == kActivePaintLayer) paintLayer = mesh.activePaintLayer;
+    if (paintLayer < -1 || paintLayer >= int(mesh.paintLayers.size())) paintLayer = -1;
+    r.paintLayer = paintLayer;
+    if (paintLayer < 0) {
+        captureChannel(r.colors, mesh.vertexCount(), verts, [&](uint32_t v) { return mesh.paintBase[v]; });
+        return r;
+    }
+    const PaintLayer& l = mesh.paintLayers[size_t(paintLayer)];
+    captureChannel(r.colors, mesh.vertexCount(), verts, [&](uint32_t v) { return l.color[v]; });
+    captureChannel(r.paintAlpha, mesh.vertexCount(), verts, [&](uint32_t v) { return l.alpha[v]; });
     return r;
+}
+
+PaintStackUndo PaintStackUndo::capture(const Mesh& mesh, bool propertiesOnly) {
+    PaintStackUndo s;
+    s.propertiesOnly = propertiesOnly;
+    s.active = mesh.activePaintLayer;
+    if (!propertiesOnly) {
+        s.colors = mesh.colors;
+        s.base = mesh.paintBase;
+        s.layers = mesh.paintLayers;
+        return s;
+    }
+    for (const PaintLayer& l : mesh.paintLayers) {
+        PaintLayer p;
+        p.name = l.name;
+        p.opacity = l.opacity;
+        p.blend = l.blend;
+        p.visible = l.visible;
+        p.locked = l.locked;
+        s.layers.push_back(std::move(p));
+    }
+    return s;
+}
+
+void PaintStackUndo::swapWith(Mesh& mesh) {
+    std::swap(active, mesh.activePaintLayer);
+    if (!propertiesOnly) {
+        // Painted <-> unpainted changes which vertex attributes the renderer uploads.
+        if (colors.empty() != mesh.colors.empty()) mesh.topologyDirty = true;
+        std::swap(colors, mesh.colors);
+        std::swap(base, mesh.paintBase);
+        std::swap(layers, mesh.paintLayers);
+        mesh.markAllDirty();
+        return;
+    }
+    for (size_t i = 0; i < layers.size() && i < mesh.paintLayers.size(); ++i) {
+        PaintLayer& a = layers[i];
+        PaintLayer& b = mesh.paintLayers[i];
+        std::swap(a.name, b.name);
+        std::swap(a.opacity, b.opacity);
+        std::swap(a.blend, b.blend);
+        std::swap(a.visible, b.visible);
+        std::swap(a.locked, b.locked);
+    }
+    compositePaintAll(mesh);
+}
+
+size_t PaintStackUndo::bytes() const {
+    size_t n = (colors.size() + base.size()) * sizeof(glm::vec3) + layers.size() * sizeof(PaintLayer);
+    for (const auto& l : layers) n += l.color.size() * sizeof(glm::vec3) + l.alpha.size() * sizeof(float);
+    return n;
 }
 
 UndoRecord UndoRecord::captureHidden(const Mesh& mesh, std::string label, std::span<const uint32_t> tris) {
@@ -90,9 +160,18 @@ void UndoStack::apply(UndoRecord& r, Mesh& mesh, BVH& bvh) {
         r.mask.swapWith(mesh.ensureMask());
         for (uint32_t v : r.mask.indices) mesh.markDirty(v);
     }
+    if (r.paint) r.paint->swapWith(mesh);
     if (!r.colors.empty()) {
-        r.colors.swapWith(mesh.ensureColors());
-        for (uint32_t v : r.colors.indices) mesh.markDirty(v);
+        const int layer = r.paintLayer;
+        if (mesh.paintLayers.empty()) {
+            r.colors.swapWith(mesh.ensureColors());
+        } else if (layer < 0 || layer >= int(mesh.paintLayers.size())) {
+            r.colors.swapWith(mesh.paintBase);
+        } else {
+            r.colors.swapWith(mesh.paintLayers[size_t(layer)].color);
+            if (!r.paintAlpha.empty()) r.paintAlpha.swapWith(mesh.paintLayers[size_t(layer)].alpha);
+        }
+        compositePaint(mesh, r.colors.indices); // marks them dirty
     }
     // Picking reads `hidden` directly, so the BVH needs no update.
     if (!r.hidden.empty()) {

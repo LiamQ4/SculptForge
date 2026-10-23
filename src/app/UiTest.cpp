@@ -40,6 +40,8 @@
 //                            pen_pressure (raw), brush_pressure (after the curve; 1 for the mouse),
 //                            stroking (1 while a stroke is open), camera_yaw (degrees), camera_pan (target offset);
 //                            N may be $NAME or $NAME*K for a value kept by `remember`
+//                            paint_layers (paint layers above Base), active_paint_layer (-1 = Base),
+//                            paint_mean_r / paint_mean_g / paint_mean_b (mean displayed polypaint, sRGB 0-255)
 //   (mesh values are the active SubTool's)
 //   snapshot                 remember the active mesh's vertices (for the moved* values)
 //   remember VALUE NAME      keep VALUE's current value as $NAME
@@ -190,6 +192,15 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "layers") return double(m.layers.size());
     if (name == "brushes") return double(app_.doc_.brushes.size());
     if (name == "colored") return m.hasColors() ? 1.0 : 0.0;
+    if (name == "paint_layers") return double(m.paintLayers.size());
+    if (name == "active_paint_layer") return m.paintLayers.empty() ? -1.0 : double(m.activePaintLayer);
+    if (name == "paint_mean_r" || name == "paint_mean_g" || name == "paint_mean_b") {
+        if (!m.hasColors()) return 255.0;
+        const int k = name.back() == 'r' ? 0 : name.back() == 'g' ? 1 : 2;
+        double sum = 0.0;
+        for (const glm::vec3& c : m.colors) sum += double(linearToSrgb(c)[k]);
+        return 255.0 * sum / double(m.colors.size());
+    }
     if (name == "can_undo") return app_.doc_.undo.canUndo() ? 1.0 : 0.0;
     if (name == "dirty") return app_.doc_.dirty() ? 1.0 : 0.0;
     if (name == "splats") return double(app_.doc_.splats.size());

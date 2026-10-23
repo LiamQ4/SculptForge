@@ -48,6 +48,7 @@ void Mesh::sanitizeAttributes() {
     if (!polygroups.empty() && polygroups.size() != triangles.size()) clearPolygroups();
     if (!hidden.empty() && hidden.size() != triangles.size()) clearHidden();
     if (!uvs.empty() && uvs.size() != triangles.size() * 3) std::vector<glm::vec2>().swap(uvs);
+    sanitizePaintLayers(*this);
 }
 
 void Mesh::rebuildTopology() {
