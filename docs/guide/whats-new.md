@@ -5,6 +5,27 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Next version (in development)
+
+### Subdivision levels
+
+Sculpt one model at several resolutions, as with ZBrush's SDiv: big forms low, fine detail high, and back down
+without losing anything.
+
+- **Divide** (<kbd>Ctrl</kbd>+<kbd>D</kbd>) adds a level and keeps the ones below. Quads stay quads
+  (Catmull-Clark); **Smt** off divides without smoothing.
+- **Lower Res** / **Higher Res** (<kbd>Shift</kbd>+<kbd>D</kbd> / <kbd>D</kbd>) and the **SDiv** slider step
+  between levels. Detail sculpted high rides along when you reshape low, and edits high show up softened below.
+  Stepping back and forth is instant, even at millions of polygons.
+- Mask, polypaint, paint layers, polygroups, hidden faces, UVs and sculpt layers follow the levels.
+- **Del Lower**, **Del Higher** and **Reconstruct Subdiv** (find the lower levels of a model subdivided
+  elsewhere). Undo walks back through strokes and level changes; projects save every level; the SubTool list
+  shows "SDiv 3/5".
+- <kbd>Ctrl</kbd>+<kbd>D</kbd> now divides with levels; the old one-way **Subdivide** is still in
+  **Tool > Geometry**.
+
+See [Subdivision levels](subdivision-levels.md).
+
 ## Version 0.4.2
 
 ### Texture painting on UV maps

@@ -47,8 +47,6 @@ the GPL covers the program, not your models.
 SculptForge is young (version 0.4; see [What's new](whats-new.md)). Some things ZBrush artists rely on are
 still on the roadmap:
 
-- Multiresolution sculpting (subdivision levels you can step up and down). Subdivide works, but it is a
-  one-way operation.
 - Dynamic topology (Sculptris Pro style) and ZRemesher-class quad retopology.
 - UV unwrapping, texture painting and map baking.
 - Booleans and stencils.

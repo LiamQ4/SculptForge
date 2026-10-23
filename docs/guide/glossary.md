@@ -16,7 +16,8 @@ for what is planned.
 | Curve brushes, IMM, ZModeler, ZSpheres | Not yet |
 | Decimation Master | **Tool > Geometry > Decimate** (`decimate`). See [Geometry](geometry.md#decimate) |
 | Del Hidden | **Tool > Visibility > Delete hidden** (`delete_hidden`) |
-| Divide (Ctrl+D) | **Tool > Geometry > Subdivide**, <kbd>Ctrl</kbd>+<kbd>D</kbd> |
+| Del Lower, Del Higher | **Tool > Geometry > Del Lower / Del Higher** (`subdiv_delete_lower`, `subdiv_delete_higher`). See [Subdivision levels](subdivision-levels.md) |
+| Divide (Ctrl+D), Smt | **Tool > Geometry > Divide**, <kbd>Ctrl</kbd>+<kbd>D</kbd>, with **Smt** beside it (`subdiv_divide`). See [Subdivision levels](subdivision-levels.md) |
 | Document, 2.5D canvas, pixols | Not planned: SculptForge is a 3D sculpting app only |
 | Draw Size | **Draw Size** (top shelf, <kbd>S</kbd>, <kbd>[</kbd> / <kbd>]</kbd>) |
 | DynaMesh | **Voxel Remesh** (**Tool > Remesh**, `remesh`). See [Geometry](geometry.md#voxel-remesh) |
@@ -46,7 +47,8 @@ for what is planned.
 | Rgb | **Rgb** on the top shelf (paint while sculpting) |
 | Rgb Intensity, Z Intensity | **Strength** (top shelf, <kbd>I</kbd>) |
 | Sculptris Pro, dynamic topology | Not yet |
-| SDiv, D / Shift+D (subdivision levels) | Not yet: Subdivide is a single, destructive step |
+| Reconstruct Subdiv | **Tool > Geometry > Reconstruct Subdiv** (`subdiv_reconstruct`) |
+| SDiv, Lower Res / Higher Res (Shift+D / D) | **Tool > Geometry**: the **SDiv** slider, **Lower Res** <kbd>Shift</kbd>+<kbd>D</kbd>, **Higher Res** <kbd>D</kbd> (`subdiv_level`). See [Subdivision levels](subdivision-levels.md) |
 | SelectLasso, SelectRect | **Tool > Visibility**: pick the shape, then <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag (add <kbd>Alt</kbd> to hide). See [Polygroups](polygroups.md) |
 | Solo | **Solo** on the right shelf or in **Tool > SubTool** |
 | Spotlight | Not yet |
@@ -81,6 +83,7 @@ for what is planned.
 | Generate 3D | Turn an image or a description into a sculptable model. See [Image and text to 3D](generate-3d.md) |
 | LOD chain | A series of lighter copies of a model (LOD0, LOD1...) for game engines. See [Geometry](geometry.md#lod-chains) |
 | MCP | Model Context Protocol: `sculptforge-cli --mcp` lets AI agents such as Claude run SculptForge commands |
+| Subdivide | One-way subdivision without levels (**Tool > Geometry > Subdivide**, `subdivide`); **Divide** keeps the levels |
 | Send to Unreal | Export and import a model into a running Unreal Editor in one step (<kbd>Ctrl</kbd>+<kbd>U</kbd>) |
 | Shelves, palettes, trays | The interface around the canvas: shelves hold the most-used controls, palettes hold everything, trays hold pinned palettes. See [The interface](interface.md) |
 | Studio brush folder | A shared, read-only brush folder for a team (`SCULPTFORGE_BRUSH_PATH`). See [For studios](studios.md) |

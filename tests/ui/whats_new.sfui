@@ -5,5 +5,6 @@ click "What's New##help.whats_new"
 expect_value guide_open == 1
 expect_guide whats-new.md
 expect_text "Version 0.4.2"
-expect_text "Texture painting on UV maps"
+expect_text "Next version (in development)"
+expect_text "Subdivision levels"
 shot whats-new

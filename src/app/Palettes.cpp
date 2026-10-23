@@ -358,6 +358,8 @@ void App::drawPalette_Tool() {
         Demo::popScope();
     }
     if (subpalette("tool.geometry", "Geometry")) {
+        Demo::pushScope("Geometry");
+        drawGeometrySection();
         actionRow(*this, {"geometry.subdivide"});
         const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
         if (ImGui::Button("Decimate", ImVec2(half, 0))) runCommand("decimate", {{"ratio", double(decimateRatio_)}});
@@ -367,6 +369,7 @@ void App::drawPalette_Tool() {
         ImGui::SetNextItemWidth(-1);
         ui::SliderInside("##decimate", &decimateRatio_, 0.05f, 0.95f, "Keep %.2f");
         ui::HelpText("Keep", nullptr, "Fraction of the triangles Decimate keeps.", "Tool > Geometry");
+        Demo::popScope();
     }
     if (subpalette("tool.remesh", "Remesh")) {
         const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;

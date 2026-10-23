@@ -6,20 +6,20 @@ expect_value triangles == 1280
 # F1: the Controls sheet is generated from the action registry. Ctrl+hover explains any item,
 # Ctrl+Alt+hover shows a command's scripting parameters.
 key f1
-type Controls/##controls_filter subdiv
-expect Controls/Subdivide
+type Controls/##controls_filter divide
+expect Controls/Divide
 hold ctrl
-hover Controls/Subdivide
-expect_help "Loop subdivision"
+hover Controls/Divide
+expect_help "subdivision level"
 expect_help Ctrl+D
 shot help_ctrl_hover
 hold ctrl+alt
-hover Controls/Subdivide
-expect_help "Number of subdivision levels"
+hover Controls/Divide
+expect_help "Smt: smooth the new level"
 shot help_ctrl_alt_hover
 hold none
 wait 0.2
-expect_no_text "Loop subdivision"
+expect_no_text "subdivision level"
 
 # ZBrush-style shortcut assignment: double-click a row (or Ctrl+Alt+click a button), press the key.
 type Controls/##controls_filter wire
@@ -32,12 +32,12 @@ expect_value wireframe == 1
 key ctrl+k
 expect_value wireframe == 0
 key f1
-expect_not Controls/Subdivide
+expect_not Controls/Divide
 
 # Command palette (F3): fuzzy search, Enter runs.
 key f3
 expect_value command_palette_open == 1
-type "##Command palette" subdiv
+type "##Command palette" subdivide
 expect_text "Tool > Geometry"
 shot command_palette
 key enter
@@ -57,7 +57,7 @@ type Console/##console "remesh resolution=64"
 key enter
 expect_text "> remesh resolution=64"
 expect_value triangles > 30000
-type Console/##console subd
+type Console/##console subdivi
 key tab
 key enter
 expect_text "> subdivide"

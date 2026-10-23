@@ -8,6 +8,7 @@
 #include "core/EnginePresets.h"
 #include "core/ImageTo3D.h"
 #include "core/Masking.h"
+#include "core/Multires.h"
 #include "core/PathStroke.h"
 #include "core/Polygroups.h"
 #include "core/SubTools.h"
@@ -285,7 +286,8 @@ CommandRegistry::CommandRegistry() {
          }});
 
     add({"subdivide",
-         "Smoothly subdivide the mesh (Loop subdivision). Each level multiplies the triangle count by 4.",
+         "Smoothly subdivide the mesh (Loop subdivision). Each level multiplies the triangle count by 4. Unlike "
+         "Divide (subdiv_divide), it keeps no lower levels to step back to.",
          {{"levels", T::Number, "Number of subdivision levels to apply (1-4). Default 1.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
              int levels = std::clamp(int(argNumber(a, "levels", 1)), 1, 4);
@@ -753,6 +755,7 @@ CommandRegistry::CommandRegistry() {
     registerMaskingCommands(*this);
     registerPolygroupCommands(*this);
     registerSubToolCommands(*this);
+    registerSubdivCommands(*this); // subdiv_* (core/MultiresCommands.cpp)
     registerPaintCommands(*this); // core/Polypaint.cpp
     registerGozCommands(*this); // goz_import/export/send/receive, export_stl (io/GozCommands.cpp)
     registerProjectCommands(*this); // keep last (core/Project.cpp)

@@ -9,7 +9,8 @@ namespace sf {
 size_t UndoRecord::approxBytes() const {
     size_t bytes = positions.bytes() + mask.bytes() + colors.bytes() + paintAlpha.bytes() + hidden.bytes() +
                    polygroups.bytes() + (paint ? paint->bytes() : 0) +
-                   (textureTiles ? textureTiles->bytes() : 0) + (texture ? texture->bytes() : 0);
+                   (textureTiles ? textureTiles->bytes() : 0) + (texture ? texture->bytes() : 0) +
+                   (subdiv ? subdiv->bytes() : 0);
     if (mesh)
         bytes += mesh->vertexCount() * ((2 + (mesh->base.empty() ? 0 : 1 + mesh->layers.size())) * sizeof(glm::vec3) +
                                         8 * sizeof(uint32_t)) +
@@ -146,6 +147,10 @@ void UndoStack::push(UndoRecord record) {
 
 // Swaps the record's state with the mesh, so the record now holds the inverse.
 void UndoStack::apply(UndoRecord& r, Mesh& mesh, BVH& bvh) {
+    if (r.subdiv) {
+        applySubdivUndo(*r.subdiv, mesh, bvh);
+        return;
+    }
     if (r.mesh) {
         std::swap(*r.mesh, mesh);
         mesh.topologyDirty = true;

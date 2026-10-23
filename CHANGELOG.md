@@ -6,6 +6,25 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### Subdivision levels (multiresolution)
+- Divide (Tool > Geometry, Ctrl+D, `subdiv_divide`) adds a subdivision level per SubTool and keeps the lower
+  ones: Catmull-Clark on meshes with quads (quads stay quads), Loop on triangle meshes, flat with Smt off.
+- Lower Res / Higher Res (Shift+D / D, `subdiv_lower`, `subdiv_higher`) and the SDiv slider (`subdiv_level`)
+  step between levels. Detail is stored per level as a displacement in the local frame of the smoothed level
+  below, so reshaping a low level carries it along; edits at a high level are restricted (full weighting) to
+  the lower ones. Round trips without edits are bit-for-bit.
+- Mask, polypaint, paint layers, polygroups, hidden faces and UVs follow the levels (copied down, interpolated or
+  inherited up where they changed); sculpt layers have their own detail per level; the texture is shared.
+- Del Lower, Del Higher (`subdiv_delete_lower`, `subdiv_delete_higher`) and Reconstruct Subdiv
+  (`subdiv_reconstruct`: finds the lower level of a regular Catmull-Clark or Loop subdivision, keeping the mesh
+  and its vertex order). `subdiv_info` lists the levels; `subdiv_export` writes the visible SubTools at another
+  level (e.g. the base cage) in any export format.
+- Each level change is one undo step, as is each stroke at any level; level edits share unchanged levels
+  copy-on-write. The two levels left last keep their topology and BVH, so stepping back and forth is instant
+  (1-45 ms at 6.5M triangles).
+- Projects save every level (project format 4). The SubTool list shows "SDiv n/m".
+- Ctrl+D now runs Divide; the one-way Subdivide stays in Tool > Geometry and as `subdivide`.
+
 ## [0.4.2] - 2026-10-23
 
 ### Texture painting on UV maps

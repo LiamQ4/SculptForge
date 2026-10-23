@@ -200,3 +200,49 @@ key escape
 click "Splats##palette.splats"
 wait 0.3
 shot splats
+
+# Subdivision levels: a cube cage divided five times, sculpted at a low and the top level.
+run new_sphere subdivisions=1
+run subtool_append type=cube name=Box
+run subtool_delete index=0
+run subdiv_reconstruct; subdiv_reconstruct; subdiv_reconstruct; subdiv_reconstruct; subdiv_delete_higher
+run subdiv_divide; subdiv_divide; subdiv_divide; subdiv_divide; subdiv_divide
+orbit 140 -70
+key f
+run subdiv_level level=2
+key 4
+key ]
+key ]
+key ]
+key ]
+key ]
+key ]
+key ]
+stroke 0.5 0.3 0.45 0.05 1.0
+stroke 0.75 0.75 0.95 0.95 1.0
+run subdiv_level level=6
+key [
+key [
+key [
+key [
+key [
+key [
+key [
+key [
+key [
+key 9
+stroke 0.2 0.45 0.8 0.5 1.0
+stroke 0.25 0.58 0.75 0.62 1.0
+stroke 0.3 0.7 0.7 0.74 1.0
+run subdiv_level level=1
+click "PolyF##view.polyf"
+wait 0.2
+shot sdiv-1
+run subdiv_level level=3
+wait 0.2
+shot sdiv-3
+click "PolyF##view.polyf"
+run subdiv_level level=6
+click "Tool/Geometry"
+wait 0.2
+shot sdiv-6

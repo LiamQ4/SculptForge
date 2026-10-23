@@ -16,6 +16,7 @@
 namespace sf {
 
 struct PaintTexture;
+struct MultiresStack;
 
 struct AABB {
     glm::vec3 min{std::numeric_limits<float>::max()};
@@ -149,6 +150,10 @@ public:
     // the paint layers work on the texture instead of the vertices.
     std::shared_ptr<PaintTexture> texture;
     bool paintToTexture = false;
+
+    // Subdivision levels (core/Multires.h): the stack this mesh is one level of, shared copy-on-write by
+    // copies of the mesh. Null = a plain mesh. sanitizeAttributes() drops it if the topology no longer fits.
+    std::shared_ptr<MultiresStack> multires;
 
     size_t vertexCount() const { return positions.size(); }
     size_t triangleCount() const { return triangles.size(); }

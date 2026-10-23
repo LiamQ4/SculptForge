@@ -56,6 +56,7 @@
 //                            texture_painted (texels of the texture composite that aren't white),
 //                            texture_mean_r / texture_mean_g / texture_mean_b (mean composite, sRGB 0-255),
 //                            auto_uv_running
+//                            sdiv (the current subdivision level, 1 = base; 0 without levels), sdiv_levels (0 = none)
 //   (mesh values are the active SubTool's)
 //   snapshot                 remember the active mesh's vertices (for the moved* values)
 //   remember VALUE NAME      keep VALUE's current value as $NAME
@@ -86,6 +87,7 @@
 #include "app/Ui.h"
 
 #include "core/BrushLibrary.h"
+#include "core/Multires.h"
 #include "core/Script.h"
 
 #include <imgui_internal.h>
@@ -218,6 +220,8 @@ double Demo::query(const std::string& name, bool& known) const {
         return 255.0 * sum / double(m.colors.size());
     }
     if (name == "uvs") return m.hasUvs() ? 1.0 : 0.0;
+    if (name == "sdiv") return subdivLevelCount(m) ? double(subdivCurrentLevel(m) + 1) : 0.0;
+    if (name == "sdiv_levels") return double(subdivLevelCount(m));
     if (name == "texture_size") return hasTexture(m) ? double(m.texture->width) : 0.0;
     if (name == "paint_texture") return paintsTexture(m) ? 1.0 : 0.0;
     if (name == "texture_layers") return hasTexture(m) ? double(m.texture->layers.size()) : 0.0;

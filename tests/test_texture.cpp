@@ -331,8 +331,8 @@ TEST(texture_layers_composite_merge_and_round_trip) {
     CHECK(reg.execute(doc, "paint_layer_flatten").ok);
     CHECK(doc.mesh.texture->layers.empty());
 
-    // Version 2 projects (no texture) still load; the current version is 3.
-    CHECK(kProjectVersion == 3);
+    // Version 2 projects (no texture) still load; textures arrived in version 3.
+    CHECK(kProjectVersion >= 3);
 }
 
 TEST(texture_layer_undo_stores_only_what_changed) {

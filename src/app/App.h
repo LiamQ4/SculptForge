@@ -558,6 +558,10 @@ private:
     float paintOpacityDrag_ = -1.0f;  // opacity before the slider drag (-1 = not dragging)
     void drawGameExportContents();
     void drawVisibilitySection();
+    void drawGeometrySection(); // PanelGeometry.cpp: Divide, SDiv, Lower / Higher Res, Del Lower / Higher, Reconstruct
+    bool smt_ = true;           // Tool > Geometry > Smt: Divide smooths
+    float sdivSlider_ = 1.0f;   // the SDiv slider while dragged (1-based)
+    bool sdivHeld_ = false;
     void drawSubToolsContents();
     void pollAlphaFile();
     ShellGeometry shell_;      // this frame's regions (drawShell)
