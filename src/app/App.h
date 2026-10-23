@@ -412,6 +412,8 @@ private:
     // The normal map to preview on SubTool `id` (null when none, it is turned off, or the mesh changed).
     const NormalMapView* bakeNormalMap(uint32_t id, const Mesh& mesh);
     bool bakeBusy() const;
+    // The last bake's normal map PNG when its SubTool is shown and still fits it (Send to Unreal takes it along).
+    std::string bakedNormalMapFile(bool& directX);
     // UI test values: bake_running, baked_maps (maps in the last bake), bake_size, bake_files, normal_map_preview
     // (1 when the active SubTool shows a baked normal map); NaN for other names.
     double bakeTestValue(const std::string& name);

@@ -156,6 +156,25 @@ const NormalMapView* App::bakeNormalMap(uint32_t id, const Mesh& mesh) {
 
 bool App::bakeBusy() const { return bake_ && bake_->job; }
 
+std::string App::bakedNormalMapFile(bool& directX) {
+    if (!bake_ || !bake_->result || !bake_->view.serial) return {};
+    for (int i = 0; i < doc_.subtoolCount(); ++i) {
+        const SubTool& st = doc_.subtools[size_t(i)];
+        if (st.id != bake_->subtool || !st.visible) continue;
+        const Mesh& m = doc_.subtoolMesh(i);
+        if (m.triangleCount() != bake_->triangles || uvHash(m) != bake_->uvKey) return {};
+        for (const std::string& f : bake_->files) {
+            const std::string suffix = "_normal.png";
+            if (f.size() >= suffix.size() && f.compare(f.size() - suffix.size(), suffix.size(), suffix) == 0 &&
+                std::filesystem::exists(std::filesystem::path(std::u8string(f.begin(), f.end())))) {
+                directX = bake_->result->flipGreen;
+                return f;
+            }
+        }
+    }
+    return {};
+}
+
 double App::bakeTestValue(const std::string& name) {
     const BakeUiState* b = bake_.get();
     if (name == "bake_running") return b && b->job ? 1.0 : 0.0;

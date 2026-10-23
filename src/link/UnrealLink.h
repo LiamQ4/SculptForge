@@ -55,6 +55,11 @@ struct UnrealImport {
     std::string assetName;                       // e.g. SM_Rock
     bool skeletal = false;                       // needed for morph targets (blend shapes)
     bool lods = false;                           // file has an LOD group
+    // A baked tangent-space normal map (core/Bake.h) imported beside the mesh as T_<name>_N, set up as a
+    // normal map (linear, BC5). Only for an editor on this computer. `normalMapDirectX`: the map is already
+    // green-down; an OpenGL map gets Unreal's Flip Green Channel.
+    std::string normalMapPath;
+    bool normalMapDirectX = false;
 };
 // Python that imports (or reimports, replacing) the asset and prints a result line.
 std::string unrealImportScript(const UnrealImport& import);

@@ -15,6 +15,7 @@
 #include "core/Primitives.h"
 #include "core/Tangents.h"
 #include "core/Texture.h"
+#include "link/UnrealLink.h"
 
 #include <chrono>
 #include <cmath>
@@ -413,4 +414,26 @@ TEST(bake_perf_4k_from_1m_triangles) {
                 r.sourceTriangles, r.seconds, r.bvhSeconds, r.islandTexels);
     CHECK(r.sourceTriangles > 1000000);
     CHECK(r.seconds < 60.0);
+}
+
+// Send to Unreal takes the baked normal map along: imported as T_<name>_N, set up as a normal map, green flipped
+// for an OpenGL-style map; skipped for an editor on another computer.
+TEST(bake_unreal_normal_map_import) {
+    link::UnrealImport im;
+    im.fbxPath = "/tmp/SM_Rock.fbx";
+    im.assetName = "SM_Rock";
+    im.normalMapPath = "/tmp/maps/Rock_normal.png";
+    std::string py = link::unrealImportScript(im);
+    CHECK(py.find("'/tmp/maps/Rock_normal.png'") != std::string::npos);
+    CHECK(py.find("'T_Rock_N'") != std::string::npos);
+    CHECK(py.find("TC_NORMALMAP") != std::string::npos && py.find("'srgb', False") != std::string::npos);
+    CHECK(py.find("flip_green_channel', True") != std::string::npos);
+    CHECK(py.find("SCULPTFORGE_TEXTURE") < py.find("SCULPTFORGE_IMPORTED")); // the mesh's line stays last
+    im.normalMapDirectX = true;
+    CHECK(link::unrealImportScript(im).find("flip_green_channel', False") != std::string::npos);
+    im.downloadUrl = "http://10.0.0.5:5000/t/SM_Rock.fbx";
+    CHECK(link::unrealImportScript(im).find("Rock_normal.png") == std::string::npos);
+    im.downloadUrl.clear();
+    im.normalMapPath.clear();
+    CHECK(link::unrealImportScript(im).find("TC_NORMALMAP") == std::string::npos);
 }

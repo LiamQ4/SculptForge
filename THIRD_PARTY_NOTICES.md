@@ -13,6 +13,7 @@ licenses require.
 | [stb_image / stb_image_write](https://github.com/nothings/stb) | commit 013ac3be | MIT License or Public Domain (Unlicense), at your choice | Image loading and PNG writing. Vendored in third_party/stb. |
 | [ufbx](https://github.com/ufbx/ufbx) | 0.23.1 (commit 5955c5c) | MIT License or Public Domain (Unlicense), at your choice | FBX import. Vendored in third_party/ufbx. |
 | [xatlas](https://github.com/jpcy/xatlas) | commit f700c77 | MIT License | Automatic UV unwrapping (UV > Auto UV) for texture painting. Vendored in third_party/xatlas. |
+| [MikkTSpace](https://github.com/mmikk/MikkTSpace) | commit 3e895b4 | zlib License | Tangent frames for baked tangent-space normal maps (Tool > Bake), matching Blender, Unreal, Unity and Godot. Vendored in third_party/mikktspace. |
 | [Inter typeface](https://github.com/rsms/inter) | 4.1 | SIL Open Font License 1.1 | User interface font, embedded in the desktop app. Vendored in assets/fonts. |
 | [libcurl](https://curl.se) | system library | curl License (MIT/X derivate) | HTTPS for optional AI features on Linux and macOS. Linked dynamically from the operating system; Windows uses the built-in WinHTTP instead. |
 
@@ -449,4 +450,30 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+---
+
+## MikkTSpace
+
+https://github.com/mmikk/MikkTSpace — zlib License
+
+```
+Copyright (C) 2011 by Morten S. Mikkelsen
+
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
 ```

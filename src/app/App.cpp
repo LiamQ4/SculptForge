@@ -1215,7 +1215,7 @@ void App::drawUi() {
                                "version 3 or later. It comes with ABSOLUTELY NO WARRANTY.");
             ImGui::Spacing();
             ImGui::TextWrapped("Built with SDL 3 (zlib), Dear ImGui (MIT), GLM (MIT), stb (MIT/public domain), ufbx "
-                               "(MIT/public domain), xatlas (MIT) and the Inter typeface (SIL OFL 1.1). Uses libcurl (curl license) "
+                               "(MIT/public domain), xatlas (MIT), MikkTSpace (zlib) and the Inter typeface (SIL OFL 1.1). Uses libcurl (curl license) "
                                "where available.");
             ImGui::Spacing();
             if (ImGui::Button("License")) SDL_OpenURL("https://github.com/islandmed/SculptForge/blob/main/LICENSE");
@@ -1296,6 +1296,7 @@ void App::sendToUnreal() {
     import.assetName = r.assetName;
     import.skeletal = r.skeletal;
     import.lods = r.lodCount > 1;
+    import.normalMapPath = bakedNormalMapFile(import.normalMapDirectX); // Tool > Bake's last normal map, if it fits
     status_ = "Sending " + r.assetName + " to Unreal...";
     auto promise = std::make_shared<std::promise<std::string>>();
     pendingUnreal_ = promise->get_future();

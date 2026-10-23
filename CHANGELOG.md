@@ -6,6 +6,25 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### Normal, displacement and AO map baking
+- Tool > Bake (and the `bake` command) bakes a high-poly source (one SubTool, or every visible one but the
+  active) onto the active SubTool's UVs: tangent-space normal, object-space normal, displacement, ambient
+  occlusion, cavity and colour (polypaint or painted texture) maps, 1K to 8K.
+- Tangent-space maps use MikkTSpace tangents (vendored, zlib), as Blender, Unreal, Unity and Godot compute them;
+  OpenGL or DirectX green convention. Unit-tested to decode to the high-poly's normals within 0.2 degrees on
+  average.
+- Rays along the low-poly's smoothed normals through a front / rear cage, measured automatically by default or
+  set by hand, keeping the high-poly hit nearest the low-poly; 1-16 rays per texel of anti-aliasing; padding
+  around UV islands; tile-parallel on every core over a dedicated thread-safe BVH, in the background with
+  progress and Cancel.
+- Displacement as a 16-bit PNG (mid-grey = 0, scale reported) and a 32-bit float OpenEXR in world units.
+- The baked normal map shows on the low-poly in the viewport (new normal-map shader with per-corner MikkTSpace
+  tangents), with a Preview Normal Map toggle.
+- Send to Unreal imports the baked normal map too (`T_<Name>_N`, normal-map compression, green flipped for
+  OpenGL maps) when the editor runs on the same computer.
+- Maps are written as `<SubTool>_normal.png`, `_ao.png`, `_displacement.png` / `.exr` and so on, beside the
+  last export by default.
+
 ## [0.4.2] - 2026-10-23
 
 ### Texture painting on UV maps
