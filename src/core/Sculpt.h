@@ -7,6 +7,7 @@
 #include "core/Mesh.h"
 #include "core/Undo.h"
 
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -59,6 +60,20 @@ void brushVertices(const Mesh& mesh, const BVH& bvh, const glm::vec3& center, fl
 // Smoothstep brush falloff: 1 at the centre, 0 at `radius`.
 float brushFalloff(float dist, float radius);
 
+// Where brush time goes (core/Benchmark.h, Help > Performance): milliseconds summed over dabs since the
+// counters were last zeroed. kernel = finding the vertices and moving / masking / painting them.
+struct SculptTimings {
+    double kernelMs = 0.0, normalsMs = 0.0, bvhMs = 0.0;
+    uint64_t dabs = 0, vertices = 0;
+};
+// Milliseconds since `t`, which moves on to now (for SculptTimings).
+inline double lapMs(std::chrono::steady_clock::time_point& t) {
+    const auto now = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(now - t).count();
+    t = now;
+    return ms;
+}
+
 // Applies brush dabs to a mesh, keeping normals and the BVH in sync and
 // recording the original positions of every touched vertex for undo.
 class Sculptor {
@@ -83,6 +98,8 @@ public:
     UndoRecord endStroke();
     bool strokeActive() const { return active_; }
 
+    SculptTimings timings;
+
     // Mirror sign vectors for the enabled symmetry axes (always starts with (1,1,1)).
     static std::vector<glm::vec3> mirrors(Symmetry sym);
 
@@ -99,9 +116,11 @@ private:
 
     void dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p);
     void dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const DabParams& p);
+    void finishDab(Mesh& mesh, BVH& bvh, std::span<const uint32_t> verts, std::chrono::steady_clock::time_point clock);
     void touch(Mesh& mesh, uint32_t v);
     // The one place brushes move vertices: scales `d` by vertexInfluence().
     void displace(Mesh& mesh, uint32_t v, const glm::vec3& d);
+    void displaceAll(Mesh& mesh, std::span<const uint32_t> verts, std::span<const glm::vec3> d);
 
     bool active_ = false;
     int layer_ = -1;
@@ -111,7 +130,7 @@ private:
 
     std::vector<uint32_t> verts_;
     std::vector<glm::vec3> scratch_;
-    std::vector<float> weights_;
+    std::vector<float> weights_, influence_;
     std::vector<GrabEntry> grab_;
     std::vector<uint32_t> grabVerts_;
 

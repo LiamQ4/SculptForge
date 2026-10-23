@@ -1,6 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "app/App.h"
+#include "app/Bench.h"
 
 #include <SDL3/SDL_main.h>
 
@@ -34,7 +35,12 @@ void usage() {
         "  --supersample N          Render recordings N times larger and downsample (sharper, allows zoom-ins)\n"
         "  --ui-test FILE.sfui      Run a UI test script headless and exit (0 = pass); settings are isolated\n"
         "  --ui-out DIR             Where UI tests save screenshots\n"
-        "  --fullscreen             Start filling the screen (F11 toggles)");
+        "  --fullscreen             Start filling the screen (F11 toggles)\n"
+        "  --bench                  Run the performance benchmark (with GPU upload and orbit timings) and exit\n"
+        "  --bench-sizes 4,16,32    Benchmark sizes in millions of triangles\n"
+        "  --bench-dabs N           Dabs per benchmark stroke (default 40)\n"
+        "  --bench-no-project       Skip the project save / open (it needs twice the memory)\n"
+        "  --bench-out FILE         Write the benchmark report (Markdown) to FILE");
 }
 
 // UI tests must never read or change the user's real settings, recent files or
@@ -68,9 +74,11 @@ void isolateSettings() {
 int main(int argc, char** argv) {
     sf::AppOptions options;
     bool sizeGiven = false;
+    sf::BenchCommandLine bench;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : std::string(); };
+        if (sf::parseBenchArg(argc, argv, i, bench)) continue;
         if (a == "--run") options.script += next() + "\n";
         else if (a == "--render") options.renderPath = next();
         else if (a == "--turntable") options.turntable = std::atoi(next().c_str());
@@ -99,6 +107,7 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    if (bench.run) return sf::runAppBenchmark(bench);
     if (!options.uiTest.empty()) {
         if (!sizeGiven) options.width = 1600, options.height = 960;
         isolateSettings();

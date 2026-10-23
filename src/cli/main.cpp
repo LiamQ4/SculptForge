@@ -5,6 +5,7 @@
 // pipelines and AI agents.
 #include "ai/AiCommands.h"
 #include "cli/McpServer.h"
+#include "core/Benchmark.h"
 #include "core/BrushLibrary.h"
 #include "core/Commands.h"
 #include "core/Script.h"
@@ -30,6 +31,11 @@ void usage() {
         "      --schema               Print commands as LLM tool definitions (JSON)\n"
         "      --mcp                  Run as an MCP server on stdio (Claude Code, Claude Desktop, any MCP client)\n"
         "  -q, --quiet                Only print errors\n"
+        "      --bench                Run the performance benchmark (CPU side; the app's --bench adds the GPU)\n"
+        "      --bench-sizes 4,16,32  Benchmark sizes in millions of triangles\n"
+        "      --bench-dabs N         Dabs per benchmark stroke (default 40)\n"
+        "      --bench-no-project     Skip the project save / open (it needs twice the memory)\n"
+        "      --bench-out FILE       Write the benchmark report (Markdown) to FILE\n"
         "  -h, --help                 Show this help\n"
         "\n"
         "Connect Claude Code:  claude mcp add sculptforge -- sculptforge-cli --mcp\n"
@@ -47,6 +53,7 @@ int main(int argc, char** argv) {
     std::string script;
     bool quiet = false;
     std::map<std::string, std::string> vars;
+    sf::BenchCommandLine bench;
 
     if (argc < 2) {
         usage();
@@ -92,6 +99,8 @@ int main(int argc, char** argv) {
         } else if (a == "--schema") {
             std::puts(registry.toolSchemaJson().c_str());
             return 0;
+        } else if (sf::parseBenchArg(argc, argv, i, bench)) {
+            // handled after the loop
         } else if (a == "-q" || a == "--quiet") {
             quiet = true;
         } else if (a == "-h" || a == "--help") {
@@ -103,6 +112,8 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+
+    if (bench.run) return sf::runBenchCommandLine(bench, "## CPU only (sculptforge-cli --bench)\n\n");
 
     std::vector<sf::ScriptStatement> statements;
     std::string error;

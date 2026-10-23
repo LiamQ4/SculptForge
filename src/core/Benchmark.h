@@ -1,0 +1,62 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Performance benchmark (sculptforge-cli --bench, sculptforge --bench; numbers in docs/performance.md).
+//
+// For each size it builds a sphere the way a sculptor gets one (a quad cube projected onto a sphere, then
+// Divide up to the size, so the mesh has subdivision levels) and measures, per dab and per stroke: the brush
+// kernel, normal update, BVH refit and undo record for every kind of brush (with X symmetry, as in the app),
+// plus opening / saving the project and stepping subdivision levels. The app adds what needs a GPU through
+// BenchGpu: uploading what a dab changed and the frame time while orbiting.
+#pragma once
+
+#include "core/Mesh.h"
+
+#include <cstddef>
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace sf {
+
+struct BenchGpu {
+    // Uploads what the mesh marked dirty and waits for the GPU; returns milliseconds. First call: everything.
+    std::function<double(Mesh&)> upload;
+    // Average milliseconds per frame over a turn around the mesh (already uploaded).
+    std::function<double(Mesh&)> orbitFrameMs;
+    std::string description; // GPU / driver, for the report
+};
+
+struct BenchOptions {
+    std::vector<double> sizesMillions{4, 16, 32}; // triangle counts, in millions
+    int dabsPerStroke = 40;
+    std::string projectDir; // where the project round trip writes (default: the system temp folder)
+    bool projectRoundTrip = true;
+    std::function<void(const std::string&)> log; // progress lines (optional)
+    std::function<void(const std::string&)> partial; // the report so far, after each size (optional)
+};
+
+// Command-line options shared by sculptforge-cli and the app: --bench, --bench-sizes 4,16,32 (millions of
+// triangles), --bench-dabs N, --bench-no-project (skip saving / opening, which needs twice the memory),
+// --bench-out FILE. parseBenchArg returns true when argv[i] was one of them
+// (advancing i past its value).
+struct BenchCommandLine {
+    bool run = false;
+    BenchOptions options;
+    std::string outPath;
+};
+bool parseBenchArg(int argc, char** argv, int& i, BenchCommandLine& cl);
+// Runs the benchmark for the command line: progress on stderr, the report (under `heading`) to cl.outPath
+// (rewritten after each size, so a long run keeps what it measured) or stdout. Returns the exit code.
+int runBenchCommandLine(BenchCommandLine cl, const std::string& heading, const BenchGpu* gpu = nullptr);
+
+// Runs the benchmark and returns the report as Markdown tables.
+std::string runBenchmark(const BenchOptions& options, const BenchGpu* gpu = nullptr);
+
+// The benchmark mesh: about `triangles` triangles, with subdivision levels.
+Mesh makeBenchSphere(size_t triangles);
+
+// Resident memory of this process in bytes (0 where unknown).
+size_t residentBytes();
+
+} // namespace sf

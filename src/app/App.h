@@ -383,8 +383,9 @@ private:
     void registerPaintUiCommands();
     void paintAt(const DabParams& p);
     void pickColorUnderCursor();
-    // First paint stroke on a mesh without polypaint: undo restores this snapshot so the attribute goes away again.
-    std::unique_ptr<Mesh> paintSnapshot_;
+    // First paint stroke on a mesh without polypaint: undo swaps this paint stack (no colours) back in, so the
+    // attribute goes away again.
+    std::unique_ptr<PaintStackUndo> paintSnapshot_;
     void beginPaintStroke();
     void finishPaintStroke(UndoRecord& record);
     TexturePainter texturePainter_; // strokes into the SubTool's texture (core/Texture.h)

@@ -116,6 +116,7 @@ size_t paintDab(Sculptor& sculptor, Mesh& mesh, const BVH& bvh, const DabParams&
     mesh.ensureColors();
     const float s = std::clamp(p.strength, 0.0f, 1.0f) * std::clamp(p.pressure, 0.0f, 1.0f);
     static thread_local std::vector<uint32_t> verts;
+    auto clock = std::chrono::steady_clock::now();
     size_t changed = 0;
     for (const glm::vec3& m : Sculptor::mirrors(sym)) {
         const glm::vec3 center = p.center * m, viewDir = p.viewDir * m;
@@ -128,7 +129,10 @@ size_t paintDab(Sculptor& sculptor, Mesh& mesh, const BVH& bvh, const DabParams&
             paintVertex(mesh, v, color, w, p.invert); // Alt paints Base back to white, erases a layer
             ++changed;
         }
+        sculptor.timings.vertices += verts.size();
     }
+    sculptor.timings.kernelMs += lapMs(clock);
+    ++sculptor.timings.dabs;
     return changed;
 }
 

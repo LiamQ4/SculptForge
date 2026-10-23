@@ -35,6 +35,7 @@ public:
     void refitAll(const Mesh& mesh);
 
     size_t nodeCount() const { return nodes_.size(); }
+    size_t memoryBytes() const;
 
 private:
     struct Node {
@@ -56,6 +57,7 @@ private:
     std::vector<uint32_t> leafStamp_;
     uint32_t leafStampValue_ = 0;
     std::vector<uint32_t> scratchLeaves_;
+    std::vector<std::vector<uint32_t>> scratchParts_;
     mutable std::vector<uint32_t> stack_;
 };
 

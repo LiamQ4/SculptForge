@@ -138,6 +138,8 @@ private:
     void syncNormalMap(MeshSlot& s, const Mesh& mesh, const NormalMapView* normalMap);
     static void updateCurvature(MeshSlot& s, const Mesh& mesh, uint32_t begin, uint32_t end);
     void uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs);
+    void uploadRuns(GLuint buffer, const void* data, size_t elementSize);
+    std::vector<std::pair<uint32_t, uint32_t>> dirtyRuns_; // scratch for sync: Mesh::dirtyRuns
     void syncTexture(MeshSlot& s, Mesh& mesh);
     void drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings);
     std::vector<MeshSlot> slots_;

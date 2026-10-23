@@ -11,6 +11,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sf {
@@ -172,42 +173,53 @@ public:
     }
 
     AABB bounds() const;
+    // Bytes this mesh holds (every array, topology included; not the shared texture or subdivision stack).
+    size_t memoryBytes() const;
 
-    // GPU synchronisation state: [dirtyBegin, dirtyEnd) needs re-uploading,
+    // GPU synchronisation state: [dirtyBegin, dirtyEnd) bounds what needs re-uploading,
     // topologyDirty means everything (including indices) does.
     // Vertex attributes (mask, colours) share the vertex range; facesDirty
     // means per-triangle state (hidden, polygroups) needs re-uploading.
+    // Within the range, vertices are tracked in blocks of kDirtyBlock (dirtyBlocks[b] != 0: some vertex of
+    // block b changed), so a dab that touches a few far-apart parts of a big mesh (symmetry, the vertex order
+    // of subdivided levels) uploads only those parts (dirtyRuns).
     uint32_t dirtyBegin = std::numeric_limits<uint32_t>::max();
     uint32_t dirtyEnd = 0;
     bool topologyDirty = true;
     bool facesDirty = true;
+    static constexpr uint32_t kDirtyBlockShift = 11, kDirtyBlock = 1u << kDirtyBlockShift; // 2048 vertices
+    std::vector<uint8_t> dirtyBlocks;
 
     void markDirty(uint32_t v) {
         dirtyBegin = std::min(dirtyBegin, v);
         dirtyEnd = std::max(dirtyEnd, v + 1);
+        const size_t b = v >> kDirtyBlockShift;
+        if (b >= dirtyBlocks.size()) growDirtyBlocks(b + 1);
+        dirtyBlocks[b] = 1;
     }
-    void clearDirty() {
-        dirtyBegin = std::numeric_limits<uint32_t>::max();
-        dirtyEnd = 0;
-        topologyDirty = false;
-        facesDirty = false;
-    }
+    void growDirtyBlocks(size_t count); // (out of line: rarely needed)
+    // Marks the vertices [begin, end).
+    void markDirtyRange(uint32_t begin, uint32_t end);
+    void clearDirty();
     void markAllDirty() {
         if (positions.empty()) return;
-        dirtyBegin = 0;
-        dirtyEnd = static_cast<uint32_t>(positions.size());
+        markDirtyRange(0, static_cast<uint32_t>(positions.size()));
     }
+    // The dirty vertices as sorted, disjoint [begin, end) ranges of whole blocks (clipped to the dirty range
+    // and the vertex count); runs closer than `mergeGap` vertices are joined (one upload call instead of two).
+    void dirtyRuns(std::vector<std::pair<uint32_t, uint32_t>>& out, uint32_t mergeGap = 2 * kDirtyBlock) const;
 
 private:
     uint32_t nextStamp();
 
     std::vector<uint32_t> adjOffsets_, adjList_;
     std::vector<uint32_t> vtOffsets_, vtList_;
-    std::vector<glm::vec3> faceNormals_;
 
-    std::vector<uint32_t> triStamp_, vertStamp_;
+    // updateNormals: vertices already gathered this call (== stamp_), the gathered ones, per-block parts.
+    std::vector<uint32_t> vertStamp_;
     uint32_t stamp_ = 0;
-    std::vector<uint32_t> scratchTris_, scratchVerts_;
+    std::vector<uint32_t> scratchVerts_;
+    std::vector<std::vector<uint32_t>> scratchParts_;
 };
 
 // Shape-preserving Taubin (lambda/mu) smoothing of positions; needs topology.

@@ -106,6 +106,7 @@ constexpr GLbitfield GL_COLOR_BUFFER_BIT = 0x4000;
     X(void, PolygonMode, GLenum, GLenum)                                                     \
     X(void, PolygonOffset, GLfloat, GLfloat)                                                 \
     X(const GLubyte*, GetString, GLenum)                                                     \
+    X(void, Finish, void)                                                                    \
     X(void, GenBuffers, GLsizei, GLuint*)                                                    \
     X(void, DeleteBuffers, GLsizei, const GLuint*)                                           \
     X(void, BindBuffer, GLenum, GLuint)                                                      \
