@@ -17,6 +17,7 @@
 #include "io/GltfIO.h"
 #include "io/GozIO.h"
 #include "io/ObjIO.h"
+#include "io/TextureExport.h"
 #include "io/UsdIO.h"
 #include "io/Zip.h"
 
@@ -287,6 +288,28 @@ TEST(texture_io_obj_writes_mtl_and_png) {
     std::vector<MeshObject> objects;
     CHECK(loadObj(str(dir / "scene.obj"), objects, err) && objects.size() == 2);
     if (objects.size() == 2) CHECK(sameUvs(m, objects[0].mesh) && !objects[1].mesh.hasUvs());
+    fs::remove_all(dir);
+}
+
+// OBJ's mtllib and MTL's map_Kd split file names at spaces: a model saved as "my scene.obj" names its
+// .mtl and PNGs without them (the OBJ keeps its name), so other apps find them.
+TEST(texture_io_sidecar_names_without_spaces) {
+    const fs::path dir = testDir("sf_texture_io_spaces");
+    std::string err;
+    Mesh m = quadCube();
+    m.texture = redBottomTexture();
+    CHECK(saveObj(str(dir / "my scene.obj"), m, err));
+    const std::string obj = readText(dir / "my scene.obj");
+    CHECK(obj.find("mtllib my_scene.mtl\n") != std::string::npos);
+    CHECK(fs::exists(dir / "my_scene.mtl") && !fs::exists(dir / "my scene.mtl"));
+    CHECK(readText(dir / "my_scene.mtl").find("map_Kd my_scene_color.png\n") != std::string::npos);
+    CHECK(checkPng(dir / "my_scene_color.png"));
+    Mesh back;
+    CHECK(loadObj(str(dir / "my scene.obj"), back, err) && sameUvs(m, back));
+    // The other formats name their PNGs the same way.
+    CHECK(saveFbx(str(dir / "my scene.fbx"), "Sculpt", {&m}, FbxExportOptions{}, err));
+    CHECK(readText(dir / "my scene.fbx").find("my_scene_color.png") != std::string::npos);
+    CHECK(textureFileNames(str(dir / "a\tb c.usda"), {{"Body", &m}}) == std::vector<std::string>{"a_b_c_color.png"});
     fs::remove_all(dir);
 }
 

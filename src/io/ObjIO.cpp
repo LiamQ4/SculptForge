@@ -318,7 +318,7 @@ bool saveObj(const std::string& path, const std::vector<MeshObjectRef>& objects,
             mtl += "\nnewmtl " + name + "\nKa 0 0 0\nKd 1 1 1\nKs 0 0 0\nillum 1\nmap_Kd " + pngs[i] + "\n";
         }
         if (clayUsed) mtl += "\nnewmtl " + clay + "\nKa 0 0 0\nKd 0.8 0.55 0.45\nKs 0 0 0\nillum 1\n";
-        const std::filesystem::path mtlPath = utf8Path(path).replace_extension(".mtl");
+        const std::filesystem::path mtlPath = utf8Path(path).parent_path() / utf8Path(sidecarStem(path) + ".mtl");
         std::ofstream mtlFile(mtlPath, std::ios::binary);
         if (!mtlFile || !mtlFile.write(mtl.data(), std::streamsize(mtl.size()))) {
             error = "Cannot write " + textureUtf8(mtlPath);
@@ -331,7 +331,7 @@ bool saveObj(const std::string& path, const std::vector<MeshObjectRef>& objects,
     for (const auto& o : objects) reserve += o.mesh->vertexCount() * 40 + o.mesh->triangleCount() * (hasCornerUvs(*o.mesh) ? 90 : 30);
     buf.reserve(reserve);
     buf += "# Exported by SculptForge\n";
-    if (textured) buf += "mtllib " + textureUtf8(utf8Path(path).stem()) + ".mtl\n";
+    if (textured) buf += "mtllib " + sidecarStem(path) + ".mtl\n";
     char line[192];
     uint32_t first = 1;   // OBJ indices are 1-based and global across objects
     uint32_t firstVt = 1; // as are texture coordinate indices

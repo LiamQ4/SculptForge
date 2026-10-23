@@ -34,9 +34,17 @@ only hold triangles.
 UVs are kept through OBJ, FBX, USD, glTF and GoZ, in and out. A SubTool with a painted
 [texture](texture-painting.md) is exported with it: the PNG is written next to the file as
 `<name>_color.png` (`<name>_<SubTool>_color.png` with several SubTools) and referenced by the model, or embedded
-in GLB and USDZ files. **Tool > Texture Map > Auto UV** gives any sculpt UVs before export.
+in GLB and USDZ files. Spaces in the file name become `_` in the names of the files written beside it
+(`my scene.obj` gets `my_scene.mtl` and `my_scene_color.png`), because OBJ and MTL separate file names with
+spaces. **Tool > Texture Map > Auto UV** gives any sculpt UVs before export. Normal, displacement and other maps
+come from [Tool > Bake](baking.md) as separate image files.
 
-> **Not yet:** texture baking (normal and displacement maps) is on the roadmap.
+Textured exports are checked against other tools, not only read back by SculptForge: GLB files pass the Khronos
+glTF validator with no errors or warnings; USD and USDZ files pass OpenUSD's validators (the USDZ files are
+uncompressed, 64-byte aligned and have the root layer first); FBX files load in ufbx's strict mode with their
+textures connected; and in all four formats plus OBJ, the texture is sampled the right way up (each format's
+UV convention), checked colour by colour against SculptForge's own sampling. The scripts are in
+`tools/export_check/` in the source tree.
 
 ### Scale and axes
 

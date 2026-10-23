@@ -116,10 +116,10 @@ A `--set` variable replaces a whole value, so pass complete paths (with their ex
 
 | Format | Read | Write | Notes |
 |---|---|---|---|
-| OpenUSD (`.usda`, `.usdz`) | Yes | Yes | Meshes, xform ops, Z-up stages, UsdSkel blend shapes, ParticleField Gaussian splats; checked with OpenUSD's `usdchecker` |
-| FBX | Yes (any version) | Yes (7.4 binary) | LOD groups, blend shapes, centimetre units |
-| glTF / GLB | Yes | Yes | Morph targets, vertex colours, `KHR_gaussian_splatting`; checked with the Khronos validator |
-| OBJ | Yes | Yes | Objects as SubTools, groups as polygroups, vertex colours |
+| OpenUSD (`.usda`, `.usdz`) | Yes | Yes | Meshes, xform ops, Z-up stages, UsdSkel blend shapes, ParticleField Gaussian splats, textures; checked with OpenUSD's validators |
+| FBX | Yes (any version) | Yes (7.4 binary) | LOD groups, blend shapes, centimetre units, textures; checked with ufbx's strict mode |
+| glTF / GLB | Yes | Yes | Morph targets, vertex colours, `KHR_gaussian_splatting`, embedded textures; checked with the Khronos validator |
+| OBJ | Yes | Yes | Objects as SubTools, groups as polygroups, vertex colours, textures through `.mtl` |
 | PLY | Yes | Yes | Meshes with vertex colours, Gaussian splats |
 | STL | Yes (binary and ASCII) | Yes (binary) | |
 | ZBrush GoZ | Yes | Yes | Polygroups, mask, polypaint, UVs |

@@ -74,9 +74,19 @@ inline std::string textureUtf8(const std::filesystem::path& p) {
     return std::string(u.begin(), u.end());
 }
 
+// The model file's stem for the files written beside it (<stem>.mtl, <stem>_color.png), with white space
+// replaced by '_': OBJ's `mtllib` and MTL's `map_Kd` separate file names (and options) by spaces, so
+// "my scene.mtl" would be read as two files "my" and "scene.mtl". Other characters (accents...) are kept.
+inline std::string sidecarStem(const std::string& modelPath) {
+    std::string stem = textureUtf8(textureFsPath(modelPath).stem());
+    for (char& c : stem)
+        if (c == ' ' || c == '\t') c = '_';
+    return stem.empty() ? std::string("model") : stem;
+}
+
 // PNG file names (no folder) for the objects of an export to `modelPath`, "" for objects without a texture.
 inline std::vector<std::string> textureFileNames(const std::string& modelPath, const std::vector<MeshObjectRef>& objects) {
-    const std::string stem = textureUtf8(textureFsPath(modelPath).stem());
+    const std::string stem = sidecarStem(modelPath);
     std::vector<std::string> names(objects.size());
     for (size_t i = 0; i < objects.size(); ++i) {
         if (!objects[i].mesh || !hasTexture(*objects[i].mesh)) continue;
