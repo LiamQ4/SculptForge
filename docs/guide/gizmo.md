@@ -106,7 +106,8 @@ part.
 A transform only changes where the vertices are. Polygroups, quads, UVs, polypaint, textures, the mask and
 the topology stay as they are. [Sculpt layers](layers.md) move with the surface: the base and every layer's
 offsets are transformed together, so a layer you sculpted on a forearm stays on it after posing, and layer
-sliders keep working. Projects save the result, and the gizmo's pivot and options too.
+sliders keep working. With [subdivision levels](subdivision-levels.md) you can pose at a low level: the detail of
+the higher levels, sculpt layers included, turns with it when you step back up. Projects save the result, and the gizmo's pivot and options too.
 
 ## Scripting
 

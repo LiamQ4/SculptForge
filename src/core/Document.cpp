@@ -157,7 +157,7 @@ void Document::replaceMeshUndoable(Mesh m, std::string label) {
     if (mesh.multires && !m.multires) {
         // A tool rebuilt the mesh from the current level: the levels go, the undo step keeps them.
         if (const std::string note = subdivDroppedNote(mesh); !note.empty())
-            notice += (notice.empty() ? "" : "; ") + note + " (Undo brings them back)";
+            notice += (notice.empty() ? "" : "; ") + note + " (undo restores them)";
         subdivReleaseCache(mesh);
     }
     UndoRecord r;

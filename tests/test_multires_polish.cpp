@@ -116,6 +116,10 @@ TEST(multires_bench_select_and_step) {
     run(d, "subdiv_higher");
     const double eval = msSince(t0);
     std::printf("  with a sculpt layer: step down folding a layer stroke in %.1f ms, step up re-evaluating %.1f ms\n", fold, eval);
+    stroke(d, "-0.3,0,2", "Inflate", 0.3); // on the base, at the top
+    t0 = std::chrono::steady_clock::now();
+    run(d, "subdiv_lower");
+    std::printf("  step down folding a base stroke in (one layer) %.1f ms\n", msSince(t0));
 }
 
 // Every tool that rebuilds the mesh works on the current level (pending edits included), says the levels were
@@ -148,7 +152,7 @@ TEST(multires_rebuilding_tools_drop_levels_and_undo_restores_them) {
         const CommandResult r = run(d, c.command, c.args);
         CHECK(r.ok);
         CHECK(contains(r.message, "Subdivision levels removed: SDiv 2 of 3 kept as the new base"));
-        CHECK(contains(r.message, "Undo"));
+        CHECK(contains(r.message, "undo restores them"));
         CHECK(subdivLevelCount(d.mesh) == 0);
         CHECK(d.notice.empty());
         // Made from the current level, with the pending stroke.

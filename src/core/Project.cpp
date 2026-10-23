@@ -386,9 +386,9 @@ bool readTexture(Reader& r, const Json& tj, Mesh& m, std::string& error) {
     return true;
 }
 
-// Subdivision levels (core/Multires.h) are the SubTool key "subdiv" (format 4): the current level and every
-// level's mesh (as "mesh" / "layers" / "paint_layers"), details and topology (scheme, Smt, quad pairing and child
-// maps). The SubTool's own "mesh" is the current level, so readers that don't know levels load what was shown.
+// Subdivision levels (core/Multires.h) are the SubTool key "subdiv" (format 4; sculpt-layer details in local
+// frames from format 5): the current level and every level's mesh (as "mesh" / "layers" / "paint_layers"),
+// details and topology (scheme, Smt, quad pairing and child maps). The SubTool's own "mesh" is the current level, so readers that don't know levels load what was shown.
 // A current level identical to that mesh is not written twice ("same_as_mesh").
 Json writeSubdiv(Writer& w, const std::string& prefix, const Mesh& m) {
     Json out = Json::object();
