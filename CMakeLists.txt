@@ -170,7 +170,9 @@ if(SCULPTFORGE_BUILD_APP)
   if(WIN32)
     set_target_properties(sculptforge PROPERTIES WIN32_EXECUTABLE $<CONFIG:Release,MinSizeRel>)
     set(ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/sculptforge.ico")
-    string(REPLACE "/" "\\\\" ICON_PATH "${ICON_PATH}")
+    if(CMAKE_HOST_WIN32)
+      string(REPLACE "/" "\\\\" ICON_PATH "${ICON_PATH}")
+    endif()
     configure_file(packaging/windows/sculptforge.rc ${CMAKE_CURRENT_BINARY_DIR}/sculptforge.rc @ONLY)
     target_sources(sculptforge PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/sculptforge.rc)
   endif()
@@ -336,13 +338,28 @@ if(SCULPTFORGE_BUILD_TESTS)
   endif()
   add_test(NAME sculptforge_tests COMMAND sculptforge_tests)
 
+  # Tests that launch our programs from Python get a path they can run directly. When cross-compiling
+  # (e.g. a Windows build tested under Wine, tools/wintest.sh) that is a script calling the emulator.
+  function(sculptforge_runner out target)
+    if(CMAKE_CROSSCOMPILING_EMULATOR)
+      list(JOIN CMAKE_CROSSCOMPILING_EMULATOR " " emulator)
+      file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/run-${target}.sh
+           CONTENT "#!/bin/sh\nexec ${emulator} \"$<TARGET_FILE:${target}>\" \"$@\"\n"
+           FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+      set(${out} ${CMAKE_CURRENT_BINARY_DIR}/run-${target}.sh PARENT_SCOPE)
+    else()
+      set(${out} $<TARGET_FILE:${target}> PARENT_SCOPE)
+    endif()
+  endfunction()
+
   # The seeded community brush gallery (tools/brush-gallery/repo) must stay valid
   # and its index.json current: every brush is round-tripped through sculptforge-cli.
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
+    sculptforge_runner(SCULPTFORGE_CLI_RUNNER sculptforge-cli)
     add_test(NAME brush_gallery_index
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/brush-gallery/build_index.py
-                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/brush-gallery/repo --check --cli $<TARGET_FILE:sculptforge-cli>)
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/brush-gallery/repo --check --cli ${SCULPTFORGE_CLI_RUNNER})
     # The user guide (docs/guide): every link, anchor and image resolves, only characters the app's font has,
     # and the website pages build.
     add_test(NAME guide_site COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/guide/build_site.py --check
@@ -370,8 +387,9 @@ if(SCULPTFORGE_BUILD_TESTS)
     set_tests_properties(ui_user_guide_1080 PROPERTIES LABELS ui TIMEOUT 300)
     # The guide's keyboard table must match the app's default shortcuts (tools/guide/update_shortcuts.py).
     if(Python3_Interpreter_FOUND)
+      sculptforge_runner(SCULPTFORGE_APP_RUNNER sculptforge)
       add_test(NAME ui_guide_shortcuts COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/guide/update_shortcuts.py
-               --app $<TARGET_FILE:sculptforge> --check)
+               --app ${SCULPTFORGE_APP_RUNNER} --check)
       set_tests_properties(ui_guide_shortcuts PROPERTIES LABELS ui TIMEOUT 300)
     endif()
   endif()

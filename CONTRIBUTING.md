@@ -49,7 +49,15 @@ The step reference is at the top of `src/app/UiTest.cpp`. Tests run headless on 
 take under a second. They use a throwaway settings folder and never touch your own. A failing step stops
 the script and saves `FAIL-line-N.png`, and clicking a missing item lists similarly named items. Clicks
 scroll panels as needed, and clicking an item a person couldn't reach (off screen) fails. CI runs the UI
-tests on Linux under Xvfb and uploads the screenshots as an artifact.
+tests on Linux under Xvfb and on Windows with Mesa's software OpenGL, and uploads the screenshots as an
+artifact.
+
+### Windows, from Linux
+
+`tools/wintest.sh` cross-compiles SculptForge for Windows with llvm-mingw (downloaded once into
+`~/.cache/sculptforge`) and runs every test, UI tests included, under Wine. It catches Windows API, path and
+file-sharing problems before a push; extra arguments go to `ctest` (`tools/wintest.sh -R ui_subtools`). On an
+ARM machine it builds for Windows on ARM, which Wine runs natively.
 
 ## Demo videos
 
