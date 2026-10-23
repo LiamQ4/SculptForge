@@ -142,6 +142,7 @@ public:
     bool canRedo() const { return !redo_.empty(); }
     const std::string& undoLabel() const { return undo_.back().label; }
     const std::string& redoLabel() const { return redo_.back().label; }
+    size_t undoCount() const { return undo_.size(); }
 
     // Both rebuild/refit the BVH as needed.
     bool undo(Mesh& mesh, BVH& bvh);

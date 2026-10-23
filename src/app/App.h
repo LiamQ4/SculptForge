@@ -19,6 +19,7 @@
 #include "core/Commands.h"
 #include "core/Image.h"
 #include "core/Document.h"
+#include "core/MeshTransform.h"
 #include "core/AutoUv.h"
 #include "core/Stroke.h"
 #include "core/Tablet.h"
@@ -94,7 +95,7 @@ public:
     void queueFile(FileAction action, std::string path);
 
 private:
-    enum class Drag { None, Stroke, Orbit, Pan, Zoom, MaskCanvas, SubToolClick, Select };
+    enum class Drag { None, Stroke, Orbit, Pan, Zoom, MaskCanvas, SubToolClick, Select, Gizmo };
 
     void handleEvent(const SDL_Event& e);
     void onMouseDown(float x, float y, Uint8 button);
@@ -664,6 +665,84 @@ private:
     friend class UserGuide; // reads the UI scale, writes the status line
     UserGuide guide_;
     // ---- end User Guide (G) ----
+    // ---- Gizmo 3D (Gizmo.cpp, core/MeshTransform.h): W Move, E Scale, R Rotate, Q back to Draw ----
+public:
+    enum class GizmoMode { Off, Move, Scale, Rotate };
+    enum class GizmoHandle {
+        None,
+        MoveX, MoveY, MoveZ,       // axis arrows
+        PlaneYZ, PlaneXZ, PlaneXY, // plane squares (named by the plane they move in)
+        MoveView,                  // the centre ring: free move in the view plane
+        RotateX, RotateY, RotateZ, RotateView,
+        ScaleX, ScaleY, ScaleZ, ScaleUniform,
+        Count
+    };
+
+private:
+    void registerGizmoActions();
+    void setGizmoMode(GizmoMode mode);
+    bool gizmoActive() const { return gizmo_.mode != GizmoMode::Off; }
+    bool gizmoMouseDown(float x, float y, SDL_Keymod mod); // true if it took the click
+    void gizmoDragTo(float x, float y);
+    void gizmoRelease();
+    void drawGizmo();          // the handles over the canvas, and the Gizmo 3D panel
+    void drawGizmoPanel();
+    void drawGizmoContents(bool compact); // Transform palette > Gizmo 3D and the floating panel
+    void updateGizmoPivot();   // follows the moving part's centre until the pivot is placed
+    void resetGizmoPivot();
+    void snapGizmoPivot(const RayHit& hit, int subtool);
+    void applyGizmoNumbers();  // the panel's Move / Rotate / Scale fields, as a transform command
+    glm::mat3 gizmoFrame() const;
+    float gizmoWorldSize() const; // world length of an axis arrow (constant on screen)
+    bool gizmoProject(const glm::vec3& p, ImVec2& out) const; // false behind the camera
+    GizmoHandle gizmoHandleAt(float x, float y) const;
+    bool gizmoHandleScreen(GizmoHandle h, ImVec2& out) const; // a point to grab handle h (UI tests)
+    std::vector<int> gizmoTargets() const; // SubTools a drag transforms (the active one, or All)
+    void gizmoAfterUndo(bool redo);        // the gizmo goes back (or forward) with its own steps
+    void rememberGizmoStep(const glm::vec3& before, const glm::mat3& frameBefore, bool surfaceBefore);
+    struct GizmoState {
+        GizmoMode mode = GizmoMode::Off;
+        glm::vec3 pivot{0.0f};
+        bool pivotPlaced = false;   // Alt+drag, snap or a drag moved it: stop following the centre
+        bool orientSurface = false; // axes from the surface the pivot was snapped to (else world)
+        glm::mat3 frame{1.0f};      // the surface axes (turn with rotations)
+        bool useMask = true, all = false;
+        float falloff = 0.0f;       // fraction of the size (core/MeshTransform.h)
+        bool snapNext = false;      // "Pivot to Surface": the next click on the model places the pivot
+        uint64_t centreKey = ~uint64_t(0), maskKey = 0;
+        GizmoHandle hover = GizmoHandle::None;
+        // The drag in progress.
+        GizmoHandle handle = GizmoHandle::None;
+        bool pivotOnly = false;     // Alt: move the pivot / turn the axes, not the model
+        glm::vec3 startPivot{0.0f};
+        glm::mat3 startFrame{1.0f};
+        glm::vec3 grab{0.0f};       // where the drag started on the handle's line / plane
+        glm::vec3 grabDir{0.0f};    // rotation: the start direction in the ring's plane
+        ImVec2 startMouse{0, 0};
+        float lastAngle = 0.0f, angle = 0.0f; // rotation: unwrapped, so a drag can go past 180 degrees
+        bool tangent = false;                 // a ring seen edge-on turns with the drag along its tangent
+        ImVec2 tangentDir{0, 0};
+        glm::vec3 surfaceNormal{0, 1, 0};     // at the last snap (Surface orientation)
+        bool pendingSnap = false;             // Alt+press on the model: a click (no drag) puts the pivot there
+        RayHit snapHit;
+        int snapSubtool = -1;
+        MeshTransform current;
+        std::vector<int> subtools;
+        std::vector<TransformSession> sessions;
+        std::string readout;        // shown beside the gizmo while dragging ("Rotate 45")
+        // Where the gizmo was before and after each of its undo steps (active SubTool, by undo depth).
+        struct Step {
+            uint32_t subtool = 0;
+            size_t depth = 0; // UndoStack::undoCount() right after the step
+            glm::vec3 before{0.0f}, after{0.0f};
+            glm::mat3 frameBefore{1.0f}, frameAfter{1.0f};
+            bool surfaceBefore = false, surfaceAfter = false;
+        };
+        std::vector<Step> undoSteps, redoSteps;
+        // Numeric entry (the panel): applied as one transform about the pivot.
+        float move[3] = {0, 0, 0}, rotate[3] = {0, 0, 0}, scale = 100.0f;
+    } gizmo_;
+    // ---- end Gizmo 3D ----
     // ---- Tablet (Tablet.cpp, core/Tablet.h, docs/tablet.md) ----
     // SDL turns pen tip contact into left mouse button events (SDL_PEN_MOUSEID); the pen's own events
     // add pressure, tilt, the eraser end and the side buttons, which are mapped in Preferences > Tablet.

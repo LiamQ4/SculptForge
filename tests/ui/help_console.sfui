@@ -88,9 +88,9 @@ type "##Command palette" "restore standard"
 key enter
 expect_status "Standard UI restored"
 expect_value console_open == 0
-key w
+key shift+f
 expect_value wireframe == 1
-key w
+key shift+f
 key f3
 type "##Command palette" "restore custom"
 key enter

@@ -104,7 +104,7 @@ action registry, the same source as the Controls window.
 | Action | Keys | What it does |
 |---|---|---|
 | Fullscreen | <kbd>F11</kbd> | Fill the screen with SculptForge (again: back to a window). |
-| Wireframe | <kbd>W</kbd> or <kbd>Shift</kbd>+<kbd>F</kbd> | Show the mesh's polygons (quads and triangles) over the surface (ZBrush PolyFrame). |
+| Wireframe | <kbd>Shift</kbd>+<kbd>F</kbd> | Show the mesh's polygons (quads and triangles) over the surface (ZBrush PolyFrame). |
 
 ### Script
 
@@ -122,7 +122,11 @@ action registry, the same source as the Controls window.
 
 | Action | Keys | What it does |
 |---|---|---|
+| Draw | <kbd>Q</kbd> | Draw mode: brushes sculpt and paint (leaves the Gizmo 3D). |
 | Frame | <kbd>F</kbd> | Fit the whole model in the view. |
+| Move | <kbd>W</kbd> | Gizmo 3D, Move: drag an arrow to move along an axis, a square to move in a plane, the centre to move in the view. Masked parts stay; Shift snaps to the grid; Alt+drag moves only the gizmo. W again: back to Draw. |
+| Rotate | <kbd>R</kbd> | Gizmo 3D, Rotate: drag a ring to turn about that axis, the outer ring to turn in the view. Mask the body and put the pivot at a joint to pose a limb. Shift snaps to 15 degrees. R again: back to Draw. |
+| Scale | <kbd>E</kbd> | Gizmo 3D, Scale: drag a box to stretch along an axis or the centre to scale evenly (right or up: bigger). Shift snaps to 10% steps. E again: back to Draw. |
 | X | <kbd>X</kbd> | Mirror strokes across X (left and right). |
 
 <!-- END GENERATED: shortcuts -->

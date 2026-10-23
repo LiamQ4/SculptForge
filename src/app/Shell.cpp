@@ -340,7 +340,7 @@ void App::registerShellActions() {
     add({"view.frame", "Frame", ICON_LC_SCAN, "Fit the whole model in the view.", "Transform", "F", "",
          [this] { camera_.frame(sceneBounds()); }, nullptr, nullptr});
         flag("view.polyf", "PolyF", ICON_LC_GRID_3X3, "Render", "", &renderSettings_.wireframe,
-         "Polyframe: show the polygons of the active SubTool (same as W).");
+         "Polyframe: show the polygons of the active SubTool (Shift+F).");
     flag("view.polygroups", "Groups", ICON_LC_SHAPES, "Render", "", &renderSettings_.showPolygroups,
          "Colour each polygroup of the active SubTool.");
     flag("view.mask", "Mask", ICON_LC_DROPLET, "Render", "", &renderSettings_.showMask, "Darken masked areas.");

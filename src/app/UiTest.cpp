@@ -19,6 +19,10 @@
 //                            or a rectangle from the first point to the last. keep: leave the button down
 //                            (for a shot mid-drag); `release` lets go, with the modifiers held then
 //   release                  release the left button
+//   gizmo_drag HANDLE DX DY [S]  left-drag a Gizmo 3D handle by DX DY pixels with the held modifiers (alt: the
+//                            gizmo only; shift: snapping). HANDLE: move_x move_y move_z plane_yz plane_xz plane_xy
+//                            move_view rotate_x rotate_y rotate_z rotate_view scale_x scale_y scale_z scale_uniform
+//   gizmo_hover HANDLE       move the mouse onto a Gizmo 3D handle (it lights up, for screenshots)
 //   orbit DX DY              right-drag on the background, in pixels (with the held modifiers)
 //   run COMMANDS             sculptforge-cli commands, e.g. run new_sphere subdivisions=4
 //   drop FILE                as if FILE were dropped onto the window (relative to the script's folder)
@@ -42,6 +46,7 @@
 //                            right_tray_open, left_tray_open, lightbox_open, guide_open, guide_hits (search results), shelves (1 shown), left_tray / right_tray (palettes in
 //                            the tray, -1 when closed); OP is == != < <= > >=
 //                            moved (vertices moved since `snapshot`), moved_max / moved_sum (distance),
+//                            moved_masked (masked vertices that moved),
 //                            moved_out (summed movement along the snapshot's normals: > 0 out, < 0 in),
 //                            pen_pressure (raw), brush_pressure (after the curve; 1 for the mouse),
 //                            stroking (1 while a stroke is open), cursor_x / cursor_y (the brush cursor, pixels),
@@ -56,6 +61,9 @@
 //                            texture_painted (texels of the texture composite that aren't white),
 //                            texture_mean_r / texture_mean_g / texture_mean_b (mean composite, sRGB 0-255),
 //                            auto_uv_running
+//                            gizmo_mode (0 Draw, 1 Move, 2 Scale, 3 Rotate), gizmo_hover (handle under the cursor,
+//                            0 = none, in gizmo_drag's order from 1), gizmo_falloff, pivot_x / pivot_y / pivot_z,
+//                            center_x / center_y / center_z and size_x / size_y / size_z (active mesh bounds)
 //   (mesh values are the active SubTool's)
 //   snapshot                 remember the active mesh's vertices (for the moved* values)
 //   remember VALUE NAME      keep VALUE's current value as $NAME
@@ -235,6 +243,17 @@ double Demo::query(const std::string& name, bool& known) const {
         const int k = name.back() == 'r' ? 0 : name.back() == 'g' ? 1 : 2;
         return sum[k] / double(px.size() / 4);
     }
+    if (name == "gizmo_mode") return double(int(app_.gizmo_.mode));
+    if (name == "gizmo_hover") return double(int(app_.gizmo_.hover));
+    if (name == "gizmo_falloff") return app_.gizmo_.falloff;
+    if (name == "pivot_x") return app_.gizmo_.pivot.x;
+    if (name == "pivot_y") return app_.gizmo_.pivot.y;
+    if (name == "pivot_z") return app_.gizmo_.pivot.z;
+    if ((name.rfind("center_", 0) == 0 && name.size() == 8) || (name.rfind("size_", 0) == 0 && name.size() == 6)) {
+        const AABB b = m.bounds();
+        const int k = name.back() == 'x' ? 0 : name.back() == 'y' ? 1 : 2;
+        return name[0] == 'c' ? b.center()[k] : b.extent()[k];
+    }
     if (name == "can_undo") return app_.doc_.undo.canUndo() ? 1.0 : 0.0;
     if (name == "dirty") return app_.doc_.dirty() ? 1.0 : 0.0;
     if (name == "splats") return double(app_.doc_.splats.size());
@@ -290,6 +309,13 @@ double Demo::query(const std::string& name, bool& known) const {
         size_t n = 0;
         for (uint8_t h : m.hidden) n += h != 0;
         return double(n);
+    }
+    if (name == "moved_masked") { // masked vertices (mask >= 0.5) that moved since `snapshot`
+        if (basePositions_.size() != m.vertexCount()) return -1.0;
+        double count = 0.0;
+        for (size_t v = 0; v < basePositions_.size(); ++v)
+            count += m.maskAt(uint32_t(v)) >= 0.5f && glm::length(m.positions[v] - basePositions_[v]) > 1e-6f ? 1.0 : 0.0;
+        return count;
     }
     if (name == "moved" || name == "moved_max" || name == "moved_sum" || name == "moved_out") {
         if (basePositions_.size() != m.vertexCount()) return -1.0; // no snapshot, or the topology changed
@@ -557,6 +583,45 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             }
             return false;
         });
+        wait(0.1f);
+    } else if (verb == "gizmo_drag" || verb == "gizmo_hover") {
+        static const char* kHandles[] = {"move_x",    "move_y",   "move_z",   "plane_yz",    "plane_xz",
+                                         "plane_xy",  "move_view", "rotate_x", "rotate_y",   "rotate_z",
+                                         "rotate_view", "scale_x", "scale_y",  "scale_z",     "scale_uniform"};
+        if (!need(verb == "gizmo_drag" ? 3 : 1)) return false;
+        int index = -1;
+        for (int i = 0; i < int(std::size(kHandles)); ++i)
+            if (w[1] == kHandles[i]) index = i + 1;
+        if (index < 0) {
+            error = "unknown gizmo handle '" + w[1] + "'";
+            return false;
+        }
+        const auto handle = App::GizmoHandle(index);
+        const bool drag = verb == "gizmo_drag";
+        const float dx = drag ? num(2, 0) : 0.0f, dy = drag ? num(3, 0) : 0.0f, seconds = drag ? num(4, 0.5f) : 0.0f;
+        auto from = std::make_shared<ImVec2>();
+        const std::string name = w[1];
+        steps_.push_back([this, line, handle, from, name](float t) {
+            if (app_.gizmoHandleScreen(handle, *from)) {
+                mouseMotion(from->x, from->y);
+                return true;
+            }
+            if (t > 1.0f) fail(line, "gizmo handle " + name + " isn't on screen (is the gizmo in that mode?)");
+            return t > 1.0f;
+        });
+        if (drag) {
+            steps_.push_back([this, from, dx, dy, seconds](float t) {
+                if (t == 0.0f) return false; // a frame of hover first
+                if (!buttonDown_ && t < seconds) mouseButton(true, SDL_BUTTON_LEFT);
+                const float u = std::min(t / seconds, 1.0f);
+                mouseMotion(from->x + dx * u, from->y + dy * u);
+                if (t >= seconds) {
+                    mouseButton(false, SDL_BUTTON_LEFT);
+                    return true;
+                }
+                return false;
+            });
+        }
         wait(0.1f);
     } else if (verb == "drag_item") {
         if (!need(3)) return false;

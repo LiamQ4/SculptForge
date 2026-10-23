@@ -26,7 +26,8 @@ UiLayout standardLayout() {
     UiLayout l;
     l.rightTray = {"tool"};
     l.openSubpalettes = {"tool.subtool"};
-    l.topShelf = {"ui.lightbox",       "sep",           "draw.sculpt",          "draw.paint",          "sep",
+    l.topShelf = {"ui.lightbox",       "sep",           "tool.draw",            "tool.move",           "tool.scale",
+                  "tool.rotate",       "sep",           "draw.sculpt",          "draw.paint",          "sep",
                   "draw.zadd",         "draw.zsub",     "draw.rgb",             "draw.paint_vertex",   "draw.paint_texture",   "sep",                 "widget.draw_size",
                   "widget.strength",   "row",           "ui.brush_lab",         "draw.front_faces",    "sep",
                   "transform.symmetry_x",   "transform.symmetry_y", "transform.symmetry_z",    "sep",                 "draw.pressure_strength",
