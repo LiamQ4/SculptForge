@@ -33,7 +33,12 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DSCULPTFORGE_USE_SYSTEM_SDL=OFF
           cmake --build build --parallel
-          ctest --test-dir build --output-on-failure
+          ctest --test-dir build --output-on-failure -LE ui
+      - name: UI tests (real app, Xvfb + Mesa)
+        run: |
+          sudo apt-get install -y xvfb libgl1-mesa-dri
+          xvfb-run -a -s "-screen 0 1920x1080x24" env LIBGL_ALWAYS_SOFTWARE=1 \
+            ctest --test-dir build --output-on-failure -L ui
       - name: .deb and .tar.gz
         run: cd build && cpack -G "DEB;TGZ"
       - name: AppImage
@@ -84,7 +89,8 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DSCULPTFORGE_USE_SYSTEM_SDL=OFF \
             -DSCULPTFORGE_BUILD_PYTHON=ON -DPython_EXECUTABLE="$PYTHON313" -DSCULPTFORGE_PYTHON_INSTALL_DIR=lib/sculptforge/python
           cmake --build build --parallel
-          ctest --test-dir build --output-on-failure
+          # UI tests need a display; they run under Xvfb in the Linux jobs above and in CI.
+          ctest --test-dir build --output-on-failure -LE ui
           cd build
           cpack -G TGZ -D CPACK_PACKAGE_FILE_NAME=SculptForge-${TAG#v}-linux-${{ matrix.arch }}-${{ matrix.suffix }}
           if [ "${{ matrix.generators }}" = "RPM;TGZ" ]; then cpack -G RPM; fi
@@ -106,7 +112,8 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           cmake --build build --parallel
-          ctest --test-dir build --output-on-failure
+          # UI tests need a display; they run under Xvfb in the Linux jobs above and in CI.
+          ctest --test-dir build --output-on-failure -LE ui
       - name: Package (signed ad-hoc inside CPack, see cmake/MacSign.cmake)
         run: cd build && cpack -G DragNDrop
       - uses: actions/upload-artifact@v4
@@ -124,7 +131,8 @@ jobs:
         run: |
           cmake -S . -B build -DSCULPTFORGE_USE_SYSTEM_SDL=OFF
           cmake --build build --config Release --parallel
-          ctest --test-dir build -C Release --output-on-failure
+          # UI tests need a display; they run under Xvfb in the Linux jobs above and in CI.
+          ctest --test-dir build -C Release --output-on-failure -LE ui
       - name: Package
         run: cd build && cpack -C Release -G "NSIS;ZIP"
       - uses: actions/upload-artifact@v4
