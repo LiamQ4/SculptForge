@@ -307,6 +307,7 @@ void App::initActions() {
     // the same id and own P (Paint), the symmetry toggles and Tab.
     registerShellActions();
     registerTextureUiActions(); // Tool > Texture Map, the Vertex / Texture paint target (PanelTexture.cpp)
+    registerBakeUiActions();    // Tool > Bake (PanelBake.cpp)
 
     // Every command, so the command palette finds anything scriptable.
     actions_.registerCommands(

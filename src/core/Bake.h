@@ -103,10 +103,11 @@ bool bakeSourceSubtools(const Document& doc, const std::string& source, std::vec
 // Where maps go when no folder is given: the project's folder, else the current folder.
 std::string defaultBakeFolder(const Document& doc);
 
-// Called after the bake command succeeds (the app shows the normal map on the model).
-using BakeListener = std::function<void(const Document&, std::shared_ptr<const BakeResult>)>;
+// Called after the bake command succeeds, with the files it wrote (the app shows the normal map on the model).
+using BakeListener =
+    std::function<void(const Document&, std::shared_ptr<const BakeResult>, const std::vector<std::string>& files)>;
 void setBakeListener(BakeListener listener);
-void notifyBakeListener(const Document& doc, std::shared_ptr<const BakeResult> result);
+void notifyBakeListener(const Document& doc, std::shared_ptr<const BakeResult> result, const std::vector<std::string>& files);
 
 // bake
 void registerBakeCommands(CommandRegistry& registry);

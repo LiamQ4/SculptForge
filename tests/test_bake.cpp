@@ -371,13 +371,18 @@ TEST(bake_command) {
     const std::string dir = tempPath("sf_bake_cmd");
     std::filesystem::remove_all(dir);
     std::shared_ptr<const BakeResult> seen;
-    setBakeListener([&](const Document&, std::shared_ptr<const BakeResult> r) { seen = r; });
+    size_t seenFiles = 0;
+    setBakeListener([&](const Document&, std::shared_ptr<const BakeResult> r, const std::vector<std::string>& files) {
+        seen = r;
+        seenFiles = files.size();
+    });
     CommandResult res = reg.execute(doc, "bake", {{"source", std::string("all")}, {"maps", std::string("normal,ao,displacement")},
                                                   {"size", 256.0}, {"out", dir}, {"ao_rays", 8.0}});
     std::printf("  %s\n", res.message.c_str());
     CHECK(res.ok);
     CHECK(res.message.find("mid-grey = 0") != std::string::npos);
     CHECK(seen && seen->width == 256 && seen->has(BakeMap::AmbientOcclusion));
+    CHECK(seenFiles == 4);
     for (const char* f : {"Low_normal.png", "Low_ao.png", "Low_displacement.png", "Low_displacement.exr"})
         CHECK(std::filesystem::exists(std::filesystem::path(dir) / f));
     res = reg.execute(doc, "bake", {{"source", std::string("High")}, {"size", std::string("1k")}, {"out", dir}, {"name", std::string("x")},

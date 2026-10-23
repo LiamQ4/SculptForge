@@ -1106,13 +1106,13 @@ void setBakeListener(BakeListener listener) {
     g_listener = std::move(listener);
 }
 
-void notifyBakeListener(const Document& doc, std::shared_ptr<const BakeResult> result) {
+void notifyBakeListener(const Document& doc, std::shared_ptr<const BakeResult> result, const std::vector<std::string>& files) {
     BakeListener l;
     {
         std::lock_guard lock(g_listenerMutex);
         l = g_listener;
     }
-    if (l) l(doc, std::move(result));
+    if (l) l(doc, std::move(result), files);
 }
 
 // ---------------------------------------------------------------------------
@@ -1197,7 +1197,7 @@ void registerBakeCommands(CommandRegistry& reg) {
                  const std::string folder = argString(a, "out", defaultBakeFolder(doc));
                  std::vector<std::string> written;
                  if (!saveBakeMaps(*result, folder, name, argBool(a, "exr", true), written, err)) return {false, err};
-                 notifyBakeListener(doc, result);
+                 notifyBakeListener(doc, result, written);
                  std::string files;
                  for (const std::string& w : written) files += "\n  " + w;
                  return {true, bakeSummary(*result) + "\nWrote:" + files};
