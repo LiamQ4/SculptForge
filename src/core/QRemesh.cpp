@@ -1675,7 +1675,6 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
     }
     size_t totalTris = 0;
     for (const WorkMesh& p : parts) totalTris += p.T.size();
-    std::vector<double> weight(parts.size(), 1.0);
     if (!report(0.03f)) return false;
 
     QuadMesh qm;
@@ -1705,8 +1704,8 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
             continue;
         }
         if (timing)
-            std::fprintf(stderr, "  piece %zu: %zu triangles, area %.4g, weight %.2f, budget %.0f -> %zu quads\n", i,
-                         parts[i].T.size(), partArea[i], weight[i], budget[i], r.mesh.quads.size());
+            std::fprintf(stderr, "  piece %zu: %zu triangles, area %.4g, budget %.0f -> %zu quads\n", i, parts[i].T.size(),
+                         partArea[i], budget[i], r.mesh.quads.size());
         qm.P.insert(qm.P.end(), r.mesh.P.begin(), r.mesh.P.end());
         for (const glm::uvec4& q : r.mesh.quads) qm.quads.push_back(q + glm::uvec4(base));
         seam.insert(seam.end(), r.seam.begin(), r.seam.end());

@@ -60,7 +60,7 @@ struct QRemeshStats {
     bool symmetryUsed = false;   // false when symmetry was asked for but the model isn't mirror-symmetric
     float symmetryCenter = 0.0f; // the plane used (with symmetryUsed)
     float asymmetry = 0.0f;      // the model's mirror mismatch about that plane, in mean quad edges
-    size_t pieces = 0;           // separate pieces of the source, each remeshed on its own
+    size_t pieces = 0;           // separate pieces of the source (small ones are remeshed on their own)
     double seconds = 0;
 };
 
