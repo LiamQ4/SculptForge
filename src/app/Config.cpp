@@ -332,6 +332,7 @@ void App::initActions() {
     registerTextureUiActions(); // Tool > Texture Map, the Vertex / Texture paint target (PanelTexture.cpp)
     registerGizmoActions();     // Q W E R: Draw, and the Gizmo 3D's Move, Scale, Rotate (Gizmo.cpp)
     registerBakeUiActions();    // Tool > Bake (PanelBake.cpp)
+    registerRetopoUiActions(); // Geometry > QRemesh, SubTool > ProjectAll (PanelRetopo.cpp)
 
     // Every command, so the command palette finds anything scriptable.
     actions_.registerCommands(

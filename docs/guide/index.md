@@ -32,25 +32,26 @@ You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<
 14. [Subdivision levels](subdivision-levels.md)
 15. [Moving, rotating and posing (Gizmo 3D)](gizmo.md)
 16. [Subdivide, remesh, decimate and LODs](geometry.md)
+17. [Quad retopology and detail projection](retopology.md)
 
 ## AI and capture
 
-17. [Image and text to 3D](generate-3d.md)
-18. [Gaussian splats](splats.md)
+18. [Image and text to 3D](generate-3d.md)
+19. [Gaussian splats](splats.md)
 
 ## Files and pipelines
 
-19. [Baking normal and displacement maps](baking.md)
-20. [Exporting, Unreal and ZBrush](exporting.md)
-21. [Projects, autosave and QuickSave](projects.md)
-22. [Scripting and automation](scripting.md)
-23. [SculptForge for studios](studios.md)
+20. [Baking normal and displacement maps](baking.md)
+21. [Exporting, Unreal and ZBrush](exporting.md)
+22. [Projects, autosave and QuickSave](projects.md)
+23. [Scripting and automation](scripting.md)
+24. [SculptForge for studios](studios.md)
 
 ## Reference
 
-24. [Keyboard and mouse](shortcuts.md)
-25. [Troubleshooting and FAQ](troubleshooting.md)
-26. [Glossary](glossary.md)
+25. [Keyboard and mouse](shortcuts.md)
+26. [Troubleshooting and FAQ](troubleshooting.md)
+27. [Glossary](glossary.md)
 
 ## Getting help
 

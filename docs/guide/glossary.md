@@ -43,6 +43,7 @@ for what is planned.
 | Polygroups | **Polygroups**: same idea, same Ctrl+Shift gestures. See [Polygroups and visibility](polygroups.md) |
 | Polypaint | **Polypaint**: Paint brush (<kbd>P</kbd>), Rgb, fills, cavity paint. See [Polypaint](polypaint.md) |
 | Polypaint layers | **Tool > Paint Layers**: Photoshop-style colour layers with blend modes. See [Paint layers](polypaint.md#paint-layers) |
+| Project All (ProjectAll) | **Tool > SubTool > Project > ProjectAll** (`project_all`), with Dist, Mean and PA Blur; respects the mask. See [Quad retopology](retopology.md#projectall) |
 | Projection Master | Not yet. **Generate > Stamp** projects an image onto the model from the view |
 | QuickSave | **QuickSave** in the title strip; the last 10 are kept. See [Projects](projects.md#quicksave) |
 | Rgb | **Rgb** on the top shelf (paint while sculpting) |
@@ -63,7 +64,7 @@ for what is planned.
 | UV Master (Unwrap) | **Tool > Texture Map > Auto UV** (`uv_auto`). UVs that come in with a model are kept. Seams and UV editing not yet. See [Texture painting](texture-painting.md) |
 | Zadd / Zsub | **Zadd** / **Zsub** on the top shelf; <kbd>Alt</kbd> flips for one stroke |
 | ZPlugin | No in-app plugin system yet. Automate with the Python module, `sculptforge-cli` and MCP ([Scripting](scripting.md)) |
-| ZRemesher | Not yet (quad retopology is on the roadmap) |
+| ZRemesher | **Tool > Geometry > QRemesh** (`qremesh`): Target Polygons, Half / Same / Double, Adaptive Size, Keep Groups, Use Polypaint, symmetry. No curve guides yet. See [Quad retopology](retopology.md) |
 | ZScript | Script commands: the console (backtick key), script files, `sculptforge-cli`. See [Scripting](scripting.md) |
 | ZTL, ZPR files | Not supported. Use GoZ, OBJ, FBX or GLB to bring models over; save work as `.sfproj` |
 
@@ -77,6 +78,7 @@ for what is planned.
 | Brush recipe | The data that defines a custom brush (direction, depth, plane, pinch, pattern and so on): values, never code |
 | `.sfbrush` | A file holding one brush recipe |
 | `.sfproj` | A SculptForge project file: the whole scene. See [Projects](projects.md) |
+| Cross field | The directions QRemesh wants quad edges to follow at every point of the surface, smoothed over the whole model. Singularities (where three or five quads meet) appear where the field must turn |
 | Command palette | <kbd>F3</kbd>: search every command, brush and setting by name and run it |
 | Community gallery | Shared CC0 brushes you can install in one click (**Community brushes**) |
 | Console | The script console (backtick key): every action appears as a script line |
@@ -93,6 +95,7 @@ for what is planned.
 | Shelves, palettes, trays | The interface around the canvas: shelves hold the most-used controls, palettes hold everything, trays hold pinned palettes. See [The interface](interface.md) |
 | Studio brush folder | A shared, read-only brush folder for a team (`SCULPTFORGE_BRUSH_PATH`). See [For studios](studios.md) |
 | Paint target (Vertex / Texture) | Where painting goes on a SubTool that has a texture: its vertices (polypaint) or its texture. Top shelf, next to **Rgb**. See [Texture painting](texture-painting.md#vertex-or-texture) |
+| QRemesh | SculptForge's automatic quad retopology (ZBrush's ZRemesher), in **Tool > Geometry**. See [Quad retopology](retopology.md) |
 | Padding (gutter) | The few texels around each UV island that texture painting and baking also fill, so seams don't show. See [Texture painting](texture-painting.md) and [Baking](baking.md) |
 | Bake | Capture a high-poly's detail as images (maps) on a low-poly's UVs. See [Baking](baking.md) |
 | Cage (front / rear distance) | How far in front of and behind the low-poly the bake's rays look for the high-poly. See [Baking](baking.md#how-the-bake-works) |

@@ -61,7 +61,8 @@
 //                            painting goes into the texture), texture_layers, active_texture_layer,
 //                            texture_painted (texels of the texture composite that aren't white),
 //                            texture_mean_r / texture_mean_g / texture_mean_b (mean composite, sRGB 0-255),
-//                            auto_uv_running
+//                            auto_uv_running, qremesh_running (QRemesh working in the background),
+//                            quads (quad pairs in the active SubTool), quad_percent (quads among its polygons)
 //                            sdiv (the current subdivision level, 1 = base; 0 without levels), sdiv_levels (0 = none)
 //                            gizmo_mode (0 Draw, 1 Move, 2 Scale, 3 Rotate), gizmo_hover (handle under the cursor,
 //                            0 = none, in gizmo_drag's order from 1), gizmo_falloff, pivot_x / pivot_y / pivot_z,
@@ -239,6 +240,10 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "active_texture_layer") return hasTexture(m) && !m.texture->layers.empty() ? double(m.texture->activeLayer) : -1.0;
     if (name == "auto_uv_running") return app_.autoUv_ ? 1.0 : 0.0;
     if (const double v = app_.bakeTestValue(name); !std::isnan(v)) return v;
+    if (name == "qremesh_running") return app_.qremesh_ ? 1.0 : 0.0;
+    if (name == "quads") return double(m.quadCount());
+    if (name == "quad_percent")
+        return m.triangleCount() ? 100.0 * double(m.quadCount()) / double(m.triangleCount() - m.quadCount()) : 0.0;
     if (name == "texture_painted" || name.rfind("texture_mean_", 0) == 0) {
         if (!hasTexture(m)) return 0.0;
         const std::vector<uint8_t>& px = m.texture->pixels;
@@ -761,7 +766,7 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             const bool idle = !busy(app_.pendingBrush_) && !busy(app_.pendingGenerator_) && !busy(app_.pendingModels_) &&
                               !busy(app_.pendingUnreal_) && !busy(app_.pendingComfyCheck_) && !app_.galleryBusy() &&
                               !app_.thumbs_.busy() && !app_.libraryScanner_.busy() && !app_.autoUv_ &&
-                              !app_.bakeBusy();
+                              !app_.bakeBusy() && !app_.qremesh_;
             if (idle) return true;
             SDL_Delay(10); // real work runs in real time
             if (t > timeout) fail(line, "still busy after " + number(timeout) + " s");

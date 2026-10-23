@@ -60,6 +60,10 @@ add_library(sculptforge_core STATIC
   src/core/Multires.cpp
   src/core/MultiresCommands.cpp
   src/core/AutoUv.cpp
+  src/core/SurfaceQuery.cpp
+  src/core/QRemesh.cpp
+  src/core/Projection.cpp
+  src/core/RetopoCommands.cpp
   third_party/xatlas/xatlas.cpp
   src/core/Bake.cpp
   src/core/BakeImage.cpp
@@ -171,6 +175,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelGeometry.cpp
     src/app/Gizmo.cpp
     src/app/PanelBake.cpp
+    src/app/PanelRetopo.cpp
     src/app/PanelGoz.cpp
     src/app/PanelProject.cpp
     src/app/PanelSubTools.cpp

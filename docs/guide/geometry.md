@@ -14,6 +14,7 @@ All of them work on the **active SubTool** and, except the LOD preview, are undo
 | Divide (levels) | **Tool > Geometry > Divide**, <kbd>Ctrl</kbd>+<kbd>D</kbd> | x4 per level, lower levels kept | Each quad becomes four (Catmull-Clark) | Yes | Yes (interpolated) | Yes |
 | Subdivide | **Tool > Geometry > Subdivide** | x4 per level | Each quad becomes four | Yes | Yes (interpolated) | Yes |
 | Voxel Remesh | **Tool > Remesh > Voxel Remesh** | Set by resolution | All quads (new ones) | Baked in | Yes (transferred) | No (reset) |
+| QRemesh | **Tool > Geometry > QRemesh** | Set by Target Polygons | All quads, with edge loops | Baked in | Yes (transferred) | Polygroups with Keep Groups; no hidden faces or UVs |
 | Decimate | **Tool > Geometry > Decimate** | Reduced | No, all triangles | Yes | Yes | Yes |
 | LOD chain | **Tool > Export** | One level per ratio step | LOD0 keeps them; lower levels are triangles | Yes, on every level | Yes | Yes |
 
@@ -34,8 +35,8 @@ turns every quad into four quads. Two things turn quads into triangles:
 
 glTF (`.glb`) and STL only hold triangles, so those exports always write triangles.
 
-> **ZBrush:** This keeps the quads you bring in; it doesn't make new ones from a triangle mesh. Quad retopology
-> (ZRemesher) is on the roadmap.
+> **ZBrush:** Besides keeping the quads you bring in, SculptForge can make new ones from any mesh: **QRemesh**
+> (like ZRemesher) builds quads with flowing edge loops. See [Quad retopology](retopology.md).
 
 ## Subdivide
 
@@ -83,8 +84,16 @@ To remesh several SubTools into one, first combine them with **Merge visible...*
 [SubTools](subtools.md#merge-subtools).
 
 > **ZBrush:** There is no Project option, Groups-aware remesh or Blur slider yet. Like DynaMesh, the remesh
-> produces an even grid of quads, not flowing edge loops. For quad retopology (ZRemesher) see the roadmap: it is
-> not available yet.
+> produces an even grid of quads, not flowing edge loops. For quads with edge loops that follow the forms, use
+> [QRemesh](retopology.md) (like ZRemesher), and ProjectAll to get the detail back.
+
+## QRemesh
+
+**Tool > Geometry > QRemesh** is automatic quad retopology, like ZBrush's ZRemesher: it rebuilds the SubTool as
+clean quads whose edge loops follow the forms, close to a target polygon count, with Keep Groups, Adaptive Size,
+polypaint density and symmetry. **ProjectAll** (**Tool > SubTool > Project**) brings the sculpted detail back onto
+the new topology after you divide it. Both have their own chapter: [Quad retopology and detail
+projection](retopology.md).
 
 ## Decimate
 
@@ -134,7 +143,7 @@ See [Exporting](exporting.md) for these exports and their options.
 
 ## Undo and safety
 
-Subdivide, remesh, decimate and delete hidden are single undo steps on the active SubTool. They can use a lot of
+Subdivide, remesh, QRemesh, decimate and delete hidden are single undo steps on the active SubTool. They can use a lot of
 memory on dense meshes, and undo keeps a full copy of the previous mesh for each of them. Before a big change on a
 heavy sculpt:
 
@@ -149,6 +158,7 @@ heavy sculpt:
 | `subdivide` | `levels` 1-4 (default 1) |
 | `remesh` | `resolution` 32-512 voxels across the longest side (default 200) |
 | `decimate` | `ratio` 0.01-1 of the triangles to keep (default 0.5), or `triangles` for an exact target |
+| `qremesh` | `target` quads (default 5000), `adaptive`, `keep_groups`, `detect_edges`, `use_polypaint`, `symmetry`, `keep_original`; see [Quad retopology](retopology.md#scripting) |
 | `export_lods` | `path` (base name), `levels` 1-8 including LOD0 (default 4), `ratio` 0.1-0.9 (default 0.5) |
 
 ```sh
@@ -159,6 +169,7 @@ The command line accepts a wider remesh range (32-512) than the palette slider.
 
 ## See also
 
+- [Quad retopology and detail projection](retopology.md): QRemesh and ProjectAll
 - [SubTools](subtools.md): merge pieces before a remesh, duplicate before a decimate
 - [Sculpt layers and blend shapes](layers.md)
 - [Exporting](exporting.md): LOD chains, FBX for Unreal, Send to Unreal

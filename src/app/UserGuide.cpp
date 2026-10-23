@@ -412,6 +412,7 @@ std::string UserGuide::websiteUrl() const {
 std::string UserGuide::chapterFor(const std::string& palette, const std::string& actionId) {
     auto starts = [&](const char* p) { return palette.rfind(p, 0) == 0; };
     auto idStarts = [&](const char* p) { return actionId.rfind(p, 0) == 0; };
+    if (starts("Tool > Geometry > QRemesh") || starts("Tool > SubTool > Project")) return "retopology.md";
     if (starts("Tool > SubTool")) return "subtools.md";
     if (starts("Tool > Layers")) return "layers.md";
     if (starts("Tool > Geometry") || starts("Tool > Remesh")) return "geometry.md";

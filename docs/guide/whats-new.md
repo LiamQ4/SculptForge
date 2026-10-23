@@ -62,6 +62,16 @@ Bake the detail of a high-poly sculpt into maps on a low-poly's UVs, for game en
 
 See [Baking normal and displacement maps](baking.md).
 
+### Quad retopology and detail projection
+
+- **QRemesh** (**Tool > Geometry**, like ZRemesher) rebuilds a sculpt as clean quads whose edge loops follow
+  the forms, near a **Target Polygons** count, in the background. **Keep Groups**, **Adaptive Size**,
+  **Use Polypaint**, **Symmetry** and **Half / Same / Double** work as in ZBrush.
+- **ProjectAll** (**Tool > SubTool > Project**) puts the sculpted detail and polypaint back onto the divided
+  quads, with **Dist**, **Mean** and **PA Blur**, and respects the mask.
+
+See [Quad retopology and detail projection](retopology.md).
+
 ## Version 0.4.2
 
 ### Texture painting on UV maps

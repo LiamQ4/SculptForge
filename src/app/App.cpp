@@ -341,6 +341,7 @@ int App::runUiTest(int w, int h, int fps) {
         pollGenerator();
         pollAutoUv();
         pollBake();
+        pollQRemesh();
         updateCameraAspect();
 
         Demo::beginFrame();
@@ -494,6 +495,7 @@ int App::runRecording() {
         pollUnreal();
         pollAutoUv();
         pollBake();
+        pollQRemesh();
         updateCameraAspect();
 
         Demo::beginFrame();
@@ -559,6 +561,7 @@ int App::run() {
         pollGoz();
         pollAutoUv();
         pollBake();
+        pollQRemesh();
 
         int fbW = 0, fbH = 0, winW = 0, winH = 0;
         SDL_GetWindowSizeInPixels(window_, &fbW, &fbH);
@@ -1220,7 +1223,8 @@ void App::drawUi() {
                                "version 3 or later. It comes with ABSOLUTELY NO WARRANTY.");
             ImGui::Spacing();
             ImGui::TextWrapped("Built with SDL 3 (zlib), Dear ImGui (MIT), GLM (MIT), stb (MIT/public domain), ufbx "
-                               "(MIT/public domain), xatlas (MIT), MikkTSpace (zlib) and the Inter typeface (SIL OFL 1.1). Uses libcurl (curl license) "
+                               "(MIT/public domain), xatlas (MIT), MikkTSpace (zlib) and the Inter typeface (SIL OFL 1.1). QRemesh follows Instant Meshes "
+                               "(BSD-3-Clause). Uses libcurl (curl license) "
                                "where available.");
             ImGui::Spacing();
             if (ImGui::Button("License")) SDL_OpenURL("https://github.com/islandmed/SculptForge/blob/main/LICENSE");
