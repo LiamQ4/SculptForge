@@ -44,7 +44,8 @@
 //                            moved (vertices moved since `snapshot`), moved_max / moved_sum (distance),
 //                            moved_out (summed movement along the snapshot's normals: > 0 out, < 0 in),
 //                            pen_pressure (raw), brush_pressure (after the curve; 1 for the mouse),
-//                            stroking (1 while a stroke is open), camera_yaw / camera_pitch / camera_roll (degrees),
+//                            stroking (1 while a stroke is open), cursor_x / cursor_y (the brush cursor, pixels),
+//                            camera_yaw / camera_pitch / camera_roll (degrees),
 //                            camera_up (the view's up vector . world Y), camera_aligned (1 when looking along a world
 //                            axis), camera_distance, camera_pan (target offset);
 //                            N may be $NAME or $NAME*K for a value kept by `remember`
@@ -69,6 +70,8 @@
 //                            button mapped to rotate / pan / right-click is held)
 //   pen_pressure P           a pressure sample from the hovering pen (e.g. a stale value before a stroke)
 //   pen_out                  the pen leaves proximity
+//   mouse_move U V           a plain mouse (not the pen) moves to a point on the model, e.g. the stray mouse
+//                            events Windows Ink sends beside the pen's
 #include "app/App.h"
 
 #ifndef SDL_PEN_INPUT_IN_PROXIMITY
@@ -281,6 +284,8 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "pen_pressure") return app_.penTracker_.raw();
     if (name == "brush_pressure") return app_.strokePressure();
     if (name == "stroking") return app_.drag_ == App::Drag::Stroke ? 1.0 : 0.0;
+    if (name == "cursor_x") return app_.mouseX_;
+    if (name == "cursor_y") return app_.mouseY_;
     if (name == "camera_yaw") return glm::degrees(app_.camera_.yaw);
     if (name == "camera_pitch") return glm::degrees(app_.camera_.pitch);
     if (name == "camera_roll") return glm::degrees(app_.camera_.roll);
@@ -854,6 +859,13 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             if (!penIn_) penProximity(true);
             penPressure(p);
         });
+    } else if (verb == "mouse_move") {
+        if (!need(2)) return false;
+        run([this, u = num(1, 0.5f), v = num(2, 0.5f)] {
+            const ImVec2 p = onModel(u, v);
+            mouseMotion(p.x, p.y);
+        });
+        wait(0.05f);
     } else if (verb == "pen_out") {
         run([this] { penProximity(false); });
         wait(0.05f);

@@ -34,6 +34,7 @@ key ctrl+z
 
 
 # The mouse always presses fully, whatever the pen did last.
+pen_out
 stroke 0.3 0.45 0.7 0.55
 expect_value brush_pressure == 1
 expect_value moved_out > $heavy
@@ -116,3 +117,18 @@ remember masked mask_before
 pen_stroke 0.2 0.5 0.8 0.5 1 1 eraser
 expect_value masked < $mask_before*0.5
 expect_value moved == 0
+
+# Stray mouse events beside the pen's (Windows Ink sends them, often at an old position) must not move
+# the brush ring: it used to flick between the two places, like a second brush blinking on the model.
+pen_hover 0.5 0.5
+remember cursor_x pen_x
+remember cursor_y pen_y
+mouse_move 0.1 0.9
+expect_value cursor_x == $pen_x
+expect_value cursor_y == $pen_y
+pen_hover 0.6 0.5
+expect_value cursor_x > $pen_x
+# Once the pen has left, the mouse moves the cursor again.
+pen_out
+mouse_move 0.1 0.9
+expect_value cursor_x < $pen_x

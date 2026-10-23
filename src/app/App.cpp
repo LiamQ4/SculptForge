@@ -700,10 +700,20 @@ void App::onMouseDown(float x, float y, Uint8 button) {
 }
 
 void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
+    if (!fromPen) {
+        // Windows Ink and some tablet drivers send mouse events of their own beside the pen's, often at an old
+        // position (where the pen last touched). Taking those made the brush ring flick between two places, so
+        // while the pen is in range only the pen moves the cursor. A pen that went quiet without saying it left
+        // (some drivers never do) hands the cursor back to the mouse.
+        if (dragFromPen_ && drag_ != Drag::None) return;
+        if (penInProximity_) {
+            if (SDL_GetTicksNS() - lastPenNs_ < 1000000000ull) return;
+            penLeft();
+        }
+    }
     mouseX_ = x;
     mouseY_ = y;
     lastInputPen_ = fromPen;
-    if (!fromPen && dragFromPen_ && drag_ != Drag::None) return; // a pen drag ignores a stray mouse
     // ZBrush: start a pan with Alt, then let go of Alt while still dragging to zoom.
     if (drag_ == Drag::Pan && panFromAlt_ && !(inputMods() & SDL_KMOD_ALT)) drag_ = Drag::Zoom;
     switch (drag_) {

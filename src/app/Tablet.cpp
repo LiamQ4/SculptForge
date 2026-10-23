@@ -39,6 +39,7 @@ bool App::dropPenMouseEvent(const SDL_Event& e) const {
 }
 
 void App::handlePenEvent(const SDL_Event& e) {
+    lastPenNs_ = SDL_GetTicksNS();
     switch (e.type) {
     case SDL_EVENT_PEN_PROXIMITY_IN:
         penSeen_ = penInProximity_ = true;
