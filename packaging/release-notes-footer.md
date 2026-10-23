@@ -3,6 +3,13 @@
 
 ### Downloads
 
+New here? **[install/](https://github.com/islandmed/SculptForge/tree/main/install#install-sculptforge)** explains
+which file to pick, or install with one command:
+`curl -fsSL https://raw.githubusercontent.com/islandmed/SculptForge/main/install/install.sh | sh` (macOS / Linux),
+`irm https://raw.githubusercontent.com/islandmed/SculptForge/main/install/install.ps1 | iex` (Windows PowerShell).
+Each file is also attached without its version number (e.g. `SculptForge-macos.dmg`) so links to
+`releases/latest/download/...` always get the newest build.
+
 | Platform | File |
 |---|---|
 | Windows 10/11 (x64) | `SculptForge-…-windows-x86_64.exe` (installer) or `.zip` (portable) |

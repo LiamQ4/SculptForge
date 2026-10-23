@@ -163,21 +163,27 @@ you modify it in-house without publishing your changes. See **[docs/studios.md](
 
 ## Install
 
-Download the latest build for your system from the
-**[releases page](https://github.com/islandmed/SculptForge/releases/latest)**:
+**[Download for Windows](https://github.com/islandmed/SculptForge/releases/latest/download/SculptForge-windows-x86_64-setup.exe)** ·
+**[Download for macOS](https://github.com/islandmed/SculptForge/releases/latest/download/SculptForge-macos.dmg)** ·
+**[Download for Linux](https://github.com/islandmed/SculptForge/releases/latest/download/SculptForge-linux-x86_64.AppImage)** (AppImage, x86_64)
 
-| System | Package |
-|---|---|
-| Windows 10/11 | Installer (`.exe`) or portable `.zip` |
-| macOS 11+ (Apple Silicon & Intel) | `.dmg` |
-| Ubuntu / Debian / Mint / Pop!_OS | `.deb` (x86_64, ARM64): `sudo apt install ./sculptforge_*.deb` |
-| Fedora / RHEL / Rocky / Alma 8+ | `.rpm` (x86_64, ARM64): `sudo dnf install ./sculptforge-*.rpm` |
-| Studio pipelines | VFX Reference Platform `…-vfx2026.tar.gz` / `…-vfx2027.tar.gz`, or the [Rez package](packaging/rez/package.py) |
-| Any Linux | `.AppImage` (x86_64, ARM64) |
-| Arch Linux | AUR: `yay -S sculptforge` ([PKGBUILD](packaging/arch/PKGBUILD)) |
+Every link gets the newest version. **[install/](install/README.md)** has the full list (.deb, .rpm, ARM64,
+portable .zip, Arch) and what to do after downloading. Or install with one command:
+
+```sh
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/islandmed/SculptForge/main/install/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/islandmed/SculptForge/main/install/install.ps1 | iex
+```
 
 The builds aren't code-signed yet. On **macOS**, right-click the app and choose **Open** the first time. On
-**Windows**, if SmartScreen appears, choose **More info → Run anyway**.
+**Windows**, if SmartScreen appears, choose **More info → Run anyway**. Studio builds (VFX Reference Platform,
+[Rez](packaging/rez/package.py)), older versions and checksums are on the
+[releases page](https://github.com/islandmed/SculptForge/releases).
 
 ## Building
 
