@@ -62,7 +62,7 @@ What happens to your sculpting when you change level:
 | | When you change it at one level |
 |---|---|
 | Shape | Carried up as detail, softened down (see above) |
-| Sculpt layers | Each layer has its own detail on every level; weights apply to all levels. See [Layers](layers.md) |
+| Sculpt layers | Each layer has its own detail on every level, kept relative to the surface like the shape's: rotate or reshape a low level and a layer's wrinkles turn and bend with it. Weights apply to all levels. See [Layers](layers.md) |
 | Mask | Copied down to the vertices below, interpolated up where it changed |
 | Polypaint and paint layers | As the mask: paint at a low level for broad colour, at a high level for detail. Painting low only changes the higher levels where you painted |
 | Polygroups, hidden faces | Copied down to the parent faces, inherited up by the faces they contain |
@@ -99,12 +99,17 @@ keeping the dense mesh exactly as it was. Press it again for more levels.
   Del Higher and Reconstruct are single undo steps. Steps share the levels they didn't change, so they cost
   little memory.
 - **Projects** (`.sfproj`) save every level of every SubTool and open at the level you saved at. They use
-  project format 4, so older SculptForge versions ask you to update before opening them.
+  project format 5 (sculpt-layer detail relative to the surface), so older SculptForge versions ask you to update
+  before opening them. Projects saved with format 4 open as before and are converted as they load.
 - **Exports and GoZ** write the current level. To write another one, step to it first, or use the
   `subdiv_export` command (`subdiv_export path=base.obj level=1` writes the base cage of every visible SubTool,
   in any export format). LODs and **Send to Unreal** start from the current level too.
-- **Tools that rebuild the mesh** (Voxel Remesh, Decimate, Subdivide, Delete hidden, merging and splitting
-  SubTools) make a new mesh without levels. Undo brings the levels back.
+- **Tools that rebuild the mesh** (Voxel Remesh, Decimate, QRemesh, Subdivide, Delete hidden, merging and
+  splitting SubTools) work on the level you are on, including what you just sculpted there, and make a new mesh
+  without levels: that level becomes the new base. The status line says so, e.g. *Subdivision levels removed:
+  SDiv 3 of 5 kept as the new base (undo restores them)*. <kbd>Ctrl</kbd>+<kbd>Z</kbd> brings every level back,
+  at the level you were on. Merging and splitting SubTools can't be undone (as in ZBrush), so step to the level
+  you want to keep first, or save before.
 
 > **Note:** **Subdivide** (in **Tool > Geometry**, below Divide) is still there: it replaces the mesh with a
 > denser one and keeps no levels. Use Divide unless you want exactly that.
@@ -137,7 +142,9 @@ Measured on an Apple M1 Pro (Asahi Linux), a cube divided four times to 6.5 mill
 | Memory for all levels | 120 MB | 480 MB |
 
 SculptForge keeps the two levels you visited last ready to show, so going back and forth between a low and a
-high level (the usual rhythm) is instant.
+high level (the usual rhythm) is instant. Only the active SubTool keeps them: selecting another SubTool frees
+that memory (50-170 MB for a SubTool with 1.8 million triangles at the top), and the first level change after
+you come back takes a moment longer (about 0.1 s at that size) while the level is prepared again.
 
 > **ZBrush:** Divide, Smt, Lower Res, Higher Res, SDiv, Del Lower, Del Higher and Reconstruct Subdiv work as in
 > ZBrush. Not yet: Freeze SubDivision Levels, Cage, Rstr, Suv (UV smoothing on divide) and creased edges.

@@ -22,7 +22,9 @@
 //  - mask, polypaint and paint layers (per vertex), polygroups and hidden faces (per triangle) and UVs (per
 //    corner) are copied down to the parent elements and interpolated / inherited up, only where they changed,
 //    so detail painted at a high level survives an edit somewhere else at a low level;
-//  - sculpt layers are their own displacement channels (world space), subdivided with the same stencils;
+//  - sculpt layers are their own displacement channels, subdivided with the same stencils; their per-level
+//    detail is stored in the same local frame as the shape's, so a sculpt layer's fine offsets turn and bend
+//    with a low level that is rotated (Gizmo 3D) or reshaped (project format 5; older files are converted);
 //  - the painted texture lives in UV space and is shared by every level.
 // Stepping between levels that weren't edited copies the stored level back, so up / down round trips are
 // bit-for-bit.
@@ -83,12 +85,15 @@ struct SubdivLevel {
     std::shared_ptr<Mesh> data;
     std::shared_ptr<const SubdivTopology> topo; // null for level 0
     std::shared_ptr<std::vector<glm::vec3>> detail; // local-frame displacement (levels >= 1)
-    std::vector<std::shared_ptr<std::vector<glm::vec3>>> layerDetail; // per sculpt layer, world space
+    // Per sculpt layer: its offsets minus the subdivided offsets of the level below, in the local frame of the
+    // subdivided shape (as `detail`), so they turn with the surface.
+    std::vector<std::shared_ptr<std::vector<glm::vec3>>> layerDetail;
     bool stale = false;
 };
 
 // Working meshes (with topology and normals) and BVHs of the levels most recently left, so stepping back to
-// one is a move instead of a rebuild. Keyed by the level's data, so any change to the level misses.
+// one is a move instead of a rebuild. Keyed by the level's data, so any change to the level misses. Only the
+// active SubTool keeps one: Document::selectSubtool frees the cache of the SubTool it leaves (subdivReleaseCache).
 struct SubdivLevelCache;
 
 struct MultiresStack {
@@ -109,6 +114,21 @@ size_t subdivLevelTriangles(const Mesh& mesh, int level);
 bool subdivMatches(const Mesh& mesh);
 // Bytes the stack holds (all levels, details and topology), for the memory readout and tests.
 size_t subdivBytes(const Mesh& mesh);
+// Bytes the level cache holds (cached working meshes and their BVHs; approximate).
+size_t subdivCacheBytes(const Mesh& mesh);
+// Frees the level cache (the next step to another level rebuilds it): for SubTools that aren't active and
+// meshes kept by undo steps.
+void subdivReleaseCache(Mesh& mesh);
+
+// --- Tools that rebuild the mesh (voxel remesh, decimate, QRemesh, Subdivide, Delete Hidden, merging and
+// splitting SubTools) work on the current level, pending edits included, and leave a plain mesh: the levels
+// are dropped and the current level becomes the new base. ---
+// The status-line note for dropping `mesh`'s levels: "Subdivision levels removed: SDiv 3 of 5 kept as the new
+// base". "" when the mesh has no levels. `name` (a SubTool name, optional) prefixes the level.
+std::string subdivDroppedNote(const Mesh& mesh, const std::string& name = {});
+// Adds the note for SubTool `index` (named) to doc.notice, for operations that aren't undoable (merging and
+// splitting SubTools). Nothing when it has no levels.
+void noteSubtoolLevelsDropped(Document& doc, int index);
 
 // --- Operations on the mesh (no undo; see the commands / Document helpers below) ---
 // Each returns false with `error` set when it can't run. All of them reconcile pending edits first.
@@ -143,6 +163,9 @@ std::shared_ptr<const SubdivTopology> rebuildSubdivTopology(const Mesh& coarse, 
                                                             std::vector<uint32_t> faceChild, std::string& error);
 // Gives a loaded mesh (the current level) its stack; false when the stack doesn't fit it.
 bool attachSubdivStack(Mesh& mesh, MultiresStack stack, std::string& error);
+// Projects before format 5 stored sculpt-layer details in world space: converts a loaded stack's (with its
+// topology) to the local frames SubdivLevel::layerDetail uses now. Evaluates stale levels on the way.
+void convertWorldLayerDetail(MultiresStack& stack);
 // The level data `level` keeps (for writing projects; may be stale, see SubdivLevel).
 const Mesh& subdivLevelData(const Mesh& mesh, int level);
 // True when the mesh holds no edits its stack hasn't folded in yet (its current level's data is the mesh).

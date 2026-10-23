@@ -125,6 +125,7 @@ void App::pollQRemesh() {
     if (index != doc_.activeSubtool) doc_.selectSubtool(index);
     if (doc_.sculptor.strokeActive()) endStroke();
     CommandResult r{true, applyQRemesh(doc_, std::move(*job->result), job->keepOriginal, *job->stats)};
+    if (const std::string notice = doc_.takeNotice(); !notice.empty()) r.message += ". " + notice; // levels dropped
     status_ = r.message;
     lastCommandOk_ = true;
     clearLods();

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Document.h"
 
+#include "core/Multires.h"
+
 #include <filesystem>
 #include <memory>
 
@@ -58,6 +60,7 @@ void Document::selectSubtool(int i) {
         std::swap(cleanRevision_, s.cleanRevision);
     };
     swapIn(subtools[size_t(activeSubtool)]);
+    subdivReleaseCache(subtools[size_t(activeSubtool)].mesh); // only the active SubTool keeps cached levels
     activeSubtool = i;
     swapIn(subtools[size_t(i)]);
     if (bvh.nodeCount() == 0 && mesh.triangleCount()) bvhDirty = true; // built on first use
@@ -150,6 +153,13 @@ std::string Document::assetName() const {
 }
 
 void Document::replaceMeshUndoable(Mesh m, std::string label) {
+    if (m.multires && !subdivMatches(m)) m.multires.reset();
+    if (mesh.multires && !m.multires) {
+        // A tool rebuilt the mesh from the current level: the levels go, the undo step keeps them.
+        if (const std::string note = subdivDroppedNote(mesh); !note.empty())
+            notice += (notice.empty() ? "" : "; ") + note + " (undo restores them)";
+        subdivReleaseCache(mesh);
+    }
     UndoRecord r;
     r.label = std::move(label);
     r.mesh = std::make_unique<Mesh>(std::move(mesh));

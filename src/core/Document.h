@@ -12,6 +12,7 @@
 #include "core/Undo.h"
 
 #include <string>
+#include <utility>
 
 namespace sf {
 
@@ -113,8 +114,14 @@ struct Document {
 
     // Replaces the whole scene with one SubTool holding `m` and clears the edit history.
     void setMesh(Mesh m, std::string name = "Sculpt");
-    // Replaces the mesh as an undoable topology change.
+    // Replaces the mesh as an undoable topology change. A result without the old mesh's subdivision levels (a
+    // remesh, decimate, ...) leaves a `notice` saying the levels were removed; undo brings them back.
     void replaceMeshUndoable(Mesh m, std::string label);
+
+    // A note for the status line from the last operation, e.g. that subdivision levels were removed.
+    // CommandRegistry::execute adds it to the command's message; other callers take it with takeNotice().
+    std::string notice;
+    std::string takeNotice() { return std::exchange(notice, {}); }
 
 private:
     uint64_t cleanRevision_ = 0, cleanSplatsVersion_ = 0;

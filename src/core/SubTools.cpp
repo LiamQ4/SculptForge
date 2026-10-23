@@ -179,6 +179,7 @@ CommandResult notFound(const Args& a) {
 
 // Replaces SubTool `index` by `pieces`, named after it ("Body 1", "Body 2", ...); the first piece is selected.
 void replaceWithPieces(Document& doc, int index, std::vector<Mesh> pieces) {
+    noteSubtoolLevelsDropped(doc, index); // the pieces are cut from the current level
     const std::string base = doc.subtools[size_t(index)].name;
     const bool visible = doc.subtools[size_t(index)].visible;
     for (size_t k = 0; k < pieces.size(); ++k) {
@@ -364,6 +365,7 @@ void registerSubToolCommands(CommandRegistry& reg) {
                  const int i = doc.activeSubtool;
                  if (i + 1 >= doc.subtoolCount()) return {false, "There's no SubTool below " + doc.activeSubtoolInfo().name};
                  Mesh merged = mergeMeshes({&doc.subtoolMesh(i), &doc.subtoolMesh(i + 1)});
+                 for (int k : {i, i + 1}) noteSubtoolLevelsDropped(doc, k); // merged at their current levels
                  const std::string name = doc.subtools[size_t(i)].name, below = doc.subtools[size_t(i + 1)].name;
                  doc.removeSubtool(i + 1);
                  doc.replaceActiveMesh(std::move(merged));
@@ -379,6 +381,7 @@ void registerSubToolCommands(CommandRegistry& reg) {
                      if (doc.subtools[size_t(i)].visible) visible.push_back(i);
                  if (visible.size() < 2) return {false, "Show at least two SubTools to merge"};
                  Mesh merged = mergedVisibleMesh(doc);
+                 for (int k : visible) noteSubtoolLevelsDropped(doc, k); // merged at their current levels
                  const size_t tris = merged.triangleCount();
                  const int at = visible.front();
                  doc.addSubtool(std::move(merged), "Merged", true, at);

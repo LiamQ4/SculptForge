@@ -92,7 +92,9 @@ The up and down arrow buttons under the list move the active SubTool one place u
   they are.
 
 Merging keeps every attribute, gives each original mesh its own polygroups (so you can split them again later) and
-matches sculpt layers by name. The merged SubTool starts with an empty undo history.
+matches sculpt layers by name. The merged SubTool starts with an empty undo history. A SubTool with
+[subdivision levels](subdivision-levels.md) is merged (or split) at the level it is on, which becomes the base of
+the result; the status line names the SubTools that lost their levels.
 
 > **Tip:** Merge first when you want one [voxel remesh](geometry.md#voxel-remesh) to fuse several pieces into a
 > single watertight surface.
