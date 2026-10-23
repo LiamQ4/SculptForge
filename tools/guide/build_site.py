@@ -490,7 +490,7 @@ def page_html(page: Page, index: Page, chapters, position: int) -> str:
   <meta property="og:type" content="article">
   <meta property="og:title" content="{html.escape(title)}">
   <meta property="og:description" content="{desc}">
-  <meta property="og:image" content="{SITE}img/social-preview.png?v=2">
+  <meta property="og:image" content="{SITE}img/social-preview.png?v=3">
   <meta property="og:url" content="{url}">
   <link rel="stylesheet" href="../style.css?v=8">
   <script src="../motion.js?v=1" defer></script>
