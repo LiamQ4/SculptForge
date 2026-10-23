@@ -465,12 +465,21 @@ std::vector<T> subdivideField(const SubdivTopology& tp, bool smooth, const std::
 
 // Vertex normals of `Q` on the fine triangles (area weighted).
 std::vector<glm::vec3> fineNormals(const std::vector<glm::uvec3>& tris, const std::vector<glm::vec3>& Q) {
+    // Face normals in parallel, then summed per vertex in triangle order (so the result doesn't depend on the
+    // thread count).
+    std::vector<glm::vec3> f(tris.size());
+    parallelRange(tris.size(), [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i) {
+            const glm::uvec3& t = tris[i];
+            f[i] = glm::cross(Q[t.y] - Q[t.x], Q[t.z] - Q[t.x]);
+        }
+    });
     std::vector<glm::vec3> n(Q.size(), glm::vec3(0.0f));
-    for (const auto& t : tris) {
-        const glm::vec3 f = glm::cross(Q[t.y] - Q[t.x], Q[t.z] - Q[t.x]);
-        n[t.x] += f;
-        n[t.y] += f;
-        n[t.z] += f;
+    for (size_t i = 0; i < tris.size(); ++i) {
+        const glm::uvec3& t = tris[i];
+        n[t.x] += f[i];
+        n[t.y] += f[i];
+        n[t.z] += f[i];
     }
     return n;
 }
@@ -496,10 +505,10 @@ inline void frameAt(glm::vec3 n, const glm::vec3& q, const glm::vec3& qref, glm:
     nn = n;
 }
 
-// P[k] = Q + Frame(Q) * D, or D = Frame(Q)^-1 (P[k] - Q), with Q = the subdivided coarse shape.
-void applyDetail(const SubdivTopology& tp, const std::vector<glm::uvec3>& tris, const std::vector<glm::vec3>& Q,
+// P[k] = Q + Frame(Q) * D, or D = Frame(Q)^-1 (P[k] - Q), with Q = the subdivided coarse shape and n its
+// normals (fineNormals).
+void applyDetail(const SubdivTopology& tp, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
                  const std::vector<glm::vec3>& D, std::vector<glm::vec3>& out) {
-    const std::vector<glm::vec3> n = fineNormals(tris, Q);
     out.resize(Q.size());
     parallelRange(Q.size(), [&](size_t b0, size_t e0) {
         for (size_t v = b0; v < e0; ++v) {
@@ -510,9 +519,8 @@ void applyDetail(const SubdivTopology& tp, const std::vector<glm::uvec3>& tris, 
         }
     });
 }
-void fitDetail(const SubdivTopology& tp, const std::vector<glm::uvec3>& tris, const std::vector<glm::vec3>& Q,
+void fitDetail(const SubdivTopology& tp, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
                const std::vector<glm::vec3>& P, std::vector<glm::vec3>& D) {
-    const std::vector<glm::vec3> n = fineNormals(tris, Q);
     D.resize(Q.size());
     parallelRange(Q.size(), [&](size_t b0, size_t e0) {
         for (size_t v = b0; v < e0; ++v) {
@@ -521,6 +529,34 @@ void fitDetail(const SubdivTopology& tp, const std::vector<glm::uvec3>& tris, co
             frameAt(n[v], Q[v], r == kNone ? Q[v] : Q[r], t, b, nn);
             const glm::vec3 d = P[v] - Q[v];
             D[v] = {glm::dot(d, t), glm::dot(d, b), glm::dot(d, nn)};
+        }
+    });
+}
+
+// Sculpt-layer details live in the same local frames as the shape's (the frames of Q, the subdivided coarse
+// base, with normals n = fineNormals(tris, Q)), so they turn with the surface. `out` += Frame(Q) * local.
+void addLayerDetail(const SubdivTopology& tp, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
+                    const std::vector<glm::vec3>& local, std::vector<glm::vec3>& out) {
+    parallelRange(Q.size(), [&](size_t b0, size_t e0) {
+        for (size_t v = b0; v < e0; ++v) {
+            glm::vec3 t, b, nn;
+            const uint32_t r = tp.frameRef[v];
+            frameAt(n[v], Q[v], r == kNone ? Q[v] : Q[r], t, b, nn);
+            out[v] += t * local[v].x + b * local[v].y + nn * local[v].z;
+        }
+    });
+}
+// local = Frame(Q)^-1 * world.
+void layerDetailToLocal(const SubdivTopology& tp, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
+                        const std::vector<glm::vec3>& world, std::vector<glm::vec3>& local) {
+    local.resize(Q.size());
+    parallelRange(Q.size(), [&](size_t b0, size_t e0) {
+        for (size_t v = b0; v < e0; ++v) {
+            glm::vec3 t, b, nn;
+            const uint32_t r = tp.frameRef[v];
+            frameAt(n[v], Q[v], r == kNone ? Q[v] : Q[r], t, b, nn);
+            const glm::vec3 d = world[v];
+            local[v] = {glm::dot(d, t), glm::dot(d, b), glm::dot(d, nn)};
         }
     });
 }
@@ -691,12 +727,19 @@ void evaluateLevel(MultiresStack& s, int k) {
     Mesh& fine = mutableData(L);
     const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, baseChannel(coarse));
     std::vector<glm::vec3>& target = baseChannel(fine);
-    if (L.detail) applyDetail(tp, fine.triangles, Q, *L.detail, target);
-    else target = Q;
+    std::vector<glm::vec3> n; // normals of Q, for the frames of the details
+    if (L.detail) {
+        n = fineNormals(fine.triangles, Q);
+        applyDetail(tp, n, Q, *L.detail, target);
+    } else {
+        target = Q;
+    }
     for (size_t i = 0; i < fine.layers.size() && i < coarse.layers.size(); ++i) {
         std::vector<glm::vec3> d = subdivideField(tp, tp.smooth, coarse.layers[i].delta);
-        if (i < L.layerDetail.size() && L.layerDetail[i])
-            for (size_t v = 0; v < d.size(); ++v) d[v] += (*L.layerDetail[i])[v];
+        if (i < L.layerDetail.size() && L.layerDetail[i]) {
+            if (n.empty()) n = fineNormals(fine.triangles, Q);
+            addLayerDetail(tp, n, Q, *L.layerDetail[i], d);
+        }
         fine.layers[i].delta = std::move(d);
     }
     evaluateLayers(fine);
@@ -977,20 +1020,27 @@ void spreadUvs(MultiresStack& s, int c, const Mesh& w, const Mesh& r) {
 void spreadShape(MultiresStack& s, int c, const Mesh& w, const Mesh& r) {
     const size_t channels = 1 + w.layers.size();
     bool anyChange = false;
+    // Per level: the subdivided coarse base and its normals (the layer details' frames), once the base channel
+    // (channel 0, done first) is final.
+    std::vector<std::vector<glm::vec3>> frameQ(size_t(c) + 1), frameN(size_t(c) + 1);
+    bool baseChanged = false;
     for (size_t ch = 0; ch < channels; ++ch) {
         const std::vector<glm::vec3>& wa = ch == 0 ? baseChannel(w) : w.layers[ch - 1].delta;
         const std::vector<glm::vec3>& ra = ch == 0 ? baseChannel(r) : r.layers[ch - 1].delta;
-        if (sameArray(wa, ra)) continue;
+        const bool same = sameArray(wa, ra);
+        // A changed base also changes the frames the layer details are kept in, so those are re-fitted too.
+        if (same && !(ch > 0 && baseChanged)) continue;
+        if (ch == 0) baseChanged = true;
         anyChange = true;
         // Restrict with full weighting (the transpose of linear interpolation): each coarse vertex moves by a
         // blend of the change at its own fine vertex (weight 1), the edge points around it (1/2) and, for
         // Catmull-Clark, the face points (1/4). Broad changes come through unchanged; narrow strokes show up
         // softened instead of as spikes.
-        std::vector<glm::vec3> delta(wa.size());
-        parallelRange(wa.size(), [&](size_t b, size_t e) {
+        std::vector<glm::vec3> delta(same ? 0 : wa.size());
+        parallelRange(delta.size(), [&](size_t b, size_t e) {
             for (size_t v = b; v < e; ++v) delta[v] = wa[v] - ra[v];
         });
-        for (int j = c; j >= 1; --j) {
+        for (int j = same ? 0 : c; j >= 1; --j) {
             const SubdivTopology& tp = *s.levels[size_t(j)].topo;
             std::vector<glm::vec3> cd(tp.coarseVertices);
             parallelRange(tp.coarseVertices, [&](size_t b, size_t e) {
@@ -1025,13 +1075,24 @@ void spreadShape(MultiresStack& s, int c, const Mesh& w, const Mesh& r) {
             const Mesh& cm = *s.levels[size_t(j) - 1].data;
             const Mesh& fm = j == c ? w : *L.data;
             const std::vector<glm::vec3>& fineVals = ch == 0 ? baseChannel(fm) : fm.layers[ch - 1].delta;
-            const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, ch == 0 ? baseChannel(cm) : cm.layers[ch - 1].delta);
+            std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, ch == 0 ? baseChannel(cm) : cm.layers[ch - 1].delta);
             if (ch == 0) {
-                fitDetail(tp, fm.triangles, Q, fineVals, mutableArray(L.detail, Q.size()));
+                std::vector<glm::vec3> n = fineNormals(fm.triangles, Q);
+                fitDetail(tp, n, Q, fineVals, mutableArray(L.detail, Q.size()));
+                if (channels > 1) { // the layer channels' frames
+                    frameN[size_t(j)] = std::move(n);
+                    frameQ[size_t(j)] = std::move(Q);
+                }
             } else {
                 if (L.layerDetail.size() < w.layers.size()) L.layerDetail.resize(w.layers.size());
-                std::vector<glm::vec3>& d = mutableArray(L.layerDetail[ch - 1], Q.size());
-                for (size_t v = 0; v < Q.size(); ++v) d[v] = fineVals[v] - Q[v];
+                std::vector<glm::vec3>& fq = frameQ[size_t(j)];
+                if (fq.empty()) {
+                    fq = subdivideField(tp, tp.smooth, baseChannel(cm));
+                    frameN[size_t(j)] = fineNormals(fm.triangles, fq);
+                }
+                std::vector<glm::vec3> world(Q.size());
+                for (size_t v = 0; v < Q.size(); ++v) world[v] = fineVals[v] - Q[v];
+                layerDetailToLocal(tp, frameN[size_t(j)], fq, world, mutableArray(L.layerDetail[ch - 1], Q.size()));
             }
         }
     }
@@ -1150,6 +1211,39 @@ size_t subdivBytes(const Mesh& mesh) {
             if (d) total += d->size() * sizeof(glm::vec3);
     }
     return total;
+}
+
+size_t subdivCacheBytes(const Mesh& mesh) {
+    if (!mesh.multires || !mesh.multires->cache) return 0;
+    size_t total = 0;
+    for (const SubdivLevelCache::Entry& e : mesh.multires->cache->entries) {
+        const Mesh& m = e.mesh;
+        // Positions, normals and the vertex adjacency; triangles, face normals, quads and the BVH (estimated).
+        total += m.vertexCount() * 80 + m.triangleCount() * 48 + m.base.size() * 12 + m.mask.size() * 4 +
+                 m.colors.size() * 12 + m.polygroups.size() * 4 + m.hidden.size() + m.uvs.size() * 8 +
+                 m.paintBase.size() * 12;
+        for (const SculptLayer& l : m.layers) total += l.delta.size() * 12;
+        for (const PaintLayer& p : m.paintLayers) total += p.color.size() * 12 + p.alpha.size() * 4;
+    }
+    return total;
+}
+
+void subdivReleaseCache(Mesh& mesh) {
+    // The cache is shared by every copy of the stack (undo steps): emptying it frees it for all of them.
+    if (mesh.multires && mesh.multires->cache) std::vector<SubdivLevelCache::Entry>().swap(mesh.multires->cache->entries);
+}
+
+std::string subdivDroppedNote(const Mesh& mesh, const std::string& name) {
+    if (!mesh.multires || mesh.multires->levels.size() < 2) return {};
+    return "Subdivision levels removed: " + (name.empty() ? std::string() : name + " ") + "SDiv " +
+           std::to_string(mesh.multires->current + 1) + " of " + std::to_string(mesh.multires->levels.size()) +
+           " kept as the new base";
+}
+
+void noteSubtoolLevelsDropped(Document& doc, int index) {
+    if (index < 0 || index >= doc.subtoolCount()) return;
+    const std::string note = subdivDroppedNote(doc.subtoolMesh(index), doc.subtools[size_t(index)].name);
+    if (!note.empty()) doc.notice += (doc.notice.empty() ? "" : "; ") + note;
 }
 
 // --- Operations ---
@@ -1399,6 +1493,28 @@ bool attachSubdivStack(Mesh& mesh, MultiresStack stack, std::string& error) {
     }
     mesh.multires = std::make_shared<MultiresStack>(std::move(stack));
     return true;
+}
+
+void convertWorldLayerDetail(MultiresStack& s) {
+    bool any = false;
+    for (const SubdivLevel& l : s.levels)
+        for (const auto& d : l.layerDetail) any = any || bool(d);
+    if (!any) return;
+    for (size_t k = 1; k < s.levels.size(); ++k) {
+        SubdivLevel& L = s.levels[k];
+        if (!L.topo || !L.data) return;
+        // The frames come from the level below, evaluated with its details (converted already).
+        if (k >= 2 && s.levels[k - 1].stale) evaluateLevel(s, int(k) - 1);
+        const SubdivTopology& tp = *L.topo;
+        const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, baseChannel(*s.levels[k - 1].data));
+        const std::vector<glm::vec3> n = fineNormals(L.data->triangles, Q);
+        for (auto& d : L.layerDetail) {
+            if (!d || d->size() != Q.size()) continue;
+            auto local = std::make_shared<std::vector<glm::vec3>>();
+            layerDetailToLocal(tp, n, Q, *d, *local);
+            d = std::move(local);
+        }
+    }
 }
 
 const Mesh& subdivLevelData(const Mesh& mesh, int level) { return *mesh.multires->levels[size_t(level)].data; }
@@ -1792,24 +1908,26 @@ bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh) {
     }
     SubdivLevel fineLevel;
     fineLevel.topo = tp;
+    // The coarse base is the positions so far (the layers' offsets are added below).
+    const std::vector<glm::vec3> Q = subdivideField(*tp, true, coarse.positions);
     if (!mesh.layers.empty()) {
         coarse.base = coarse.positions;
+        const std::vector<glm::vec3> n = fineNormals(mesh.triangles, Q);
         for (const SculptLayer& l : mesh.layers) {
             SculptLayer cl{l.name, std::vector<glm::vec3>(nc), l.weight};
             for (uint32_t v = 0; v < nc; ++v) cl.delta[v] = l.delta[rec.vertexChild[v]];
             const std::vector<glm::vec3> s = subdivideField(*tp, true, cl.delta);
-            auto d = std::make_shared<std::vector<glm::vec3>>(s.size());
-            for (size_t v = 0; v < s.size(); ++v) (*d)[v] = l.delta[v] - s[v];
+            std::vector<glm::vec3> world(s.size());
+            for (size_t v = 0; v < s.size(); ++v) world[v] = l.delta[v] - s[v];
+            auto d = std::make_shared<std::vector<glm::vec3>>();
+            layerDetailToLocal(*tp, n, Q, world, *d);
             fineLevel.layerDetail.push_back(std::move(d));
             coarse.layers.push_back(std::move(cl));
         }
         evaluateLayers(coarse);
     }
-    {
-        const std::vector<glm::vec3> Q = subdivideField(*tp, true, baseChannel(coarse));
-        fineLevel.detail = std::make_shared<std::vector<glm::vec3>>();
-        fitDetail(*tp, mesh.triangles, Q, fineBase, *fineLevel.detail);
-    }
+    fineLevel.detail = std::make_shared<std::vector<glm::vec3>>();
+    fitDetail(*tp, fineNormals(mesh.triangles, Q), Q, fineBase, *fineLevel.detail);
     MultiresStack& s = ensureStack(mesh);
     fineLevel.data = s.levels[0].data;
     fineLevel.stale = false;

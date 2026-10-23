@@ -780,7 +780,10 @@ CommandResult CommandRegistry::execute(Document& doc, const std::string& name, c
     if (!cmd) return {false, "Unknown command: " + name};
     for (const auto& p : cmd->params)
         if (p.required && !args.contains(p.name)) return {false, "Missing required argument: " + p.name};
-    return cmd->run(doc, args);
+    doc.notice.clear();
+    CommandResult r = cmd->run(doc, args);
+    if (const std::string notice = doc.takeNotice(); !notice.empty() && r.ok) r.message += ". " + notice;
+    return r;
 }
 
 std::string CommandRegistry::toolSchemaJson() const {

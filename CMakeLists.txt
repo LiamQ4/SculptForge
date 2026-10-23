@@ -352,6 +352,7 @@ if(SCULPTFORGE_BUILD_TESTS)
   add_executable(sculptforge_tests ${SCULPTFORGE_TEST_SOURCES} src/cli/McpServer.cpp src/app/AssetLibrary.cpp
                                    src/app/UiLayout.cpp src/app/ShellGeometry.cpp src/render/Camera.cpp)
   target_include_directories(sculptforge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+  target_compile_definitions(sculptforge_tests PRIVATE SF_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   target_link_libraries(sculptforge_tests PRIVATE sculptforge_core sculptforge_ai)
   if(SCULPTFORGE_BUILD_APP) # the action registry (key chords, shortcut overrides) needs SDL's key names
     target_sources(sculptforge_tests PRIVATE src/app/Actions.cpp)

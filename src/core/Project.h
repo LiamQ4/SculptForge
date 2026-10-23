@@ -22,8 +22,9 @@ namespace sf {
 
 // 1: one mesh. 2: a list of SubTools (version 1 files still load, as one SubTool). 3: SubTools may carry a
 // painted texture with layers ("texture"; older files still load). 4: SubTools may carry subdivision levels
-// ("subdiv"; older files still load).
-constexpr int kProjectVersion = 4;
+// ("subdiv"; older files still load). 5: sculpt-layer details of subdivision levels are in the levels' local
+// frames, not world space (format 4 files are converted when they load).
+constexpr int kProjectVersion = 5;
 constexpr const char* kProjectExtension = ".sfproj";
 
 // True for paths ending in .sfproj (any case).

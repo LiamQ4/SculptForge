@@ -438,8 +438,9 @@ bool readUintList(Reader& r, const Json& desc, const char* what, std::vector<uin
     return r.uints(desc, what, n, 1, out.data());
 }
 
-// Reads "subdiv" into `m` (the SubTool's current level). Levels that don't fit are an error.
-bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error) {
+// Reads "subdiv" into `m` (the SubTool's current level). Levels that don't fit are an error. Format 4 kept the
+// sculpt-layer details in world space (`worldLayerDetail`): they're converted to local frames.
+bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error, bool worldLayerDetail) {
     if (!sj.isObject()) return true;
     const Json& list = sj["levels"];
     if (!list.isArray() || list.size() < 2 || list.size() > 32) {
@@ -521,6 +522,7 @@ bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error) {
         }
         stack.levels.push_back(std::move(level));
     }
+    if (worldLayerDetail) convertWorldLayerDetail(stack);
     if (!attachSubdivStack(m, std::move(stack), error)) {
         error = "Project " + error;
         return false;
@@ -682,7 +684,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
             if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error)) return false;
             if (!readPaintLayers(r, sj["paint_layers"], s.mesh, error)) return false;
             if (!readTexture(r, sj["texture"], s.mesh, error)) return false;
-            if (!readSubdiv(r, sj["subdiv"], s.mesh, error)) return false;
+            if (!readSubdiv(r, sj["subdiv"], s.mesh, error, version < 5)) return false;
             s.activeLayer = int(sj["active_layer"].asNumber(-1));
             subtools.push_back(std::move(s));
         }
