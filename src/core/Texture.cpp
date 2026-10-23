@@ -70,6 +70,7 @@ void parallelRows(int n, size_t work, Fn fn) {
 }
 
 std::atomic<uint64_t> gTextureSerial{1};
+std::atomic<uint32_t> gTextureLayerId{1};
 
 // --- Fixed-point triangle setup (1/256 texel) shared by the rasteriser, the gutter and the brush ---
 
@@ -267,9 +268,148 @@ inline void paintTexel(uint8_t* px, const uint8_t* orig, bool layer, const glm::
     px[3] = unit8(na);
 }
 
+
+// --- Packed tiles for undo (PackedTexels in core/Undo.h) ---
+
+int tileCount(int size) { return (size + kTextureTile - 1) / kTextureTile; }
+
+// Appends a cw x ch tile whose rows start `stride` bytes apart: one RGBA value when every texel is the same.
+void appendTile(PackedTexels& p, const uint8_t* src, size_t stride, int cw, int ch) {
+    bool uniform = true;
+    for (int y = 0; y < ch && uniform; ++y) {
+        const uint8_t* row = src + size_t(y) * stride;
+        for (int x = 0; x < cw; ++x)
+            if (std::memcmp(row + size_t(x) * 4, src, 4) != 0) {
+                uniform = false;
+                break;
+            }
+    }
+    if (cw > 0 && ch > 0) {
+        if (uniform) {
+            p.data.insert(p.data.end(), src, src + 4);
+        } else {
+            for (int y = 0; y < ch; ++y)
+                p.data.insert(p.data.end(), src + size_t(y) * stride, src + size_t(y) * stride + size_t(cw) * 4);
+        }
+    }
+    p.offsets.push_back(uint32_t(p.data.size()));
+}
+
+// Writes tile i of `p` (cw x ch texels) to `dst` (rows `stride` bytes apart).
+void writeTile(const PackedTexels& p, size_t i, uint8_t* dst, size_t stride, int cw, int ch) {
+    const uint8_t* src = &p.data[p.offsets[i]];
+    const size_t n = p.offsets[i + 1] - p.offsets[i];
+    for (int y = 0; y < ch; ++y) {
+        uint8_t* row = dst + size_t(y) * stride;
+        if (n == 4) {
+            for (int x = 0; x < cw; ++x) std::memcpy(row + size_t(x) * 4, src, 4);
+        } else if (n == size_t(cw) * size_t(ch) * 4) {
+            std::memcpy(row, src + size_t(y) * size_t(cw) * 4, size_t(cw) * 4);
+        }
+    }
+}
+
+// The texel arrays of a texture: Base (or the plain texture) first, then the layers.
+size_t planeCount(const PaintTexture& t) { return 1 + t.layers.size(); }
+const std::vector<uint8_t>& plane(const PaintTexture& t, size_t i) {
+    return i == 0 ? (t.layers.empty() ? t.pixels : t.base) : t.layers[i - 1].rgba;
+}
+uint32_t planeId(const PaintTexture& t, size_t i) { return i == 0 ? 0 : t.layers[i - 1].id; }
+// The array of `ref` with the same id and size as array `i` of `t`, or null.
+const std::vector<uint8_t>* matchingPlane(const PaintTexture& t, size_t i, const PaintTexture* ref) {
+    if (!ref || ref->width != t.width || ref->height != t.height) return nullptr;
+    for (size_t j = 0; j < planeCount(*ref); ++j)
+        if (planeId(*ref, j) == planeId(t, i)) {
+            const std::vector<uint8_t>& r = plane(*ref, j);
+            return r.size() == t.texelCount() * 4 ? &r : nullptr;
+        }
+    return nullptr;
+}
+
+// `t` without its texels (size, settings, layer names...), plus in `planes` the tiles of each of its arrays
+// that differ from the matching array of `ref` (all tiles where there is none). Null for no texture.
+std::shared_ptr<PaintTexture> packTexture(const PaintTexture* t, const PaintTexture* ref, std::vector<PackedTexels>& planes) {
+    planes.clear();
+    if (!t) return nullptr;
+    auto shell = std::make_shared<PaintTexture>();
+    shell->width = t->width;
+    shell->height = t->height;
+    shell->activeLayer = t->activeLayer;
+    shell->layers.reserve(t->layers.size());
+    for (const TextureLayer& l : t->layers) {
+        TextureLayer s;
+        s.id = l.id;
+        s.name = l.name;
+        s.opacity = l.opacity;
+        s.blend = l.blend;
+        s.visible = l.visible;
+        s.locked = l.locked;
+        shell->layers.push_back(std::move(s));
+    }
+    const int tilesX = tileCount(t->width), tilesY = tileCount(t->height);
+    const size_t stride = size_t(t->width) * 4;
+    planes.resize(planeCount(*t));
+    for (size_t i = 0; i < planes.size(); ++i) {
+        PackedTexels& p = planes[i];
+        p.id = planeId(*t, i);
+        p.offsets.push_back(0);
+        const std::vector<uint8_t>& src = plane(*t, i);
+        if (src.size() != t->texelCount() * 4) continue;
+        const std::vector<uint8_t>* r = matchingPlane(*t, i, ref);
+        for (int ty = 0; ty < tilesY; ++ty)
+            for (int tx = 0; tx < tilesX; ++tx) {
+                const int cw = std::min(kTextureTile, t->width - tx * kTextureTile), ch = std::min(kTextureTile, t->height - ty * kTextureTile);
+                const size_t at = size_t(ty) * kTextureTile * stride + size_t(tx) * kTextureTile * 4;
+                if (r) {
+                    bool same = true;
+                    for (int y = 0; y < ch && same; ++y)
+                        same = std::memcmp(&src[at + size_t(y) * stride], &(*r)[at + size_t(y) * stride], size_t(cw) * 4) == 0;
+                    if (same) continue;
+                }
+                p.tiles.push_back(uint32_t(ty * tilesX + tx));
+                appendTile(p, &src[at], stride, cw, ch);
+            }
+    }
+    return shell;
+}
+
+// The texture packTexture(t, ref) described, rebuilt from `shell`, `planes` and the same `ref`.
+std::shared_ptr<PaintTexture> unpackTexture(const PaintTexture& shell, const std::vector<PackedTexels>& planes, const PaintTexture* ref) {
+    auto t = std::make_shared<PaintTexture>();
+    t->width = shell.width;
+    t->height = shell.height;
+    t->serial = gTextureSerial++;
+    t->activeLayer = shell.activeLayer;
+    t->layers = shell.layers;
+    const size_t n = t->texelCount() * 4, stride = size_t(t->width) * 4;
+    const int tilesX = tileCount(t->width);
+    for (size_t i = 0; i < planeCount(*t) && i < planes.size(); ++i) {
+        std::vector<uint8_t>& dst = i == 0 ? (t->layers.empty() ? t->pixels : t->base) : t->layers[i - 1].rgba;
+        if (const std::vector<uint8_t>* r = matchingPlane(shell, i, ref); r && r->size() == n) dst = *r;
+        else dst.assign(n, 255);
+        const PackedTexels& p = planes[i];
+        for (size_t k = 0; k < p.tiles.size(); ++k) {
+            const int tx = int(p.tiles[k] % uint32_t(tilesX)) * kTextureTile, ty = int(p.tiles[k] / uint32_t(tilesX)) * kTextureTile;
+            const int cw = std::min(kTextureTile, t->width - tx), ch = std::min(kTextureTile, t->height - ty);
+            if (cw > 0 && ch > 0) writeTile(p, k, &dst[size_t(ty) * stride + size_t(tx) * 4], stride, cw, ch);
+        }
+    }
+    if (!t->layers.empty()) {
+        t->pixels.resize(n);
+        compositeTextureAll(*t);
+    }
+    if (ref && ref->width == t->width && ref->height == t->height) { // same UVs: the coverage still holds
+        t->coverage = ref->coverage;
+        t->coverageUvs = ref->coverageUvs;
+    }
+    t->markAllDirty();
+    return t;
+}
 } // namespace
 
 // --- PaintTexture ---
+
+uint32_t newTextureLayerId() { return gTextureLayerId++; }
 
 bool validTextureSize(int size) { return size == 1024 || size == 2048 || size == 4096 || size == 8192; }
 
@@ -545,12 +685,11 @@ void TexturePainter::end(UndoRecord& record) {
         auto u = std::make_unique<TextureTileUndo>();
         u->layer = layer_;
         std::sort(tiles_.begin(), tiles_.end(), [](const Tile& a, const Tile& b) { return a.index < b.index; });
-        constexpr size_t n = size_t(kTextureTile) * kTextureTile * 4;
-        u->tiles.reserve(tiles_.size());
-        u->data.resize(tiles_.size() * n);
-        for (size_t i = 0; i < tiles_.size(); ++i) {
-            u->tiles.push_back(tiles_[i].index);
-            std::memcpy(&u->data[i * n], tiles_[i].original.data(), n);
+        u->texels.tiles.reserve(tiles_.size());
+        u->texels.offsets.push_back(0);
+        for (const Tile& t : tiles_) {
+            u->texels.tiles.push_back(t.index);
+            appendTile(u->texels, t.original.data(), size_t(kTextureTile) * 4, kTextureTile, kTextureTile);
         }
         record.textureTiles = std::move(u);
     }
@@ -566,28 +705,50 @@ void TextureTileUndo::swapWith(Mesh& mesh) {
     if (!validTexLayer(t, layer) || (layer >= 0 && t.layers.empty())) return;
     std::vector<uint8_t>& target = t.target(layer);
     if (target.size() != t.texelCount() * 4) return;
-    const int tilesX = (t.width + kTextureTile - 1) / kTextureTile;
-    constexpr size_t n = size_t(kTextureTile) * kTextureTile * 4;
-    for (size_t i = 0; i < tiles.size(); ++i) {
-        const int tx = int(tiles[i] % uint32_t(tilesX)) * kTextureTile, ty = int(tiles[i] / uint32_t(tilesX)) * kTextureTile;
+    const int tilesX = tileCount(t.width);
+    PackedTexels now; // what the tiles hold now: the inverse step
+    now.id = texels.id;
+    now.tiles = texels.tiles;
+    now.offsets.push_back(0);
+    for (size_t i = 0; i < texels.tiles.size(); ++i) {
+        const int tx = int(texels.tiles[i] % uint32_t(tilesX)) * kTextureTile, ty = int(texels.tiles[i] / uint32_t(tilesX)) * kTextureTile;
         const int cw = std::min(kTextureTile, t.width - tx), ch = std::min(kTextureTile, t.height - ty);
+        uint8_t* at = &target[(size_t(ty) * size_t(t.width) + size_t(tx)) * 4];
+        appendTile(now, at, size_t(t.width) * 4, cw, ch);
         if (cw <= 0 || ch <= 0) continue;
-        uint8_t* saved = &data[i * n];
-        for (int y = 0; y < ch; ++y)
-            std::swap_ranges(saved + size_t(y) * kTextureTile * 4, saved + size_t(y) * kTextureTile * 4 + size_t(cw) * 4,
-                             &target[(size_t(ty + y) * size_t(t.width) + size_t(tx)) * 4]);
+        writeTile(texels, i, at, size_t(t.width) * 4, cw, ch);
         if (!t.layers.empty()) compositeTexture(t, tx, ty, tx + cw, ty + ch);
         else t.markDirty(tx, ty, tx + cw, ty + ch);
     }
+    texels = std::move(now);
+}
+
+void TextureStackUndo::commit(const Mesh& mesh) {
+    if (committed) return;
+    const std::shared_ptr<PaintTexture> whole = std::move(texture);
+    texture = packTexture(whole.get(), mesh.texture.get(), planes);
+    committed = true;
 }
 
 void TextureStackUndo::swapWith(Mesh& mesh) {
-    std::swap(texture, mesh.texture);
+    commit(mesh);
+    std::shared_ptr<PaintTexture> restored = texture ? unpackTexture(*texture, planes, mesh.texture.get()) : nullptr;
+    std::vector<PackedTexels> inverse; // the mesh's texture now, relative to the one put back
+    texture = packTexture(mesh.texture.get(), restored.get(), inverse);
+    planes = std::move(inverse);
+    mesh.texture = std::move(restored);
     std::swap(paintToTexture, mesh.paintToTexture);
     mesh.facesDirty = true; // the renderer keeps per-triangle UVs only while there is a texture
 }
 
-size_t TextureStackUndo::bytes() const { return texture ? texture->bytes() : 0; }
+size_t TextureStackUndo::bytes() const {
+    if (!texture) return 0;
+    if (!committed) return texture->bytes();
+    size_t n = sizeof(PaintTexture);
+    for (const auto& l : texture->layers) n += sizeof(TextureLayer) + l.name.size();
+    for (const auto& p : planes) n += p.bytes() + sizeof(PackedTexels);
+    return n;
+}
 
 UndoRecord captureTexture(Mesh& mesh, std::string label) {
     UndoRecord r;
@@ -597,6 +758,10 @@ UndoRecord captureTexture(Mesh& mesh, std::string label) {
     r.texture->paintToTexture = mesh.paintToTexture;
     if (mesh.texture) mesh.texture = cloneTexture(*mesh.texture);
     return r;
+}
+
+void finishTextureUndo(UndoRecord& record, const Mesh& mesh) {
+    if (record.texture) record.texture->commit(mesh);
 }
 
 // --- Whole-texture operations ---
@@ -756,6 +921,7 @@ int duplicateTextureLayer(PaintTexture& t, int layer) {
         for (size_t i = 3; i < copy.rgba.size(); i += 4) copy.rgba[i] = 255;
     } else {
         copy = t.layers[size_t(layer)];
+        copy.id = newTextureLayerId();
         copy.locked = false;
     }
     copy.name = uniqueTextureLayerName(t, copy.name + " copy");

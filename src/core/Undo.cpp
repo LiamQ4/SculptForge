@@ -213,6 +213,12 @@ void UndoStack::clear() {
     redo_.clear();
 }
 
+size_t UndoStack::undoBytes() const {
+    size_t total = 0;
+    for (const auto& r : undo_) total += r.approxBytes();
+    return total;
+}
+
 void UndoStack::enforceBudget() {
     size_t total = 0;
     for (const auto& r : undo_) total += r.approxBytes();

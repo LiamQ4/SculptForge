@@ -254,8 +254,10 @@ TEST(texture_stroke_undo_restores_exactly) {
     UndoRecord rec;
     rec.label = "Paint";
     painter.end(rec);
-    CHECK(rec.textureTiles && !rec.textureTiles->tiles.empty());
-    CHECK(rec.approxBytes() >= rec.textureTiles->tiles.size() * kTextureTile * kTextureTile * 4);
+    CHECK(rec.textureTiles && !rec.textureTiles->texels.tiles.empty());
+    // The touched tiles were blank: each keeps one colour, not 64x64 texels.
+    CHECK(rec.textureTiles->texels.data.size() == rec.textureTiles->texels.tiles.size() * 4);
+    CHECK(rec.approxBytes() >= rec.textureTiles->texels.data.size());
     doc.undo.push(std::move(rec));
     const std::vector<uint8_t> after = doc.mesh.texture->pixels;
     CHECK(after != before);
@@ -331,6 +333,82 @@ TEST(texture_layers_composite_merge_and_round_trip) {
 
     // Version 2 projects (no texture) still load; the current version is 3.
     CHECK(kProjectVersion == 3);
+}
+
+TEST(texture_layer_undo_stores_only_what_changed) {
+    Document doc = makeDoc(texturedPlane(32, 4096));
+    // A busy Base: no tile is one colour, so nothing compresses by accident.
+    std::vector<uint8_t>& px = doc.mesh.texture->pixels;
+    for (size_t i = 0; i < px.size(); ++i) px[i] = (i & 3) == 3 ? 255 : uint8_t((uint32_t(i) * 2654435761u) >> 24);
+    CommandRegistry reg;
+    constexpr size_t kMB = size_t(1) << 20;
+    struct State {
+        std::vector<uint8_t> pixels, base;
+        std::vector<std::vector<uint8_t>> layers;
+        std::vector<std::string> names;
+        int active;
+    };
+    auto state = [&] {
+        if (!doc.mesh.texture) return State{{}, {}, {}, {}, -3};
+        const PaintTexture& t = *doc.mesh.texture;
+        State s{t.pixels, t.base, {}, {}, t.activeLayer};
+        for (const TextureLayer& l : t.layers) s.layers.push_back(l.rgba), s.names.push_back(l.name);
+        return s;
+    };
+    auto same = [&](const State& a) {
+        const State b = state();
+        return a.pixels == b.pixels && a.base == b.base && a.layers == b.layers && a.names == b.names && a.active == b.active;
+    };
+    // Runs a step, checks what its undo costs, then that undo and redo give back both states exactly.
+    auto step = [&](const char* what, size_t maxBytes, const std::function<void()>& fn) {
+        const State before = state();
+        const size_t bytes0 = doc.undo.undoBytes();
+        fn();
+        const size_t cost = doc.undo.undoBytes() - bytes0;
+        if (cost >= maxBytes) std::printf("  %s: undo costs %zu bytes\n", what, cost);
+        CHECK(cost < maxBytes);
+        const State after = state();
+        CHECK(doc.undo.undo(doc.mesh, doc.bvh));
+        CHECK(same(before));
+        CHECK(doc.undo.redo(doc.mesh, doc.bvh));
+        CHECK(same(after));
+    };
+    auto stroke = [&](const glm::vec3& color, bool erase) {
+        TexturePainter painter;
+        CHECK(painter.begin(doc.mesh));
+        for (int i = 0; i < 8; ++i) {
+            DabParams p = dab(glm::vec3(-0.2f + 0.05f * float(i), 0, 0.3f), 0.04f, 0.8f);
+            p.invert = erase;
+            CHECK(painter.dab(doc.mesh, doc.bvh, p, color, Symmetry{false, false, false}) > 0);
+        }
+        UndoRecord rec;
+        rec.label = "Paint";
+        painter.end(rec);
+        doc.undo.push(std::move(rec));
+    };
+
+    // A new 4K layer is blank: its undo is a few bytes per tile, not 64 MB.
+    step("add layer", kMB, [&] { CHECK(reg.execute(doc, "paint_layer_add", {{"name", std::string("Detail")}}).ok); });
+    // The brief's case: a small stroke on a 4K layer costs well under 2 MB and undoes exactly.
+    step("layer stroke", 2 * kMB / 8, [&] { stroke(srgbToLinear(glm::vec3(0.9f, 0.1f, 0.1f)), false); });
+    step("layer erase", 2 * kMB, [&] { stroke(glm::vec3(0.0f), true); });
+    step("settings", 64 * 1024, [&] { CHECK(reg.execute(doc, "paint_layer_set", {{"opacity", 0.5}, {"blend", std::string("multiply")}}).ok); });
+    step("duplicate", kMB, [&] { CHECK(reg.execute(doc, "paint_layer_duplicate").ok); });
+    step("move", 64 * 1024, [&] { CHECK(reg.execute(doc, "paint_layer_move", {{"direction", std::string("down")}}).ok); });
+    // Whole-layer edits keep only the tiles they changed: clearing a layer with one stroke on it costs that stroke.
+    step("clear layer", 2 * kMB, [&] { CHECK(reg.execute(doc, "paint_layer_clear").ok); });
+    step("fill layer", kMB, [&] { CHECK(reg.execute(doc, "paint_fill", {{"color", std::string("#336699")}, {"area", std::string("all")}}).ok); });
+    step("delete layer", kMB, [&] { CHECK(reg.execute(doc, "paint_layer_delete").ok); });
+    CHECK(doc.mesh.texture->layers.size() == 1);
+    // Merging a stroke into the busy Base changes only the tiles under it.
+    step("merge", 2 * kMB, [&] { CHECK(reg.execute(doc, "paint_layer_merge").ok); });
+    CHECK(doc.mesh.texture->layers.empty());
+    step("base stroke", 2 * kMB, [&] { stroke(srgbToLinear(glm::vec3(0.1f, 0.2f, 0.9f)), false); });
+    // Clearing the busy Base has to keep it all (64 MB of texels that can't be told apart from anything).
+    step("clear base", 65 * kMB, [&] { CHECK(reg.execute(doc, "paint_clear").ok); });
+    // A new texture replacing nothing, and deleting a white one: one colour per tile.
+    step("delete white", kMB, [&] { CHECK(reg.execute(doc, "texture_delete").ok); });
+    CHECK(!doc.mesh.texture);
 }
 
 TEST(texture_copies_are_independent) {

@@ -17,7 +17,8 @@
 // (falloff, alpha stamp, strength x pressure, mask, hidden faces, symmetry,
 // and front faces only). Texels just outside the UV islands (kTextureGutter
 // texels) take the colour of the nearest island texel, so seams don't show.
-// Undo keeps the 64x64 tiles a stroke touched (one step per stroke).
+// Undo keeps the 64x64 tiles a stroke touched (one step per stroke), and whole-texture edits keep only the
+// tiles they changed (TextureStackUndo); tiles of one colour cost one RGBA value.
 //
 // Mesh::texture is shared between copies of a mesh (undo snapshots, duplicated
 // SubTools): edits go through mutableTexture(), which copies it first when
@@ -46,7 +47,11 @@ constexpr int kDefaultTextureSize = 2048;
 // 1K, 2K, 4K or 8K.
 bool validTextureSize(int size);
 
+// A fresh TextureLayer::id.
+uint32_t newTextureLayerId();
+
 struct TextureLayer {
+    uint32_t id = newTextureLayerId(); // identity across edits (undo matches layers by it); copies keep it
     std::string name;
     std::vector<uint8_t> rgba; // sRGB colour + coverage (alpha), rows bottom-up
     float opacity = 1.0f;
@@ -184,8 +189,10 @@ bool textureLayerEditable(const PaintTexture& tex, int layer);
 
 // --- Undo (TextureTileUndo / TextureStackUndo live in core/Undo.h) ---
 // An undo step holding the mesh's current texture; then gives the mesh its own copy to change
-// (copy-on-write), so call it right before a whole-texture edit.
+// (copy-on-write), so call it right before a whole-texture edit, and finishTextureUndo after it.
 UndoRecord captureTexture(Mesh& mesh, std::string label);
+// Shrinks a captureTexture record to what the edit changed (the tiles that differ, settings), before pushing it.
+void finishTextureUndo(UndoRecord& record, const Mesh& mesh);
 
 // texture_create, texture_delete, texture_import, texture_export, texture_from_polypaint,
 // polypaint_from_texture, paint_target, uv_auto (see core/AutoUv.h).

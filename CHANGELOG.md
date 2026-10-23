@@ -17,7 +17,9 @@ All notable changes to SculptForge are listed here. The format follows
   the material; Show texture hides it.
 - The Paint Layers palette works on the texture's own layer stack: blend modes, opacity, visibility, lock,
   duplicate, merge down, flatten, clear and fill, composited only where something changed.
-- One undo step per stroke, storing just the 64x64 tiles it touched (counted in the undo memory budget).
+- One undo step per stroke, storing just the 64x64 tiles it touched (counted in the undo memory budget). Layer
+  edits (add, duplicate, clear, fill, merge, flatten, delete, settings) store only the tiles they changed, and a
+  tile of one colour costs 4 bytes: a stroke on a new 4K layer takes under a kilobyte of undo, not 64 MB.
 - Interactive at 4K on a 1.3M-triangle mesh: a dab visits only the triangles under the brush and uploads only
   the changed rectangle of the texture.
 - Auto UV (Tool > Texture Map, `uv_auto`): automatic UV unwrapping with xatlas (MIT, vendored in

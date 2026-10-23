@@ -320,6 +320,7 @@ void registerPaintCommands(CommandRegistry& registry) {
                                                                   : 1.0f) * amount;
                           UndoRecord r = captureTexture(m, "Fill Texture");
                           const size_t n = textureFill(m, c, w);
+                          finishTextureUndo(r, m);
                           doc.undo.push(std::move(r));
                           return {true, "Filled " + std::to_string(n) + " texels with " + colorToHex(c)};
                       }
@@ -338,6 +339,7 @@ void registerPaintCommands(CommandRegistry& registry) {
                           t.base.clear();
                           t.activeLayer = -1;
                           clearTextureLayer(t, -1);
+                          finishTextureUndo(r, doc.mesh);
                           doc.undo.push(std::move(r));
                           return {true, "Texture cleared to white (its layers too)"};
                       }
@@ -371,6 +373,7 @@ void registerPaintCommands(CommandRegistry& registry) {
                           for (uint32_t v = 0; v < m.vertexCount(); ++v) w[v] *= strength * (1.0f - m.maskAt(v));
                           UndoRecord r = captureTexture(m, "Paint Cavity");
                           const size_t n = textureFill(m, c, w);
+                          finishTextureUndo(r, m);
                           doc.undo.push(std::move(r));
                           return {true, "Painted cavities on " + std::to_string(n) + " texels"};
                       }

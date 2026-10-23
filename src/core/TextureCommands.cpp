@@ -108,6 +108,7 @@ CommandResult textureLayerCommand(Document& doc, const std::string& verb, const 
         TextureLayer& l = t.layers[size_t(at)];
         l.blend = blend;
         l.opacity = std::clamp(float(argNumber(a, "opacity", 1.0)), 0.0f, 1.0f);
+        finishTextureUndo(r, m);
         doc.undo.push(std::move(r));
         return {true, "Added texture layer '" + l.name + "' (index " + std::to_string(at) + ", " + blendModeLabel(blend) + ")"};
     }
@@ -133,6 +134,7 @@ CommandResult textureLayerCommand(Document& doc, const std::string& verb, const 
         l.visible = argBool(a, "visible", l.visible);
         l.locked = argBool(a, "locked", l.locked);
         compositeTextureAll(t);
+        finishTextureUndo(r, m);
         doc.undo.push(std::move(r));
         return {true, "Texture layer '" + l.name + "': " + blendModeLabel(l.blend) + ", " + percent(l.opacity) +
                           (l.visible ? "" : ", hidden") + (l.locked ? ", locked" : "")};
@@ -140,6 +142,7 @@ CommandResult textureLayerCommand(Document& doc, const std::string& verb, const 
     if (verb == "duplicate") {
         UndoRecord r = captureTexture(m, "Duplicate Texture Layer");
         const int at = duplicateTextureLayer(*m.texture, i);
+        finishTextureUndo(r, m);
         doc.undo.push(std::move(r));
         return {true, "Duplicated into '" + m.texture->layers[size_t(at)].name + "'"};
     }
@@ -148,6 +151,7 @@ CommandResult textureLayerCommand(Document& doc, const std::string& verb, const 
         const std::string name = layerName(cur, i);
         UndoRecord r = captureTexture(m, "Delete Texture Layer");
         removeTextureLayer(*m.texture, i);
+        finishTextureUndo(r, m);
         doc.undo.push(std::move(r));
         return {true, "Deleted texture layer '" + name + "'"};
     }
@@ -160,6 +164,7 @@ CommandResult textureLayerCommand(Document& doc, const std::string& verb, const 
             return {false, "'" + layerName(cur, i) + "' is already at the " + (d > 0 ? "top" : "bottom")};
         UndoRecord r = captureTexture(m, "Move Texture Layer");
         moveTextureLayer(*m.texture, i, d);
+        finishTextureUndo(r, m);
         doc.undo.push(std::move(r));
         return {true, "Moved '" + layerName(*m.texture, i + d) + "' " + dir};
     }
@@ -171,6 +176,7 @@ CommandResult textureLayerCommand(Document& doc, const std::string& verb, const 
             r.texture->swapWith(m); // put the untouched original back
             return {false, err};
         }
+        finishTextureUndo(r, m);
         doc.undo.push(std::move(r));
         return {true, "Merged '" + name + "' into '" + below + "'"};
     }
@@ -178,6 +184,7 @@ CommandResult textureLayerCommand(Document& doc, const std::string& verb, const 
         if (cur.layers.empty()) return {true, "There are no texture layers to flatten"};
         UndoRecord r = captureTexture(m, "Flatten Texture Layers");
         flattenTextureLayers(*m.texture);
+        finishTextureUndo(r, m);
         doc.undo.push(std::move(r));
         return {true, "Flattened the texture layers into Base"};
     }
@@ -185,6 +192,7 @@ CommandResult textureLayerCommand(Document& doc, const std::string& verb, const 
         if (i >= 0 && cur.layers[size_t(i)].locked) return {false, "Layer '" + layerName(cur, i) + "' is locked"};
         UndoRecord r = captureTexture(m, "Clear Texture Layer");
         clearTextureLayer(*m.texture, i);
+        finishTextureUndo(r, m);
         doc.undo.push(std::move(r));
         return {true, "Cleared texture " + layerName(*m.texture, i)};
     }
@@ -233,6 +241,7 @@ void registerTextureCommands(CommandRegistry& reg) {
                  m.paintToTexture = true;
                  if (argBool(a, "from_polypaint", false) && m.hasColors()) polypaintToTexture(m);
                  m.facesDirty = true;
+                 finishTextureUndo(r, m);
                  doc.undo.push(std::move(r));
                  return {true, "New " + sizeLabel(*m.texture) + " texture: painting now goes into the texture"};
              }});
@@ -245,6 +254,7 @@ void registerTextureCommands(CommandRegistry& reg) {
                  m.texture.reset();
                  m.paintToTexture = false;
                  m.facesDirty = true;
+                 finishTextureUndo(r, m);
                  doc.undo.push(std::move(r));
                  return {true, "Texture deleted"};
              }});
@@ -283,6 +293,7 @@ void registerTextureCommands(CommandRegistry& reg) {
                  }
                  m.paintToTexture = true;
                  polypaintToTexture(m);
+                 finishTextureUndo(r, m);
                  doc.undo.push(std::move(r));
                  return {true, "Polypaint baked into the " + sizeLabel(*m.texture) + " texture"};
              }});
@@ -337,6 +348,7 @@ void registerTextureCommands(CommandRegistry& reg) {
                  m.texture = std::move(tex);
                  m.paintToTexture = true;
                  m.facesDirty = true;
+                 finishTextureUndo(r, m);
                  doc.undo.push(std::move(r));
                  return {true, "Texture " + sizeLabel(*m.texture) + " loaded from " + argString(a, "path")};
              }});

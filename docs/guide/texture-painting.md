@@ -48,7 +48,9 @@ viewport without deleting it.
 - Around every UV island the paint runs on a few texels into the empty space (padding), so seams don't show as
   thin lines when the texture is filtered or mipmapped.
 - One stroke is one undo step. SculptForge stores only the 64x64-texel tiles the stroke touched, so undo stays
-  light even on an 8K texture.
+  light even on an 8K texture. Layer edits (new layer, fill, clear, merge, flatten, delete) also keep only the
+  tiles they changed, and an empty or single-colour tile costs almost nothing. Only an edit that changes a whole
+  painted layer at once, like clearing a fully painted Base, stores the full layer.
 - <kbd>Alt</kbd> paints back towards white on Base, and erases on a paint layer, as with polypaint.
 - <kbd>C</kbd> over the model picks the texture's colour under the cursor.
 

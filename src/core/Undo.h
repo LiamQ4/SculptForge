@@ -46,21 +46,36 @@ struct PaintStackUndo {
     size_t bytes() const;
 };
 
+// Texels of one RGBA8 texture array (core/Texture.h) as 64x64 tiles: only the listed tiles are stored, each
+// as its texels or, when they are all the same, as one RGBA value (a blank layer's tile costs 4 bytes).
+struct PackedTexels {
+    uint32_t id = 0;               // which array: TextureLayer::id, 0 = Base (the texture without layers)
+    std::vector<uint32_t> tiles;   // tile index (row-major, sorted)
+    std::vector<uint32_t> offsets; // where tile i's bytes start in `data`; offsets.back() == data.size()
+    std::vector<uint8_t> data;
+    size_t bytes() const { return data.size() + (tiles.size() + offsets.size()) * sizeof(uint32_t); }
+};
+
 // Old texels of the 64x64 tiles a texture-paint stroke touched in one layer (core/Texture.h);
 // applying swaps them with the texture.
 struct TextureTileUndo {
     int layer = -1;
-    std::vector<uint32_t> tiles;
-    std::vector<uint8_t> data; // kTextureTile^2 RGBA per tile
+    PackedTexels texels;
     void swapWith(Mesh& mesh);
-    size_t bytes() const { return data.size() + tiles.size() * sizeof(uint32_t); }
+    size_t bytes() const { return texels.bytes(); }
 };
 
-// The whole texture before a texture edit (create, delete, layer edits, conversions, fills): applying
-// swaps the mesh's texture and paint target with these (see captureTexture in core/Texture.h).
+// The texture before a texture edit (create, delete, layer edits, conversions, fills). captureTexture
+// (core/Texture.h) holds the whole old texture; commit() (finishTextureUndo) then keeps only what the edit
+// changed: the layer settings, and per layer the tiles that differ from the texture after the edit (layers
+// are matched by TextureLayer::id). Applying rebuilds that texture from the mesh's and swaps.
 struct TextureStackUndo {
+    // Uncommitted: the whole texture. Committed: its size, settings and layers without texels. Null = no texture.
     std::shared_ptr<PaintTexture> texture;
+    std::vector<PackedTexels> planes; // committed: [0] = Base, then one per layer
+    bool committed = false;
     bool paintToTexture = false;
+    void commit(const Mesh& mesh); // `mesh` holds the texture after the edit
     void swapWith(Mesh& mesh);
     size_t bytes() const;
 };
@@ -130,6 +145,8 @@ public:
     void clear();
     // Bumped by every push, undo and redo (unsaved-changes tracking).
     uint64_t revision() const { return revision_; }
+    // Memory the undo steps hold (UndoRecord::approxBytes), as counted against byteBudget.
+    size_t undoBytes() const;
 
     size_t byteBudget = size_t(1) << 30; // 1 GiB
 
