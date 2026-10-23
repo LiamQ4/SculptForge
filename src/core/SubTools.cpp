@@ -3,6 +3,7 @@
 #include "core/SubTools.h"
 
 #include "core/Commands.h"
+#include "core/Multires.h"
 #include "core/Polygroups.h"
 #include "core/Primitives.h"
 
@@ -201,6 +202,7 @@ void registerSubToolCommands(CommandRegistry& reg) {
                  for (int i = 0; i < doc.subtoolCount(); ++i) {
                      const SubTool& s = doc.subtools[size_t(i)];
                      out += "\n" + std::to_string(i) + ". " + s.name + " (" + countText(doc.subtoolMesh(i).triangleCount());
+                     if (subdivLevelCount(doc.subtoolMesh(i))) out += ", " + subdivLevelText(doc.subtoolMesh(i));
                      if (i == doc.activeSubtool) out += ", active";
                      if (!s.visible) out += ", hidden";
                      out += ")";

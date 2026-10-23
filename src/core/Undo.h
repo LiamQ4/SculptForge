@@ -4,6 +4,7 @@
 
 #include "core/BVH.h"
 #include "core/Mesh.h"
+#include "core/Multires.h"
 
 #include <deque>
 #include <memory>
@@ -93,6 +94,7 @@ inline constexpr int kActivePaintLayer = -2;
 //  - paint: the whole paint-layer stack (layer add / delete / merge / settings)
 //  - hidden / polygroups: per-triangle visibility and group ids
 //  - textureTiles / texture: texture-paint tiles of one layer, or the whole texture
+//  - subdiv: a subdivision level step or level edit (core/Multires.h), applied on its own
 // Record old values before changing them (ensureX() the attribute first);
 // undo allocates a missing attribute so values can always be restored.
 struct UndoRecord {
@@ -109,10 +111,11 @@ struct UndoRecord {
     std::unique_ptr<TextureTileUndo> textureTiles;
     std::unique_ptr<TextureStackUndo> texture;
     std::unique_ptr<Mesh> mesh;
+    std::unique_ptr<SubdivUndo> subdiv;
 
     bool empty() const {
         return positions.empty() && mask.empty() && colors.empty() && paintAlpha.empty() && hidden.empty() &&
-               polygroups.empty() && !mesh && !paint && !textureTiles && !texture;
+               polygroups.empty() && !mesh && !paint && !textureTiles && !texture && !subdiv;
     }
     size_t approxBytes() const;
 

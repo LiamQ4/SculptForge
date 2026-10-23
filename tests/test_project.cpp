@@ -199,7 +199,8 @@ TEST(project_version_handling) {
     std::string err;
     CHECK(saveProject(path, doc, err));
     const std::string manifest = readManifest(path);
-    CHECK(manifest.find("\"version\": 3") != std::string::npos || manifest.find("\"version\":3") != std::string::npos);
+    const std::string v = std::to_string(kProjectVersion);
+    CHECK(manifest.find("\"version\": " + v) != std::string::npos || manifest.find("\"version\":" + v) != std::string::npos);
     CHECK(manifest.find("app_version") != std::string::npos);
 
     // Unknown fields (top level and inside the mesh) are ignored.

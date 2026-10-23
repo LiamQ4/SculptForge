@@ -1,6 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Mesh.h"
+#include "core/Multires.h"
 
 #include <algorithm>
 #include <cmath>
@@ -116,6 +117,7 @@ void Mesh::sanitizeAttributes() {
     }
     if (!anyQuad) clearQuads();
     sanitizePaintLayers(*this);
+    if (multires && !subdivMatches(*this)) multires.reset();
 }
 
 void Mesh::rebuildTopology() {

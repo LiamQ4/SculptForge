@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Project.h"
 
+#include "core/Multires.h"
+
 #include "core/Texture.h"
 #include "io/Zip.h"
 
@@ -384,6 +386,148 @@ bool readTexture(Reader& r, const Json& tj, Mesh& m, std::string& error) {
     return true;
 }
 
+// Subdivision levels (core/Multires.h) are the SubTool key "subdiv" (format 4): the current level and every
+// level's mesh (as "mesh" / "layers" / "paint_layers"), details and topology (scheme, Smt, quad pairing and child
+// maps). The SubTool's own "mesh" is the current level, so readers that don't know levels load what was shown.
+// A current level identical to that mesh is not written twice ("same_as_mesh").
+Json writeSubdiv(Writer& w, const std::string& prefix, const Mesh& m) {
+    Json out = Json::object();
+    out.set("current", subdivCurrentLevel(m));
+    Json levels = Json::array();
+    for (int i = 0; i < subdivLevelCount(m); ++i) {
+        const std::string p = prefix + "subdiv/" + std::to_string(i) + "/";
+        const SubdivLevel& l = m.multires->levels[size_t(i)];
+        const Mesh& data = *l.data;
+        Json lj = Json::object();
+        if (i == subdivCurrentLevel(m) && subdivInSync(m)) {
+            lj.set("same_as_mesh", true);
+        } else {
+            writeMesh(w, p, data, lj);
+            if (hasPaintLayers(data)) lj.set("paint_layers", writePaintLayers(w, p, data));
+        }
+        if (l.stale) lj.set("stale", true);
+        if (l.topo) {
+            const SubdivTopology& tp = *l.topo;
+            Json t = Json::object();
+            t.set("catmull_clark", tp.catmullClark);
+            t.set("smooth", tp.smooth);
+            if (!tp.pairing.empty()) t.set("pairing", w.uints(p + "pairing.bin", tp.pairing.data(), tp.pairing.size(), 1));
+            t.set("vertex_child", w.uints(p + "vertex_child.bin", tp.vertexChild.data(), tp.vertexChild.size(), 1));
+            t.set("edge_child", w.uints(p + "edge_child.bin", tp.edgeChild.data(), tp.edgeChild.size(), 1));
+            if (!tp.faceChild.empty()) t.set("face_child", w.uints(p + "face_child.bin", tp.faceChild.data(), tp.faceChild.size(), 1));
+            lj.set("topology", std::move(t));
+        }
+        if (l.detail) lj.set("detail", w.vec3s(p + "detail.bin", *l.detail));
+        Json ld = Json::array();
+        for (size_t k = 0; k < l.layerDetail.size(); ++k)
+            ld.push(l.layerDetail[k] ? w.vec3s(p + "layer_detail_" + std::to_string(k) + ".bin", *l.layerDetail[k]) : Json());
+        if (!l.layerDetail.empty()) lj.set("layer_detail", std::move(ld));
+        levels.push(std::move(lj));
+    }
+    out.set("levels", std::move(levels));
+    return out;
+}
+
+bool readUintList(Reader& r, const Json& desc, const char* what, std::vector<uint32_t>& out) {
+    const size_t n = countOf(desc["count"]);
+    if (n == size_t(-1) || n > (size_t(1) << 31)) {
+        r.error = std::string("Project ") + what + " has an invalid size";
+        return false;
+    }
+    out.resize(n);
+    return r.uints(desc, what, n, 1, out.data());
+}
+
+// Reads "subdiv" into `m` (the SubTool's current level). Levels that don't fit are an error.
+bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error) {
+    if (!sj.isObject()) return true;
+    const Json& list = sj["levels"];
+    if (!list.isArray() || list.size() < 2 || list.size() > 32) {
+        error = "Project has invalid subdivision levels";
+        return false;
+    }
+    MultiresStack stack;
+    const double current = sj["current"].asNumber(-1);
+    if (current < 0 || current >= double(list.size())) {
+        error = "Project has an invalid current subdivision level";
+        return false;
+    }
+    stack.current = int(current);
+    for (size_t i = 0; i < list.size(); ++i) {
+        const Json& lj = list[i];
+        SubdivLevel level;
+        auto data = std::make_shared<Mesh>();
+        if (lj["same_as_mesh"].asBool(false) && i == size_t(stack.current)) {
+            *data = m;
+        } else {
+            if (!readMesh(r, lj["mesh"], lj["layers"], *data, error)) return false;
+            if (!readPaintLayers(r, lj["paint_layers"], *data, error)) return false;
+        }
+        // Keep just the level's arrays (no topology, normals or texture), as the stack stores levels.
+        Mesh lean;
+        lean.positions = std::move(data->positions);
+        lean.triangles = std::move(data->triangles);
+        lean.mask = std::move(data->mask);
+        lean.colors = std::move(data->colors);
+        lean.polygroups = std::move(data->polygroups);
+        lean.hidden = std::move(data->hidden);
+        lean.uvs = std::move(data->uvs);
+        lean.quadPartners = std::move(data->quadPartners);
+        lean.base = std::move(data->base);
+        lean.layers = std::move(data->layers);
+        lean.paintBase = std::move(data->paintBase);
+        lean.paintLayers = std::move(data->paintLayers);
+        lean.activePaintLayer = data->activePaintLayer;
+        *data = std::move(lean);
+        level.data = std::move(data);
+        level.stale = lj["stale"].asBool(false);
+        const size_t nv = level.data->vertexCount();
+        if (lj.has("detail")) {
+            level.detail = std::make_shared<std::vector<glm::vec3>>();
+            if (!r.vec3s(lj["detail"], "subdivision detail", nv, *level.detail)) {
+                error = r.error;
+                return false;
+            }
+        }
+        for (const Json& d : lj["layer_detail"].items()) {
+            if (!d.isObject()) {
+                level.layerDetail.push_back(nullptr);
+                continue;
+            }
+            auto v = std::make_shared<std::vector<glm::vec3>>();
+            if (!r.vec3s(d, "subdivision layer detail", nv, *v)) {
+                error = r.error;
+                return false;
+            }
+            level.layerDetail.push_back(std::move(v));
+        }
+        if (i > 0) {
+            const Json& t = lj["topology"];
+            std::vector<uint32_t> pairing, vc, ec, fc;
+            if ((t.has("pairing") && !readUintList(r, t["pairing"], "subdivision quad pairing", pairing)) ||
+                !readUintList(r, t["vertex_child"], "subdivision vertex map", vc) ||
+                !readUintList(r, t["edge_child"], "subdivision edge map", ec) ||
+                (t.has("face_child") && !readUintList(r, t["face_child"], "subdivision face map", fc))) {
+                error = r.error;
+                return false;
+            }
+            level.topo = rebuildSubdivTopology(*stack.levels[i - 1].data, *level.data, std::move(pairing),
+                                               t["catmull_clark"].asBool(false), t["smooth"].asBool(true),
+                                               std::move(vc), std::move(ec), std::move(fc), error);
+            if (!level.topo) {
+                error = "Project " + error;
+                return false;
+            }
+        }
+        stack.levels.push_back(std::move(level));
+    }
+    if (!attachSubdivStack(m, std::move(stack), error)) {
+        error = "Project " + error;
+        return false;
+    }
+    return true;
+}
+
 // A SubTool read from a project, before it joins the document.
 struct LoadedSubtool {
     std::string name, gozName;
@@ -422,6 +566,8 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
             st.set("paint_layers", writePaintLayers(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
         if (doc.subtoolMesh(i).texture && doc.subtoolMesh(i).texture->width > 0)
             st.set("texture", writeTexture(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
+        if (subdivLevelCount(doc.subtoolMesh(i)))
+            st.set("subdiv", writeSubdiv(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
         const std::string& gozName = active ? doc.gozName : s.gozName;
         if (!gozName.empty()) st.set("goz_name", gozName);
         subtools.push(std::move(st));
@@ -536,6 +682,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
             if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error)) return false;
             if (!readPaintLayers(r, sj["paint_layers"], s.mesh, error)) return false;
             if (!readTexture(r, sj["texture"], s.mesh, error)) return false;
+            if (!readSubdiv(r, sj["subdiv"], s.mesh, error)) return false;
             s.activeLayer = int(sj["active_layer"].asNumber(-1));
             subtools.push_back(std::move(s));
         }
@@ -669,6 +816,7 @@ void registerProjectCommands(CommandRegistry& registry) {
                       // that open, isProjectPath and Ctrl+S would not recognise.
                       if (!isProjectPath(path)) path += kProjectExtension;
                       std::string err;
+                      subdivCommit(doc.mesh); // fold pending edits into the levels, so they're written once
                       if (!saveProject(path, doc, err)) return {false, err};
                       doc.path = path;
                       doc.markClean();

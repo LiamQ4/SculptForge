@@ -55,6 +55,8 @@ add_library(sculptforge_core STATIC
   src/core/PaintLayer.cpp
   src/core/Texture.cpp
   src/core/TextureCommands.cpp
+  src/core/Multires.cpp
+  src/core/MultiresCommands.cpp
   src/core/AutoUv.cpp
   third_party/xatlas/xatlas.cpp
   src/core/Matcap.cpp
