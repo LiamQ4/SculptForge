@@ -29,6 +29,7 @@ using GLintptr = std::ptrdiff_t;
 constexpr GLenum GL_FALSE = 0;
 constexpr GLenum GL_TRUE = 1;
 constexpr GLenum GL_TRIANGLES = 0x0004;
+constexpr GLenum GL_LINES = 0x0001;
 constexpr GLenum GL_LEQUAL = 0x0203;
 constexpr GLenum GL_SRC_ALPHA = 0x0302;
 constexpr GLenum GL_ONE_MINUS_SRC_ALPHA = 0x0303;

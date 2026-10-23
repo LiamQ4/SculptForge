@@ -10,7 +10,8 @@
 
 namespace sf {
 
-// Paths are UTF-8. Polygons are fan-triangulated; UVs and normals are ignored.
+// Paths are UTF-8. Polygons are fan-triangulated; quads are kept paired
+// (Mesh::quadPartners) and written back as quads. UVs and normals are ignored.
 // "v x y z r g b" vertex colours are read into Mesh::colors and written back.
 // `g` groups become polygroups (when an object uses two or more), as ZBrush
 // writes them; `o` starts a new object, as Blender and ZBrush write SubTools.

@@ -155,7 +155,7 @@ unmasked area with the main colour.
 
 - **Frame** (<kbd>F</kbd>): fits the model in the view.
 - **Move**, **Zoom**, **Rotate**: drag on these buttons to pan, zoom and orbit the view, as in ZBrush.
-- **PolyF** (<kbd>W</kbd>): shows the mesh's triangles.
+- **PolyF** (<kbd>W</kbd>): shows the mesh's polygons: quads as quads, triangles as triangles.
 - **Groups**: colours each polygroup.
 - **Mask**: darkens masked areas (on by default).
 - **Paint**: shows polypaint colours (on by default).

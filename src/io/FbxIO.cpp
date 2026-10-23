@@ -204,9 +204,17 @@ Node makeGeometry(int64_t id, const std::string& name, const Mesh& mesh, float s
     for (const auto& p : base) verts.insert(verts.end(), {double(p.x * scale), double(p.y * scale), double(p.z * scale)});
     g.add("Vertices").f64s(verts);
 
+    // Polygons: quads where the mesh keeps them (Mesh::quadPartners), else triangles; the last corner is negated.
     std::vector<int32_t> poly;
     poly.reserve(mesh.triangleCount() * 3);
-    for (const auto& t : mesh.triangles) poly.insert(poly.end(), {int32_t(t.x), int32_t(t.y), ~int32_t(t.z)});
+    size_t polygons = 0;
+    for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
+        glm::uvec4 f;
+        const int corners = mesh.exportFace(t, f);
+        if (corners == 0) continue;
+        for (int c = 0; c < corners; ++c) poly.push_back(c + 1 < corners ? int32_t(f[c]) : ~int32_t(f[c]));
+        ++polygons;
+    }
     g.add("PolygonVertexIndex").i32s(poly);
 
     // Normals of the base shape, per polygon corner.
@@ -216,12 +224,11 @@ Node makeGeometry(int64_t id, const std::string& name, const Mesh& mesh, float s
     shape.rebuildTopology();
     shape.recomputeAllNormals();
     std::vector<double> normals;
-    normals.reserve(mesh.triangleCount() * 9);
-    for (const auto& t : mesh.triangles)
-        for (uint32_t v : {t.x, t.y, t.z}) {
-            const glm::vec3& n = shape.normals[v];
-            normals.insert(normals.end(), {double(n.x), double(n.y), double(n.z)});
-        }
+    normals.reserve(poly.size() * 3);
+    for (int32_t i : poly) {
+        const glm::vec3& n = shape.normals[size_t(i < 0 ? ~i : i)];
+        normals.insert(normals.end(), {double(n.x), double(n.y), double(n.z)});
+    }
     Node& ln = g.add("LayerElementNormal").i32(0);
     ln.add("Version").i32(101);
     ln.add("Name").str("");
@@ -234,7 +241,7 @@ Node makeGeometry(int64_t id, const std::string& name, const Mesh& mesh, float s
     ls.add("Name").str("");
     ls.add("MappingInformationType").str("ByPolygon");
     ls.add("ReferenceInformationType").str("Direct");
-    ls.add("Smoothing").i32s(std::vector<int32_t>(mesh.triangleCount(), 1));
+    ls.add("Smoothing").i32s(std::vector<int32_t>(polygons, 1));
 
     Node& lm = g.add("LayerElementMaterial").i32(0);
     lm.add("Version").i32(101);
@@ -534,7 +541,11 @@ bool readFbx(const std::string& path, bool split, std::vector<MeshObject>& out, 
             for (uint32_t t = 0; t < n; ++t)
                 m.triangles.push_back(glm::uvec3(base + mesh->vertex_indices.data[tri[t * 3]], base + mesh->vertex_indices.data[tri[t * 3 + 1]],
                                                  base + mesh->vertex_indices.data[tri[t * 3 + 2]]));
+            // A quad's two triangles stay paired (Mesh::quadPartners); n-gons are left as triangles.
+            if (mesh->faces.data[f].num_indices == 4 && n == 2)
+                m.pairQuad(uint32_t(m.triangles.size() - 2), uint32_t(m.triangles.size() - 1));
         }
+        if (m.hasQuads()) m.quadPartners.resize(m.triangles.size(), Mesh::kNoQuad);
         for (auto& l : layers) l.delta.resize(m.positions.size(), glm::vec3(0.0f));
         for (size_t d = 0; d < mesh->blend_deformers.count; ++d) {
             const ufbx_blend_deformer* blend = mesh->blend_deformers.data[d];

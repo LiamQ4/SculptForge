@@ -269,6 +269,8 @@ Mesh meshFromField(const VoxelGrid& grid, const std::vector<float>& f, float iso
                         m.triangles.push_back({qq.x, qq.y, qq.w});
                         m.triangles.push_back({qq.y, qq.z, qq.w});
                     }
+                    // Surface nets makes quads: keep each one (Mesh::quadPartners), like ZBrush's DynaMesh.
+                    m.pairQuad(uint32_t(m.triangles.size() - 2), uint32_t(m.triangles.size() - 1));
                 }
             }
     m.rebuildTopology();
@@ -402,6 +404,7 @@ Mesh voxelRemesh(const Mesh& mesh, int resolution, std::string* error) {
     if (out.triangleCount() == 0 && error) *error = "Remesh produced no surface";
     // Mask and polypaint follow the nearest original vertex; polygroups, hidden
     // flags and UVs don't survive a rebuild (everything becomes visible group 0).
+    // The original's quads don't either: the new surface is all quads of its own.
     transferVertexAttributes(mesh, out);
     return out;
 }

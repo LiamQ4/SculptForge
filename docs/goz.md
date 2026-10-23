@@ -55,11 +55,13 @@ faces with out-of-range indices are dropped, so a broken file cannot read past i
 - **Axes.** ZBrush is Y-down. GoB maps GoZ `(x, y, z)` to Blender `(x, z, -y)` (Z-up). In SculptForge's
   Y-up space that is `(x, -y, -z)`, a 180° turn about X, which keeps the triangle winding. It is applied
   on import and undone on export. GoB's default scale factor is 1, so no unit scaling is applied.
-- **Faces.** A quad `(a, b, c, d)` becomes two consecutive triangles, `(a, b, c)` and `(a, c, d)`.
-  On export, consecutive triangles with exactly that pattern are written back as one quad, provided the
-  pair shares a polygroup and its UVs agree on the shared corners (`quads=false` turns this off). A mesh
-  imported from ZBrush therefore goes back with its original quads, and other meshes are written mostly
-  as triangles. Degenerate triangles (e.g. a quad with a repeated index) are dropped.
+- **Faces.** A quad `(a, b, c, d)` becomes two consecutive triangles, `(a, b, c)` and `(a, c, d)`, kept
+  paired as one quad (`Mesh::quadPartners`, so PolyF shows the quad and sculpting, undo, subdivision and
+  projects keep it). On export every pair is written back as that quad, `(a, b, c, d)`, provided the two
+  halves share a polygroup and their UVs agree on the shared corners (`quads=false` turns this off). A mesh
+  imported from ZBrush therefore goes back with its original quads. Meshes without kept quads (older
+  projects) fall back to pairing consecutive triangles of exactly that pattern. Degenerate triangles (e.g.
+  a quad with a repeated index) are dropped, and their quad partner becomes a plain triangle.
 - **UVs.** GoZ stores V downwards, and GoB flips V both ways by default. `Mesh::uvs` uses V up
   (OpenGL/OBJ), so V is flipped on the way in and out. There are 3 corners per triangle, in triangle order.
 - **Polypaint.** The bytes are sRGB. `Mesh::colors` is linear, so they are converted with

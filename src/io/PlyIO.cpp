@@ -301,6 +301,7 @@ bool loadPly(const std::string& path, Mesh& mesh, SplatCloud& splats, PlyContent
                 }
             } else if (isFace && poly.size() >= 3) {
                 for (size_t k = 1; k + 1 < poly.size(); ++k) m.triangles.push_back({poly[0], poly[k], poly[k + 1]});
+                if (poly.size() == 4) m.pairQuad(uint32_t(m.triangles.size() - 2), uint32_t(m.triangles.size() - 1));
             }
         }
     }
@@ -311,6 +312,7 @@ bool loadPly(const std::string& path, Mesh& mesh, SplatCloud& splats, PlyContent
                 error = "PLY face index out of range";
                 return false;
             }
+        if (m.hasQuads()) m.quadPartners.resize(m.triangles.size(), Mesh::kNoQuad);
         mesh = weldImported(m); // keeps vertex colours (scans, photogrammetry)
         if (mesh.triangleCount() == 0) {
             error = "The PLY mesh has no usable faces";
@@ -481,13 +483,26 @@ bool savePlyMesh(const std::string& path, const Mesh& mesh, std::string& error) 
       << "\nproperty float x\nproperty float y\nproperty float z\n";
     if (normals) h << "property float nx\nproperty float ny\nproperty float nz\n";
     if (colors) h << "property uchar red\nproperty uchar green\nproperty uchar blue\n";
-    h << "element face " << mesh.triangleCount() << "\nproperty list uchar int vertex_indices\nend_header\n";
 
-    std::vector<uint8_t> data;
-    data.reserve(mesh.vertexCount() * 27 + mesh.triangleCount() * 13);
-    auto put32 = [&](uint32_t u) {
-        for (int k = 0; k < 4; ++k) data.push_back(uint8_t(u >> (8 * k))); // little-endian on any host
+    std::vector<uint8_t> data, faces;
+    data.reserve(mesh.vertexCount() * 27);
+    faces.reserve(mesh.triangleCount() * 13);
+    auto put32To = [](std::vector<uint8_t>& out, uint32_t u) {
+        for (int k = 0; k < 4; ++k) out.push_back(uint8_t(u >> (8 * k))); // little-endian on any host
     };
+    auto put32 = [&](uint32_t u) { put32To(data, u); };
+    // Quads where the mesh keeps them (Mesh::quadPartners), else triangles.
+    size_t faceCount = 0;
+    for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
+        glm::uvec4 f;
+        const int corners = mesh.exportFace(t, f);
+        if (corners == 0) continue;
+        faces.push_back(uint8_t(corners));
+        for (int c = 0; c < corners; ++c) put32To(faces, f[c]);
+        ++faceCount;
+    }
+    h << "element face " << faceCount << "\nproperty list uchar int vertex_indices\nend_header\n";
+
     auto putFloat = [&](float v) { put32(std::bit_cast<uint32_t>(v)); };
     for (size_t v = 0; v < mesh.vertexCount(); ++v) {
         for (int c = 0; c < 3; ++c) putFloat(mesh.positions[v][c]);
@@ -498,12 +513,7 @@ bool savePlyMesh(const std::string& path, const Mesh& mesh, std::string& error) 
             for (int k = 0; k < 3; ++k) data.push_back(uint8_t(std::lround(c[k] * 255.0f)));
         }
     }
-    for (const auto& t : mesh.triangles) {
-        data.push_back(3);
-        put32(t.x);
-        put32(t.y);
-        put32(t.z);
-    }
+    data.insert(data.end(), faces.begin(), faces.end());
 
     std::ofstream f(std::filesystem::path(std::u8string(path.begin(), path.end())), std::ios::binary);
     if (!f) {

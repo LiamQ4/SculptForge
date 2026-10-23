@@ -468,7 +468,9 @@ void Renderer::updateCurvature(MeshSlot& s, const Mesh& mesh, uint32_t begin, ui
 }
 
 // Index buffer without hidden triangles, plus the polygroup id of every drawn
-// triangle in draw order (looked up by gl_PrimitiveID).
+// triangle in draw order (looked up by gl_PrimitiveID). Meshes with quads
+// (Mesh::quadPartners) also get wireframe edges without the quad diagonals,
+// stored as GL_LINES indices after the triangles.
 void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh) {
     const size_t nt = mesh.triangleCount();
     const bool hidden = mesh.hidden.size() == nt && nt > 0;
@@ -488,10 +490,29 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh) {
     } else if (groups) {
         visibleGroups_ = mesh.polygroups;
     }
+    wireLines_.clear();
+    if (mesh.hasQuads()) {
+        for (uint32_t t = 0; t < nt; ++t) {
+            if (hidden && mesh.hidden[t]) continue;
+            // The diagonal stays visible where the other half of the quad is hidden (it is the visible edge).
+            const uint32_t u = mesh.quadPartnerAt(t);
+            const int diagonal = u != Mesh::kNoQuad && !mesh.triangleHidden(u) ? mesh.quadDiagonal(t, u) : -1;
+            const glm::uvec3& tri = mesh.triangles[t];
+            for (int e = 0; e < 3; ++e)
+                if (e != diagonal) wireLines_.insert(wireLines_.end(), {tri[e], tri[(e + 1) % 3]});
+        }
+    }
+    const GLsizeiptr triBytes = GLsizeiptr(drawn * sizeof(glm::uvec3));
     gl::BindVertexArray(s.vao);
-    gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(drawn * sizeof(glm::uvec3)), tris, GL_STATIC_DRAW);
+    gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, triBytes + GLsizeiptr(wireLines_.size() * sizeof(uint32_t)),
+                   wireLines_.empty() ? tris : nullptr, GL_STATIC_DRAW);
+    if (!wireLines_.empty()) {
+        gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, triBytes, tris);
+        gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, triBytes, GLsizeiptr(wireLines_.size() * sizeof(uint32_t)), wireLines_.data());
+    }
     gl::BindVertexArray(0);
     s.indexCount = GLsizei(drawn * 3);
+    s.lineCount = GLsizei(wireLines_.size());
 
     GLint maxTexels = 0;
     gl::GetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxTexels);
@@ -508,6 +529,7 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh) {
     // Scratch only: don't keep a big mesh's copy around.
     if (visibleTris_.capacity() > (size_t(1) << 16)) std::vector<glm::uvec3>().swap(visibleTris_);
     if (visibleGroups_.capacity() > (size_t(1) << 16)) std::vector<uint32_t>().swap(visibleGroups_);
+    if (wireLines_.capacity() > (size_t(1) << 16)) std::vector<uint32_t>().swap(wireLines_);
 }
 
 void Renderer::syncScene(const std::vector<SceneMesh>& scene) {
@@ -761,7 +783,11 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
             const MeshSlot* s = item.active ? findSlot(item.id) : nullptr;
             if (!s || s->indexCount == 0) continue;
             gl::BindVertexArray(s->vao);
-            gl::DrawElements(GL_TRIANGLES, s->indexCount, GL_UNSIGNED_INT, nullptr);
+            if (s->lineCount > 0) // quads: their edges without the diagonals
+                gl::DrawElements(GL_LINES, s->lineCount, GL_UNSIGNED_INT,
+                                 reinterpret_cast<const void*>(uintptr_t(s->indexCount) * sizeof(uint32_t)));
+            else
+                gl::DrawElements(GL_TRIANGLES, s->indexCount, GL_UNSIGNED_INT, nullptr);
         }
         gl::PolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         gl::DepthMask(GL_TRUE);

@@ -40,11 +40,18 @@ struct ObjObject {
     std::string name;
     std::vector<glm::uvec3> triangles;
     std::vector<uint32_t> groups;          // per triangle: index into groupNames
+    std::vector<uint32_t> quads;           // first triangle of each quad face (the second one follows it)
     std::vector<std::string> groupNames;   // `g` names in order of first use ("" = before any `g`)
     std::map<std::string, uint32_t> groupIndex;
     std::string pendingGroup;  // the last `g`, registered by its first face (unused names don't count)
     uint32_t currentGroup = ~0u;
 };
+
+// Quad faces were split as (a,b,c) + (a,c,d) into consecutive triangles: keep them paired.
+void applyQuads(const ObjObject& o, Mesh& m) {
+    for (uint32_t t : o.quads) m.pairQuad(t, t + 1);
+    if (m.hasQuads()) m.quadPartners.resize(m.triangles.size(), Mesh::kNoQuad);
+}
 
 // Polygroups from `g` names: only when the object uses two or more (ids 1, 2, ... in order of first use).
 void applyGroups(const ObjObject& o, Mesh& m) {
@@ -135,6 +142,7 @@ bool parseObj(const std::string& path, bool splitObjects, std::vector<MeshObject
             }
             ObjObject& o = objects.back();
             if (poly.size() >= 3 && o.currentGroup == ~0u) groupFor(o, o.pendingGroup);
+            if (poly.size() == 4) o.quads.push_back(uint32_t(o.triangles.size())); // n-gons are fanned unpaired
             for (size_t i = 2; i < poly.size(); ++i) {
                 o.triangles.push_back({poly[0], poly[i - 1], poly[i]});
                 o.groups.push_back(o.currentGroup);
@@ -171,6 +179,7 @@ bool parseObj(const std::string& path, bool splitObjects, std::vector<MeshObject
             obj.mesh.colors = std::move(colors);
             obj.mesh.triangles = std::move(o.triangles);
             applyGroups(o, obj.mesh);
+            applyQuads(o, obj.mesh);
             out.push_back(std::move(obj));
         }
     } else {
@@ -204,6 +213,7 @@ bool parseObj(const std::string& path, bool splitObjects, std::vector<MeshObject
             for (uint32_t v : used) local[v] = ~0u;
             m.triangles = std::move(o.triangles);
             applyGroups(o, m);
+            applyQuads(o, m);
             out.push_back(std::move(obj));
         }
     }
@@ -271,13 +281,19 @@ bool saveObj(const std::string& path, const std::vector<MeshObjectRef>& objects,
         // Polygroups as `g` groups (ZBrush's OBJ convention), when there is more than one.
         bool groups = false;
         for (uint32_t t = 1; t < mesh.triangleCount() && !groups; ++t) groups = mesh.polygroupAt(t) != mesh.polygroupAt(0);
+        uint32_t written = 0; // group of the last face written
         for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
-            if (groups && (t == 0 || mesh.polygroupAt(t) != mesh.polygroupAt(t - 1))) {
-                const int n = std::snprintf(line, sizeof line, "g group%u\n", mesh.polygroupAt(t));
+            glm::uvec4 f;
+            const int corners = mesh.exportFace(t, f); // quads as quads, the second half of one as nothing
+            if (corners == 0) continue;
+            if (groups && (t == 0 || mesh.polygroupAt(t) != written)) {
+                written = mesh.polygroupAt(t);
+                const int n = std::snprintf(line, sizeof line, "g group%u\n", written);
                 buf.append(line, n);
             }
-            const glm::uvec3& tri = mesh.triangles[t];
-            const int n = std::snprintf(line, sizeof line, "f %u %u %u\n", tri.x + first, tri.y + first, tri.z + first);
+            const int n = corners == 4 ? std::snprintf(line, sizeof line, "f %u %u %u %u\n", f.x + first, f.y + first,
+                                                       f.z + first, f.w + first)
+                                       : std::snprintf(line, sizeof line, "f %u %u %u\n", f.x + first, f.y + first, f.z + first);
             buf.append(line, n);
         }
         first += uint32_t(mesh.vertexCount());

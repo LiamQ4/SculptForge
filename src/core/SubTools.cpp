@@ -32,6 +32,7 @@ Mesh mergeMeshes(const std::vector<const Mesh*>& meshes) {
     for (const Mesh* m : meshes) {
         const uint32_t first = uint32_t(out.positions.size());
         const size_t nv = m->vertexCount(), nt = m->triangleCount();
+        appendQuads(out, out.triangles.size(), *m);
         out.positions.insert(out.positions.end(), m->positions.begin(), m->positions.end());
         for (const auto& t : m->triangles) out.triangles.push_back(t + glm::uvec3(first));
         if (mask) {
@@ -70,6 +71,7 @@ Mesh mergeMeshes(const std::vector<const Mesh*>& meshes) {
     }
     // Group ids start at 0 in the first input; shift so ids are 1-based like new groups elsewhere.
     for (auto& g : out.polygroups) ++g;
+    if (out.hasQuads()) out.quadPartners.resize(out.triangles.size(), Mesh::kNoQuad);
     out.rebuildTopology();
     if (!out.layers.empty()) out.evaluateAll(); // weights of same-named layers may have differed
     out.recomputeAllNormals();

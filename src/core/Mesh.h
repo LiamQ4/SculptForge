@@ -57,12 +57,19 @@ public:
     std::vector<uint8_t> hidden;
     // Per triangle corner (3 per triangle, in triangle order): texture coordinates.
     std::vector<glm::vec2> uvs;
+    // Per triangle: the triangle it forms a quad with (kNoQuad = a plain triangle; empty = no quads). Imported
+    // quads are split into two triangles that keep each other here, so the wireframe and the exporters can
+    // show and write them as quads again. Pairs are symmetric and share one edge, wound oppositely;
+    // sanitizeAttributes() unpairs anything else, so topology changes can never leave a stale pair.
+    std::vector<uint32_t> quadPartners;
+    static constexpr uint32_t kNoQuad = ~0u;
 
     bool hasMask() const { return !mask.empty(); }
     bool hasColors() const { return !colors.empty(); }
     bool hasPolygroups() const { return !polygroups.empty(); }
     bool hasHidden() const { return !hidden.empty(); }
     bool hasUvs() const { return !uvs.empty(); }
+    bool hasQuads() const { return !quadPartners.empty(); }
 
     float maskAt(uint32_t v) const { return mask.empty() ? 0.0f : mask[v]; }
     glm::vec3 colorAt(uint32_t v, const glm::vec3& fallback = glm::vec3(1.0f)) const {
@@ -70,6 +77,22 @@ public:
     }
     uint32_t polygroupAt(uint32_t t) const { return polygroups.empty() ? 0u : polygroups[t]; }
     bool triangleHidden(uint32_t t) const { return !hidden.empty() && hidden[t] != 0; }
+    // The triangle `t` is shown and exported as one quad with, or kNoQuad: a stored pair whose halves share a
+    // polygroup (a pair split between groups shows and exports as two triangles).
+    uint32_t quadPartnerAt(uint32_t t) const {
+        if (quadPartners.empty()) return kNoQuad;
+        const uint32_t u = quadPartners[t];
+        return u < quadPartners.size() && polygroupAt(t) == polygroupAt(u) ? u : kNoQuad;
+    }
+    // Which edge of `t` (t[e] -> t[(e + 1) % 3]) is the diagonal it shares with triangle `u` (wound the other
+    // way in `u`, whose third corner is not on `t`), or -1 when they don't form a quad.
+    int quadDiagonal(uint32_t t, uint32_t u) const;
+    // Face for exporting `t`: returns 4 with the quad's corners in winding order (t[e+1], t[e+2], t[e], then the
+    // partner's far corner, so an (a,b,c) + (a,c,d) split gives (a,b,c,d) back), 3 with the triangle, or 0 when
+    // `t` is the second half of a quad written with its partner.
+    int exportFace(uint32_t t, glm::uvec4& face) const;
+    // Number of quads (pairs counted once by quadPartnerAt).
+    size_t quadCount() const;
     // True when every triangle around `v` is hidden (such vertices must not be edited).
     bool vertexHidden(uint32_t v) const;
 
@@ -78,12 +101,18 @@ public:
     std::vector<glm::vec3>& ensureColors(const glm::vec3& fill = glm::vec3(1.0f));
     std::vector<uint32_t>& ensurePolygroups(uint32_t fill = 0);
     std::vector<uint8_t>& ensureHidden();
+    std::vector<uint32_t>& ensureQuadPartners();
+    // Records triangles `t` and `u` as one quad (growing quadPartners to the triangle count, so it can be called
+    // while triangles are being added).
+    void pairQuad(uint32_t t, uint32_t u);
     // Free an attribute again once it holds only its default (e.g. after "clear mask" / "show all").
     void clearMask() { std::vector<float>().swap(mask); }
     void clearColors() { std::vector<glm::vec3>().swap(colors); }
     void clearPolygroups() { std::vector<uint32_t>().swap(polygroups); }
     void clearHidden() { std::vector<uint8_t>().swap(hidden); }
-    // Drops attributes whose size no longer matches the mesh (called by rebuildTopology).
+    void clearQuads() { std::vector<uint32_t>().swap(quadPartners); }
+    // Drops attributes whose size no longer matches the mesh and unpairs invalid quad pairs (called by
+    // rebuildTopology).
     void sanitizeAttributes();
 
     // Sculpt layers. While any exist, `base` holds the positions with every
@@ -168,6 +197,13 @@ void taubinSmooth(Mesh& m, int iterations);
 // Optional attributes of `m` are carried over (vertex ones from the first
 // vertex of each welded group, triangle/corner ones per kept triangle).
 Mesh weldImported(const Mesh& m, const std::vector<SculptLayer>& layers = {});
+
+// Carries the quad pairs of `src` over to `dst`, built from some of its triangles: `newIndex[t]` is the index of
+// src triangle t in dst (Mesh::kNoQuad = dropped). Pairs that lost a half are dropped; call before
+// dst.rebuildTopology(), which checks the rest.
+void remapQuads(const Mesh& src, const std::vector<uint32_t>& newIndex, Mesh& dst);
+// Appends the quad pairs of `src` (whose triangles were appended to `dst` after `firstTriangle` others).
+void appendQuads(Mesh& dst, size_t firstTriangle, const Mesh& src);
 
 // Mesh::colors are linear RGB; files that store display colours (OBJ, PLY) convert.
 glm::vec3 srgbToLinear(const glm::vec3& c);

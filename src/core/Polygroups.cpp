@@ -278,8 +278,10 @@ Mesh extractTriangles(const Mesh& mesh, const std::vector<uint8_t>& keep) {
     std::vector<uint32_t> kept;
     Mesh out;
     bool anyHidden = false;
+    std::vector<uint32_t> newTriangle(mesh.hasQuads() ? nt : 0, Mesh::kNoQuad);
     for (uint32_t t = 0; t < nt; ++t) {
         if (t >= keep.size() || !keep[t]) continue;
+        if (!newTriangle.empty()) newTriangle[t] = uint32_t(out.triangles.size());
         glm::uvec3 tri;
         for (int k = 0; k < 3; ++k) {
             uint32_t& r = remap[mesh.triangles[t][k]];
@@ -312,6 +314,7 @@ Mesh extractTriangles(const Mesh& mesh, const std::vector<uint8_t>& keep) {
         }
     }
     if (!anyHidden) out.clearHidden();
+    remapQuads(mesh, newTriangle, out); // a quad loses its pairing when only one half is kept
     out.rebuildTopology();
     out.recomputeAllNormals();
     return out;

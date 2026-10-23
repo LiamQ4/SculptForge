@@ -161,9 +161,10 @@ CommandRegistry::CommandRegistry() {
              std::string msg = "Opened " + path;
              const bool hasMesh = !objects.empty();
              if (hasMesh) {
-                 size_t tris = 0, layers = 0;
+                 size_t tris = 0, quads = 0, layers = 0;
                  for (const auto& o : objects) {
                      tris += o.mesh.triangleCount();
+                     quads += o.mesh.quadCount();
                      layers = std::max(layers, o.mesh.layers.size());
                  }
                  const size_t count = objects.size();
@@ -171,7 +172,7 @@ CommandRegistry::CommandRegistry() {
                  doc.path = ext == ".obj" ? path : std::string(); // other formats are exported explicitly
                  if (ext == ".goz") doc.gozName = goz.name;
                  msg += " (" + (count > 1 ? std::to_string(count) + " SubTools, " : std::string()) + std::to_string(tris) +
-                        " triangles" + (layers == 0 ? "" : ", " + std::to_string(layers) + " layers") + ")";
+                        " triangles" + (quads == 0 ? "" : ", " + std::to_string(quads) + " quads") + (layers == 0 ? "" : ", " + std::to_string(layers) + " layers") + ")";
              }
              if (!splats.empty()) {
                  doc.splats = std::move(splats);

@@ -44,7 +44,7 @@
           <input type="search" id="guide-q" placeholder="Search the guide" aria-label="Search the guide" autocomplete="off">
           <div class="search-results" id="guide-results" hidden></div>
         </div>
-        <nav class="toc" aria-label="User guide"><a class="toc-home" href="index.html">Contents</a><p class="toc-group">Getting started</p><ul><li><a href="welcome.html">Welcome to SculptForge</a></li><li><a href="installing.html">Installing SculptForge</a></li><li><a href="interface.html">The interface</a></li><li><a href="navigation.html">Navigating the view</a></li></ul><p class="toc-group">Sculpting</p><ul><li><a href="sculpting.html">Sculpting and brushes</a></li><li><a href="brush-lab.html">Brush Lab and sharing brushes</a></li><li><a href="masking.html">Masking</a></li><li><a href="polygroups.html">Polygroups and visibility</a></li><li><a href="subtools.html">SubTools</a></li><li><a href="polypaint.html">Polypaint and materials</a></li><li><a href="layers.html">Sculpt layers and blend shapes</a></li><li><a href="geometry.html" class="current" aria-current="page">Subdivide, remesh, decimate and LODs</a><ul class="toc-sections"><li><a href="#at-a-glance">At a glance</a></li><li><a href="#subdivide">Subdivide</a></li><li><a href="#voxel-remesh">Voxel remesh</a></li><li><a href="#decimate">Decimate</a></li><li><a href="#lod-chains">LOD chains</a></li><li><a href="#undo-and-safety">Undo and safety</a></li><li><a href="#scripting">Scripting</a></li><li><a href="#see-also">See also</a></li></ul></li></ul><p class="toc-group">AI and capture</p><ul><li><a href="generate-3d.html">Image and text to 3D</a></li><li><a href="splats.html">Gaussian splats</a></li></ul><p class="toc-group">Files and pipelines</p><ul><li><a href="exporting.html">Exporting, Unreal and ZBrush</a></li><li><a href="projects.html">Projects, autosave and QuickSave</a></li><li><a href="scripting.html">Scripting and automation</a></li><li><a href="studios.html">SculptForge for studios</a></li></ul><p class="toc-group">Reference</p><ul><li><a href="shortcuts.html">Keyboard and mouse</a></li><li><a href="troubleshooting.html">Troubleshooting and FAQ</a></li><li><a href="glossary.html">Glossary</a></li></ul></nav>
+        <nav class="toc" aria-label="User guide"><a class="toc-home" href="index.html">Contents</a><p class="toc-group">Getting started</p><ul><li><a href="welcome.html">Welcome to SculptForge</a></li><li><a href="installing.html">Installing SculptForge</a></li><li><a href="interface.html">The interface</a></li><li><a href="navigation.html">Navigating the view</a></li></ul><p class="toc-group">Sculpting</p><ul><li><a href="sculpting.html">Sculpting and brushes</a></li><li><a href="brush-lab.html">Brush Lab and sharing brushes</a></li><li><a href="masking.html">Masking</a></li><li><a href="polygroups.html">Polygroups and visibility</a></li><li><a href="subtools.html">SubTools</a></li><li><a href="polypaint.html">Polypaint and materials</a></li><li><a href="layers.html">Sculpt layers and blend shapes</a></li><li><a href="geometry.html" class="current" aria-current="page">Subdivide, remesh, decimate and LODs</a><ul class="toc-sections"><li><a href="#at-a-glance">At a glance</a></li><li><a href="#quads-and-triangles">Quads and triangles</a></li><li><a href="#subdivide">Subdivide</a></li><li><a href="#voxel-remesh">Voxel remesh</a></li><li><a href="#decimate">Decimate</a></li><li><a href="#lod-chains">LOD chains</a></li><li><a href="#undo-and-safety">Undo and safety</a></li><li><a href="#scripting">Scripting</a></li><li><a href="#see-also">See also</a></li></ul></li></ul><p class="toc-group">AI and capture</p><ul><li><a href="generate-3d.html">Image and text to 3D</a></li><li><a href="splats.html">Gaussian splats</a></li></ul><p class="toc-group">Files and pipelines</p><ul><li><a href="exporting.html">Exporting, Unreal and ZBrush</a></li><li><a href="projects.html">Projects, autosave and QuickSave</a></li><li><a href="scripting.html">Scripting and automation</a></li><li><a href="studios.html">SculptForge for studios</a></li></ul><p class="toc-group">Reference</p><ul><li><a href="shortcuts.html">Keyboard and mouse</a></li><li><a href="troubleshooting.html">Troubleshooting and FAQ</a></li><li><a href="glossary.html">Glossary</a></li></ul></nav>
       </div>
     </div>
     <main class="guide-main" id="top">
@@ -53,7 +53,20 @@
 <p>These tools change the topology of the active SubTool: add resolution for detail, rebuild an even surface, reduce the triangle count, or make a chain of levels of detail for a game engine. This chapter explains what each one does to your mesh and its attributes, and when to use it.</p>
 <p>All of them work on the <strong>active SubTool</strong> and, except the LOD preview, are undoable with <kbd>Ctrl</kbd>+<kbd>Z</kbd>.</p>
 <h2 id="at-a-glance">At a glance<a class="anchor" href="#at-a-glance" aria-label="Link to this section">#</a></h2>
-<div class="table-wrap"><table><thead><tr><th>Tool</th><th>Where</th><th>Triangles</th><th>Keeps sculpt layers</th><th>Keeps mask and polypaint</th><th>Keeps polygroups, hidden faces, UVs</th></tr></thead><tbody><tr><td>Subdivide</td><td><strong>Tool &gt; Geometry &gt; Subdivide</strong>, <kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>x4 per level</td><td>Yes</td><td>Yes (interpolated)</td><td>Yes</td></tr><tr><td>Voxel Remesh</td><td><strong>Tool &gt; Remesh &gt; Voxel Remesh</strong></td><td>Set by resolution</td><td>Baked in</td><td>Yes (transferred)</td><td>No (reset)</td></tr><tr><td>Decimate</td><td><strong>Tool &gt; Geometry &gt; Decimate</strong></td><td>Reduced</td><td>Yes</td><td>Yes</td><td>Yes</td></tr><tr><td>LOD chain</td><td><strong>Tool &gt; Export</strong></td><td>One level per ratio step</td><td>Yes, on every level</td><td>Yes</td><td>Yes</td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>Tool</th><th>Where</th><th>Triangles</th><th>Quads</th><th>Keeps sculpt layers</th><th>Keeps mask and polypaint</th><th>Keeps polygroups, hidden faces, UVs</th></tr></thead><tbody><tr><td>Subdivide</td><td><strong>Tool &gt; Geometry &gt; Subdivide</strong>, <kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>x4 per level</td><td>Each quad becomes four</td><td>Yes</td><td>Yes (interpolated)</td><td>Yes</td></tr><tr><td>Voxel Remesh</td><td><strong>Tool &gt; Remesh &gt; Voxel Remesh</strong></td><td>Set by resolution</td><td>All quads (new ones)</td><td>Baked in</td><td>Yes (transferred)</td><td>No (reset)</td></tr><tr><td>Decimate</td><td><strong>Tool &gt; Geometry &gt; Decimate</strong></td><td>Reduced</td><td>No, all triangles</td><td>Yes</td><td>Yes</td><td>Yes</td></tr><tr><td>LOD chain</td><td><strong>Tool &gt; Export</strong></td><td>One level per ratio step</td><td>LOD0 keeps them; lower levels are triangles</td><td>Yes, on every level</td><td>Yes</td><td>Yes</td></tr></tbody></table></div>
+<h2 id="quads-and-triangles">Quads and triangles<a class="anchor" href="#quads-and-triangles" aria-label="Link to this section">#</a></h2>
+<p>SculptForge sculpts on triangles, but it remembers which pairs of triangles were one quad. A model you open from ZBrush (GoZ), Blender or Maya (OBJ, FBX, PLY, USD) keeps its quads: <strong>PolyF</strong> draws them as quads, without the diagonal, and OBJ, FBX, PLY, USD and GoZ exports write them back as quads, corner for corner. Polygons with more than four sides are split into triangles. The new <strong>Plane</strong> and <strong>Cube</strong> are made of quads, and so is the result of a voxel remesh.</p>
+<p>Sculpting, masking, polypaint, sculpt layers, undo, SubTools and project files all keep the quads. Subdivide turns every quad into four quads. Two things turn quads into triangles:</p>
+<ul>
+<li>
+<strong>Decimate</strong> (and the lower levels of a LOD chain) collapses edges, so its result is all triangles.
+</li>
+<li>
+When the two halves of a quad end up in different polygroups, or one half is deleted, they show and export as two triangles.
+</li>
+</ul>
+<p>glTF (<code>.glb</code>) and STL only hold triangles, so those exports always write triangles.</p>
+<aside class="callout callout-zbrush"><p><strong>ZBrush:</strong> This keeps the quads you bring in; it doesn&#x27;t make new ones from a triangle mesh. Quad retopology (ZRemesher) is on the roadmap.</p></aside>
 <h2 id="subdivide">Subdivide<a class="anchor" href="#subdivide" aria-label="Link to this section">#</a></h2>
 <p><strong>Tool &gt; Geometry &gt; Subdivide</strong> (<kbd>Ctrl</kbd>+<kbd>D</kbd>) smooths the mesh with Loop subdivision. Each level multiplies the triangle count by four and rounds off the shape slightly, like ZBrush&#x27;s Divide with Smt on.</p>
 <ul>
@@ -62,6 +75,9 @@ Sculpt layers are subdivided with the mesh, so blend shapes keep working.
 </li>
 <li>
 Mask, polypaint and UVs are interpolated; polygroups and hidden faces carry over.
+</li>
+<li>
+Each quad becomes four quads; triangles become four triangles.
 </li>
 <li>
 SculptForge refuses to subdivide past 50 million triangles.
@@ -98,12 +114,15 @@ Polygroups, hidden faces and UVs are reset (everything becomes visible, one poly
 <li>
 Separate pieces that don&#x27;t touch stay separate pieces; overlapping ones are merged.
 </li>
+<li>
+The new surface is made of even quads (the original&#x27;s quads are rebuilt, not kept).
+</li>
 </ul>
 <p>To remesh several SubTools into one, first combine them with <strong>Merge visible...</strong> or <strong>Merge down...</strong> in <a href="subtools.html#merge-subtools">SubTools</a>.</p>
-<aside class="callout callout-zbrush"><p><strong>ZBrush:</strong> There is no Project option, Groups-aware remesh or Blur slider yet, and the remesh produces triangles, not quads. For quad retopology (ZRemesher) see the roadmap: it is not available yet.</p></aside>
+<aside class="callout callout-zbrush"><p><strong>ZBrush:</strong> There is no Project option, Groups-aware remesh or Blur slider yet. Like DynaMesh, the remesh produces an even grid of quads, not flowing edge loops. For quad retopology (ZRemesher) see the roadmap: it is not available yet.</p></aside>
 <h2 id="decimate">Decimate<a class="anchor" href="#decimate" aria-label="Link to this section">#</a></h2>
 <p><strong>Tool &gt; Geometry &gt; Decimate</strong> reduces the triangle count while keeping the shape, using quadric edge collapse (the same family of algorithm as ZBrush&#x27;s Decimation Master). The <strong>Keep</strong> slider next to the button sets the fraction of triangles to keep (0.05 to 0.95, default 0.50).</p>
-<p>Decimation keeps open borders in place, and because it only removes vertices, every remaining vertex keeps its exact sculpt layer offsets, mask and polypaint. Polygroups, hidden flags and UVs survive on the remaining triangles.</p>
+<p>Decimation keeps open borders in place, and because it only removes vertices, every remaining vertex keeps its exact sculpt layer offsets, mask and polypaint. Polygroups, hidden flags and UVs survive on the remaining triangles. The result is all triangles: quads are not kept.</p>
 <p>Use it to make a lighter version of a finished sculpt for export, 3D printing or a review, or to bring a dense scan down to something you can work with.</p>
 <aside class="callout callout-tip"><p><strong>Tip:</strong> Decimate a duplicate SubTool (<strong>Tool &gt; SubTool &gt; Duplicate</strong>) when you want to keep the full-resolution sculpt in the same project.</p></aside>
 <h2 id="lod-chains">LOD chains<a class="anchor" href="#lod-chains" aria-label="Link to this section">#</a></h2>
@@ -167,7 +186,7 @@ Click <strong>Generate LOD chain</strong>.
       <p class="guide-meta fine">Also in the app: <strong>Help &gt; User Guide</strong> (<kbd>Shift</kbd>+<kbd>F1</kbd>).
         Found a mistake? <a href="https://github.com/islandmed/SculptForge/edit/main/docs/guide/geometry.md">Edit this page on GitHub</a>.</p>
     </main>
-    <aside class="on-page" aria-label="On this page"><p>On this page</p><ul><li><a href="#at-a-glance">At a glance</a></li><li><a href="#subdivide">Subdivide</a></li><li><a href="#voxel-remesh">Voxel remesh</a></li><li><a href="#decimate">Decimate</a></li><li><a href="#lod-chains">LOD chains</a></li><li><a href="#undo-and-safety">Undo and safety</a></li><li><a href="#scripting">Scripting</a></li><li><a href="#see-also">See also</a></li></ul></aside>
+    <aside class="on-page" aria-label="On this page"><p>On this page</p><ul><li><a href="#at-a-glance">At a glance</a></li><li><a href="#quads-and-triangles">Quads and triangles</a></li><li><a href="#subdivide">Subdivide</a></li><li><a href="#voxel-remesh">Voxel remesh</a></li><li><a href="#decimate">Decimate</a></li><li><a href="#lod-chains">LOD chains</a></li><li><a href="#undo-and-safety">Undo and safety</a></li><li><a href="#scripting">Scripting</a></li><li><a href="#see-also">See also</a></li></ul></aside>
   </div>
   <footer class="footer">
     <div class="wrap footer-grid">
