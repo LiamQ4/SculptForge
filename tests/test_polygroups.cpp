@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Polygroups and visibility: grouping commands, hide/isolate/show/invert,
-// rectangle hiding, delete hidden, undo, and that picking and brushes skip
+// rectangle and lasso hiding, delete hidden, undo, and that picking and brushes skip
 // hidden geometry.
 #include "TestHarness.h"
 
@@ -64,7 +64,7 @@ TEST(polygroup_commands_registered) {
     CommandRegistry reg;
     for (const char* name : {"polygroup_auto_by_normals", "polygroup_by_connectivity", "polygroup_from_mask",
                              "polygroup_clear", "polygroup_merge_visible", "hide_polygroup", "isolate_polygroup",
-                             "show_all", "invert_visibility", "hide_rect", "delete_hidden"})
+                             "show_all", "invert_visibility", "hide_rect", "hide_lasso", "delete_hidden"})
         CHECK(reg.find(name) != nullptr);
     CHECK(reg.toolSchemaJson().find("\"isolate_polygroup\"") != std::string::npos);
 }
@@ -210,6 +210,42 @@ TEST(visibility_hide_rect) {
     CHECK(!reg.execute(d, "hide_rect", {{"view_proj", std::string("1 2 3")}}).ok);
     // A rectangle on empty space would hide everything: refused.
     CHECK(!reg.execute(d, "hide_rect", {{"x0", 5.0}, {"y0", 5.0}, {"x1", 6.0}, {"y1", 6.0}, {"view_proj", identity}}).ok);
+}
+
+TEST(visibility_hide_lasso) {
+    Document d = makeDoc(makeIcosphere(3));
+    CommandRegistry reg;
+    // A diamond in the front view: keep the triangles whose centre lies inside |x| + |y| < 0.5 (scaled to the bounds).
+    const std::string diamond = "0 -1  1 0  0 1  -1 0";
+    CHECK(reg.execute(d, "hide_lasso", {{"points", diamond}}).ok);
+    const AABB b = d.mesh.bounds();
+    auto inDiamond = [&](const glm::vec3& c) {
+        const glm::vec2 ndc = (glm::vec2(c) - glm::vec2(b.center())) / (glm::vec2(b.extent()) * 0.5f);
+        return std::abs(ndc.x) + std::abs(ndc.y);
+    };
+    int wrong = 0;
+    for (uint32_t t = 0; t < d.mesh.triangleCount(); ++t) {
+        const float r = inDiamond(centroid(d.mesh, t));
+        if (std::abs(r - 1.0f) > 1e-3f && d.mesh.triangleHidden(t) != (r > 1.0f)) ++wrong;
+    }
+    CHECK(wrong == 0 && hiddenCount(d.mesh) > 0);
+    CHECK(reg.execute(d, "undo").ok);
+    CHECK(hiddenCount(d.mesh) == 0);
+
+    // Alt (inside): hide the diamond instead.
+    CHECK(reg.execute(d, "hide_lasso", {{"points", diamond}, {"inside", true}}).ok);
+    wrong = 0;
+    for (uint32_t t = 0; t < d.mesh.triangleCount(); ++t) {
+        const float r = inDiamond(centroid(d.mesh, t));
+        if (std::abs(r - 1.0f) > 1e-3f && d.mesh.triangleHidden(t) != (r < 1.0f)) ++wrong;
+    }
+    CHECK(wrong == 0);
+
+    // A lasso around everything with Alt, or on empty space without, would hide everything: refused.
+    CHECK(!reg.execute(d, "hide_lasso", {{"points", std::string("-2 -2 2 -2 2 2 -2 2")}, {"inside", true}}).ok);
+    CHECK(!reg.execute(d, "hide_lasso", {{"points", std::string("5 5 6 5 6 6")}}).ok);
+    CHECK(!reg.execute(d, "hide_lasso", {{"points", std::string("0 0 1 1")}}).ok);
+    CHECK(!reg.execute(d, "hide_lasso", {}).ok); // points is required
 }
 
 TEST(delete_hidden_compacts_attributes) {

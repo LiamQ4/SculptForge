@@ -663,6 +663,7 @@ void App::onMouseDown(float x, float y, Uint8 button) {
     }
     if (button == SDL_BUTTON_LEFT) {
         if (polygroupMouseDown(x, y, mod)) return;
+        if (maskSelectMouseDown(x, y, mod)) return;
         // Alt+click on another SubTool selects it (ZBrush); Alt+drag stays an inverted stroke or a pan.
         if ((mod & SDL_KMOD_ALT) && !ctrlDown(mod) && !(mod & SDL_KMOD_SHIFT) && doc_.subtoolCount() > 1) {
             const int target = pickSubtool(x, y);
@@ -712,6 +713,7 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     case Drag::Zoom: camera_.zoom(-dy * 0.05f); break;
     case Drag::MaskCanvas: maskCanvasMove(x, y); break;
     case Drag::SubToolClick: subtoolClickMove(x, y); break;
+    case Drag::Select: selectionMove(x, y); break;
     case Drag::None: break;
     }
 }
@@ -731,7 +733,7 @@ void App::orbitBy(float dx, float dy) {
 void App::onMouseUp() {
     orbitStarted_ = false;
     panFromAlt_ = false;
-    if (hideRectActive_) polygroupMouseUp();
+    if (drag_ == Drag::Select) selectionMouseUp();
     if (drag_ == Drag::Stroke) endStroke();
     if (drag_ == Drag::MaskCanvas) maskCanvasRelease();
     if (drag_ == Drag::SubToolClick) subtoolClickRelease();
@@ -1173,9 +1175,9 @@ void App::drawUi() {
     }
     const ImVec2 mouse(mouseX_, mouseY_);
     if (((!ImGui::GetIO().WantCaptureMouse && canvasRect().contains(mouse.x, mouse.y)) || drag_ == Drag::Stroke) &&
-        !hideBrushCursor_)
+        !hideBrushCursor_ && drag_ != Drag::Select)
         drawBrushCursor();
-    drawPolygroupOverlay();
+    drawSelectionOverlay();
     drawBrushLibraryPopups();
     autosaveBrush();
 
@@ -2082,6 +2084,12 @@ void App::drawBrushCursor() {
                                                 : invertToggle_ != (((mod & SDL_KMOD_ALT) != 0) ||
                                                                     (erasing() && eraserAction() == PenAction::Invert));
     const bool masking = drag_ == Drag::Stroke ? strokeMask_ : ctrlDown(mod) && !(mod & SDL_KMOD_SHIFT);
+    if (masking && drag_ != Drag::Stroke && maskShape_ != SelectShape::Pen) { // MaskLasso / MaskRect: a crosshair
+        const float arm = 8.0f * uiScale_;
+        dl->AddLine(ImVec2(c.x - arm, c.y), ImVec2(c.x + arm, c.y), IM_COL32(230, 230, 230, 220), 1.5f);
+        dl->AddLine(ImVec2(c.x, c.y - arm), ImVec2(c.x, c.y + arm), IM_COL32(230, 230, 230, 220), 1.5f);
+        return;
+    }
     ImU32 col = masking                                ? IM_COL32(230, 230, 230, 200)
                 : activeBrush() == BrushType::Smooth ? IM_COL32(120, 200, 255, 200)
                 : inverted                         ? IM_COL32(255, 110, 110, 200)

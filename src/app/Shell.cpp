@@ -306,6 +306,22 @@ void App::registerShellActions() {
     flag("draw.rgb", "Rgb", nullptr, "Draw", "", &paintRgb_, "Sculpt brushes also paint the colour (ZBrush Rgb with Zadd).");
     flag("draw.front_faces", "Front", nullptr, "Brush", "", &frontFacesOnly_,
          "Front faces only: brushes leave the far side of thin parts alone.");
+    // Masking and visibility selection shapes (Tool > Masking, Tool > Visibility), named as in ZBrush.
+    auto shape = [this](std::string id, std::string label, std::string palette, SelectShape* target, SelectShape value,
+                        std::string description) {
+        actions_.add({std::move(id), std::move(label), nullptr, std::move(description), std::move(palette), "", "",
+                      [target, value] { *target = value; }, [target, value] { return *target == value; }, nullptr});
+    };
+    shape("mask.pen", "MaskPen", "Tool > Masking", &maskShape_, SelectShape::Pen,
+          "Ctrl+drag paints the mask with the brush; Ctrl+Alt+drag erases it. Ctrl+drag on the background clears it.");
+    shape("mask.lasso", "MaskLasso", "Tool > Masking", &maskShape_, SelectShape::Lasso,
+          "Ctrl+drag draws a lasso and masks everything inside it; Ctrl+Alt+drag unmasks. The far side is included.");
+    shape("mask.rect", "MaskRect", "Tool > Masking", &maskShape_, SelectShape::Rect,
+          "Ctrl+drag draws a rectangle and masks everything inside it; Ctrl+Alt+drag unmasks. The far side is included.");
+    shape("select.rect", "SelectRect", "Tool > Visibility", &hideShape_, SelectShape::Rect,
+          "Ctrl+Shift+drag a rectangle to keep what's inside and hide the rest; add Alt to hide the inside.");
+    shape("select.lasso", "SelectLasso", "Tool > Visibility", &hideShape_, SelectShape::Lasso,
+          "Ctrl+Shift+drag a lasso to keep what's inside and hide the rest; add Alt to hide the inside.");
     flag("draw.pressure_strength", "Pressure > Strength", nullptr, "Draw > Tablet", "", &pressureStrength_,
          "Pen pressure scales the brush strength.");
     flag("draw.pressure_size", "Pressure > Size", nullptr, "Draw > Tablet", "", &pressureSize_,

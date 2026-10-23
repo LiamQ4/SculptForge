@@ -6,6 +6,7 @@
 
 #include <imgui.h>
 
+#include <initializer_list>
 #include <string>
 
 namespace sf {
@@ -20,6 +21,8 @@ enum class Look { Label, Icon, IconLabel, Tile };
 // is a Ctrl+Alt drag source in customize mode. Ctrl+Alt+click (outside customize mode) assigns
 // a shortcut, as in ZBrush. Returns true when the action ran.
 bool ActionButton(App& app, const char* actionId, ImVec2 size = {}, Look look = Look::Label);
+// Adjacent toggle buttons that read as one control (Zadd | Zsub, X | Y | Z); width -1 fills the line.
+void Segmented(App& app, std::initializer_list<const char*> actionIds, float width = -1.0f);
 // Ctrl-hover help for the last item.
 void HelpText(const char* title, const char* shortcut, const char* description, const char* path = nullptr);
 void HelpAction(App& app, const char* actionId);

@@ -1,7 +1,8 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Masking: Ctrl mask strokes, the Ctrl + background gestures and the
+// Masking: Ctrl mask strokes, MaskLasso / MaskRect selections (the shape is
+// tracked and drawn by Selection.cpp), the Ctrl + background gestures and the
 // "Masking" section of the Tools panel. The operations themselves are the
 // mask_* commands (core/Masking.cpp).
 #include "app/App.h"
@@ -56,10 +57,33 @@ void App::maskCanvasRelease() {
     if (!maskCanvasMoved_) runCommand("mask_invert"); // Ctrl+click on the background
 }
 
+// MaskLasso / MaskRect: Ctrl+drag draws the shape, starting on the model or the background.
+bool App::maskSelectMouseDown(float x, float y, SDL_Keymod mod) {
+    const bool ctrl = (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0;
+    if (!ctrl || (mod & SDL_KMOD_SHIFT) || maskShape_ == SelectShape::Pen || previewLod_ >= 0) return false;
+    beginSelection(x, y, SelectTarget::Mask, maskShape_);
+    return true;
+}
+
+void App::maskSelectMouseUp() {
+    const bool alt = (inputMods() & SDL_KMOD_ALT) != 0;
+    if (!selectMoved_) {
+        // A click on the background inverts the mask, as with MaskPen; on the model it does nothing.
+        doc_.syncBvh();
+        RayHit hit;
+        if (!alt && !pick(selectPath_.front().x, selectPath_.front().y, hit)) runCommand("mask_invert");
+        return;
+    }
+    // Mask the inside, or unmask it with Alt (Mask Strength sets how much).
+    runSelection("mask_rect", "mask_lasso", {{"unmask", alt}, {"strength", double(maskStrength_)}});
+}
+
 void App::drawMaskingSection() {
     ImGui::Checkbox("Show mask", &renderSettings_.showMask);
     ImGui::SameLine();
-    ImGui::TextDisabled("(Ctrl paints, Ctrl+Alt erases)");
+    ImGui::TextDisabled(maskShape_ == SelectShape::Pen ? "(Ctrl paints, Ctrl+Alt erases)"
+                                                       : "(Ctrl masks, Ctrl+Alt unmasks)");
+    ui::Segmented(*this, {"mask.pen", "mask.lasso", "mask.rect"});
     ImGui::SetNextItemWidth(-1);
     ui::SliderInside("##maskstrength", &maskStrength_, 0.01f, 1.0f, "Mask Strength %.2f");
 
@@ -67,7 +91,7 @@ void App::drawMaskingSection() {
     const float third = (ImGui::GetContentRegionAvail().x - 2 * style.ItemSpacing.x) / 3.0f;
     const float half = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
     if (ImGui::Button("Clear##mask", ImVec2(third, 0))) runCommand("mask_clear");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Unmask everything (Ctrl + drag background)");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Unmask everything (MaskPen: Ctrl + drag background)");
     ImGui::SameLine();
     if (ImGui::Button("Invert##mask", ImVec2(third, 0))) runCommand("mask_invert");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Ctrl + click background");
@@ -90,7 +114,8 @@ void App::drawMaskingSection() {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
     ImGui::SliderFloat("##cavitythreshold", &cavityThreshold_, -0.2f, 0.5f, "threshold %.2f");
-    if (ImGui::Button("By polygroup", ImVec2(half, 0))) runCommand("mask_by_polygroup", {{"group", double(maskGroup_)}});
+    if (ImGui::Button("By polygroup", ImVec2(half, 0)))
+        runCommand("mask_by_polygroup", {{"group", double(maskGroup_)}});
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mask one polygroup (replaces the mask)");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);

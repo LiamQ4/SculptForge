@@ -3,6 +3,7 @@
 #include "core/Masking.h"
 
 #include "core/Commands.h"
+#include "core/ScreenSelect.h"
 #include "core/Sculpt.h"
 
 #include <algorithm>
@@ -159,6 +160,16 @@ bool maskByPolygroup(Mesh& mesh, uint32_t group, bool add) {
     });
 }
 
+bool maskInShape(Mesh& mesh, const glm::mat4& viewProj, const ScreenPolygon& shape, float strength, bool unmask) {
+    if (mesh.vertexCount() == 0 || !shape.valid()) return false;
+    const float s = std::clamp(strength, 0.0f, 1.0f);
+    return maskPass(mesh, [&](const std::vector<float>& m, uint32_t v) {
+        glm::vec2 ndc;
+        if (!projectToNdc(viewProj, mesh.positions[v], ndc) || !shape.contains(ndc)) return m[v];
+        return unmask ? m[v] * (1.0f - s) : m[v] + (1.0f - m[v]) * s;
+    });
+}
+
 void Sculptor::dabMask(Mesh& mesh, const BVH& bvh, const DabParams& p, Symmetry sym) {
     if (!active_) return;
     const float s = std::clamp(p.strength, 0.0f, 1.0f) * std::clamp(p.pressure, 0.0f, 1.0f);
@@ -230,6 +241,60 @@ void registerMaskingCommands(CommandRegistry& registry) {
         [](Mesh& m, const Args& a) {
             return maskByPolygroup(m, uint32_t(std::max(0.0, argNumber(a, "group", 0))), argBool(a, "add", false));
         });
+
+    // MaskRect / MaskLasso. Bad arguments are errors, unlike the "mask unchanged" of a selection that misses.
+    const ParamSpec unmask{"unmask", T::Bool, "Unmask the inside instead (ZBrush: Alt held). Default false.", false};
+    const ParamSpec strength{"strength", T::Number, "How much to mask or unmask (0-1). Default 1.", false};
+    const ParamSpec viewProj{"view_proj", T::String, "Optional 16 numbers: column-major view-projection matrix.",
+                             false};
+    auto selection = [&registry](std::string name, std::string description, std::vector<ParamSpec> params,
+                                 std::function<bool(const Args&, std::vector<glm::vec2>&, std::string&)> shape) {
+        registry.add(
+            {std::move(name), std::move(description), std::move(params),
+             [shape](Document& doc, const Args& a) -> CommandResult {
+                 if (doc.mesh.vertexCount() == 0) return {false, "The mesh is empty"};
+                 glm::mat4 vp;
+                 std::vector<glm::vec2> points;
+                 std::string error;
+                 if (!viewProjArg(doc.mesh, a, vp, error) || !shape(a, points, error)) return {false, error};
+                 const bool unmask = argBool(a, "unmask", false);
+                 const std::string label = unmask ? "Unmask" : "Mask";
+                 UndoRecord record = UndoRecord::captureMask(doc.mesh, label);
+                 if (!maskInShape(doc.mesh, vp, ScreenPolygon(points), float(argNumber(a, "strength", 1.0)), unmask))
+                     return {true, label + ": mask unchanged"};
+                 doc.undo.push(std::move(record));
+                 doc.modified = true;
+                 return {true, label};
+             }});
+    };
+    selection(
+        "mask_rect",
+        "Rectangle mask selection (ZBrush MaskRect, Ctrl+drag): mask the visible vertices inside a screen rectangle, "
+        "or unmask them. Coordinates are normalised (-1..1, y up) in the given view; without a view the rectangle "
+        "spans the mesh seen from the front (+Z).",
+        {{"x0", T::Number, "Rectangle left (-1..1). Default -1.", false},
+         {"y0", T::Number, "Rectangle bottom (-1..1). Default -1.", false},
+         {"x1", T::Number, "Rectangle right (-1..1). Default 1.", false},
+         {"y1", T::Number, "Rectangle top (-1..1). Default 1.", false},
+         unmask,
+         strength,
+         viewProj},
+        [](const Args& a, std::vector<glm::vec2>& points, std::string&) {
+            const float x0 = float(argNumber(a, "x0", -1)), y0 = float(argNumber(a, "y0", -1));
+            const float x1 = float(argNumber(a, "x1", 1)), y1 = float(argNumber(a, "y1", 1));
+            points = {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}};
+            return true;
+        });
+    selection(
+        "mask_lasso",
+        "Lasso mask selection (ZBrush MaskLasso, Ctrl+drag): mask the visible vertices inside a screen polygon, or "
+        "unmask them. Points are normalised (-1..1, y up) in the given view; without a view they span the mesh "
+        "seen from the front (+Z).",
+        {{"points", T::String, "The lasso: at least 3 points as \"x0 y0 x1 y1 ...\" (-1..1, y up).", true},
+         unmask,
+         strength,
+         viewProj},
+        lassoArg);
 }
 
 } // namespace sf

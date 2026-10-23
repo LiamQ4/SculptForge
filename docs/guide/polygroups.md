@@ -61,18 +61,24 @@ macOS):
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click the isolated group again | Invert the visibility: show everything else instead. |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd> + click a polygroup | Hide that group. |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click the background | Show everything. |
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + drag a rectangle | Keep what's inside the rectangle, hide the rest. The rectangle is drawn green. |
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd> + drag a rectangle | Hide what's inside the rectangle. The rectangle is drawn red. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + drag | Keep what's inside the rectangle (or lasso), hide the rest. The shape is drawn green. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd> + drag | Hide what's inside the rectangle (or lasso). The shape is drawn red. |
 
-The rectangle works in screen space: a triangle counts as inside when its centre falls inside the rectangle as
-you see it, including triangles on the far side of the model. You can press or release <kbd>Alt</kbd> while
-dragging; what counts is whether it is held when you let go.
+Whether a drag draws a rectangle or a lasso is set by **SelectRect** and **SelectLasso** at the top of
+**Tool > Visibility** (SelectRect by default). With **SelectLasso**, the drag traces a free-hand outline that
+closes back to where you started; drag around a part as if you were drawing round it with a pen. The drag can
+start on the model or on the background.
+
+Both shapes work in screen space: a triangle counts as inside when its centre falls inside the shape as you see
+it, including triangles on the far side of the model. A lasso that crosses itself leaves out the areas it
+encloses twice. You can press or release <kbd>Alt</kbd> while dragging; what counts is whether it is held when
+you let go.
 
 SculptForge refuses a change that would hide everything, as ZBrush does. Every visibility change is one undo
 step, so <kbd>Ctrl</kbd>+<kbd>Z</kbd> brings back what you just hid.
 
-> **ZBrush:** the gestures are the same as ZBrush's SelectRect with polygroups. SelectLasso, Grow and Shrink
-> visibility and hiding by clicking with the rectangle brush are not available yet.
+> **ZBrush:** the gestures are the same as ZBrush's SelectRect and SelectLasso with polygroups. Grow and
+> Shrink visibility and hiding by clicking with the rectangle brush are not available yet.
 
 ### The Visibility sub-palette
 
@@ -80,6 +86,7 @@ Open **Tool > Visibility**:
 
 | Control | What it does | Command |
 |---|---|---|
+| **SelectRect** / **SelectLasso** | The shape <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + drag draws: a rectangle or a free-hand lasso. | `hide_rect` / `hide_lasso` |
 | **Show all** | Show every hidden part again. Available when something is hidden. | `show_all` |
 | **Invert visible** | Hide what is visible and show what is hidden. | `invert_visibility` |
 | **Delete hidden** | Permanently remove the hidden triangles from the mesh. Undoable. | `delete_hidden` |
@@ -100,7 +107,8 @@ the outside.
 ### Clean up a scan or a generated model
 
 1. Turn the model so the unwanted piece is on screen.
-2. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd> + drag a rectangle over it to hide it.
+2. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd> + drag a rectangle over it to hide it. For an awkward shape,
+   pick **SelectLasso** in **Tool > Visibility** first and draw around it.
 3. Click **Delete hidden** in **Tool > Visibility**.
 
 ### Split a model into SubTools
@@ -125,6 +133,7 @@ Group the model, then click **Split groups** in **Tool > SubTool**: each polygro
 | `isolate_polygroup`, `hide_polygroup` | `group` (required): the polygroup id |
 | `show_all`, `invert_visibility`, `delete_hidden` | |
 | `hide_rect` | `x0 y0 x1 y1` (-1 to 1, y up), `inside`, optional `view_proj` matrix; without a view the rectangle spans the mesh seen from the front |
+| `hide_lasso` | `points` (required): the outline as `"x0 y0 x1 y1 ..."`, at least 3 points in the same -1 to 1 space; `inside`, `view_proj` as for `hide_rect` |
 
 When you isolate or hide a group in the viewport, the console (<kbd>`</kbd>) shows the command with the group's
 id, for example `isolate_polygroup group=3`, which you can reuse in scripts.

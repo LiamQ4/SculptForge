@@ -14,6 +14,11 @@
 //   drag X0 Y0 X1 Y1 [S] [release]  left-drag in window fractions (rectangle hide, sliders...); release:
 //                            let go of the held modifiers halfway (ZBrush's Alt-drag, release Alt to zoom)
 //   drag_item LABEL DX DY [S] left-drag from the item by DX DY pixels (scrubbing, dragging a tile out)
+//   drag_path U0 V0 U1 V1 ... [keep] [S=seconds]   left-drag through the points (fractions of the model's
+//                            on-screen bounds; outside 0..1 is the background) with the held modifiers: a lasso,
+//                            or a rectangle from the first point to the last. keep: leave the button down
+//                            (for a shot mid-drag); `release` lets go, with the modifiers held then
+//   release                  release the left button
 //   orbit DX DY              right-drag on the background, in pixels (with the held modifiers)
 //   run COMMANDS             sculptforge-cli commands, e.g. run new_sphere subdivisions=4
 //   drop FILE                as if FILE were dropped onto the window (relative to the script's folder)
@@ -537,6 +542,66 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
                 return true;
             }
             return false;
+        });
+        wait(0.1f);
+    } else if (verb == "drag_path") {
+        // Points first, then the optional words: "keep" and "S=seconds".
+        std::vector<glm::vec2> uv;
+        bool keep = false;
+        float seconds = 0.6f;
+        std::vector<float> nums;
+        for (size_t i = 1; i < w.size(); ++i) {
+            if (w[i] == "keep") keep = true;
+            else if (w[i].rfind("S=", 0) == 0) seconds = std::strtof(w[i].c_str() + 2, nullptr);
+            else nums.push_back(std::strtof(w[i].c_str(), nullptr));
+        }
+        if (nums.size() < 4 || nums.size() % 2) {
+            error = "'drag_path' needs at least 2 points (U V pairs)";
+            return false;
+        }
+        for (size_t i = 0; i + 1 < nums.size(); i += 2) uv.push_back({nums[i], nums[i + 1]});
+        auto points = std::make_shared<std::vector<ImVec2>>();
+        steps_.push_back([this, uv, points](float t) {
+            // The model's on-screen bounds, without onModel's walk onto the surface: points may be on the background.
+            const AABB b = app_.doc_.mesh.bounds();
+            ImVec2 lo(1e9f, 1e9f), hi(-1e9f, -1e9f);
+            for (int i = 0; i < 8; ++i) {
+                const ImVec2 p = project(glm::vec3((i & 1) ? b.max.x : b.min.x, (i & 2) ? b.max.y : b.min.y,
+                                                   (i & 4) ? b.max.z : b.min.z));
+                lo = ImVec2(std::min(lo.x, p.x), std::min(lo.y, p.y));
+                hi = ImVec2(std::max(hi.x, p.x), std::max(hi.y, p.y));
+            }
+            points->clear();
+            for (const glm::vec2& q : uv) points->push_back(ImVec2(lo.x + (hi.x - lo.x) * q.x, lo.y + (hi.y - lo.y) * q.y));
+            if (t == 0.0f) { // hover the start for a frame first
+                mouseMotion(points->front().x, points->front().y);
+                return false;
+            }
+            return true;
+        });
+        steps_.push_back([this, points, keep, seconds](float t) {
+            if (!buttonDown_) {
+                SDL_SetModState(held_);
+                mouseButton(true, SDL_BUTTON_LEFT);
+            }
+            // Walk the polyline at constant speed.
+            const std::vector<ImVec2>& p = *points;
+            std::vector<float> at(p.size(), 0.0f);
+            for (size_t i = 1; i < p.size(); ++i) at[i] = at[i - 1] + std::hypot(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y);
+            const float d = std::min(t / seconds, 1.0f) * at.back();
+            size_t i = 1;
+            while (i + 1 < p.size() && at[i] < d) ++i;
+            const float u = at[i] > at[i - 1] ? std::clamp((d - at[i - 1]) / (at[i] - at[i - 1]), 0.0f, 1.0f) : 1.0f;
+            mouseMotion(p[i - 1].x + (p[i].x - p[i - 1].x) * u, p[i - 1].y + (p[i].y - p[i - 1].y) * u);
+            if (t < seconds) return false;
+            if (!keep) mouseButton(false, SDL_BUTTON_LEFT);
+            return true;
+        });
+        wait(0.1f);
+    } else if (verb == "release") {
+        run([this] {
+            SDL_SetModState(held_);
+            if (buttonDown_) mouseButton(false, SDL_BUTTON_LEFT);
         });
         wait(0.1f);
     } else if (verb == "orbit") {

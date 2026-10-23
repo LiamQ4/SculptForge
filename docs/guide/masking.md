@@ -1,8 +1,8 @@
 # Masking
 
 A mask protects part of the model from change. Masked areas are drawn darker, and every brush, the Paint
-brush and colour fills leave them alone. This chapter covers painting masks with <kbd>Ctrl</kbd>, the
-background gestures, and the **Tool > Masking** controls for inverting, blurring, growing and building masks
+brush and colour fills leave them alone. This chapter covers painting masks with <kbd>Ctrl</kbd>, masking
+with a lasso or rectangle, the background gestures, and the **Tool > Masking** controls for inverting, blurring, growing and building masks
 from cavities or polygroups.
 
 ![A mask painted on the lion's mane, with the Masking sub-palette](images/masking.jpg)
@@ -32,8 +32,37 @@ alpha you have selected, and a **DragRect** stroke masks with dabs along the pat
 
 On macOS, <kbd>Cmd</kbd> works wherever this guide says <kbd>Ctrl</kbd>.
 
-> **ZBrush:** this is ZBrush's Ctrl-masking with the MaskPen behaviour. Selecting a different masking brush
-> (MaskLasso, MaskRect, MaskCurve) is not available yet.
+> **ZBrush:** this is ZBrush's Ctrl-masking with the MaskPen brush, the default. MaskLasso and MaskRect are
+> described next.
+
+## Mask with a lasso or rectangle
+
+To mask a large or sharply outlined area in one go, pick a mask selection shape at the top of **Tool > Masking**:
+
+| Shape | <kbd>Ctrl</kbd> + drag |
+|---|---|
+| **MaskPen** (default) | Paints the mask with the brush, as described above. |
+| **MaskLasso** | Draws a free-hand outline that closes back to where you started. Everything inside is masked. |
+| **MaskRect** | Draws a rectangle. Everything inside is masked. |
+
+With **MaskLasso** or **MaskRect**:
+
+1. Hold <kbd>Ctrl</kbd> and drag around the area. The drag can start on the model or on the background. The
+   shape is drawn as you drag, white with a dark veil.
+2. Let go to mask what's inside. Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd> instead to unmask what's inside (the shape
+   is drawn blue). You can press or release <kbd>Alt</kbd> while dragging; what counts is whether it is held when
+   you let go.
+
+The selection works in screen space, like the visibility rectangle: a vertex counts as inside when it falls
+inside the shape as you see it, including vertices on the far side of the model. Hidden parts are left alone.
+**Mask Strength** sets how much a selection masks or unmasks, and each selection is one undo step. A lasso that
+crosses itself leaves out the areas it encloses twice.
+
+The cursor turns into a small cross while <kbd>Ctrl</kbd> is held, since the brush size doesn't matter for a
+selection.
+
+> **ZBrush:** these are ZBrush's MaskLasso and MaskRect brushes. Like ZBrush, the shape stays selected until you
+> pick another one, so switch back to **MaskPen** to paint masks again. MaskCurve is not available yet.
 
 ## Background gestures
 
@@ -42,10 +71,12 @@ With <kbd>Ctrl</kbd> held, clicks and drags on the empty background act on the w
 | Gesture | Effect |
 |---|---|
 | <kbd>Ctrl</kbd> + click the background | Invert the mask |
-| <kbd>Ctrl</kbd> + drag on the background | Clear the mask |
-| <kbd>Ctrl</kbd> + drag on the background, with nothing masked | Zoom the view |
+| <kbd>Ctrl</kbd> + drag on the background | Clear the mask (MaskPen) |
+| <kbd>Ctrl</kbd> + drag on the background, with nothing masked | Zoom the view (MaskPen) |
 
-A drag starts after the cursor moves a few pixels, so a slightly shaky click still inverts.
+A drag starts after the cursor moves a few pixels, so a slightly shaky click still inverts. With **MaskLasso**
+or **MaskRect**, a <kbd>Ctrl</kbd> + drag on the background draws the shape instead; clear the mask with
+**Clear**, or <kbd>Ctrl</kbd>+<kbd>Alt</kbd> + drag a shape around the whole model.
 
 ## The Masking sub-palette
 
@@ -54,7 +85,8 @@ Open **Tool > Masking** (the Tool palette is in the right tray by default). Ever
 | Control | What it does | Command |
 |---|---|---|
 | **Show mask** | Darken masked areas in the viewport. | |
-| **Mask Strength** | How much each mask stroke masks (0.01 to 1), and the mask value **By cavity** gives the deepest cavities. | |
+| **MaskPen** / **MaskLasso** / **MaskRect** | What <kbd>Ctrl</kbd> + drag does: paint with the brush, or mask inside a lasso or rectangle. | `mask_lasso` / `mask_rect` |
+| **Mask Strength** | How much each mask stroke or selection masks (0.01 to 1), and the mask value **By cavity** gives the deepest cavities. | |
 | **Clear** | Unmask everything. | `mask_clear` |
 | **Invert** | Masked becomes free and free becomes masked. | `mask_invert` |
 | **All** | Mask every visible vertex. | `mask_all` |
@@ -122,13 +154,15 @@ you can mask an area and fill the rest with a colour. See [Polypaint and materia
 | `mask_blur`, `mask_sharpen`, `mask_grow`, `mask_shrink` | `iterations` (1-100, default 1) |
 | `mask_by_cavity` | `strength` (0-1, default 1), `threshold` (-1 to 1, default 0.02) |
 | `mask_by_polygroup` | `group` (required), `add=true` to add to the current mask instead of replacing it |
+| `mask_rect` | `x0 y0 x1 y1` (-1 to 1, y up), `unmask`, `strength` (0-1, default 1), optional `view_proj` matrix; without a view the rectangle spans the mesh seen from the front |
+| `mask_lasso` | `points` (required): the outline as `"x0 y0 x1 y1 ..."`, at least 3 points in the same -1 to 1 space; `unmask`, `strength`, `view_proj` as for `mask_rect` |
 
 ```sh
 sculptforge-cli -c 'open path=head.obj; mask_by_cavity threshold=0.05; mask_blur iterations=2; save_project path=head.sfproj'
 ```
 
-> **Not yet:** masking by topology, by normals or by alpha, Mask By Smoothness, and lasso, rectangle or curve
-> mask selections are not available yet.
+> **Not yet:** masking by topology, by normals or by alpha, Mask By Smoothness, and MaskCurve are not
+> available yet.
 
 ## See also
 

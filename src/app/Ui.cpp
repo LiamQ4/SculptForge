@@ -107,6 +107,20 @@ void HelpText(const char* title, const char* shortcut, const char* description, 
     g_help.disabled = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0;
 }
 
+void Segmented(App& app, std::initializer_list<const char*> actionIds, float width) {
+    const float total = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
+    const float w = (total - float(actionIds.size() - 1)) / float(actionIds.size());
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(1.0f, ImGui::GetStyle().ItemSpacing.y));
+    bool first = true;
+    for (const char* id : actionIds) {
+        if (!first) ImGui::SameLine();
+        first = false;
+        ActionButton(app, id, ImVec2(w, 0));
+        HelpAction(app, id);
+    }
+    ImGui::PopStyleVar();
+}
+
 void HelpAction(App& app, const char* actionId) {
     if (!wantHelp() || !itemHoveredForHelp()) return;
     const Action* a = app.actions().find(actionId);

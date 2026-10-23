@@ -72,19 +72,8 @@ void actionRow(App& app, std::initializer_list<const char*> ids) {
     }
 }
 
-// Adjacent toggle buttons that read as one control (Zadd | Zsub, X | Y | Z).
 void segmented(App& app, std::initializer_list<const char*> ids, float width = -1.0f) {
-    const float total = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
-    const float w = (total - float(ids.size() - 1)) / float(ids.size());
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(1.0f, ImGui::GetStyle().ItemSpacing.y));
-    bool first = true;
-    for (const char* id : ids) {
-        if (!first) ImGui::SameLine();
-        first = false;
-        ui::ActionButton(app, id, ImVec2(w, 0));
-        ui::HelpAction(app, id);
-    }
-    ImGui::PopStyleVar();
+    ui::Segmented(app, ids, width);
 }
 
 // A menu-style row for an action: label, shortcut on the right, check mark for toggles.
