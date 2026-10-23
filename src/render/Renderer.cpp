@@ -53,6 +53,7 @@ uniform int uGroups;     // 0: off, 1: per-triangle ids from uGroupIds, 2: every
 uniform usamplerBuffer uGroupIds;
 uniform int uMatcap;          // 1: shade with the matcap texture instead of the studio lights
 uniform sampler2D uMatcapTex; // sRGB-encoded lit sphere (core/Matcap.h)
+uniform vec2 uMatcapCavity;   // crease darkening, ridge lift (sf::matcapCavity)
 uniform int uDim;             // 1: an inactive SubTool, shown a little darker and greyer
 out vec4 fragColor;
 vec4 finish(vec3 c) {
@@ -88,7 +89,7 @@ void main() {
         vec3 mc = pow(texture(uMatcapTex, uv).rgb, vec3(2.2));
         float mcrease = smoothstep(0.0, 0.16, vCurvature);
         float mridge = smoothstep(0.0, 0.2, -vCurvature);
-        vec3 c = mc * tint * (1.0 - 0.55 * mcrease) * (1.0 + 0.2 * mridge);
+        vec3 c = mc * tint * (1.0 - uMatcapCavity.x * mcrease) * (1.0 + uMatcapCavity.y * mridge);
         if (uShowMask == 1) c *= 1.0 - 0.75 * clamp(vMask, 0.0, 1.0);
         fragColor = finish(c);
         return;
@@ -279,7 +280,7 @@ bool Renderer::init(std::string& error) {
 
     gl::GenVertexArrays(1, &emptyVao_);
 
-    // Built-in matcaps, generated once (6 x 256 KB).
+    // Built-in matcaps, generated once (256 KB each).
     matcapTextures_.assign(size_t(matcapCount()), 0);
     gl::GenTextures(GLsizei(matcapTextures_.size()), matcapTextures_.data());
     gl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -737,6 +738,8 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
     const GLuint matcap = matcapTexture(settings.matcap);
     gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uMatcap"), matcap ? 1 : 0);
     gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uMatcapTex"), 2);
+    const MatcapCavity cavity = matcapCavity(settings.matcap);
+    gl::Uniform2f(gl::GetUniformLocation(meshProgram_, "uMatcapCavity"), cavity.crease, cavity.ridge);
     gl::ActiveTexture(kTexture2);
     gl::BindTexture(GL_TEXTURE_2D, matcap);
     gl::ActiveTexture(GL_TEXTURE0);

@@ -24,9 +24,12 @@ struct MatcapStyle {
     glm::vec3 rim;
     float metal; // 0 = dielectric, 1 = pure environment reflection
     float roughness; // blurs the environment for metals
+    bool sculpt = false; // the readability-first sculpting light (shadeSculpt) instead of the shared model
+    MatcapCavity cavity{};
 };
 
 const MatcapStyle kStyles[] = {
+    {"Sculpt", {0.56f, 0.44f, 0.36f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, true, {0.8f, 0.35f}},
     {"Red Wax", {0.50f, 0.045f, 0.03f}, 0.55f, {0.55f, 0.06f, 0.03f}, 0.55f, 70.0f, {0.25f, 0.08f, 0.06f}, 0.0f, 0.0f},
     {"Clay", {0.46f, 0.38f, 0.33f}, 0.25f, {0.05f, 0.03f, 0.02f}, 0.06f, 10.0f, {0.10f, 0.10f, 0.11f}, 0.0f, 0.0f},
     {"Skin", {0.68f, 0.38f, 0.28f}, 0.6f, {0.6f, 0.16f, 0.08f}, 0.16f, 28.0f, {0.22f, 0.16f, 0.15f}, 0.0f, 0.0f},
@@ -54,7 +57,30 @@ glm::vec3 environment(const glm::vec3& r, float roughness) {
     return c;
 }
 
+// Built for reading the surface while sculpting, after ZBrush's default material and Blender's sculpt
+// studio light: a strong key from the upper left, little ambient so forms don't flatten, a crisp
+// highlight that catches every undulation, only a hint of rim and no fresnel glow. Creases get the
+// strongest cavity darkening of the materials (kStyles' cavity, applied by the mesh shader).
+glm::vec3 shadeSculpt(const MatcapStyle& m, const glm::vec3& n) {
+    const glm::vec3 v(0.0f, 0.0f, 1.0f);
+    const glm::vec3 key = glm::normalize(glm::vec3(-0.4f, 0.65f, 0.65f));
+    const glm::vec3 fill = glm::normalize(glm::vec3(0.75f, -0.3f, 0.6f));
+    const float diff = std::max((glm::dot(n, key) + 0.1f) / 1.1f, 0.0f);
+    const float fd = std::max(glm::dot(n, fill), 0.0f);
+    const float hemi = 0.04f + 0.04f * (0.5f + 0.5f * n.y);
+    // A steep falloff on both lights: brightness changes quickly with the slope everywhere in view.
+    const glm::vec3 light = 1.6f * std::pow(diff, 2.5f) + 0.5f * fd * fd * glm::vec3(0.85f, 0.9f, 1.0f) + glm::vec3(hemi);
+    // A tight highlight over a broad sheen, plus a faint one from the fill, so strokes catch light
+    // on the shadow side too.
+    const float nh = std::max(glm::dot(n, glm::normalize(key + v)), 0.0f);
+    const float spec = (0.3f * std::pow(nh, 80.0f) + 0.25f * std::pow(nh, 12.0f)) * std::min(1.0f, diff * 4.0f);
+    const float fillSpec = 0.07f * std::pow(std::max(glm::dot(n, glm::normalize(fill + v)), 0.0f), 40.0f);
+    const float rim = std::pow(1.0f - std::max(n.z, 0.0f), 4.0f) * 0.1f;
+    return m.albedo * light + glm::vec3(spec) + glm::vec3(0.8f, 0.85f, 0.95f) * (fillSpec + rim);
+}
+
 glm::vec3 shade(const MatcapStyle& m, const glm::vec3& n) {
+    if (m.sculpt) return shadeSculpt(m, n);
     const glm::vec3 v(0.0f, 0.0f, 1.0f);
     const float nv = std::max(n.z, 0.0f);
     if (m.metal > 0.0f) {
@@ -90,6 +116,8 @@ std::string squash(const std::string& s) {
 int matcapCount() { return kStyleCount; }
 
 const char* matcapName(int index) { return index >= 0 && index < kStyleCount ? kStyles[index].name : ""; }
+
+MatcapCavity matcapCavity(int index) { return index >= 0 && index < kStyleCount ? kStyles[index].cavity : MatcapCavity{}; }
 
 int findMatcap(const std::string& name) {
     const std::string key = squash(name);

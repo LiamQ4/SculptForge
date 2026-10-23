@@ -789,7 +789,8 @@ void drawMaterialGrid(App& app, GridMode mode) {
     int column = 0;
     int hovered = -2;
     const int active = s.previewing ? s.savedMatcap : app.renderSettings_.matcap;
-    for (int i = -1; i < matcapCount(); ++i) {
+    for (int k = 0; k <= matcapCount(); ++k) {
+        const int i = k < matcapCount() ? k : -1; // the MatCaps (Sculpt first), then Studio
         tileGrid(column, columns);
         const char* name = i < 0 ? "Studio" : matcapName(i);
         const ImTextureID tex = app.thumbs_.material(i);
@@ -801,8 +802,10 @@ void drawMaterialGrid(App& app, GridMode mode) {
         }
         if (ImGui::IsItemHovered()) hovered = i;
         ui::HelpText(name, nullptr,
-                     i < 0 ? "Clay lighting with cavity shading (the default)."
-                           : "MatCap material: the whole lit look in one image.",
+                     i < 0    ? "Soft studio lighting with cavity shading, in the Base colour."
+                     : i == 0 ? "Made for sculpting (the default): a strong key light, crisp highlights and deep "
+                                "cavities so every stroke reads."
+                              : "MatCap material: the whole lit look in one image.",
                      "Material");
     }
     // ZBrush's "Preview Material On Mesh": hovering a material shows it on the model until the pointer leaves.

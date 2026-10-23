@@ -18,6 +18,13 @@ const char* matcapName(int index);
 // Case-insensitive; also accepts names without spaces ("redwax"). -1 if unknown.
 int findMatcap(const std::string& name);
 
+// How strongly the viewport darkens creases and lifts ridges on top of this matcap (the
+// curvature term in the mesh shader); the Sculpt material leans on it more than the others.
+struct MatcapCavity {
+    float crease = 0.55f, ridge = 0.2f;
+};
+MatcapCavity matcapCavity(int index);
+
 // `size` x `size` RGBA8 pixels, sRGB-encoded, rows bottom-up (OpenGL order):
 // pixel (i, j) shows the sphere normal x = (i + 0.5) / size * 2 - 1,
 // y = (j + 0.5) / size * 2 - 1. Pixels outside the disk repeat the rim.

@@ -305,6 +305,16 @@ TEST(matcap_builtin_materials) {
     CHECK(std::abs(cc.x - cc.z) < 40); // neutral metal
     // Deterministic.
     CHECK(generateMatcap(findMatcap("Chrome"), size) == chrome);
+
+    // Sculpt, the default material, comes first: a neutral warm clay with a strong key from the upper
+    // left (a clear light-to-shadow range, so slopes read), and the deepest cavity shading of them all.
+    CHECK(findMatcap("sculpt") == 0);
+    const std::vector<uint8_t> sculpt = generateMatcap(0, size);
+    const glm::ivec4 sc = pixel(sculpt, size / 2, size / 2);
+    CHECK(sc.x >= sc.z && sc.x - sc.z < 60);
+    CHECK(pixel(sculpt, size / 4, size * 3 / 4).x > pixel(sculpt, size * 3 / 4, size / 4).x + 60);
+    for (int i = 1; i < matcapCount(); ++i) CHECK(matcapCavity(0).crease > matcapCavity(i).crease);
+    CHECK(matcapCavity(-1).crease > 0.0f && matcapCavity(matcapCount()).crease == matcapCavity(-1).crease);
 }
 
 TEST(polypaint_restore_stroke_marks_colors_dirty) {

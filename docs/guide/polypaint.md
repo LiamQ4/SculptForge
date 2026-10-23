@@ -73,13 +73,14 @@ Materials change only how the model is shaded in the viewport. They aren't expor
 
 | Material | Look |
 |---|---|
-| Studio | The default clay shading with soft studio lighting. Its colour is **Base colour** in the Material palette |
+| Sculpt | The default, made for sculpting: neutral warm clay under a strong key light from the upper left, a crisp highlight and deep cavity shading, so small strokes and undulations stay readable |
 | Red Wax | Glossy deep red wax, the classic sculpting look |
 | Clay | Matte grey-brown clay |
 | Skin | Warm, soft skin tones |
 | Chrome | Mirror-like metal, good for checking surface flow |
 | White | Neutral off-white for judging forms |
 | Bronze | Polished bronze |
+| Studio | Softer clay shading with studio lighting (the default in earlier versions). Its colour is **Base colour** in the Material palette |
 
 To choose one:
 
@@ -88,10 +89,13 @@ To choose one:
   previous material back.
 - Open the **Material** palette, or the **Material** tab of the LightBox.
 
-![The material picker with the six MatCaps and Studio](images/material-picker.jpg)
+![The material picker with the seven MatCaps and Studio](images/material-picker.jpg)
 
-Polypaint multiplies the material, and cavity shading stays on with every material. The material is saved with
-the project.
+Polypaint multiplies the material, and cavity shading stays on with every material (strongest with Sculpt). The
+material is saved with the project: projects saved with Studio open with Studio.
+
+> **Tip:** **Sculpt** is the material to judge strokes with. The prettier ones (Skin, Red Wax) soften small
+> detail; switch to them for presenting.
 
 > **Not yet:** loading your own MatCap images, and physically based materials or BPR-style renders.
 
@@ -103,7 +107,7 @@ the project.
 | `paint_fill area=unmasked` | Fill; `area` is `unmasked` (default), `masked` or `all`; `strength` 0-1 |
 | `paint_from_cavity color=#202020 strength=0.7 smoothing=2` | Cavity paint (defaults: dark brown, 0.7, 2 blur passes) |
 | `paint_clear` | Remove all polypaint |
-| `set_material name=Chrome` | Viewport material: `studio` or a MatCap name (desktop app only) |
+| `set_material name=Chrome` | Viewport material: a MatCap name (`Sculpt` is the default) or `studio` (desktop app only) |
 
 ```text
 set_color color="#d9b38c"; paint_fill; paint_from_cavity strength=0.5
