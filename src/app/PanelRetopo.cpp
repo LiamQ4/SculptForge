@@ -196,8 +196,10 @@ void App::drawQRemeshContents() {
     ImGui::SameLine(half + style.ItemSpacing.x);
     ImGui::Checkbox("Symmetry", &retopo_.symmetry);
     const char axis = char('X' + symmetryAxis(symmetry_));
-    const std::string symHelp = std::string("Mirror the topology across the ") + axis +
-                                " plane through the origin (the Transform palette's symmetry axis), welded on the seam.";
+    const std::string symHelp = std::string("Mirror the topology across ") + axis +
+                                " (the Transform palette's symmetry axis), welded on the seam. The mirror plane is the "
+                                "model's own, so a model away from the world centre works too; a model that isn't "
+                                "mirror-symmetric is remeshed without symmetry (the status line says so).";
     ui::HelpText("Symmetry", nullptr, symHelp.c_str(), kQRemeshPath);
     ImGui::Checkbox("Keep Original", &retopo_.keepOriginal);
     ui::HelpText("Keep Original", nullptr,

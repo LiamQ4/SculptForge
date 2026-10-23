@@ -18,7 +18,11 @@
 //     lattice size and extracting again.
 //
 // Keep Groups constrains the fields to the polygroup borders, so edge loops run along them (and the result
-// keeps the groups). Symmetry remeshes one half (cut at the plane) and mirrors it, welded on the seam.
+// keeps the groups). Symmetry remeshes one half (cut at the plane) and mirrors it, welded on the seam; the plane
+// is the model's own (found from it, so a model away from the origin works), and a model that isn't
+// mirror-symmetric is remeshed whole instead. Separate pieces are kept: small ones (eyes, rivets) are remeshed
+// on their own with a few dozen quads at least. Parts thinner than a quad keep both sides (clusters facing
+// apart don't merge) and hard edges keep their loops and corners.
 #pragma once
 
 #include "core/Mesh.h"
@@ -37,7 +41,12 @@ struct QRemeshOptions {
     bool keepGroups = false; // edge loops along polygroup borders; the result keeps the groups
     bool detectEdges = true; // hard edges (faces meeting at more than 50 degrees) get an edge loop
     bool usePolypaint = false; // red polypaint: up to 4x the density, blue: down to 1/4
-    int symmetryAxis = -1;   // -1 none, 0 X, 1 Y, 2 Z (mirror across the plane through the origin)
+    int symmetryAxis = -1;   // -1 none, 0 X, 1 Y, 2 Z
+    // The mirror plane's position along the axis. symmetryAuto: the plane is found from the model (the world
+    // origin's plane when the model is symmetric about it, else the model's own middle, as for an off-centre
+    // model), otherwise symmetryCenter is used as given.
+    bool symmetryAuto = true;
+    float symmetryCenter = 0.0f;
     int smoothIterations = 6;
     uint32_t seed = 1;       // the field's random start (the result is deterministic for a seed)
 };
@@ -47,6 +56,11 @@ struct QRemeshStats {
     size_t boundaryEdges = 0, nonManifoldEdges = 0;
     int attempts = 0;      // extractions run to approach the target count
     float edgeLength = 0;  // mean quad edge length
+    int symmetryAxis = -1;       // the axis asked for (-1: none)
+    bool symmetryUsed = false;   // false when symmetry was asked for but the model isn't mirror-symmetric
+    float symmetryCenter = 0.0f; // the plane used (with symmetryUsed)
+    float asymmetry = 0.0f;      // the model's mirror mismatch about that plane, in mean quad edges
+    size_t pieces = 0;           // separate pieces of the source, each remeshed on its own
     double seconds = 0;
 };
 
