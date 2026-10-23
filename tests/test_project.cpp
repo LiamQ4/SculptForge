@@ -199,7 +199,7 @@ TEST(project_version_handling) {
     std::string err;
     CHECK(saveProject(path, doc, err));
     const std::string manifest = readManifest(path);
-    CHECK(manifest.find("\"version\": 2") != std::string::npos || manifest.find("\"version\":2") != std::string::npos);
+    CHECK(manifest.find("\"version\": 3") != std::string::npos || manifest.find("\"version\":3") != std::string::npos);
     CHECK(manifest.find("app_version") != std::string::npos);
 
     // Unknown fields (top level and inside the mesh) are ignored.
@@ -210,6 +210,12 @@ TEST(project_version_handling) {
     Document back;
     CHECK(loadProject(path, back, err));
     CHECK(back.mesh.positions == doc.mesh.positions);
+
+    // Version 2 (SculptForge 0.4, before textures) still loads.
+    CHECK(editManifest(path, [](Json& j) { j.set("version", 2); }));
+    Document v2;
+    CHECK(loadProject(path, v2, err));
+    CHECK(v2.mesh.positions == doc.mesh.positions && !v2.mesh.texture);
 
     // A newer format is refused with a clear message and leaves the document alone.
     CHECK(editManifest(path, [](Json& j) {

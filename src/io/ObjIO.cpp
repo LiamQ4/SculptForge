@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "io/ObjIO.h"
 
+#include "io/TextureExport.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -41,6 +43,8 @@ struct ObjObject {
     std::vector<glm::uvec3> triangles;
     std::vector<uint32_t> groups;          // per triangle: index into groupNames
     std::vector<uint32_t> quads;           // first triangle of each quad face (the second one follows it)
+    std::vector<glm::vec2> uvs;            // per triangle corner (when any face has `vt` indices)
+    bool hasUvs = false;
     std::vector<std::string> groupNames;   // `g` names in order of first use ("" = before any `g`)
     std::map<std::string, uint32_t> groupIndex;
     std::string pendingGroup;  // the last `g`, registered by its first face (unused names don't count)
@@ -51,6 +55,11 @@ struct ObjObject {
 void applyQuads(const ObjObject& o, Mesh& m) {
     for (uint32_t t : o.quads) m.pairQuad(t, t + 1);
     if (m.hasQuads()) m.quadPartners.resize(m.triangles.size(), Mesh::kNoQuad);
+}
+
+// UVs from `vt` indices, when any face of the object has them (faces without get (0, 0)).
+void applyUvs(ObjObject& o, Mesh& m) {
+    if (o.hasUvs) m.uvs = std::move(o.uvs);
 }
 
 // Polygroups from `g` names: only when the object uses two or more (ids 1, 2, ... in order of first use).
@@ -69,9 +78,11 @@ bool parseObj(const std::string& path, bool splitObjects, std::vector<MeshObject
     std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
     std::vector<glm::vec3> positions, colors; // colours: empty until a vertex has one
+    std::vector<glm::vec2> texcoords;         // `vt` lines
     std::vector<uint8_t> colored;             // per vertex (while colours exist): had an explicit colour
     std::vector<ObjObject> objects(1);
     std::vector<uint32_t> poly;
+    std::vector<int64_t> polyUv; // per corner: index into texcoords, or -1
     const char* p = data.c_str();
     const char* end = p + data.size();
     size_t lineNo = 0;
@@ -123,14 +134,34 @@ bool parseObj(const std::string& path, bool splitObjects, std::vector<MeshObject
                 colored.push_back(0);
             }
             positions.push_back(v);
+        } else if (s[0] == 'v' && s[1] == 't' && (s[2] == ' ' || s[2] == '\t')) {
+            char* cur = const_cast<char*>(s + 2);
+            glm::vec2 uv(0.0f);
+            for (int i = 0; i < 2; ++i) { // "vt u" alone means v = 0; a third (w) value is ignored
+                char* next;
+                const float x = std::strtof(cur, &next);
+                if (next == cur) break;
+                uv[i] = x;
+                cur = next;
+            }
+            texcoords.push_back(uv);
         } else if (s[0] == 'f' && (s[1] == ' ' || s[1] == '\t')) {
             poly.clear();
+            polyUv.clear();
             char* cur = const_cast<char*>(s + 1);
             while (true) {
                 char* next;
                 long idx = std::strtol(cur, &next, 10);
                 if (next == cur) break;
                 cur = next;
+                // Optional /vt (the /vn after it is ignored); out-of-range texture indices are dropped.
+                int64_t uv = -1;
+                if (*cur == '/' && cur[1] != '/') {
+                    const long t = std::strtol(cur + 1, &next, 10);
+                    const long nt = static_cast<long>(texcoords.size());
+                    const long resolved = t > 0 ? t - 1 : nt + t;
+                    if (next != cur + 1 && t != 0 && resolved >= 0 && resolved < nt) uv = resolved;
+                }
                 while (*cur && *cur != ' ' && *cur != '\t' && *cur != '\r') ++cur; // skip /vt/vn
                 long n = static_cast<long>(positions.size());
                 long resolved = idx > 0 ? idx - 1 : n + idx;
@@ -139,13 +170,21 @@ bool parseObj(const std::string& path, bool splitObjects, std::vector<MeshObject
                     return false;
                 }
                 poly.push_back(static_cast<uint32_t>(resolved));
+                polyUv.push_back(uv);
             }
             ObjObject& o = objects.back();
             if (poly.size() >= 3 && o.currentGroup == ~0u) groupFor(o, o.pendingGroup);
             if (poly.size() == 4) o.quads.push_back(uint32_t(o.triangles.size())); // n-gons are fanned unpaired
+            const bool faceUvs = poly.size() >= 3 && std::all_of(polyUv.begin(), polyUv.end(), [](int64_t i) { return i >= 0; });
+            if (faceUvs && !o.hasUvs) {
+                o.hasUvs = true;
+                o.uvs.resize(o.triangles.size() * 3, glm::vec2(0.0f));
+            }
+            auto uvAt = [&](size_t corner) { return faceUvs ? texcoords[size_t(polyUv[corner])] : glm::vec2(0.0f); };
             for (size_t i = 2; i < poly.size(); ++i) {
                 o.triangles.push_back({poly[0], poly[i - 1], poly[i]});
                 o.groups.push_back(o.currentGroup);
+                if (o.hasUvs) o.uvs.insert(o.uvs.end(), {uvAt(0), uvAt(i - 1), uvAt(i)});
             }
         } else if (isStatement(s, 'g')) {
             objects.back().pendingGroup = statementName(s);
@@ -180,6 +219,7 @@ bool parseObj(const std::string& path, bool splitObjects, std::vector<MeshObject
             obj.mesh.triangles = std::move(o.triangles);
             applyGroups(o, obj.mesh);
             applyQuads(o, obj.mesh);
+            applyUvs(o, obj.mesh);
             out.push_back(std::move(obj));
         }
     } else {
@@ -214,6 +254,7 @@ bool parseObj(const std::string& path, bool splitObjects, std::vector<MeshObject
             m.triangles = std::move(o.triangles);
             applyGroups(o, m);
             applyQuads(o, m);
+            applyUvs(o, m);
             out.push_back(std::move(obj));
         }
     }
@@ -251,14 +292,51 @@ bool saveObj(const std::string& path, const std::vector<MeshObjectRef>& objects,
         error = "Cannot write " + path;
         return false;
     }
+    // Textured objects: a PNG each beside the file and a material in <stem>.mtl that maps it.
+    const std::vector<std::string> pngs = textureFileNames(path, objects);
+    const bool textured = std::any_of(pngs.begin(), pngs.end(), [](const std::string& n) { return !n.empty(); });
+    std::vector<std::string> materials(objects.size());
+    std::string mtl;
+    if (textured) {
+        mtl = "# Exported by SculptForge\n";
+        // Objects without a texture share a plain clay material (so they don't inherit the one before them).
+        const std::string clay = "Clay";
+        bool clayUsed = false;
+        for (size_t i = 0; i < objects.size(); ++i) {
+            if (pngs[i].empty()) {
+                materials[i] = clay;
+                clayUsed = true;
+                continue;
+            }
+            const std::string base = safeTextureName(objects[i].name);
+            std::string name = base;
+            for (int k = 2; name == clay || std::find(materials.begin(), materials.end(), name) != materials.end(); ++k)
+                name = base + "_" + std::to_string(k);
+            materials[i] = name;
+            std::string pngPath;
+            if (!writeTextureBeside(path, pngs[i], *objects[i].mesh, pngPath, error)) return false;
+            mtl += "\nnewmtl " + name + "\nKa 0 0 0\nKd 1 1 1\nKs 0 0 0\nillum 1\nmap_Kd " + pngs[i] + "\n";
+        }
+        if (clayUsed) mtl += "\nnewmtl " + clay + "\nKa 0 0 0\nKd 0.8 0.55 0.45\nKs 0 0 0\nillum 1\n";
+        const std::filesystem::path mtlPath = utf8Path(path).replace_extension(".mtl");
+        std::ofstream mtlFile(mtlPath, std::ios::binary);
+        if (!mtlFile || !mtlFile.write(mtl.data(), std::streamsize(mtl.size()))) {
+            error = "Cannot write " + textureUtf8(mtlPath);
+            return false;
+        }
+    }
+
     std::string buf;
     size_t reserve = 0;
-    for (const auto& o : objects) reserve += o.mesh->vertexCount() * 40 + o.mesh->triangleCount() * 30;
+    for (const auto& o : objects) reserve += o.mesh->vertexCount() * 40 + o.mesh->triangleCount() * (hasCornerUvs(*o.mesh) ? 90 : 30);
     buf.reserve(reserve);
     buf += "# Exported by SculptForge\n";
-    char line[128];
-    uint32_t first = 1; // OBJ indices are 1-based and global across objects
-    for (const auto& o : objects) {
+    if (textured) buf += "mtllib " + textureUtf8(utf8Path(path).stem()) + ".mtl\n";
+    char line[192];
+    uint32_t first = 1;   // OBJ indices are 1-based and global across objects
+    uint32_t firstVt = 1; // as are texture coordinate indices
+    for (size_t oi = 0; oi < objects.size(); ++oi) {
+        const MeshObjectRef& o = objects[oi];
         const Mesh& mesh = *o.mesh;
         if (objects.size() > 1) {
             std::string name = o.name.empty() ? std::string("Object") : o.name;
@@ -278,18 +356,39 @@ bool saveObj(const std::string& path, const std::vector<MeshObjectRef>& objects,
             }
             buf.append(line, n);
         }
+        // UVs: one `vt` per distinct value (faces index them per corner).
+        const bool uvs = hasCornerUvs(mesh);
+        std::map<std::pair<float, float>, uint32_t> vtIndex;
+        if (uvs)
+            for (const auto& uv : mesh.uvs) {
+                auto [it, inserted] = vtIndex.try_emplace({uv.x, uv.y}, uint32_t(vtIndex.size()));
+                if (!inserted) continue;
+                const int n = std::snprintf(line, sizeof line, "vt %.7g %.7g\n", uv.x, uv.y);
+                buf.append(line, n);
+            }
+        if (textured) buf += "usemtl " + materials[oi] + "\n";
         // Polygroups as `g` groups (ZBrush's OBJ convention), when there is more than one.
         bool groups = false;
         for (uint32_t t = 1; t < mesh.triangleCount() && !groups; ++t) groups = mesh.polygroupAt(t) != mesh.polygroupAt(0);
         uint32_t written = 0; // group of the last face written
         for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
             glm::uvec4 f;
-            const int corners = mesh.exportFace(t, f); // quads as quads, the second half of one as nothing
+            glm::vec2 fuv[4];
+            const int corners = exportFaceUv(mesh, t, f, fuv); // quads as quads, the second half of one as nothing
             if (corners == 0) continue;
             if (groups && (t == 0 || mesh.polygroupAt(t) != written)) {
                 written = mesh.polygroupAt(t);
                 const int n = std::snprintf(line, sizeof line, "g group%u\n", written);
                 buf.append(line, n);
+            }
+            if (uvs) {
+                buf += 'f';
+                for (int c = 0; c < corners; ++c) {
+                    const int n = std::snprintf(line, sizeof line, " %u/%u", f[c] + first, vtIndex[{fuv[c].x, fuv[c].y}] + firstVt);
+                    buf.append(line, n);
+                }
+                buf += '\n';
+                continue;
             }
             const int n = corners == 4 ? std::snprintf(line, sizeof line, "f %u %u %u %u\n", f.x + first, f.y + first,
                                                        f.z + first, f.w + first)
@@ -297,6 +396,7 @@ bool saveObj(const std::string& path, const std::vector<MeshObjectRef>& objects,
             buf.append(line, n);
         }
         first += uint32_t(mesh.vertexCount());
+        firstVt += uint32_t(vtIndex.size());
     }
     file.write(buf.data(), static_cast<std::streamsize>(buf.size()));
     if (!file) {

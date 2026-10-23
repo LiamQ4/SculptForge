@@ -83,6 +83,13 @@ constexpr GLenum GL_STREAM_DRAW = 0x88E0;
 constexpr GLenum GL_TEXTURE_BUFFER = 0x8C2A;
 constexpr GLenum GL_MAX_TEXTURE_BUFFER_SIZE = 0x8C2B;
 constexpr GLenum GL_R32UI = 0x8236;
+constexpr GLenum GL_RG32F = 0x8230;
+constexpr GLenum GL_GEOMETRY_SHADER = 0x8DD9;
+constexpr GLenum GL_SRGB8_ALPHA8 = 0x8C43;
+constexpr GLenum GL_LINEAR_MIPMAP_LINEAR = 0x2703;
+constexpr GLenum GL_UNPACK_ROW_LENGTH = 0x0CF2;
+constexpr GLenum GL_TEXTURE3 = 0x84C3;
+constexpr GLenum GL_TEXTURE4 = 0x84C4;
 constexpr GLbitfield GL_DEPTH_BUFFER_BIT = 0x0100;
 constexpr GLbitfield GL_COLOR_BUFFER_BIT = 0x4000;
 
@@ -133,6 +140,8 @@ constexpr GLbitfield GL_COLOR_BUFFER_BIT = 0x4000;
     X(void, BindTexture, GLenum, GLuint)                                                     \
     X(void, TexImage2D, GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*) \
     X(void, TexParameteri, GLenum, GLenum, GLint)                                            \
+    X(void, TexSubImage2D, GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void*) \
+    X(void, GenerateMipmap, GLenum)                                                          \
     X(void, PixelStorei, GLenum, GLint)                                                      \
     X(void, ReadPixels, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*)               \
     X(void, GenFramebuffers, GLsizei, GLuint*)                                               \

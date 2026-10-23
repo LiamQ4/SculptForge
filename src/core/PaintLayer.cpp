@@ -4,6 +4,7 @@
 
 #include "core/Commands.h"
 #include "core/Mesh.h"
+#include "core/Texture.h"
 #include "core/Undo.h"
 
 #include <algorithm>
@@ -517,6 +518,7 @@ void registerPaintLayerCommands(CommandRegistry& reg) {
               {"blend", T::String, "Blend mode: " + blendList() + ". Default normal.", false},
               {"opacity", T::Number, "Layer opacity 0-1. Default 1.", false}},
              [](Document& doc, const Args& a) -> CommandResult {
+                 if (paintsTexture(doc.mesh)) return textureLayerCommand(doc, "add", a);
                  Mesh& m = doc.mesh;
                  if (m.vertexCount() == 0) return {false, "There is no mesh to paint"};
                  BlendMode blend = BlendMode::Normal;
@@ -543,6 +545,7 @@ void registerPaintLayerCommands(CommandRegistry& reg) {
               {"visible", T::Bool, "Show (true) or hide (false) the layer.", false},
               {"locked", T::Bool, "Lock the layer against painting, fills, clears and merges.", false}},
              [](Document& doc, const Args& a) -> CommandResult {
+                 if (paintsTexture(doc.mesh)) return textureLayerCommand(doc, "set", a);
                  Mesh& m = doc.mesh;
                  std::string err;
                  const int i = layerArg(m, a, err);
@@ -572,6 +575,7 @@ void registerPaintLayerCommands(CommandRegistry& reg) {
 
     reg.add({"paint_layer_select", "Choose the paint layer the Paint brush and fills write into.", {kIndexParam, kLayerParam},
              [](Document& doc, const Args& a) -> CommandResult {
+                 if (paintsTexture(doc.mesh)) return textureLayerCommand(doc, "select", a);
                  Mesh& m = doc.mesh;
                  if (!a.contains("index") && !a.contains("layer")) return {false, "Give index or layer"};
                  std::string err;
@@ -584,6 +588,7 @@ void registerPaintLayerCommands(CommandRegistry& reg) {
     reg.add({"paint_layer_duplicate", "Copy a paint layer (Base becomes an opaque layer) to a new layer above it.",
              {kIndexParam, kLayerParam},
              [](Document& doc, const Args& a) -> CommandResult {
+                 if (paintsTexture(doc.mesh)) return textureLayerCommand(doc, "duplicate", a);
                  Mesh& m = doc.mesh;
                  if (m.vertexCount() == 0) return {false, "There is no mesh to paint"};
                  std::string err;
@@ -598,6 +603,7 @@ void registerPaintLayerCommands(CommandRegistry& reg) {
     reg.add({"paint_layer_delete", "Delete a paint layer (not Base). With the last layer gone, Base is plain polypaint again.",
              {kIndexParam, kLayerParam},
              [](Document& doc, const Args& a) -> CommandResult {
+                 if (paintsTexture(doc.mesh)) return textureLayerCommand(doc, "delete", a);
                  Mesh& m = doc.mesh;
                  std::string err;
                  const int i = layerArg(m, a, err);
@@ -613,6 +619,7 @@ void registerPaintLayerCommands(CommandRegistry& reg) {
     reg.add({"paint_layer_move", "Move a paint layer up or down the stack (Base stays at the bottom).",
              {kIndexParam, kLayerParam, {"direction", T::String, "up or down.", true}},
              [](Document& doc, const Args& a) -> CommandResult {
+                 if (paintsTexture(doc.mesh)) return textureLayerCommand(doc, "move", a);
                  Mesh& m = doc.mesh;
                  std::string err;
                  const int i = layerArg(m, a, err);
@@ -634,6 +641,7 @@ void registerPaintLayerCommands(CommandRegistry& reg) {
              "onto another layer the result keeps that layer's blend mode, as in Photoshop.",
              {kIndexParam, kLayerParam},
              [](Document& doc, const Args& a) -> CommandResult {
+                 if (paintsTexture(doc.mesh)) return textureLayerCommand(doc, "merge", a);
                  Mesh& m = doc.mesh;
                  std::string err;
                  const int i = layerArg(m, a, err);
@@ -648,6 +656,7 @@ void registerPaintLayerCommands(CommandRegistry& reg) {
 
     reg.add({"paint_layer_flatten", "Flatten every visible paint layer into Base (hidden layers are discarded).", {},
              [](Document& doc, const Args&) -> CommandResult {
+                 if (paintsTexture(doc.mesh)) return textureLayerCommand(doc, "flatten", {});
                  Mesh& m = doc.mesh;
                  if (m.paintLayers.empty()) return {true, "There are no paint layers to flatten"};
                  UndoRecord r = stackUndo(m, "Flatten Paint Layers");
@@ -659,6 +668,7 @@ void registerPaintLayerCommands(CommandRegistry& reg) {
     reg.add({"paint_layer_clear", "Clear a paint layer: a layer becomes transparent, Base white (undoable).",
              {kIndexParam, kLayerParam},
              [](Document& doc, const Args& a) -> CommandResult {
+                 if (paintsTexture(doc.mesh)) return textureLayerCommand(doc, "clear", a);
                  Mesh& m = doc.mesh;
                  if (m.vertexCount() == 0) return {false, "There is no mesh to paint"};
                  std::string err;
@@ -674,6 +684,7 @@ void registerPaintLayerCommands(CommandRegistry& reg) {
 
     reg.add({"paint_layer_list", "List the active SubTool's paint layers, top first.", {},
              [](Document& doc, const Args&) -> CommandResult {
+                 if (paintsTexture(doc.mesh)) return textureLayerCommand(doc, "list", {});
                  const Mesh& m = doc.mesh;
                  std::string out;
                  for (int i = int(m.paintLayers.size()) - 1; i >= -1; --i) {

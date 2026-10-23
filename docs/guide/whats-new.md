@@ -5,6 +5,26 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Next version (in development)
+
+### Texture painting on UV maps
+
+Paint into a texture instead of the vertices, so the colour detail comes from the texture (1K to 8K), not from
+the mesh: sharp decals, pores and freckles on a light game mesh.
+
+- **Auto UV.** **Tool > Texture Map > Auto UV** unwraps any sculpt in the background. Models that come in with
+  UVs keep them, and now OBJ, FBX, USD and glTF carry UVs in and out too.
+- **New Texture.** Pick a size and click **New Texture**: the Paint brush, **Rgb** sculpting, fills, cavity paint
+  and colour picking (<kbd>C</kbd>) now work on the texture, with the mask, symmetry, pen pressure and alphas.
+  Strokes never paint through to the far side, and seams stay invisible.
+- **Vertex or Texture.** A toggle on the top shelf chooses where paint goes for each SubTool.
+- **The same paint layers.** **Tool > Paint Layers** works on the texture's layers: blend modes, opacity,
+  merge, flatten, all undoable.
+- **Convert both ways**, **Show UVs**, **Import / Export Texture** (PNG). Projects save textures and their
+  layers, and model exports write the texture next to the model (OBJ `.mtl`, glTF, USD, FBX, GoZ).
+
+See [Texture painting](texture-painting.md).
+
 ## Version 0.4.1
 
 A fix for graphics tablets: the brush ring no longer flickers between two places on the model (it looked like

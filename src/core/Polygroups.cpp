@@ -296,6 +296,10 @@ Mesh extractTriangles(const Mesh& mesh, const std::vector<uint8_t>& keep) {
     }
     out.positions.reserve(kept.size());
     for (uint32_t v : kept) out.positions.push_back(mesh.positions[v]);
+    if (mesh.hasUvs()) { // the painted texture still fits the kept UVs (shared until one side paints)
+        out.texture = mesh.texture;
+        out.paintToTexture = mesh.paintToTexture;
+    }
     if (mesh.hasMask())
         for (uint32_t v : kept) out.mask.push_back(mesh.mask[v]);
     if (mesh.hasColors())

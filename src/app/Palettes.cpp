@@ -352,6 +352,11 @@ void App::drawPalette_Tool() {
         drawPaintLayersContents();
         Demo::popScope();
     }
+    if (subpalette("tool.texture", "Texture Map")) {
+        Demo::pushScope("Texture Map");
+        drawTextureMapContents();
+        Demo::popScope();
+    }
     if (subpalette("tool.geometry", "Geometry")) {
         actionRow(*this, {"geometry.subdivide"});
         const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;

@@ -16,7 +16,9 @@ paint layers with blend modes, and the MatCap materials that change how the mode
   (`displayColor`) and GoZ. FBX export doesn't include it.
 - A mesh starts without polypaint. The first paint stroke or fill adds it (white everywhere you haven't painted).
 
-> **Not yet:** texture painting on UVs and baking polypaint to a texture map. See the roadmap.
+> **Texture painting:** to paint finer than the mesh, give the SubTool a texture and paint into it instead; the
+> Paint brush, fills and paint layers work the same way. **Polypaint > Texture** bakes polypaint into a texture.
+> See [Texture painting](texture-painting.md).
 
 ## Paint with the Paint brush
 
@@ -48,7 +50,8 @@ paints the current colour along its stroke. The Smooth brush and <kbd>Shift</kbd
   the second swatch swaps it with the main colour, like ZBrush's Alternate.
 - The **Color** palette has a larger hue wheel with a hex value, ten preset swatches (white, near black, red,
   orange, yellow, green, blue, purple, skin and brown) and the fill buttons.
-- Press <kbd>C</kbd> with the cursor over the model to pick the colour under it (the mesh needs polypaint for this).
+- Press <kbd>C</kbd> with the cursor over the model to pick the colour under it (the mesh needs polypaint for this,
+  or a texture while painting into the texture).
 
 ## Fill, cavity paint and clear
 

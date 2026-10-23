@@ -111,7 +111,8 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
 
 - 📋 Multiresolution subdivision levels (step up and down, keep detail, reconstruct)
 - 📋 ZRemesher-class quad retopology with guides and density, plus Project / Project All detail transfer
-- 📋 UV unwrapping and normal / displacement map baking
+- ✅ Automatic UV unwrapping (Auto UV, xatlas) and texture painting on UV maps (v0.5)
+- 📋 Normal / displacement map baking
 - 📋 Performance at 20-100M polygons, multithreaded brushes, fast undo
 - 📋 A transpose / gizmo tool for posing and moving parts
 
@@ -134,8 +135,9 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
   📋 ZRemesher-class retopology from triangle meshes
 - ✅ Polypaint: Paint brush, RGB while sculpting, colour pick, fill (respecting the mask), cavity paint;
   exported to PLY, glTF, OBJ, USD and GoZ; Photoshop-style paint layers with blend modes (v0.4)
-- 📋 Texture painting on UV maps (resolution independent of the mesh), with the same paint layers
-- 📋 UV unwrapping and editing, texture baking (normal/displacement)
+- ✅ Texture painting on UV maps (resolution independent of the mesh), with the same paint layers; Auto UV,
+  polypaint <-> texture, PNG next to OBJ / glTF / USD / FBX / GoZ exports (v0.5)
+- 📋 UV editing (seams, relax, pack options), UDIM tiles, texture baking (normal/displacement)
 - ✅ STL import (binary and ASCII) and binary export
 - 📋 Binary USD (usdc), SPZ-compressed splats, USD references/payloads
 - 📋 Splat editing: crop box, paint-select, sculpt deforming nearby splats

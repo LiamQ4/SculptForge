@@ -4,8 +4,8 @@ A `.sfproj` is an uncompressed ("stored") ZIP (src/io/Zip.cpp) written by `saveP
 read by `loadProject` (src/core/Project.cpp). Commands: `save_project path=...`,
 `open_project path=...`; `open` also recognises `.sfproj`.
 
-## Layout (version 2)
-- `manifest.json`: always first. `format` = `"SculptForge project"`, `version` (integer, currently 2),
+## Layout (version 3)
+- `manifest.json`: always first. `format` = `"SculptForge project"`, `version` (integer, currently 3),
   `app_version`, then `subtools` (one entry per SubTool, in list order), `active_subtool` (index),
   `brushes` (recipe JSON), `active_brush` (name), optional `splats`, and app-owned keys (`camera`,
   `render`, `brush`, `symmetry`).
@@ -29,6 +29,8 @@ read by `loadProject` (src/core/Project.cpp). Commands: `save_project path=...`,
 | `layers[k].delta` | subtools/i/layers/<k>.bin | f32 x3 per vertex, plus `name`, `weight` |
 | `paint_layers.base` | subtools/i/paint/base.bin | f32 x3 per vertex: the Base paint layer (linear RGB) |
 | `paint_layers.layers[k].color` / `alpha` | subtools/i/paint/<k>_color.bin, <k>_alpha.bin | f32 x3 / x1 per vertex, plus `name`, `opacity` (0-1), `blend`, `visible`, `locked` |
+| `texture.base` | subtools/i/texture/base.png | u8 blob with `"encoding": "png"`: the texture (or its Base layer), RGBA, sRGB, top row = v 1 |
+| `texture.layers[k].rgba` | subtools/i/texture/<k>.png | PNG as above: the layer's colour, coverage in alpha, plus `name`, `opacity`, `blend`, `visible`, `locked` |
 
 | Manifest key (top level) | File | Layout |
 |--------------|------|--------|
@@ -44,6 +46,15 @@ Optional attributes are simply absent when the mesh doesn't have them.
 `paint_layers` (SculptForge 0.3 and earlier) open the project with the paint flattened, and the key needs no
 version bump.
 
+### Texture (version 3)
+`subtools[i].texture` (only for SubTools with a painted texture; src/core/Texture.h) holds `width`, `height`,
+`paint_to_texture` (painting goes into the texture rather than the vertices), `active` (texture layer
+painting writes into, -1 = Base), `base` and `layers` (bottom to top, the same fields and blend modes as
+paint layers). Each image is a PNG of exactly `width` x `height`; a texture whose images are missing or the
+wrong size refuses the whole file. The composite is not stored: it is rebuilt from the layers on load.
+Version 3 was introduced for this key (SculptForge 0.5): earlier versions refuse the file instead of
+silently dropping the paint. Version 1 and 2 files load unchanged.
+
 Loading replaces the scene: every SubTool comes back with its name, visibility, attributes, layers,
 active layer and GoZ name, the saved active SubTool is selected, every SubTool starts with an empty
 undo history and the document is clean. A file is refused (and the open scene left alone) when the
@@ -53,7 +64,7 @@ selects the first one.
 ## Version 1
 Version 1 files (SculptForge 0.2 and earlier) have one mesh at the top level instead of `subtools`:
 `mesh` and `layers` as above (blobs under `mesh/` and `layers/`) and `active_layer`. They still load,
-as a single SubTool called "Sculpt". Saving always writes version 2.
+as a single SubTool called "Sculpt". Saving always writes the current version (3).
 
 ## Compatibility rules
 - Unknown keys and files are ignored. Unknown **top-level** keys are kept in

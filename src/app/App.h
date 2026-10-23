@@ -19,8 +19,10 @@
 #include "core/Commands.h"
 #include "core/Image.h"
 #include "core/Document.h"
+#include "core/AutoUv.h"
 #include "core/Stroke.h"
 #include "core/Tablet.h"
+#include "core/Texture.h"
 #include "render/Camera.h"
 #include "render/Renderer.h"
 
@@ -28,6 +30,7 @@
 #include <imgui.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <future>
@@ -382,6 +385,27 @@ private:
     std::unique_ptr<Mesh> paintSnapshot_;
     void beginPaintStroke();
     void finishPaintStroke(UndoRecord& record);
+    TexturePainter texturePainter_; // strokes into the SubTool's texture (core/Texture.h)
+    // Texture Map sub-palette (PanelTexture.cpp): texture painting on UVs, Auto UV, the UV view.
+    void drawTextureMapContents();
+    void registerTextureUiActions();
+    void startAutoUv();
+    void pollAutoUv();
+    struct AutoUvJob {
+        std::future<bool> done;
+        std::shared_ptr<std::atomic<float>> progress;
+        std::shared_ptr<std::atomic<bool>> cancel;
+        std::shared_ptr<AutoUvResult> result;
+        std::shared_ptr<std::string> error;
+        uint32_t subtool = 0;            // SubTool id it unwraps
+        size_t triangles = 0;            // the mesh must still have this many triangles when it finishes
+    };
+    std::unique_ptr<AutoUvJob> autoUv_;
+    int textureSizeChoice_ = 1;          // 1K, 2K, 4K, 8K
+    bool showUvView_ = false;            // Texture Map > Show UVs
+    // Cached UV wireframe of the active SubTool for the UV view: segments in 0..1 UV space.
+    std::vector<glm::vec2> uvLines_;
+    uint64_t uvLinesKey_ = 0;
     const BrushRecipe* strokeRecipe() const; // recipe the current stroke sculpts with (none for Smooth / paint only)
     // ZBrush GoZ bridge and GoZ/STL files (PanelGoz.cpp).
     void drawGozMenu();

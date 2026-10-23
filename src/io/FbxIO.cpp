@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "io/FbxIO.h"
 
+#include "io/TextureExport.h"
+
 #include "ufbx.h"
 
 #include <algorithm>
@@ -125,6 +127,10 @@ struct Ids {
 void addConnection(Node& connections, const char* kind, int64_t child, int64_t parent) {
     connections.add("C").str(kind).i64(child).i64(parent);
 }
+// An object connected to a property of its parent ("OP"), e.g. a texture to a material's DiffuseColor.
+void addPropertyConnection(Node& connections, int64_t child, int64_t parent, const std::string& property) {
+    connections.add("C").str("OP").i64(child).i64(parent).str(property);
+}
 
 void addHeader(Node& root) {
     Node& ext = root.add("FBXHeaderExtension");
@@ -205,14 +211,19 @@ Node makeGeometry(int64_t id, const std::string& name, const Mesh& mesh, float s
     g.add("Vertices").f64s(verts);
 
     // Polygons: quads where the mesh keeps them (Mesh::quadPartners), else triangles; the last corner is negated.
+    // UVs per polygon corner (quads split by a UV seam along their diagonal are written as triangles).
+    const bool uvs = hasCornerUvs(mesh);
     std::vector<int32_t> poly;
+    std::vector<glm::vec2> cornerUvs;
     poly.reserve(mesh.triangleCount() * 3);
     size_t polygons = 0;
     for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
         glm::uvec4 f;
-        const int corners = mesh.exportFace(t, f);
+        glm::vec2 fuv[4];
+        const int corners = exportFaceUv(mesh, t, f, fuv);
         if (corners == 0) continue;
         for (int c = 0; c < corners; ++c) poly.push_back(c + 1 < corners ? int32_t(f[c]) : ~int32_t(f[c]));
+        if (uvs) cornerUvs.insert(cornerUvs.end(), fuv, fuv + corners);
         ++polygons;
     }
     g.add("PolygonVertexIndex").i32s(poly);
@@ -243,6 +254,26 @@ Node makeGeometry(int64_t id, const std::string& name, const Mesh& mesh, float s
     ls.add("ReferenceInformationType").str("Direct");
     ls.add("Smoothing").i32s(std::vector<int32_t>(polygons, 1));
 
+    if (uvs) {
+        // Distinct UVs, indexed per polygon corner (as Blender and Maya write them).
+        std::map<std::pair<float, float>, int32_t> index;
+        std::vector<double> values;
+        std::vector<int32_t> indices;
+        indices.reserve(cornerUvs.size());
+        for (const auto& uv : cornerUvs) {
+            auto [it, inserted] = index.try_emplace({uv.x, uv.y}, int32_t(index.size()));
+            if (inserted) values.insert(values.end(), {double(uv.x), double(uv.y)});
+            indices.push_back(it->second);
+        }
+        Node& lu = g.add("LayerElementUV").i32(0);
+        lu.add("Version").i32(101);
+        lu.add("Name").str("UVMap");
+        lu.add("MappingInformationType").str("ByPolygonVertex");
+        lu.add("ReferenceInformationType").str("IndexToDirect");
+        lu.add("UV").f64s(values);
+        lu.add("UVIndex").i32s(indices);
+    }
+
     Node& lm = g.add("LayerElementMaterial").i32(0);
     lm.add("Version").i32(101);
     lm.add("Name").str("");
@@ -252,7 +283,8 @@ Node makeGeometry(int64_t id, const std::string& name, const Mesh& mesh, float s
 
     Node& layer = g.add("Layer").i32(0);
     layer.add("Version").i32(100);
-    for (const char* type : {"LayerElementNormal", "LayerElementSmoothing", "LayerElementMaterial"}) {
+    for (const char* type : {"LayerElementNormal", "LayerElementSmoothing", "LayerElementMaterial", "LayerElementUV"}) {
+        if (!uvs && std::strcmp(type, "LayerElementUV") == 0) continue;
         Node& le = layer.add("LayerElement");
         le.add("Type").str(type);
         le.add("TypedIndex").i32(0);
@@ -309,7 +341,7 @@ bool saveFbx(const std::string& path, const std::vector<FbxObject>& fbxObjects, 
     Node definitions("Definitions");
     Node objects("Objects");
     Node connections("Connections");
-    int models = 0, geometries = 0, deformers = 0, attributes = 0;
+    int models = 0, geometries = 0, deformers = 0, attributes = 0, materials = 1, textures = 0;
 
     // Material shared by every object and LOD.
     const int64_t materialId = ids();
@@ -326,11 +358,67 @@ bool saveFbx(const std::string& path, const std::vector<FbxObject>& fbxObjects, 
         prop70(p70, "ShininessExponent", "double", "Number", "").f64(20.0);
     }
 
-    for (const FbxObject& object : fbxObjects) {
+    // Textured objects (core/Texture.h on LOD0): a PNG beside the file and a material of their own whose
+    // DiffuseColor reads it (Texture + Video, as Blender and Maya write them).
+    std::vector<MeshObjectRef> refs;
+    for (const auto& obj : fbxObjects) refs.push_back({obj.name, obj.lods[0]});
+    const std::vector<std::string> pngs = textureFileNames(path, refs);
+
+    for (size_t oi = 0; oi < fbxObjects.size(); ++oi) {
+        const FbxObject& object = fbxObjects[oi];
         const std::string& name = object.name;
         const std::vector<const Mesh*>& lods = object.lods;
         const bool grouped = lods.size() > 1;
         int64_t parentId = 0;
+        int64_t objectMaterialId = materialId;
+        if (!pngs[oi].empty()) {
+            std::string pngPath;
+            if (!writeTextureBeside(path, pngs[oi], *lods[0], pngPath, error)) return false;
+            std::error_code ec;
+            const std::filesystem::path absolute = std::filesystem::absolute(textureFsPath(pngPath), ec);
+            const std::string file = ec ? pngPath : textureUtf8(absolute);
+            objectMaterialId = ids();
+            const int64_t textureId = ids(), videoId = ids();
+            const std::string matName = "M_" + safeTextureName(name);
+            Node& mat = objects.add("Material").i64(objectMaterialId).objName(matName, "Material").str("");
+            mat.add("Version").i32(102);
+            mat.add("ShadingModel").str("Phong");
+            mat.add("MultiLayer").i32(0);
+            Node& p70 = mat.add("Properties70");
+            prop70(p70, "DiffuseColor", "Color", "", "A").f64(1.0).f64(1.0).f64(1.0);
+            prop70(p70, "Diffuse", "Vector3D", "Vector", "").f64(1.0).f64(1.0).f64(1.0);
+            prop70(p70, "SpecularFactor", "Number", "", "A").f64(0.2);
+            prop70(p70, "Shininess", "double", "Number", "").f64(20.0);
+            prop70(p70, "ShininessExponent", "double", "Number", "").f64(20.0);
+
+            const std::string texName = safeTextureName(name) + "_color";
+            Node& tex = objects.add("Texture").i64(textureId).objName(texName, "Texture").str("");
+            tex.add("Type").str("TextureVideoClip");
+            tex.add("Version").i32(202);
+            tex.add("TextureName").objName(texName, "Texture");
+            Node& tp70 = tex.add("Properties70");
+            prop70(tp70, "UseMaterial", "bool", "", "").i32(1);
+            prop70(tp70, "UseMipMap", "bool", "", "").i32(0);
+            tex.add("Media").objName(texName, "Video");
+            tex.add("FileName").str(file);
+            tex.add("RelativeFilename").str(pngs[oi]);
+            tex.add("ModelUVTranslation").f64(0.0).f64(0.0);
+            tex.add("ModelUVScaling").f64(1.0).f64(1.0);
+            tex.add("Texture_Alpha_Source").str("None");
+            tex.add("Cropping").i32(0).i32(0).i32(0).i32(0);
+
+            Node& video = objects.add("Video").i64(videoId).objName(texName, "Video").str("Clip");
+            video.add("Type").str("Clip");
+            prop70(video.add("Properties70"), "Path", "KString", "XRefUrl", "").str(file);
+            video.add("UseMipMap").i32(0);
+            video.add("Filename").str(file);
+            video.add("RelativeFilename").str(pngs[oi]);
+
+            addConnection(connections, "OO", videoId, textureId);
+            addPropertyConnection(connections, textureId, objectMaterialId, "DiffuseColor");
+            ++materials;
+            ++textures;
+        }
         if (grouped) {
             const int64_t groupId = ids(), attrId = ids();
             Node attr("NodeAttribute");
@@ -364,7 +452,7 @@ bool saveFbx(const std::string& path, const std::vector<FbxObject>& fbxObjects, 
             objects.children.push_back(makeGeometry(geometryId, meshName, mesh, o.scale));
             objects.children.push_back(makeModel(modelId, meshName, "Mesh"));
             addConnection(connections, "OO", geometryId, modelId);
-            addConnection(connections, "OO", materialId, modelId);
+            addConnection(connections, "OO", objectMaterialId, modelId);
             if (grouped) {
                 // Like Maya/FBX SDK files: LOD group -> one Null per level -> the level's mesh.
                 const int64_t levelId = ids(), levelAttrId = ids();
@@ -429,7 +517,7 @@ bool saveFbx(const std::string& path, const std::vector<FbxObject>& fbxObjects, 
 
     // Definitions: object type counts (property templates are optional).
     definitions.add("Version").i32(100);
-    const int total = 1 + models + geometries + 1 + deformers + attributes;
+    const int total = 1 + models + geometries + materials + deformers + attributes + textures * 2;
     definitions.add("Count").i32(total);
     auto defType = [&](const char* type, int count) {
         if (count == 0) return;
@@ -439,7 +527,9 @@ bool saveFbx(const std::string& path, const std::vector<FbxObject>& fbxObjects, 
     defType("GlobalSettings", 1);
     defType("Model", models);
     defType("Geometry", geometries);
-    defType("Material", 1);
+    defType("Material", materials);
+    defType("Texture", textures);
+    defType("Video", textures);
     defType("Deformer", deformers);
     defType("NodeAttribute", attributes);
 
@@ -519,6 +609,7 @@ bool readFbx(const std::string& path, bool split, std::vector<MeshObject>& out, 
         Mesh m;
         std::vector<SculptLayer> layers;
         std::map<std::string, size_t> layerIndex;
+        bool uvs = false; // some mesh had UVs (Mesh::uvs holds one per corner either way until the end)
     };
     std::vector<Gathered> objects(split ? 0 : 1);
     std::vector<uint32_t> tri;
@@ -526,7 +617,7 @@ bool readFbx(const std::string& path, bool split, std::vector<MeshObject>& out, 
         const ufbx_node* node = scene->nodes.data[ni];
         const ufbx_mesh* mesh = node->mesh;
         if (!mesh || !node->visible || isLowerLod(node)) continue;
-        if (split) objects.push_back({objectName(node), {}, {}, {}});
+        if (split) objects.push_back({objectName(node), {}, {}, {}, false});
         Mesh& m = objects.back().m;
         std::vector<SculptLayer>& layers = objects.back().layers;
         std::map<std::string, size_t>& layerIndex = objects.back().layerIndex;
@@ -536,11 +627,19 @@ bool readFbx(const std::string& path, bool split, std::vector<MeshObject>& out, 
         const ufbx_vec3 origin = ufbx_transform_position(&xf, zero);
         for (size_t v = 0; v < mesh->vertices.count; ++v) m.positions.push_back(toVec(ufbx_transform_position(&xf, mesh->vertices.data[v])));
         tri.resize(mesh->max_face_triangles * 3);
+        // UVs of the first UV set, per face corner (V up, as in SculptForge).
+        const bool meshUvs = mesh->vertex_uv.exists;
+        objects.back().uvs |= meshUvs;
         for (size_t f = 0; f < mesh->faces.count; ++f) {
             const uint32_t n = ufbx_triangulate_face(tri.data(), tri.size(), mesh, mesh->faces.data[f]);
-            for (uint32_t t = 0; t < n; ++t)
+            for (uint32_t t = 0; t < n; ++t) {
                 m.triangles.push_back(glm::uvec3(base + mesh->vertex_indices.data[tri[t * 3]], base + mesh->vertex_indices.data[tri[t * 3 + 1]],
                                                  base + mesh->vertex_indices.data[tri[t * 3 + 2]]));
+                for (int c = 0; c < 3; ++c) {
+                    const ufbx_vec2 uv = meshUvs ? ufbx_get_vertex_vec2(&mesh->vertex_uv, tri[t * 3 + size_t(c)]) : ufbx_vec2{};
+                    m.uvs.push_back(glm::vec2(float(uv.x), float(uv.y)));
+                }
+            }
             // A quad's two triangles stay paired (Mesh::quadPartners); n-gons are left as triangles.
             if (mesh->faces.data[f].num_indices == 4 && n == 2)
                 m.pairQuad(uint32_t(m.triangles.size() - 2), uint32_t(m.triangles.size() - 1));
@@ -570,6 +669,7 @@ bool readFbx(const std::string& path, bool split, std::vector<MeshObject>& out, 
     out.clear();
     for (auto& o : objects) {
         if (o.m.triangles.empty()) continue;
+        if (!o.uvs) o.m.uvs.clear();
         for (auto& l : o.layers) l.delta.resize(o.m.positions.size(), glm::vec3(0.0f));
         out.push_back({o.name, weldImported(o.m, o.layers)});
     }

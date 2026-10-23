@@ -225,6 +225,10 @@ Mesh decimate(const Mesh& src, size_t targetTriangles) {
     }
     out.positions.reserve(kept.size());
     for (uint32_t v : kept) out.positions.push_back(src.positions[v]);
+    if (!FUV.empty()) { // the painted texture still fits the kept UVs (shared until one side paints)
+        out.texture = src.texture;
+        out.paintToTexture = src.paintToTexture;
+    }
     if (src.mask.size() == nv)
         for (uint32_t v : kept) out.mask.push_back(src.mask[v]);
     if (src.colors.size() == nv)

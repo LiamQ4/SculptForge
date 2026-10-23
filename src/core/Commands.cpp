@@ -270,7 +270,8 @@ CommandRegistry::CommandRegistry() {
     add({"save_obj",
          "Export the visible SubTools as a Wavefront OBJ file (one `o` object each, polygroups as `g` groups). OBJ "
          "cannot hold the mask, visibility, sculpt layers or splats, so this is an export: the document keeps its "
-         "path and unsaved-changes state.",
+         "path and unsaved-changes state. UVs are kept; a textured SubTool also writes <name>.mtl and its PNG beside "
+         "the file.",
          {{"path", T::String, "File path (UTF-8). Defaults to the current document path unless that is a project.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path", isProjectPath(doc.path) ? std::string() : doc.path);
@@ -360,7 +361,7 @@ CommandRegistry::CommandRegistry() {
 
     add({"export_glb",
          "Export a game-ready binary glTF (.glb), one node and mesh per visible SubTool. Sculpt layers become "
-         "morph targets (blend shapes).",
+         "morph targets (blend shapes). UVs are kept and SubTool textures are embedded.",
          {{"path", T::String, "Output .glb path (UTF-8).", true}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path");
@@ -375,7 +376,8 @@ CommandRegistry::CommandRegistry() {
          "Export OpenUSD (.usda text, or .usdz package for AR Quick Look / Vision Pro), one Mesh prim per visible "
          "SubTool. Sculpt layers become "
          "UsdSkel blend shapes with their current weights; loaded Gaussian splats are included as a "
-         "ParticleField3DGaussianSplat prim.",
+         "ParticleField3DGaussianSplat prim. UVs are kept; a SubTool's texture becomes a UsdPreviewSurface texture "
+         "(packed into .usdz, else a PNG beside the file).",
          {{"path", T::String, "Output .usda, .usd or .usdz path (UTF-8).", true},
           {"splats", T::Bool, "Include the loaded Gaussian splats. Default true.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
@@ -390,7 +392,8 @@ CommandRegistry::CommandRegistry() {
 
     add({"export_fbx",
          "Export binary FBX, one model per visible SubTool: sculpt layers become blend shapes; with lods > 1 each "
-         "SubTool's LOD chain is written as an FBX LOD group in the same file.",
+         "SubTool's LOD chain is written as an FBX LOD group in the same file. UVs are kept; a SubTool's texture is "
+         "written as a PNG beside the file and used by its material.",
          {{"path", T::String, "Output .fbx path (UTF-8).", true},
           {"lods", T::Number, "LOD levels including LOD0 (1-8). Default 1.", false},
           {"ratio", T::Number, "Triangle ratio between LODs (0.1-0.9). Default 0.5.", false},
@@ -459,7 +462,11 @@ CommandRegistry::CommandRegistry() {
              if (objects.empty()) return {false, "Nothing visible to export"};
              // Every visible SubTool is decimated on its own; LOD n of each goes into <name>_LOD<n>.glb.
              std::vector<std::vector<Mesh>> lods;
-             for (const auto& o : objects) lods.push_back(generateLods(*o.mesh, levels, ratio));
+             for (const auto& o : objects) {
+                 lods.push_back(generateLods(*o.mesh, levels, ratio));
+                 // Decimation keeps the UVs, so every level can carry the SubTool's texture.
+                 for (auto& l : lods.back()) l.texture = o.mesh->texture;
+             }
              auto stemU8 = base.stem().u8string();
              std::string stem(stemU8.begin(), stemU8.end());
              std::ostringstream msg;

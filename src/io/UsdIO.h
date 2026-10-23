@@ -4,12 +4,16 @@
 // OpenUSD interchange without the OpenUSD SDK (keeps builds small and
 // portable). Writes text USD (.usda) and USDZ packages (.usdz, for AR Quick
 // Look / Vision Pro, Omniverse, Houdini Solaris, Blender, Maya, Unreal):
-//  - the sculpt as a UsdGeomMesh with a UsdPreviewSurface clay material
+//  - the sculpt as a UsdGeomMesh with a UsdPreviewSurface clay material, UVs
+//    as a face-varying primvars:st
+//  - a SubTool's texture (core/Texture.h) as a PNG (inside a .usdz, else beside
+//    the file) read by a UsdUVTexture in the mesh's own UsdPreviewSurface
 //  - sculpt layers as UsdSkel blend shapes, current weights on a SkelAnimation
 //  - Gaussian splats as a UsdVol ParticleField3DGaussianSplat prim (OpenUSD 26.03+)
 //
 // Reads .usda files and .usdz packages whose root layer is text: meshes (any
-// polygon counts, xform ops, Z-up stages), blend shapes and Gaussian splats.
+// polygon counts, xform ops, Z-up stages, texCoord2 UVs), blend shapes and
+// Gaussian splats.
 // Binary .usdc layers and external references are not resolved yet.
 #pragma once
 

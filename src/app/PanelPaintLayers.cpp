@@ -8,12 +8,15 @@
 // Below: blend mode and opacity of the active layer, then New / Duplicate /
 // Delete, Up / Down / Merge down / Flatten and Clear. Every change goes through
 // the paint_layer_* commands (core/PaintLayer.cpp), so it is undoable and
-// scriptable; the opacity slider previews live and commits on release.
+// scriptable; the opacity slider previews live and commits on release. When
+// the SubTool paints into its texture (Tool > Texture Map) the same palette
+// shows and edits the texture's layers (the commands hand over to it).
 #include "app/App.h"
 #include "app/Ui.h"
 
 #include "core/PaintLayer.h"
 #include "core/Polypaint.h"
+#include "core/Texture.h"
 
 #include <IconsLucide.h>
 
@@ -62,11 +65,45 @@ bool iconToggle(const char* id, const char* icon, bool on, const char* tip) {
 
 } // namespace
 
+namespace {
+
+// One row of the palette: a polypaint layer or a texture layer.
+struct LayerRow {
+    std::string name;
+    BlendMode blend = BlendMode::Normal;
+    float opacity = 1.0f;
+    bool visible = true, locked = false;
+};
+
+// The stack the palette shows: the texture's layers when painting goes into the texture, else polypaint's.
+std::vector<LayerRow> layerRows(const Mesh& m, bool texture, int& active) {
+    std::vector<LayerRow> rows;
+    if (texture) {
+        for (const TextureLayer& l : m.texture->layers) rows.push_back({l.name, l.blend, l.opacity, l.visible, l.locked});
+        active = m.texture->activeLayer;
+    } else {
+        for (const PaintLayer& l : m.paintLayers) rows.push_back({l.name, l.blend, l.opacity, l.visible, l.locked});
+        active = m.activePaintLayer;
+    }
+    active = rows.empty() ? -1 : std::clamp(active, -1, int(rows.size()) - 1);
+    return rows;
+}
+
+} // namespace
+
 void App::drawPaintLayersContents() {
     const Mesh& mesh = doc_.mesh;
     const ImGuiStyle& style = ImGui::GetStyle();
-    const int count = paintLayerCount(mesh);
-    const int active = count ? std::clamp(mesh.activePaintLayer, -1, count - 1) : -1;
+    const bool texture = paintsTexture(mesh);
+    int active = -1;
+    const std::vector<LayerRow> rows = layerRows(mesh, texture, active);
+    const int count = int(rows.size());
+    if (hasTexture(mesh)) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Paint into");
+        ImGui::SameLine();
+        ui::Segmented(*this, {"draw.paint_vertex", "draw.paint_texture"});
+    }
     auto indexArg = [](int i) { return Args{{"index", double(i)}}; };
 
     // Rows, top layer first, Base last. Actions run after the table (they change the list).
@@ -86,7 +123,7 @@ void App::drawPaintLayersContents() {
         ImGui::TableSetupColumn("lock", ImGuiTableColumnFlags_WidthFixed, iconW);
         ImGui::TableSetupColumn("eye", ImGuiTableColumnFlags_WidthFixed, iconW);
         for (int i = count - 1; i >= -1; --i) {
-            const PaintLayer* l = i >= 0 ? &mesh.paintLayers[size_t(i)] : nullptr;
+            const LayerRow* l = i >= 0 ? &rows[size_t(i)] : nullptr;
             const std::string name = l ? l->name : "Base";
             const bool isActive = i == active;
             const bool dim = l && !l->visible;
@@ -121,6 +158,8 @@ void App::drawPaintLayersContents() {
                 ui::HelpText(name.c_str(), nullptr,
                              l ? "A paint layer. Click to paint on it, double-click to rename, right-click for more. "
                                  "Layers composite bottom to top with their blend mode and opacity."
+                             : texture ? "The base colour layer of the SubTool's texture. Always opaque; layers above it "
+                                         "blend over it."
                                : "The base colour layer: the SubTool's polypaint. Always opaque; layers above it blend "
                                  "over it. With only Base, polypaint works exactly as before.",
                              kPath);
@@ -174,19 +213,33 @@ void App::drawPaintLayersContents() {
 
     if (selectIndex >= -1) runCommand("paint_layer_select", indexArg(selectIndex));
     if (toggleVisible >= 0)
-        runCommand("paint_layer_set", {{"index", double(toggleVisible)}, {"visible", !mesh.paintLayers[size_t(toggleVisible)].visible}});
+        runCommand("paint_layer_set", {{"index", double(toggleVisible)}, {"visible", !rows[size_t(toggleVisible)].visible}});
     if (toggleLock >= 0)
-        runCommand("paint_layer_set", {{"index", double(toggleLock)}, {"locked", !mesh.paintLayers[size_t(toggleLock)].locked}});
-    if (renameIndex >= 0 && !renameTo.empty() && renameTo != mesh.paintLayers[size_t(renameIndex)].name)
+        runCommand("paint_layer_set", {{"index", double(toggleLock)}, {"locked", !rows[size_t(toggleLock)].locked}});
+    if (renameIndex >= 0 && !renameTo.empty() && renameTo != rows[size_t(renameIndex)].name)
         runCommand("paint_layer_set", {{"index", double(renameIndex)}, {"name", renameTo}});
     if (duplicateIndex >= -1) runCommand("paint_layer_duplicate", indexArg(duplicateIndex));
     if (mergeIndex >= 0) runCommand("paint_layer_merge", indexArg(mergeIndex));
     if (clearIndex >= -1) runCommand("paint_layer_clear", indexArg(clearIndex));
     if (deleteIndex >= 0) runCommand("paint_layer_delete", indexArg(deleteIndex));
 
-    // The active layer's blend mode and opacity (Base is always Normal, 100%).
-    const int act = paintLayerCount(doc_.mesh) ? std::clamp(doc_.mesh.activePaintLayer, -1, paintLayerCount(doc_.mesh) - 1) : -1;
-    PaintLayer* cur = act >= 0 ? &doc_.mesh.paintLayers[size_t(act)] : nullptr;
+    // The active layer's blend mode and opacity (Base is always Normal, 100%). The commands above may have
+    // changed the stack, so look again.
+    int act = -1;
+    const std::vector<LayerRow> now = layerRows(doc_.mesh, paintsTexture(doc_.mesh), act);
+    const LayerRow* cur = act >= 0 ? &now[size_t(act)] : nullptr;
+    const int stackSize = int(now.size());
+    // Live opacity preview on the real layer, recomposited (the command records the change on release).
+    auto setOpacity = [this, act](float value) {
+        if (paintsTexture(doc_.mesh)) {
+            PaintTexture& t = mutableTexture(doc_.mesh);
+            t.layers[size_t(act)].opacity = value;
+            compositeTextureAll(t);
+        } else {
+            doc_.mesh.paintLayers[size_t(act)].opacity = value;
+            compositePaintAll(doc_.mesh);
+        }
+    };
     const float half = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
     ImGui::BeginDisabled(!cur);
     ImGui::SetNextItemWidth(half);
@@ -207,12 +260,11 @@ void App::drawPaintLayersContents() {
     float opacity = cur ? cur->opacity * 100.0f : 100.0f;
     if (ui::SliderInside("##opacity", &opacity, 0.0f, 100.0f, "Opacity %.0f%%") && cur) {
         if (paintOpacityDrag_ < 0.0f) paintOpacityDrag_ = cur->opacity; // live preview; committed on release
-        cur->opacity = std::clamp(opacity / 100.0f, 0.0f, 1.0f);
-        compositePaintAll(doc_.mesh);
+        setOpacity(std::clamp(opacity / 100.0f, 0.0f, 1.0f));
     }
     if (ImGui::IsItemDeactivated() && paintOpacityDrag_ >= 0.0f && cur) {
-        const float committed = cur->opacity;
-        cur->opacity = paintOpacityDrag_; // so the command's undo step records the value before the drag
+        const float committed = std::clamp(opacity / 100.0f, 0.0f, 1.0f);
+        setOpacity(paintOpacityDrag_); // so the command's undo step records the value before the drag
         paintOpacityDrag_ = -1.0f;
         runCommand("paint_layer_set", {{"index", double(act)}, {"opacity", double(committed)}});
     }
@@ -237,7 +289,7 @@ void App::drawPaintLayersContents() {
 
     const float arrow = ImGui::GetFrameHeight();
     const float rest = (ImGui::GetContentRegionAvail().x - 2 * arrow - 3 * style.ItemSpacing.x) * 0.5f;
-    ImGui::BeginDisabled(!cur || act >= paintLayerCount(doc_.mesh) - 1);
+    ImGui::BeginDisabled(!cur || act >= stackSize - 1);
     if (ImGui::ArrowButton("##paintup", ImGuiDir_Up)) runCommand("paint_layer_move", {{"direction", std::string("up")}});
     ImGui::EndDisabled();
     ui::HelpText("Move up", nullptr, "Move the active layer up the stack (it then covers the layer it passed).", kPath);
@@ -253,7 +305,7 @@ void App::drawPaintLayersContents() {
     ui::HelpText("Merge down", nullptr,
                  "Merge the active layer into the one below it (Base for the lowest layer), keeping how it looks.", kPath);
     ImGui::SameLine();
-    ImGui::BeginDisabled(paintLayerCount(doc_.mesh) == 0);
+    ImGui::BeginDisabled(stackSize == 0);
     if (ImGui::Button("Flatten##paint", ImVec2(-1, 0))) runCommand("paint_layer_flatten");
     ImGui::EndDisabled();
     ui::HelpText("Flatten", nullptr, "Bake every visible layer into Base and remove the layers (hidden layers are discarded).",

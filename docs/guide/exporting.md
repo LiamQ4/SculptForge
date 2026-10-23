@@ -12,15 +12,15 @@ or mark it saved, so your next <kbd>Ctrl</kbd>+<kbd>S</kbd> still saves the proj
 
 | Format | Where in the app | Keeps | Use it for |
 |---|---|---|---|
-| glTF binary (`.glb`) | **File > Export GLB...** (<kbd>Ctrl</kbd>+<kbd>E</kbd>) | One node per SubTool, sculpt layers as morph targets, polypaint as vertex colour | Games, Blender, three.js, web viewers |
+| glTF binary (`.glb`) | **File > Export GLB...** (<kbd>Ctrl</kbd>+<kbd>E</kbd>) | One node per SubTool, sculpt layers as morph targets, polypaint as vertex colour, UVs and the painted texture (embedded) | Games, Blender, three.js, web viewers |
 | LOD chain (`.glb` per level) | **File > Export LOD Chain...** | As GLB, one file per level, blend shapes on every level | Game engines |
-| OpenUSD (`.usda`, `.usdz`) | **File > Export USD / USDZ...** | One Mesh prim per SubTool, quads, layers as UsdSkel blend shapes, polypaint as `displayColor`, loaded splats | Film pipelines, Omniverse, Apple AR Quick Look |
-| FBX for Unreal (`.fbx`) | **File > Export FBX for Unreal...** | Unreal naming and scale, quads, LOD group, layers as blend shapes | Unreal Engine (by hand) |
-| Wavefront OBJ (`.obj`) | **File > Export OBJ...** | One `o` object per SubTool, quads, polygroups as `g` groups, polypaint as vertex colour. Layers are baked into the current blend | Any 3D app, ZBrush |
-| ZBrush GoZ (`.GoZ`) | **File > ZBrush (GoZ) > Export GoZ...** | Quads, polygroups, mask, polypaint, UVs | ZBrush |
+| OpenUSD (`.usda`, `.usdz`) | **File > Export USD / USDZ...** | One Mesh prim per SubTool, quads, layers as UsdSkel blend shapes, polypaint as `displayColor`, UVs (`primvars:st`) and the painted texture through a preview material (inside a USDZ), loaded splats | Film pipelines, Omniverse, Apple AR Quick Look |
+| FBX for Unreal (`.fbx`) | **File > Export FBX for Unreal...** | Unreal naming and scale, quads, UVs, LOD group, layers as blend shapes, the painted texture as a PNG beside it | Unreal Engine (by hand) |
+| Wavefront OBJ (`.obj`) | **File > Export OBJ...** | One `o` object per SubTool, quads, polygroups as `g` groups, polypaint as vertex colour, UVs, the painted texture through a `.mtl` (`map_Kd`) and a PNG beside it. Layers are baked into the current blend | Any 3D app, ZBrush |
+| ZBrush GoZ (`.GoZ`) | **File > ZBrush (GoZ) > Export GoZ...** | Quads, polygroups, mask, polypaint, UVs, the painted texture as a PNG beside it | ZBrush |
 | STL (`.stl`) | **File > ZBrush (GoZ) > Export STL...** | Geometry only (triangles), visible SubTools merged | 3D printing |
 | PLY (`.ply`) | `export_ply` command | Geometry, quads and polypaint, visible SubTools merged | Scan tools, MeshLab, Blender |
-| FBX (general) | `export_fbx` command | One model per SubTool, quads, blend shapes, optional LOD groups | Other FBX pipelines |
+| FBX (general) | `export_fbx` command | One model per SubTool, quads, UVs, blend shapes, optional LOD groups, the painted texture | Other FBX pipelines |
 
 The GLB, LOD chain and FBX for Unreal exports are also in the **Tool** palette under **Export**, together with
 the LOD and Unreal settings.
@@ -31,9 +31,12 @@ only hold triangles.
 
 ![The Tool > Export sub-palette with a generated LOD chain and the Unreal Engine settings](images/export.jpg)
 
-> **Not yet:** SculptForge has no UV unwrapping, so exported meshes carry no UVs unless they came in with them
-> (GoZ and project files keep imported UVs). Texture baking (normal and displacement maps) is also on the
-> roadmap. Engines that need lightmap UVs can generate them on import.
+UVs are kept through OBJ, FBX, USD, glTF and GoZ, in and out. A SubTool with a painted
+[texture](texture-painting.md) is exported with it: the PNG is written next to the file as
+`<name>_color.png` (`<name>_<SubTool>_color.png` with several SubTools) and referenced by the model, or embedded
+in GLB and USDZ files. **Tool > Texture Map > Auto UV** gives any sculpt UVs before export.
+
+> **Not yet:** texture baking (normal and displacement maps) is on the roadmap.
 
 ### Scale and axes
 

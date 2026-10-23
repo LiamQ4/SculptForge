@@ -172,6 +172,32 @@ bool BVH::raycast(const Mesh& mesh, const glm::vec3& origin, const glm::vec3& di
     return true;
 }
 
+void BVH::queryTriangles(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const {
+    out.clear();
+    if (nodes_.empty()) return;
+    const float r2 = radius * radius;
+    stack_.clear();
+    stack_.push_back(0);
+    while (!stack_.empty()) {
+        const Node& n = nodes_[stack_.back()];
+        stack_.pop_back();
+        if (!sphereBox(n.box, center, r2)) continue;
+        if (n.count > 0) {
+            for (uint32_t i = n.first; i < n.first + n.count; ++i) {
+                const auto& t = mesh.triangles[triIndices_[i]];
+                AABB b;
+                b.expand(mesh.positions[t.x]);
+                b.expand(mesh.positions[t.y]);
+                b.expand(mesh.positions[t.z]);
+                if (sphereBox(b, center, r2)) out.push_back(triIndices_[i]);
+            }
+        } else {
+            stack_.push_back(n.first);
+            stack_.push_back(n.first + 1);
+        }
+    }
+}
+
 void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const {
     out.clear();
     if (nodes_.empty()) return;

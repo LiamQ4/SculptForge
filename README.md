@@ -52,10 +52,11 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 | AI agents (MCP), headless scripting | **Built in** | ZScript |
 | Masking, polygroups, visibility (Ctrl / Ctrl+Shift, lasso or rectangle), polypaint, MatCaps | **Yes** | Yes |
 | Polypaint layers with blend modes (Multiply, Overlay, Screen...) | **Yes** (new in 0.4) | Opacity only |
+| Texture painting on UVs (1K-8K, same paint layers), automatic UV unwrap | **Yes** (new in 0.5) | Polypaint, converted to a texture |
 | Quads kept from import, shown and exported as quads | **Yes** (new in 0.4) | Yes |
 | SubTools (separate meshes: append, split, merge, solo, Alt+click to select) | **Yes** (new in 0.3) | Yes |
 | GoZ exchange with ZBrush | **Yes** (new in 0.2; not yet tested against a live ZBrush) | Yes |
-| Multiresolution (subdivision levels), dynamic topology, ZRemesher-class retopology, UV unwrapping | Not yet ([roadmap](ROADMAP.md)) | Yes |
+| Multiresolution (subdivision levels), dynamic topology, ZRemesher-class retopology, UV editing | Not yet ([roadmap](ROADMAP.md)) | Yes |
 
 SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models over with GoZ (`.GoZ` files
 keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
@@ -89,6 +90,9 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
   by piece), and Alt+click a SubTool to select it. Projects, OBJ, glTF, FBX, USD and GoZ keep them as separate
   objects.
 - **Polypaint** (Paint brush, RGB while sculpting, fills, cavity paint) and six MatCap materials.
+- **Texture painting** on UV maps: Auto UV (xatlas) unwraps any sculpt, then the Paint brush paints a 1K-8K
+  texture with the same paint layers and blend modes; polypaint and texture convert both ways, and OBJ, glTF,
+  USD, FBX and GoZ exports write the PNG next to the model.
 - **Project files** (`.sfproj`) that keep everything, with an unsaved-changes prompt, recent files and autosave.
 - Unlimited undo, Loop subdivision, **voxel remesh** (DynaMesh-style) and quadric decimation.
 - **Sculpt layers** that work as blend shapes, with live weights and playback.

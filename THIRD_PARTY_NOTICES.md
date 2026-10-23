@@ -12,6 +12,7 @@ licenses require.
 | [GLM](https://github.com/g-truc/glm) | 1.0.1 | MIT License (or The Happy Bunny License) | Vector and matrix math. |
 | [stb_image / stb_image_write](https://github.com/nothings/stb) | commit 013ac3be | MIT License or Public Domain (Unlicense), at your choice | Image loading and PNG writing. Vendored in third_party/stb. |
 | [ufbx](https://github.com/ufbx/ufbx) | 0.23.1 (commit 5955c5c) | MIT License or Public Domain (Unlicense), at your choice | FBX import. Vendored in third_party/ufbx. |
+| [xatlas](https://github.com/jpcy/xatlas) | commit f700c77 | MIT License | Automatic UV unwrapping (UV > Auto UV) for texture painting. Vendored in third_party/xatlas. |
 | [Inter typeface](https://github.com/rsms/inter) | 4.1 | SIL Open Font License 1.1 | User interface font, embedded in the desktop app. Vendored in assets/fonts. |
 | [libcurl](https://curl.se) | system library | curl License (MIT/X derivate) | HTTPS for optional AI features on Linux and macOS. Linked dynamically from the operating system; Windows uses the built-in WinHTTP instead. |
 
@@ -418,4 +419,34 @@ OR OTHER DEALINGS IN THE SOFTWARE.
 Except as contained in this notice, the name of a copyright holder shall not
 be used in advertising or otherwise to promote the sale, use or other dealings
 in this Software without prior written authorization of the copyright holder.
+```
+
+---
+
+## xatlas
+
+https://github.com/jpcy/xatlas — MIT License
+
+```
+MIT License
+
+Copyright (c) 2018-2020 Jonathan Young
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```

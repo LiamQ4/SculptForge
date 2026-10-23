@@ -306,6 +306,7 @@ void App::initActions() {
     // The shell's actions (Shell.cpp: brushes, shelves, palettes, trays): they replace any of the above with
     // the same id and own P (Paint), the symmetry toggles and Tab.
     registerShellActions();
+    registerTextureUiActions(); // Tool > Texture Map, the Vertex / Texture paint target (PanelTexture.cpp)
 
     // Every command, so the command palette finds anything scriptable.
     actions_.registerCommands(

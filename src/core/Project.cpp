@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Project.h"
 
+#include "core/Texture.h"
 #include "io/Zip.h"
 
 #include <algorithm>
@@ -287,6 +288,102 @@ bool readPaintLayers(Reader& r, const Json& pj, Mesh& m, std::string& error) {
     return true;
 }
 
+// Texture painting (core/Texture.h) is the SubTool key "texture" (format 3): the size, where paint goes,
+// and every layer as a PNG blob (top row = v 1, as image files are). Without layers "base" is the texture.
+Json pngBlob(Writer& w, const std::string& file, int width, int height, const std::vector<uint8_t>& rgba) {
+    Image img;
+    img.width = width;
+    img.height = height;
+    img.rgba.resize(rgba.size());
+    const size_t row = size_t(width) * 4;
+    for (int y = 0; y < height; ++y) std::memcpy(&img.rgba[size_t(height - 1 - y) * row], &rgba[size_t(y) * row], row);
+    std::vector<uint8_t> png;
+    img.encodePng(png);
+    Json d = w.bytes(file, png);
+    d.set("encoding", "png");
+    return d;
+}
+
+bool readPngBlob(Reader& r, const Json& desc, const char* what, int width, int height, std::vector<uint8_t>& rgba,
+                 std::string& error) {
+    const size_t n = countOf(desc["count"]);
+    const uint8_t* p = n == size_t(-1) ? nullptr : r.blob(desc, what, Scalar::U8, 1, n);
+    Image img;
+    std::string why;
+    if (!p || !Image::decode(p, n, img, why) || img.width != width || img.height != height) {
+        error = r.error.empty() ? std::string("Project ") + what + " is not a " + std::to_string(width) + "x" +
+                                      std::to_string(height) + " image" + (why.empty() ? "" : " (" + why + ")")
+                                : r.error;
+        return false;
+    }
+    rgba.resize(img.rgba.size());
+    const size_t row = size_t(width) * 4;
+    for (int y = 0; y < height; ++y) std::memcpy(&rgba[size_t(y) * row], &img.rgba[size_t(height - 1 - y) * row], row);
+    return true;
+}
+
+Json writeTexture(Writer& w, const std::string& prefix, const Mesh& m) {
+    const PaintTexture& t = *m.texture;
+    Json out = Json::object();
+    out.set("width", t.width);
+    out.set("height", t.height);
+    out.set("paint_to_texture", m.paintToTexture);
+    out.set("active", t.activeLayer);
+    out.set("base", pngBlob(w, prefix + "texture/base.png", t.width, t.height, t.layers.empty() ? t.pixels : t.base));
+    Json layers = Json::array();
+    for (size_t i = 0; i < t.layers.size(); ++i) {
+        const TextureLayer& tl = t.layers[i];
+        Json l = Json::object();
+        l.set("name", tl.name);
+        l.set("opacity", double(tl.opacity));
+        l.set("blend", blendModeId(tl.blend));
+        l.set("visible", tl.visible);
+        l.set("locked", tl.locked);
+        l.set("rgba", pngBlob(w, prefix + "texture/" + std::to_string(i) + ".png", t.width, t.height, tl.rgba));
+        layers.push(std::move(l));
+    }
+    out.set("layers", std::move(layers));
+    return out;
+}
+
+bool readTexture(Reader& r, const Json& tj, Mesh& m, std::string& error) {
+    if (!tj.isObject()) return true;
+    const double w = tj["width"].asNumber(0), h = tj["height"].asNumber(0);
+    if (!(w >= 1 && h >= 1 && w <= 16384 && h <= 16384)) {
+        error = "Project texture has an invalid size";
+        return false;
+    }
+    auto tex = makeTexture(int(w), int(h));
+    std::vector<uint8_t> base;
+    if (!readPngBlob(r, tj["base"], "texture", tex->width, tex->height, base, error)) return false;
+    for (size_t i = 0; i < tj["layers"].size(); ++i) {
+        const Json& lj = tj["layers"][i];
+        TextureLayer l;
+        l.name = lj["name"].asString();
+        if (l.name.empty()) l.name = "Layer " + std::to_string(i + 1);
+        l.opacity = std::clamp(float(lj["opacity"].asNumber(1.0)), 0.0f, 1.0f);
+        if (!parseBlendMode(lj["blend"].asString(), l.blend)) l.blend = BlendMode::Normal;
+        l.visible = lj["visible"].asBool(true);
+        l.locked = lj["locked"].asBool(false);
+        if (!readPngBlob(r, lj["rgba"], "texture layer", tex->width, tex->height, l.rgba, error)) return false;
+        tex->layers.push_back(std::move(l));
+    }
+    if (tex->layers.empty()) {
+        tex->pixels = std::move(base);
+    } else {
+        tex->base = std::move(base);
+        const double active = tj["active"].asNumber(-1);
+        tex->activeLayer = active >= 0 && active < double(tex->layers.size()) ? int(active) : -1;
+        compositeTextureAll(*tex);
+    }
+    for (size_t i = 3; i < (tex->layers.empty() ? tex->pixels : tex->base).size(); i += 4)
+        (tex->layers.empty() ? tex->pixels : tex->base)[i] = 255; // Base is opaque
+    tex->markAllDirty();
+    m.texture = std::move(tex);
+    m.paintToTexture = tj["paint_to_texture"].asBool(true);
+    return true;
+}
+
 // A SubTool read from a project, before it joins the document.
 struct LoadedSubtool {
     std::string name, gozName;
@@ -323,6 +420,8 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
         st.set("active_layer", active ? doc.activeLayer : s.activeLayer);
         if (hasPaintLayers(doc.subtoolMesh(i)))
             st.set("paint_layers", writePaintLayers(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
+        if (doc.subtoolMesh(i).texture && doc.subtoolMesh(i).texture->width > 0)
+            st.set("texture", writeTexture(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
         const std::string& gozName = active ? doc.gozName : s.gozName;
         if (!gozName.empty()) st.set("goz_name", gozName);
         subtools.push(std::move(st));
@@ -436,6 +535,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
             s.gozName = sj["goz_name"].asString();
             if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error)) return false;
             if (!readPaintLayers(r, sj["paint_layers"], s.mesh, error)) return false;
+            if (!readTexture(r, sj["texture"], s.mesh, error)) return false;
             s.activeLayer = int(sj["active_layer"].asNumber(-1));
             subtools.push_back(std::move(s));
         }
