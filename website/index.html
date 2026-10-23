@@ -91,11 +91,36 @@
 
     <section id="whats-new" class="section alt">
       <div class="wrap">
-        <h2>What's new in 0.4</h2>
-        <p class="section-lede">Shaped by feedback from a working ZBrush modeler: SculptForge now feels like home
-          if ZBrush is second nature. <a href="guide/whats-new.html">Everything that changed</a> ·
+        <h2>What's new in 0.5</h2>
+        <p class="section-lede">The ZBrush workflow core: sculpt at several resolutions, retopologise, bake maps for
+          games, pose with a gizmo, and stay fast at tens of millions of polygons. <a href="guide/whats-new.html">Everything that changed</a> ·
           <a href="https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md">changelog</a></p>
         <div class="grid">
+          <article class="card">
+            <h3>Subdivision levels <small>new in 0.5</small></h3>
+            <p>Divide, then step down for big forms and back up for detail, like ZBrush's SDiv. Changes at a low
+              level carry up to the detail; Reconstruct Subdiv and Del Lower / Higher are there too.</p>
+          </article>
+          <article class="card">
+            <h3>QRemesh and ProjectAll <small>new in 0.5</small></h3>
+            <p>Turn any sculpt into clean quads with edge loops that follow the forms, near a target count, then
+              project the sculpted detail and polypaint back onto the divided quads.</p>
+          </article>
+          <article class="card">
+            <h3>Map baking <small>new in 0.5</small></h3>
+            <p>Bake normal, displacement, AO, cavity and colour maps from the high-poly to the low-poly with
+              MikkTSpace tangents, preview them in the viewport and send them to Unreal.</p>
+          </article>
+          <article class="card">
+            <h3>Gizmo 3D <small>new in 0.5</small></h3>
+            <p>W, E and R move, scale and rotate a SubTool or just its unmasked part, with soft falloff for posing
+              limbs. Transpose All moves every SubTool at once.</p>
+          </article>
+          <article class="card">
+            <h3>Fast at tens of millions of polygons <small>new in 0.5</small></h3>
+            <p>Brushes use every core and send the graphics card only what changed: a medium dab on a 33 million
+              triangle model went from 400 ms to about 10 ms, with about 30% less memory.</p>
+          </article>
           <article class="card">
             <h3>Texture painting on UVs <small>new in 0.4.2</small></h3>
             <p>Paint into a 1K to 8K texture instead of the vertices, so colour detail no longer depends on the
@@ -362,7 +387,7 @@ rez-env sculptforge -- sculptforge troll.usda \
     <section id="download" class="section alt">
       <div class="wrap">
         <h2>Download</h2>
-        <p class="section-lede">Version 0.4.2. All builds come from the
+        <p class="section-lede">Version 0.5.0. All builds come from the
           <a href="https://github.com/islandmed/SculptForge/releases/latest">latest GitHub release</a>, with
           SHA-256 checksums.</p>
         <div class="downloads">

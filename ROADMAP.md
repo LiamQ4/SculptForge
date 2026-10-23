@@ -105,14 +105,14 @@ zoom, right-click navigation), lasso / rectangle masking and hiding, a Sculpt de
 through import, editing and export, Photoshop-style paint layers, and an `install/` folder with
 always-latest downloads.
 
-## Next (v0.5) — the ZBrush workflow core
+## Done in v0.5 — the ZBrush workflow core
 
 Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox forums:
 
 - ✅ Multiresolution subdivision levels (step up and down, keep detail, reconstruct)
 - ✅ ZRemesher-class quad retopology (QRemesh: target count, Adaptive Size, Keep Groups, polypaint density,
   symmetry) plus ProjectAll detail transfer (v0.5); 📋 curve guides
-- ✅ Automatic UV unwrapping (Auto UV, xatlas) and texture painting on UV maps (v0.5)
+- ✅ Automatic UV unwrapping (Auto UV, xatlas) and texture painting on UV maps (v0.4.2)
 - ✅ Normal / displacement / AO / cavity / colour map baking with MikkTSpace tangents and a viewport preview (v0.5)
 - ✅ Performance at 20-100M polygons, multithreaded brushes, fast undo (benchmark, partial GPU uploads, Fast
   Navigation; v0.5)
@@ -138,7 +138,7 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
 - ✅ Polypaint: Paint brush, RGB while sculpting, colour pick, fill (respecting the mask), cavity paint;
   exported to PLY, glTF, OBJ, USD and GoZ; Photoshop-style paint layers with blend modes (v0.4)
 - ✅ Texture painting on UV maps (resolution independent of the mesh), with the same paint layers; Auto UV,
-  polypaint <-> texture, PNG next to OBJ / glTF / USD / FBX / GoZ exports (v0.5)
+  polypaint <-> texture, PNG next to OBJ / glTF / USD / FBX / GoZ exports (v0.4.2)
 - ✅ Textures survive Auto UV, voxel remesh, QRemesh, Decimate and merges (Keep Texture, v0.5); textured
   exports validated with the Khronos glTF validator, OpenUSD and ufbx (v0.5)
 - 📋 UV editing (seams, relax, pack options), UDIM tiles; ✅ texture baking (normal/displacement, v0.5)

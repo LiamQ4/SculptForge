@@ -44,11 +44,11 @@ the GPL covers the program, not your models.
 
 ## What it doesn't do yet
 
-SculptForge is young (version 0.4; see [What's new](whats-new.md)). Some things ZBrush artists rely on are
+SculptForge is young (version 0.5; see [What's new](whats-new.md)). Some things ZBrush artists rely on are
 still on the roadmap:
 
-- Dynamic topology (Sculptris Pro style) and ZRemesher-class quad retopology.
-- UV unwrapping, texture painting and map baking.
+- Dynamic topology (Sculptris Pro style) and QRemesh curve guides.
+- UV editing (seams, relax) and UDIM tiles.
 - Booleans and stencils.
 
 Others are not on the roadmap: ZSpheres, ZModeler, the 2.5D canvas, and reading ZBrush's own `.ZTL` and `.ZPR`
