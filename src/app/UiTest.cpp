@@ -762,12 +762,18 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
         wait(num(1, 0));
     } else if (verb == "wait_idle") {
         const float timeout = num(1, 120.0f);
-        steps_.push_back([this, line, timeout](float t) {
+        // Idle for several frames in a row: work is often only requested by the frame after an input (a
+        // double-clicked LightBox folder is listed when the strip next draws), and a single idle frame in
+        // between let the test run on before it started (ui_lightbox failed that way under a loaded ctest -j).
+        auto idleFrames = std::make_shared<int>(0);
+        steps_.push_back([this, line, timeout, idleFrames](float t) {
             const bool idle = !busy(app_.pendingBrush_) && !busy(app_.pendingGenerator_) && !busy(app_.pendingModels_) &&
                               !busy(app_.pendingUnreal_) && !busy(app_.pendingComfyCheck_) && !app_.galleryBusy() &&
                               !app_.thumbs_.busy() && !app_.libraryScanner_.busy() && !app_.autoUv_ &&
                               !app_.bakeBusy() && !app_.qremesh_;
-            if (idle) return true;
+            *idleFrames = idle ? *idleFrames + 1 : 0;
+            if (*idleFrames >= 4) return true;
+            if (idle) return false;
             SDL_Delay(10); // real work runs in real time
             if (t > timeout) fail(line, "still busy after " + number(timeout) + " s");
             return t > timeout;
