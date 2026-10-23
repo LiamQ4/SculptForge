@@ -6,6 +6,33 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### Gizmo 3D (moving, scaling, rotating and posing)
+- Gizmo 3D modes, as in ZBrush: W Move, E Scale, R Rotate, Q back to Draw (top shelf, Transform palette, F3).
+  Move has axis arrows, plane squares and a view-plane centre; Rotate has axis rings and a view ring; Scale has
+  axis boxes and a uniform centre. Shift snaps (15 degrees, a round grid step, 10%). The amount shows beside the
+  gizmo while dragging. Dragging off the handles still navigates; Ctrl still masks.
+- Transforms move the active SubTool, or only its unmasked part: partly masked vertices move partly, hidden ones
+  never. Falloff eases the movement in over a distance from the mask's edge (measured along the surface, as a
+  share of the size) for soft joints when posing. With symmetry on, a masked transform is mirrored across the
+  symmetry plane.
+- Pivot: follows the centre of what moves; Alt+drag the gizmo to move it (or turn its axes) without the model,
+  Alt+click the model or To Surface to put it on the surface, Reset; World or Surface axes (Y along the normal,
+  turning with rotations). The gizmo follows undo / redo of its own steps and is saved in projects (`gizmo` key,
+  no format bump).
+- Gizmo 3D panel: pivot, options and numeric Move / Rotate / Scale with Apply; All SubTools (Transpose All, one
+  undo step per SubTool).
+- `transform` command (translate, rotate, scale, pivot, orient, masked, falloff, symmetry, all); each gizmo drag
+  is echoed to the console as the command that repeats it.
+- One undo step per drag that restores positions bit for bit. Sculpt layers move with the surface (the base and
+  every layer's offsets). Topology, quads, UVs, textures, polypaint and polygroups are untouched.
+- Fast on big meshes: a drag recomputes from the drag's start (no drift), transforms only the moving vertices
+  through a per-weight lookup table on several threads, turns normals of rigid parts and recomputes only where
+  the movement varies, uploads only the changed vertex range and refits the BVH once on release. On 1.3M
+  triangles: about 2 ms to transform and 7 ms to upload per drag frame, 20-40 ms on release.
+
+### Changed
+- Wireframe (PolyF) is Shift+F only: W is now the Gizmo 3D's Move, as in ZBrush.
+
 ## [0.4.2] - 2026-10-23
 
 ### Texture painting on UV maps

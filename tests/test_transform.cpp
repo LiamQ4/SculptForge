@@ -8,6 +8,7 @@
 #include "core/Commands.h"
 #include "core/MeshTransform.h"
 #include "core/Primitives.h"
+#include "core/Project.h"
 #include "core/SubTools.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -17,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 
 using namespace sf;
 
@@ -392,4 +394,24 @@ TEST(transform_perf_million_triangles) {
                     d.mesh.triangleCount(), masked ? "masked + falloff 0.1" : "whole SubTool", begin, frame,
                     moving, finish, undo);
     }
+}
+
+TEST(transform_saved_in_projects) {
+    // A posed SubTool with a sculpt layer and quads saves and opens as it is.
+    Document d = makeDoc(makeCube(6));
+    d.mesh.addLayer("Detail");
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) d.mesh.layers[0].delta[v] = d.mesh.normals[v] * 0.05f;
+    d.mesh.setLayerWeight(0, 1.0f);
+    maskBelowX(d.mesh, 0.0f);
+    CHECK(run(d, "transform", {{"rotate", std::string("0,0,45")}, {"pivot", std::string("0,0,0")}, {"falloff", 0.2}}).ok);
+    const std::string path = tempPath("sf_transform_test.sfproj");
+    std::string err;
+    CHECK(saveProject(path, d, err));
+    Document e;
+    CHECK(loadProject(path, e, err));
+    CHECK(sameBits(e.mesh.positions, d.mesh.positions));
+    CHECK(sameBits(e.mesh.base, d.mesh.base));
+    CHECK(e.mesh.layers.size() == 1 && sameBits(e.mesh.layers[0].delta, d.mesh.layers[0].delta));
+    CHECK(e.mesh.quadPartners == d.mesh.quadPartners);
+    std::filesystem::remove(path);
 }

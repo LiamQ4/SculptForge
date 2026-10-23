@@ -4,6 +4,6 @@ click "Help##palette.help"
 click "What's New##help.whats_new"
 expect_value guide_open == 1
 expect_guide whats-new.md
-expect_text "Version 0.4.2"
-expect_text "Texture painting on UV maps"
+expect_text "Next version (in development)"
+expect_text "Gizmo 3D: move, scale, rotate and pose"
 shot whats-new

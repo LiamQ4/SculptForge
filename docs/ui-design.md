@@ -167,12 +167,12 @@ Every palette's body is one function `void drawPalette_<Id>()`, and the same fun
 | **Help** | Controls (shortcut sheet generated from the Action registry), User Guide (Shift+F1), What's New (also opened once after each update), Command palette (F3), Website & documentation, Report a problem, About SculptForge |
 | **Material** | Studio + MatCap thumbnail grid (`cmd:set_material`); base colour (today's "Material" ColorEdit in Tools) |
 | **Preferences** | Sub-palettes: **Config** (Enable Customize, Store Config Ctrl+Shift+I, Restore Custom UI, Restore Standard UI, Save UI..., Load UI... Ctrl+L); **Interface** (UI scale, Popup Info, Plain tooltips delay, One sub-palette open, Left-handed layout); **LightBox** (library folder, Show at startup, Startup rows, Placement top/bottom); **Hotkeys** (list with reset; Store); **Tablet** (pen, pressure meter, test area, pressure curve, eraser and side-button mappings; see docs/tablet.md); **Autosave** |
-| **Render** | Wireframe (W), Show Mesh, Show Polypaint, Show Mask, Show Polygroups, Show Splats, Frame Model (F) (today's View menu render toggles) |
+| **Render** | Wireframe (Shift+F), Show Mesh, Show Polypaint, Show Mask, Show Polygroups, Show Splats, Frame Model (F) (today's View menu render toggles) |
 | **Script** | Show console (`` ` ``), Run script file..., Copy session as script, Clear console |
 | **Splats** | `drawSplatSection` body (info, clean, transform, to mesh, save, clear) |
 | **Stroke** | Stroke type (Dots, DragRect, Spray, LazyMouse) and its settings (spray scatter, lazy radius) |
 | **Tool** | The ZBrush "Tool" palette. Header: active SubTool name + tri count, `[Open] [Save] [Import]`. Sub-palettes (collapsing headers, one open at a time, Shift+click for more): **SubTool** (SubTools panel body), **Layers** (Layers / Blend Shapes body), **Geometry** (Subdivide Ctrl+D, Decimate, `cmd:decimate`), **Remesh** (Voxel remesh + resolution, the "DynaMesh" analogue), **Masking** (`drawMaskingSection`), **Polygroups** (`drawPolygroupsSection`), **Visibility** (Show all, Invert visibility, Delete hidden), **Export** (Game Ready panel body: LODs, Unreal, GLB/LOD chain), **Display** (wireframe, show mask/groups, material colour) |
-| **Transform** | Symmetry X / Y / Z (X), Frame (F), Solo (`cmd:subtool_solo`), Wireframe |
+| **Transform** | Draw / Move / Scale / Rotate (Q W E R, Gizmo 3D: pivot, World / Surface axes, Mask, All SubTools, Falloff, numeric entry; `cmd:transform`), Symmetry X / Y / Z (X), Frame (F), Solo (`cmd:subtool_solo`), Wireframe |
 
 ZBrush has no separate top-level SubTool / Layer / Masking / Polygroups palettes, so they are **Tool** sub-palettes only. The Mesh and View menus disappear, and their items move to Tool > Geometry/Remesh and Render. Palettes are sorted by name at registration, so a new palette lands in alphabetical order automatically.
 
@@ -207,7 +207,7 @@ ZBrush's Texture slot is left out (no texture feature yet). It's reserved in the
 ### 3.5 Right shelf (w 52)
 Icon + tiny label, 44x40 each. Groups are separated by 8 px.
 - **Navigation**: Frame (F). **Move, Zoom and Rotate are drag buttons**: left-drag on the button pans / zooms / orbits the camera, as in ZBrush. Implement with `InvisibleButton` + `IsItemActive()` + `io.MouseDelta`, feeding the existing camera functions.
-- **View**: Persp (only if the camera supports ortho; otherwise leave it out), Floor (optional grid, only if cheap), PolyF = wireframe (W, Shift+F), Groups (`showPolygroups`), Mask (`showMask`), Paint (`showPolypaint`).
+- **View**: Persp (only if the camera supports ortho; otherwise leave it out), Floor (optional grid, only if cheap), PolyF = wireframe (Shift+F; W is the Gizmo 3D's Move since 0.5), Groups (`showPolygroups`), Mask (`showMask`), Paint (`showPolypaint`).
 - **Object**: Solo (`cmd:subtool_solo`), Splats (show splats; shown only when splats are loaded).
 
 Toggles that are on get an accent background.
@@ -412,9 +412,9 @@ bool SliderInside(const char* id, float* v, float lo, float hi, const char* fmt,
 | `,` | LightBox | | `B` | Brush picker |
 | `Tab` | Hide/show shelves (+ trays) | | `M` | Material picker |
 | `` ` `` | Console | | `S` / `I` | Size / Strength at cursor |
-| `F3`, `Ctrl+Shift+P` | Command palette | | `Shift+F` | Wireframe (alias of `W`) |
+| `F3`, `Ctrl+Shift+P` | Command palette | | `Shift+F` | Wireframe (`W` until 0.4; since 0.5 `Q W E R` are Draw and the Gizmo 3D's Move, Scale, Rotate) |
 | `Ctrl+Shift+I` | Store Config | | `Ctrl+L` | Load UI... |
-| `F1` | Controls | | `1-9, 0, [ ] X W F P C, Ctrl+D/Z/Y/O/S/N/E/U/V` | unchanged |
+| `F1` | Controls | | `1-9, 0, [ ] X F P C, Ctrl+D/Z/Y/O/S/N/E/U/V` | unchanged |
 
 `onKey`'s switch becomes `actions_.handleKey(...)` with these defaults. The F1 Controls window is generated from the registry, grouped by palette. User overrides are stored with Store Config.
 

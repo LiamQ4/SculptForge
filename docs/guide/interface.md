@@ -69,7 +69,7 @@ Interface > Palettes strictly A-Z (ZBrush order)**.
 | **Splats** | Gaussian splat tools: show, flip, turn, fit, clean floaters, convert to mesh, sculpt to splats, save, clear |
 | **Stroke** | The stroke types (Dots, DragRect, Spray, LazyMouse) and their settings |
 | **Tool** | The active SubTool with Open, Save and Import, and the SubTool, Layers, Paint Layers, Geometry, Remesh, Masking, Polygroups, Visibility, Export and Display sub-palettes |
-| **Transform** | Symmetry X, Y and Z, Frame, Solo, PolyF |
+| **Transform** | Draw, Move, Scale and Rotate (the [Gizmo 3D](gizmo.md) with its pivot, axes, options and numeric entry), Symmetry X, Y and Z, Frame, Solo, PolyF |
 | **Help** | Controls, User Guide, What's New, Command palette, Website & documentation, Report a problem, About SculptForge |
 
 ### Sub-palettes
@@ -155,7 +155,7 @@ unmasked area with the main colour.
 
 - **Frame** (<kbd>F</kbd>): fits the model in the view.
 - **Move**, **Zoom**, **Rotate**: drag on these buttons to pan, zoom and orbit the view, as in ZBrush.
-- **PolyF** (<kbd>W</kbd>): shows the mesh's polygons: quads as quads, triangles as triangles.
+- **PolyF** (<kbd>Shift</kbd>+<kbd>F</kbd>): shows the mesh's polygons: quads as quads, triangles as triangles.
 - **Groups**: colours each polygroup.
 - **Mask**: darkens masked areas (on by default).
 - **Paint**: shows polypaint colours (on by default).

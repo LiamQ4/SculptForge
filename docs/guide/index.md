@@ -26,28 +26,29 @@ You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<
 8. [Masking](masking.md)
 9. [Polygroups and visibility](polygroups.md)
 10. [SubTools](subtools.md)
-11. [Polypaint and materials](polypaint.md)
-12. [Texture painting](texture-painting.md)
-13. [Sculpt layers and blend shapes](layers.md)
-14. [Subdivide, remesh, decimate and LODs](geometry.md)
+11. [Moving, rotating and posing (Gizmo 3D)](gizmo.md)
+12. [Polypaint and materials](polypaint.md)
+13. [Texture painting](texture-painting.md)
+14. [Sculpt layers and blend shapes](layers.md)
+15. [Subdivide, remesh, decimate and LODs](geometry.md)
 
 ## AI and capture
 
-15. [Image and text to 3D](generate-3d.md)
-16. [Gaussian splats](splats.md)
+16. [Image and text to 3D](generate-3d.md)
+17. [Gaussian splats](splats.md)
 
 ## Files and pipelines
 
-17. [Exporting, Unreal and ZBrush](exporting.md)
-18. [Projects, autosave and QuickSave](projects.md)
-19. [Scripting and automation](scripting.md)
-20. [SculptForge for studios](studios.md)
+18. [Exporting, Unreal and ZBrush](exporting.md)
+19. [Projects, autosave and QuickSave](projects.md)
+20. [Scripting and automation](scripting.md)
+21. [SculptForge for studios](studios.md)
 
 ## Reference
 
-21. [Keyboard and mouse](shortcuts.md)
-22. [Troubleshooting and FAQ](troubleshooting.md)
-23. [Glossary](glossary.md)
+22. [Keyboard and mouse](shortcuts.md)
+23. [Troubleshooting and FAQ](troubleshooting.md)
+24. [Glossary](glossary.md)
 
 ## Getting help
 

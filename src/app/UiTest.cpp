@@ -19,9 +19,10 @@
 //                            or a rectangle from the first point to the last. keep: leave the button down
 //                            (for a shot mid-drag); `release` lets go, with the modifiers held then
 //   release                  release the left button
-//   gizmo_drag HANDLE DX DY [S]  left-drag a Gizmo 3D handle by DX DY pixels with the held modifiers (alt: the
+//   gizmo_drag HANDLE DX DY [S] [keep]  left-drag a Gizmo 3D handle by DX DY pixels with the held modifiers (alt: the
 //                            gizmo only; shift: snapping). HANDLE: move_x move_y move_z plane_yz plane_xz plane_xy
-//                            move_view rotate_x rotate_y rotate_z rotate_view scale_x scale_y scale_z scale_uniform
+//                            move_view rotate_x rotate_y rotate_z rotate_view scale_x scale_y scale_z scale_uniform;
+//                            keep: leave the button down (a shot mid-drag), then `release`
 //   gizmo_hover HANDLE       move the mouse onto a Gizmo 3D handle (it lights up, for screenshots)
 //   orbit DX DY              right-drag on the background, in pixels (with the held modifiers)
 //   run COMMANDS             sculptforge-cli commands, e.g. run new_sphere subdivisions=4
@@ -598,7 +599,9 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
         }
         const auto handle = App::GizmoHandle(index);
         const bool drag = verb == "gizmo_drag";
-        const float dx = drag ? num(2, 0) : 0.0f, dy = drag ? num(3, 0) : 0.0f, seconds = drag ? num(4, 0.5f) : 0.0f;
+        const bool keep = drag && w.back() == "keep";
+        const float dx = drag ? num(2, 0) : 0.0f, dy = drag ? num(3, 0) : 0.0f;
+        const float seconds = drag && w.size() > 4 && w[4] != "keep" ? num(4, 0.5f) : 0.5f;
         auto from = std::make_shared<ImVec2>();
         const std::string name = w[1];
         steps_.push_back([this, line, handle, from, name](float t) {
@@ -610,13 +613,13 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             return t > 1.0f;
         });
         if (drag) {
-            steps_.push_back([this, from, dx, dy, seconds](float t) {
+            steps_.push_back([this, from, dx, dy, seconds, keep](float t) {
                 if (t == 0.0f) return false; // a frame of hover first
                 if (!buttonDown_ && t < seconds) mouseButton(true, SDL_BUTTON_LEFT);
                 const float u = std::min(t / seconds, 1.0f);
                 mouseMotion(from->x + dx * u, from->y + dy * u);
                 if (t >= seconds) {
-                    mouseButton(false, SDL_BUTTON_LEFT);
+                    if (!keep) mouseButton(false, SDL_BUTTON_LEFT);
                     return true;
                 }
                 return false;

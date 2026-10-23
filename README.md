@@ -55,6 +55,7 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 | Texture painting on UVs (1K-8K, same paint layers), automatic UV unwrap | **Yes** (new in 0.5) | Polypaint, converted to a texture |
 | Quads kept from import, shown and exported as quads | **Yes** (new in 0.4) | Yes |
 | SubTools (separate meshes: append, split, merge, solo, Alt+click to select) | **Yes** (new in 0.3) | Yes |
+| Gizmo 3D: move, scale, rotate and pose (masked parts, soft joints, Transpose All) | **Yes** (new in 0.5) | Yes |
 | GoZ exchange with ZBrush | **Yes** (new in 0.2; not yet tested against a live ZBrush) | Yes |
 | Multiresolution (subdivision levels), dynamic topology, ZRemesher-class retopology, UV editing | Not yet ([roadmap](ROADMAP.md)) | Yes |
 
@@ -89,6 +90,8 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
   append a sphere, cube, plane or model file, show/hide, solo, reorder, duplicate, merge and split (by polygroup or
   by piece), and Alt+click a SubTool to select it. Projects, OBJ, glTF, FBX, USD and GoZ keep them as separate
   objects.
+- **Gizmo 3D** (W Move, E Scale, R Rotate): move, scale and rotate a SubTool, or only its unmasked part with a
+  soft falloff for posing a limb at its joint; Shift snapping, numeric entry, All SubTools, one undo step per drag.
 - **Polypaint** (Paint brush, RGB while sculpting, fills, cavity paint) and six MatCap materials.
 - **Texture painting** on UV maps: Auto UV (xatlas) unwraps any sculpt, then the Paint brush paints a 1K-8K
   texture with the same paint layers and blend modes; polypaint and texture convert both ways, and OBJ, glTF,
@@ -273,7 +276,8 @@ app: F1 for Controls, Shift+F1 for the guide).
 | Brush size | `[` / `]` |
 | Select brush | `1`–`9`, `0` |
 | Paint brush / pick colour | `P` / `C` |
-| Toggle X symmetry / wireframe | `X` / `W` |
+| Toggle X symmetry / wireframe | `X` / `Shift+F` |
+| Gizmo 3D: Move / Scale / Rotate / back to Draw | `W` / `E` / `R` / `Q` (Alt+drag: the gizmo only; Shift snaps) |
 | Frame model | `F` |
 | Subdivide | Ctrl+D |
 | Undo / Redo | Ctrl+Z / Ctrl+Shift+Z |

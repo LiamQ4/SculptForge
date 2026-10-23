@@ -106,7 +106,12 @@ expect_value gizmo_falloff > 0.05
 snapshot
 gizmo_hover rotate_z
 shot rotate-hover
-gizmo_drag rotate_z 0 -90
+gizmo_drag rotate_z 0 -90 0.5 keep
+# Mid-drag: the swept angle and the readout show beside the gizmo.
+expect_text "deg"
+shot posing-mid-drag
+release
+wait 0.1
 expect_value moved > 1000
 expect_value moved_max > 1
 expect_status Gizmo Rotate
@@ -120,6 +125,25 @@ expect_value moved > 1000
 shot posed-redo
 key ctrl+z
 run mask_clear
+
+# Every control explains itself with Ctrl held; Ctrl+F1 opens this chapter of the guide.
+hold ctrl
+hover "Gizmo 3D/Apply"
+expect_help "about the pivot"
+hover "Gizmo 3D/##gizmo_falloff"
+expect_help "soft joint"
+hover "Gizmo 3D/To Surface##gizmo.snap_pivot"
+expect_help "Alt+click"
+hover "Gizmo 3D/All SubTools##gizmo.all"
+expect_help "Transpose All"
+hover "Rotate##tool.rotate"
+expect_help "pose a limb"
+key ctrl+f1
+hold none
+expect_guide gizmo.md
+shot help-guide
+key shift+f1
+expect_value guide_open == 0
 
 # Numeric entry: type the amounts, Apply runs one transform command about the pivot.
 click "Reset##gizmo.reset_pivot"
