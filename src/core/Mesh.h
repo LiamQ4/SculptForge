@@ -8,11 +8,14 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
 
 namespace sf {
+
+struct PaintTexture;
 
 struct AABB {
     glm::vec3 min{std::numeric_limits<float>::max()};
@@ -140,6 +143,12 @@ public:
     std::vector<glm::vec3> paintBase;
     std::vector<PaintLayer> paintLayers;
     int activePaintLayer = -1;
+
+    // Texture painting (core/Texture.h): an RGBA texture on the UVs, shared by copies of the mesh until
+    // one of them changes it (mutableTexture copies first). `paintToTexture`: the Paint brush, fills and
+    // the paint layers work on the texture instead of the vertices.
+    std::shared_ptr<PaintTexture> texture;
+    bool paintToTexture = false;
 
     size_t vertexCount() const { return positions.size(); }
     size_t triangleCount() const { return triangles.size(); }

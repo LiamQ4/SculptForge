@@ -26,6 +26,8 @@ public:
     // Appends every vertex within `radius` of `center` to `out` (cleared first).
     // Ignores visibility; brushes use sf::brushVertices, which filters hidden ones.
     void queryVertices(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const;
+    // Appends every triangle whose bounds touch the sphere (cleared first; hidden ones included).
+    void queryTriangles(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const;
     // Updates bounds after the given vertices moved. Bounds only ever grow
     // conservatively for ancestors, which keeps queries correct.
     void refit(const Mesh& mesh, std::span<const uint32_t> movedVerts);

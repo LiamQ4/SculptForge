@@ -53,6 +53,10 @@ add_library(sculptforge_core STATIC
   src/core/BrushGallery.cpp
   src/core/Polypaint.cpp
   src/core/PaintLayer.cpp
+  src/core/Texture.cpp
+  src/core/TextureCommands.cpp
+  src/core/AutoUv.cpp
+  third_party/xatlas/xatlas.cpp
   src/core/Matcap.cpp
   src/core/Project.cpp
   src/core/Guide.cpp
@@ -68,12 +72,12 @@ add_library(sculptforge_core STATIC
   src/io/GozCommands.cpp
   src/io/StlIO.cpp
 )
-target_include_directories(sculptforge_core PUBLIC src PRIVATE third_party/stb third_party/ufbx)
+target_include_directories(sculptforge_core PUBLIC src PRIVATE third_party/stb third_party/ufbx third_party/xatlas)
 # Third-party C code: compile quietly.
 if(MSVC)
-  set_source_files_properties(third_party/ufbx/ufbx.c PROPERTIES COMPILE_OPTIONS "/w")
+  set_source_files_properties(third_party/ufbx/ufbx.c third_party/xatlas/xatlas.cpp PROPERTIES COMPILE_OPTIONS "/w")
 else()
-  set_source_files_properties(third_party/ufbx/ufbx.c PROPERTIES COMPILE_OPTIONS "-w")
+  set_source_files_properties(third_party/ufbx/ufbx.c third_party/xatlas/xatlas.cpp PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 target_link_libraries(sculptforge_core PUBLIC glm::glm)
 target_compile_definitions(sculptforge_core PUBLIC GLM_FORCE_XYZW_ONLY)

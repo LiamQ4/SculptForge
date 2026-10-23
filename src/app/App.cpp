@@ -1203,7 +1203,7 @@ void App::drawUi() {
                                "version 3 or later. It comes with ABSOLUTELY NO WARRANTY.");
             ImGui::Spacing();
             ImGui::TextWrapped("Built with SDL 3 (zlib), Dear ImGui (MIT), GLM (MIT), stb (MIT/public domain), ufbx "
-                               "(MIT/public domain) and the Inter typeface (SIL OFL 1.1). Uses libcurl (curl license) "
+                               "(MIT/public domain), xatlas (MIT) and the Inter typeface (SIL OFL 1.1). Uses libcurl (curl license) "
                                "where available.");
             ImGui::Spacing();
             if (ImGui::Button("License")) SDL_OpenURL("https://github.com/islandmed/SculptForge/blob/main/LICENSE");

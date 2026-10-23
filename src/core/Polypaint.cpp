@@ -4,6 +4,8 @@
 
 #include "core/Commands.h"
 #include "core/SubTools.h"
+#include "core/Texture.h"
+#include "core/Undo.h"
 #include "io/PlyIO.h"
 
 #include <algorithm>
@@ -253,6 +255,14 @@ UndoRecord colorUndo(const Mesh& mesh, std::string label) {
 
 // Why the active paint layer can't be painted ("" = it can).
 std::string paintBlocked(const Mesh& mesh) {
+    if (paintsTexture(mesh)) {
+        const PaintTexture& t = *mesh.texture;
+        if (t.layers.empty() || t.activeLayer < 0 || t.activeLayer >= int(t.layers.size())) return {};
+        const TextureLayer& l = t.layers[size_t(t.activeLayer)];
+        if (l.locked) return "Texture layer '" + l.name + "' is locked";
+        if (!l.visible) return "Texture layer '" + l.name + "' is hidden";
+        return {};
+    }
     if (mesh.paintLayers.empty() || mesh.activePaintLayer < 0) return {};
     const PaintLayer& l = mesh.paintLayers[size_t(mesh.activePaintLayer)];
     if (l.locked) return "Paint layer '" + l.name + "' is locked";
@@ -282,7 +292,7 @@ void registerPaintCommands(CommandRegistry& registry) {
                   }});
 
     registry.add({"paint_fill",
-                  "Fill the active paint layer with a polypaint colour (undoable). By default the mask is respected: only "
+                  "Fill the active paint layer (of the texture when the SubTool paints into one) with a colour (undoable). By default the mask is respected: only "
                   "unmasked areas are painted. Hidden faces are never painted.",
                   {{"color", T::String, std::string(kColorHelp) + " Default: the current paint colour.", false},
                    {"area", T::String, "unmasked (default), masked (only the masked area) or all (ignore the mask).", false},
@@ -300,6 +310,19 @@ void registerPaintCommands(CommandRegistry& registry) {
                       else return {false, "area must be unmasked, masked or all"};
                       if (area == PaintArea::Masked && !doc.mesh.hasMask()) return {false, "Nothing is masked"};
                       if (std::string why = paintBlocked(doc.mesh); !why.empty()) return {false, why};
+                      if (paintsTexture(doc.mesh)) {
+                          Mesh& m = doc.mesh;
+                          const float amount = std::clamp(float(argNumber(a, "strength", 1.0)), 0.0f, 1.0f);
+                          std::vector<float> w(m.vertexCount());
+                          for (uint32_t v = 0; v < m.vertexCount(); ++v)
+                              w[v] = (area == PaintArea::Unmasked ? 1.0f - m.maskAt(v)
+                                      : area == PaintArea::Masked ? m.maskAt(v)
+                                                                  : 1.0f) * amount;
+                          UndoRecord r = captureTexture(m, "Fill Texture");
+                          const size_t n = textureFill(m, c, w);
+                          doc.undo.push(std::move(r));
+                          return {true, "Filled " + std::to_string(n) + " texels with " + colorToHex(c)};
+                      }
                       doc.undo.push(colorUndo(doc.mesh, "Fill Color"));
                       const size_t n = paintFill(doc.mesh, c, area, float(argNumber(a, "strength", 1.0)));
                       doc.modified = true;
@@ -308,6 +331,16 @@ void registerPaintCommands(CommandRegistry& registry) {
 
     registry.add({"paint_clear", "Remove all polypaint from the mesh, paint layers included (undoable).", {},
                   [](Document& doc, const Args&) -> CommandResult {
+                      if (paintsTexture(doc.mesh)) {
+                          UndoRecord r = captureTexture(doc.mesh, "Clear Texture");
+                          PaintTexture& t = *doc.mesh.texture;
+                          t.layers.clear();
+                          t.base.clear();
+                          t.activeLayer = -1;
+                          clearTextureLayer(t, -1);
+                          doc.undo.push(std::move(r));
+                          return {true, "Texture cleared to white (its layers too)"};
+                      }
                       if (!doc.mesh.hasColors()) return {true, "The mesh has no polypaint"};
                       // A snapshot, so redo removes the attribute again instead of leaving white paint.
                       Mesh cleared = doc.mesh;
@@ -331,6 +364,16 @@ void registerPaintCommands(CommandRegistry& registry) {
                       std::string err;
                       if (!colorArg(a, c, err) && !err.empty()) return {false, err};
                       if (std::string why = paintBlocked(doc.mesh); !why.empty()) return {false, why};
+                      if (paintsTexture(doc.mesh)) {
+                          Mesh& m = doc.mesh;
+                          std::vector<float> w = cavityMap(m, std::clamp(int(argNumber(a, "smoothing", 2)), 0, 50));
+                          const float strength = std::clamp(float(argNumber(a, "strength", 0.7)), 0.0f, 1.0f);
+                          for (uint32_t v = 0; v < m.vertexCount(); ++v) w[v] *= strength * (1.0f - m.maskAt(v));
+                          UndoRecord r = captureTexture(m, "Paint Cavity");
+                          const size_t n = textureFill(m, c, w);
+                          doc.undo.push(std::move(r));
+                          return {true, "Painted cavities on " + std::to_string(n) + " texels"};
+                      }
                       doc.undo.push(colorUndo(doc.mesh, "Paint Cavity"));
                       const size_t n = paintFromCavity(doc.mesh, c, float(argNumber(a, "strength", 0.7)),
                                                        int(argNumber(a, "smoothing", 2)));
@@ -351,6 +394,7 @@ void registerPaintCommands(CommandRegistry& registry) {
                       return {true, "Exported " + path + (mesh.hasColors() ? " (with polypaint)" : "")};
                   }});
     registerPaintLayerCommands(registry); // paint_layer_* (core/PaintLayer.cpp)
+    registerTextureCommands(registry);    // texture_*, uv_auto, paint_target (core/TextureCommands.cpp)
 }
 
 } // namespace sf

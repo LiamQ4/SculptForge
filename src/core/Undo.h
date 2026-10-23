@@ -46,6 +46,25 @@ struct PaintStackUndo {
     size_t bytes() const;
 };
 
+// Old texels of the 64x64 tiles a texture-paint stroke touched in one layer (core/Texture.h);
+// applying swaps them with the texture.
+struct TextureTileUndo {
+    int layer = -1;
+    std::vector<uint32_t> tiles;
+    std::vector<uint8_t> data; // kTextureTile^2 RGBA per tile
+    void swapWith(Mesh& mesh);
+    size_t bytes() const { return data.size() + tiles.size() * sizeof(uint32_t); }
+};
+
+// The whole texture before a texture edit (create, delete, layer edits, conversions, fills): applying
+// swaps the mesh's texture and paint target with these (see captureTexture in core/Texture.h).
+struct TextureStackUndo {
+    std::shared_ptr<PaintTexture> texture;
+    bool paintToTexture = false;
+    void swapWith(Mesh& mesh);
+    size_t bytes() const;
+};
+
 // "The active paint layer" for UndoRecord::captureColors.
 inline constexpr int kActivePaintLayer = -2;
 
@@ -58,6 +77,7 @@ inline constexpr int kActivePaintLayer = -2;
 //    -1 or that layer's colours, with its coverage in `paintAlpha`)
 //  - paint: the whole paint-layer stack (layer add / delete / merge / settings)
 //  - hidden / polygroups: per-triangle visibility and group ids
+//  - textureTiles / texture: texture-paint tiles of one layer, or the whole texture
 // Record old values before changing them (ensureX() the attribute first);
 // undo allocates a missing attribute so values can always be restored.
 struct UndoRecord {
@@ -71,11 +91,13 @@ struct UndoRecord {
     std::unique_ptr<PaintStackUndo> paint;
     UndoChannel<uint8_t> hidden;
     UndoChannel<uint32_t> polygroups;
+    std::unique_ptr<TextureTileUndo> textureTiles;
+    std::unique_ptr<TextureStackUndo> texture;
     std::unique_ptr<Mesh> mesh;
 
     bool empty() const {
         return positions.empty() && mask.empty() && colors.empty() && paintAlpha.empty() && hidden.empty() &&
-               polygroups.empty() && !mesh && !paint;
+               polygroups.empty() && !mesh && !paint && !textureTiles && !texture;
     }
     size_t approxBytes() const;
 
