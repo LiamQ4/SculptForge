@@ -6,6 +6,27 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### Quad retopology and detail projection
+- QRemesh (Tool > Geometry > QRemesh, `qremesh`): automatic quad retopology like ZBrush's ZRemesher. A
+  field-aligned method after Instant Meshes (Jakob et al. 2015; field formulas follow its BSD-3 reference code,
+  credited in THIRD_PARTY_NOTICES.md): a multi-resolution 4-RoSy orientation field and position field, polygon
+  extraction, then every polygon split into quads and relaxed onto the sculpt. The result is 100% quads,
+  2-manifold and closed where the sculpt is, within about 5% of the target count.
+- Options: Target Polygons with Half / Same / Double, Adaptive Size (curvature-driven quad size), Keep Groups
+  (edge loops along polygroup borders, groups kept), Detect Edges (loops on hard edges over 50 degrees),
+  Use Polypaint (red = up to 4x the density, blue = down to a quarter), Symmetry (one half remeshed and mirrored,
+  welded on the seam), Keep Original (the old SubTool kept hidden below, for ProjectAll).
+- Runs in the background in the app with a progress bar and Cancel; one undo step. Mask and polypaint are
+  interpolated onto the new mesh; sculpt layers are baked.
+- ProjectAll (Tool > SubTool > Project, `project_all`): moves the active SubTool onto the other visible
+  SubTools (rays both ways along the normal, nearest hit within Dist, else the closest point) and takes their
+  polypaint. Dist, Mean, PA Blur, Geometry / Polypaint toggles, an optional single `source`; respects the mask
+  and hidden faces; shape goes into the active sculpt layer, colour into the active paint layer; one undo step.
+- Fast on dense meshes (all threads, a read-only BVH): 1.3M triangles to 5,000 quads in 1.7 s, to 100,000 in
+  6 s; ProjectAll onto 1.25M vertices in 0.6 s (10-core desktop).
+- New guide chapter "Quad retopology and detail projection", glossary entries; UI test `tests/ui/retopo.sfui`,
+  unit tests `tests/test_retopo.cpp` (manifold, quad %, target count, Hausdorff distance, projection error).
+
 ## [0.4.2] - 2026-10-23
 
 ### Texture painting on UV maps

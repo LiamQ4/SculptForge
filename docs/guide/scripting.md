@@ -91,6 +91,8 @@ the ones you will use most:
 | Geometry | `subdivide` | `levels` (1 to 4, default 1) |
 | Geometry | `remesh` | `resolution` (32 to 512, default 200) |
 | Geometry | `decimate` | `ratio` (default 0.5) or `triangles` |
+| Geometry | `qremesh` | `target` (default 5000), `adaptive`, `keep_groups`, `detect_edges`, `use_polypaint`, `symmetry`, `keep_original` |
+| SubTools | `project_all` | `distance` (default 0.02), `mean`, `blur`, `geometry`, `polypaint`, `source` |
 | Geometry | `mesh_info` | |
 | Sculpting | `stroke` | `points` (required), `brush`, `radius`, `strength`, `invert`, `symmetry` |
 | Brushes | `brush_set_alpha` | `name` (round, square, noise) or `path`, `invert` |

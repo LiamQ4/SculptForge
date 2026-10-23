@@ -27,8 +27,8 @@ Where SculptForge aims to win:
 4. **Scriptable** — every action is a named command callable from UI, scripts or AI.
 5. **Free AI built in, or bring your own:** free models out of the box, provider-agnostic, and fully offline with local models.
 
-Where we deliberately do *not* compete yet: ZRemesher-class automatic
-retopology, a full ZBrush feature list, rendering/animation (use Blender).
+Where we deliberately do *not* compete yet: a full ZBrush feature list,
+rendering/animation (use Blender).
 
 ## Status key
 
@@ -110,7 +110,8 @@ always-latest downloads.
 Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox forums:
 
 - 📋 Multiresolution subdivision levels (step up and down, keep detail, reconstruct)
-- 📋 ZRemesher-class quad retopology with guides and density, plus Project / Project All detail transfer
+- ✅ ZRemesher-class quad retopology (QRemesh: target count, Adaptive Size, Keep Groups, polypaint density,
+  symmetry) plus ProjectAll detail transfer (v0.5); 📋 curve guides
 - ✅ Automatic UV unwrapping (Auto UV, xatlas) and texture painting on UV maps (v0.5)
 - 📋 Normal / displacement map baking
 - 📋 Performance at 20-100M polygons, multithreaded brushes, fast undo
@@ -131,8 +132,8 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
 ## Phase 4 — Advanced modeling (v0.5+)
 
 - 📋 Boolean merge/subtract on the voxel pipeline; sharper voxel remesh (signed distance instead of occupancy)
-- 🚧 Quads: imported quads kept, shown and exported as quads, quad subdivision and quad voxel remesh (v0.4);
-  📋 ZRemesher-class retopology from triangle meshes
+- ✅ Quads: imported quads kept, shown and exported as quads, quad subdivision and quad voxel remesh (v0.4);
+  ZRemesher-class retopology from triangle meshes (QRemesh, v0.5)
 - ✅ Polypaint: Paint brush, RGB while sculpting, colour pick, fill (respecting the mask), cavity paint;
   exported to PLY, glTF, OBJ, USD and GoZ; Photoshop-style paint layers with blend modes (v0.4)
 - ✅ Texture painting on UV maps (resolution independent of the mesh), with the same paint layers; Auto UV,

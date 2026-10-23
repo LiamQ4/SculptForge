@@ -5,6 +5,18 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Next version (in development)
+
+### Quad retopology and detail projection
+
+- **QRemesh** (**Tool > Geometry**, like ZRemesher) rebuilds a sculpt as clean quads whose edge loops follow
+  the forms, near a **Target Polygons** count, in the background. **Keep Groups**, **Adaptive Size**,
+  **Use Polypaint**, **Symmetry** and **Half / Same / Double** work as in ZBrush.
+- **ProjectAll** (**Tool > SubTool > Project**) puts the sculpted detail and polypaint back onto the divided
+  quads, with **Dist**, **Mean** and **PA Blur**, and respects the mask.
+
+See [Quad retopology and detail projection](retopology.md).
+
 ## Version 0.4.2
 
 ### Texture painting on UV maps

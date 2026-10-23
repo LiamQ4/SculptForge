@@ -200,8 +200,9 @@ No. They are proprietary and undocumented. Use GoZ, or export OBJ or FBX from ZB
 [Exporting, Send to Unreal and GoZ](exporting.md#exchange-models-with-zbrush-goz).
 
 **Does it have subdivision levels, DynaMesh, ZRemesher or UVs?**
-Voxel remesh works like DynaMesh. Multiresolution subdivision levels, dynamic topology, automatic retopology
-and UV unwrapping are not there yet; they are on the roadmap.
+Voxel remesh works like DynaMesh, **QRemesh** like ZRemesher (with **ProjectAll** to bring the detail back; see
+[Quad retopology](retopology.md)) and **Auto UV** unwraps any model. Multiresolution subdivision levels and
+dynamic topology are not there yet; they are on the roadmap.
 
 **Is it really free? Can I sell what I make?**
 Yes and yes. SculptForge is GPL-3.0-or-later free software; the licence covers the program, not your models.

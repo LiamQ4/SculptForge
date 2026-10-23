@@ -53,10 +53,11 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 | Masking, polygroups, visibility (Ctrl / Ctrl+Shift, lasso or rectangle), polypaint, MatCaps | **Yes** | Yes |
 | Polypaint layers with blend modes (Multiply, Overlay, Screen...) | **Yes** (new in 0.4) | Opacity only |
 | Texture painting on UVs (1K-8K, same paint layers), automatic UV unwrap | **Yes** (new in 0.5) | Polypaint, converted to a texture |
+| Automatic quad retopology (ZRemesher-style) and ProjectAll detail transfer | **Yes** (new in 0.5) | Yes |
 | Quads kept from import, shown and exported as quads | **Yes** (new in 0.4) | Yes |
 | SubTools (separate meshes: append, split, merge, solo, Alt+click to select) | **Yes** (new in 0.3) | Yes |
 | GoZ exchange with ZBrush | **Yes** (new in 0.2; not yet tested against a live ZBrush) | Yes |
-| Multiresolution (subdivision levels), dynamic topology, ZRemesher-class retopology, UV editing | Not yet ([roadmap](ROADMAP.md)) | Yes |
+| Multiresolution (subdivision levels), dynamic topology, UV editing | Not yet ([roadmap](ROADMAP.md)) | Yes |
 
 SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models over with GoZ (`.GoZ` files
 keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
@@ -64,8 +65,8 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 > **Status: early release (v0.4).** The core sculpting, pipeline and AI features work and are tested on every
 > commit. Version 0.4 makes SculptForge feel like ZBrush (free rotation, lasso masking, a sculpting material),
 > keeps quads, and adds Photoshop-style paint layers; 0.3 added SubTools, the ZBrush-style interface, tablets,
-> ComfyUI and the user guide (see the [changelog](CHANGELOG.md)). Multiresolution sculpting, dynamic topology,
-> retopology, UV unwrapping and texture painting are still on the [roadmap](ROADMAP.md).
+> ComfyUI and the user guide (see the [changelog](CHANGELOG.md)). Multiresolution sculpting and dynamic topology
+> are still on the [roadmap](ROADMAP.md).
 
 ## Features
 
@@ -95,6 +96,8 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
   USD, FBX and GoZ exports write the PNG next to the model.
 - **Project files** (`.sfproj`) that keep everything, with an unsaved-changes prompt, recent files and autosave.
 - Unlimited undo, Loop subdivision, **voxel remesh** (DynaMesh-style) and quadric decimation.
+- **QRemesh** quad retopology (ZRemesher-style: target count, Adaptive Size, Keep Groups, polypaint density,
+  symmetry) and **ProjectAll** to bring the sculpted detail back onto the new topology.
 - **Sculpt layers** that work as blend shapes, with live weights and playback.
 
 **Free built-in AI: Brush Lab (describe a brush, AI builds it)**

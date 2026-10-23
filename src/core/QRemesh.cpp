@@ -3,7 +3,9 @@
 //
 // QRemesh: field-aligned quad remeshing (see QRemesh.h for the outline). The field formulas (extrinsic 4-RoSy
 // orientation and position compatibility, the middle point of two tangent planes) follow Instant Meshes
-// (Jakob et al. 2015); hierarchy, extraction, quad splitting and relaxation are our own.
+// (Jakob et al. 2015); hierarchy, extraction, quad splitting and relaxation are our own. Instant Meshes is
+// Copyright (c) 2015 Wenzel Jakob, Daniele Panozzo, Marco Tarini, and Olga Sorkine-Hornung, BSD-3-Clause; see
+// THIRD_PARTY_NOTICES.md.
 #include "core/QRemesh.h"
 
 #include "core/Parallel.h"
