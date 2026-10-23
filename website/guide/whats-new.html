@@ -18,7 +18,7 @@
   <meta property="og:url" content="https://islandmed.github.io/SculptForge/guide/whats-new.html">
   <link rel="stylesheet" href="../style.css?v=8">
   <script src="../motion.js?v=1" defer></script>
-  <script src="search-index.js?v=24" defer></script>
+  <script src="search-index.js?v=28" defer></script>
 </head>
 <body class="guide-page" data-prev="welcome.html" data-next="installing.html">
   <div class="scroll-progress" aria-hidden="true"></div>
@@ -44,7 +44,7 @@
           <input type="search" id="guide-q" placeholder="Search the guide" aria-label="Search the guide" autocomplete="off">
           <div class="search-results" id="guide-results" hidden></div>
         </div>
-        <nav class="toc" aria-label="User guide"><a class="toc-home" href="index.html">Contents</a><p class="toc-group">Getting started</p><ul><li><a href="welcome.html">Welcome to SculptForge</a></li><li><a href="whats-new.html" class="current" aria-current="page">What&#x27;s new</a><ul class="toc-sections"><li><a href="#next-version-in-development">Next version (in development)</a></li><li><a href="#version-042">Version 0.4.2</a></li><li><a href="#version-041">Version 0.4.1</a></li><li><a href="#version-04">Version 0.4</a></li><li><a href="#version-03">Version 0.3</a></li><li><a href="#version-02">Version 0.2</a></li><li><a href="#version-01">Version 0.1</a></li></ul></li><li><a href="installing.html">Installing SculptForge</a></li><li><a href="interface.html">The interface</a></li><li><a href="navigation.html">Navigating the view</a></li></ul><p class="toc-group">Sculpting</p><ul><li><a href="sculpting.html">Sculpting and brushes</a></li><li><a href="brush-lab.html">Brush Lab and sharing brushes</a></li><li><a href="masking.html">Masking</a></li><li><a href="polygroups.html">Polygroups and visibility</a></li><li><a href="subtools.html">SubTools</a></li><li><a href="polypaint.html">Polypaint and materials</a></li><li><a href="texture-painting.html">Texture painting</a></li><li><a href="layers.html">Sculpt layers and blend shapes</a></li><li><a href="subdivision-levels.html">Subdivision levels</a></li><li><a href="geometry.html">Subdivide, remesh, decimate and LODs</a></li></ul><p class="toc-group">AI and capture</p><ul><li><a href="generate-3d.html">Image and text to 3D</a></li><li><a href="splats.html">Gaussian splats</a></li></ul><p class="toc-group">Files and pipelines</p><ul><li><a href="exporting.html">Exporting, Unreal and ZBrush</a></li><li><a href="projects.html">Projects, autosave and QuickSave</a></li><li><a href="scripting.html">Scripting and automation</a></li><li><a href="studios.html">SculptForge for studios</a></li></ul><p class="toc-group">Reference</p><ul><li><a href="shortcuts.html">Keyboard and mouse</a></li><li><a href="troubleshooting.html">Troubleshooting and FAQ</a></li><li><a href="glossary.html">Glossary</a></li></ul></nav>
+        <nav class="toc" aria-label="User guide"><a class="toc-home" href="index.html">Contents</a><p class="toc-group">Getting started</p><ul><li><a href="welcome.html">Welcome to SculptForge</a></li><li><a href="whats-new.html" class="current" aria-current="page">What&#x27;s new</a><ul class="toc-sections"><li><a href="#next-version-in-development">Next version (in development)</a></li><li><a href="#version-042">Version 0.4.2</a></li><li><a href="#version-041">Version 0.4.1</a></li><li><a href="#version-04">Version 0.4</a></li><li><a href="#version-03">Version 0.3</a></li><li><a href="#version-02">Version 0.2</a></li><li><a href="#version-01">Version 0.1</a></li></ul></li><li><a href="installing.html">Installing SculptForge</a></li><li><a href="interface.html">The interface</a></li><li><a href="navigation.html">Navigating the view</a></li></ul><p class="toc-group">Sculpting</p><ul><li><a href="sculpting.html">Sculpting and brushes</a></li><li><a href="brush-lab.html">Brush Lab and sharing brushes</a></li><li><a href="masking.html">Masking</a></li><li><a href="polygroups.html">Polygroups and visibility</a></li><li><a href="subtools.html">SubTools</a></li><li><a href="polypaint.html">Polypaint and materials</a></li><li><a href="texture-painting.html">Texture painting</a></li><li><a href="layers.html">Sculpt layers and blend shapes</a></li><li><a href="subdivision-levels.html">Subdivision levels</a></li><li><a href="gizmo.html">Moving, rotating and posing (Gizmo 3D)</a></li><li><a href="geometry.html">Subdivide, remesh, decimate and LODs</a></li><li><a href="retopology.html">Quad retopology and detail projection</a></li></ul><p class="toc-group">AI and capture</p><ul><li><a href="generate-3d.html">Image and text to 3D</a></li><li><a href="splats.html">Gaussian splats</a></li></ul><p class="toc-group">Files and pipelines</p><ul><li><a href="baking.html">Baking normal and displacement maps</a></li><li><a href="exporting.html">Exporting, Unreal and ZBrush</a></li><li><a href="projects.html">Projects, autosave and QuickSave</a></li><li><a href="scripting.html">Scripting and automation</a></li><li><a href="studios.html">SculptForge for studios</a></li></ul><p class="toc-group">Reference</p><ul><li><a href="shortcuts.html">Keyboard and mouse</a></li><li><a href="performance.html">Performance and big meshes</a></li><li><a href="troubleshooting.html">Troubleshooting and FAQ</a></li><li><a href="glossary.html">Glossary</a></li></ul></nav>
       </div>
     </div>
     <main class="guide-main" id="top">
@@ -72,6 +72,82 @@ Mask, polypaint, paint layers, polygroups, hidden faces, UVs and sculpt layers f
 </li>
 </ul>
 <p>See <a href="subdivision-levels.html">Subdivision levels</a>.</p>
+<h3 id="gizmo-3d-move-scale-rotate-and-pose">Gizmo 3D: move, scale, rotate and pose<a class="anchor" href="#gizmo-3d-move-scale-rotate-and-pose" aria-label="Link to this section">#</a></h3>
+<p>ZBrush&#x27;s Gizmo 3D, with the same keys: <kbd>W</kbd> Move, <kbd>E</kbd> Scale, <kbd>R</kbd> Rotate, <kbd>Q</kbd> back to Draw (also on the top shelf and in the <strong>Transform</strong> palette).</p>
+<ul>
+<li>
+<strong>Handles over the model.</strong> Arrows, plane squares and a free-move centre; axis rings and a view ring; axis boxes and a uniform centre. <kbd>Shift</kbd> snaps to 15 degrees, the grid or 10% steps.
+</li>
+<li>
+<strong>Only the unmasked part moves</strong>, so posing is: mask the body, <kbd>Alt</kbd>+click the shoulder to put the pivot there, raise <strong>Falloff</strong> for a soft joint, turn the arm. With X symmetry both arms move together.
+</li>
+<li>
+<strong>Pivot tools</strong>: <kbd>Alt</kbd>+drag the gizmo to move it alone, <strong>Reset</strong>, <strong>To Surface</strong>, World or Surface axes.
+</li>
+<li>
+<strong>Numeric entry</strong> in the Gizmo 3D panel, <strong>All SubTools</strong> (Transpose All), one undo step per drag, sculpt layers move with the surface, and the <code>transform</code> command for scripts.
+</li>
+<li>
+Fast on big models: a drag frame on 1.3 million triangles takes about 10 ms.
+</li>
+</ul>
+<p><kbd>W</kbd> no longer toggles the wireframe: use <kbd>Shift</kbd>+<kbd>F</kbd> (as in ZBrush) or <strong>PolyF</strong> on the right shelf. See <a href="gizmo.html">Moving, rotating and posing</a>.</p>
+<h3 id="normal-displacement-and-ao-map-baking">Normal, displacement and AO map baking<a class="anchor" href="#normal-displacement-and-ao-map-baking" aria-label="Link to this section">#</a></h3>
+<p>Bake the detail of a high-poly sculpt into maps on a low-poly&#x27;s UVs, for game engines and renderers: <strong>Tool &gt; Bake</strong>.</p>
+<ul>
+<li>
+<strong>Six maps in one go</strong>: tangent-space normal, object-space normal, displacement (16-bit PNG with mid-grey = 0, plus a 32-bit EXR in world units), ambient occlusion, cavity and colour (polypaint or texture).
+</li>
+<li>
+<strong>Right in every engine.</strong> Tangent-space maps use MikkTSpace tangents, as Blender, Unreal, Unity and Godot do; pick the OpenGL or DirectX green convention.
+</li>
+<li>
+<strong>Check it on the model.</strong> The low-poly shows its baked normal map in the viewport as soon as the bake ends, next to the high-poly.
+</li>
+<li>
+<strong>ZBrush-style controls</strong>: source SubTool, 1K-8K, anti-aliasing, automatic or manual front and rear ray distances, padding around UV islands. Bakes run in the background on every core, with progress and Cancel.
+</li>
+<li>
+<strong>Send to Unreal</strong> brings the normal map along, set up as a normal map. The <code>bake</code> command does it all from scripts.
+</li>
+</ul>
+<p>See <a href="baking.html">Baking normal and displacement maps</a>.</p>
+<h3 id="quad-retopology-and-detail-projection">Quad retopology and detail projection<a class="anchor" href="#quad-retopology-and-detail-projection" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>
+<strong>QRemesh</strong> (<strong>Tool &gt; Geometry</strong>, like ZRemesher) rebuilds a sculpt as clean quads whose edge loops follow the forms, near a <strong>Target Polygons</strong> count, in the background. <strong>Keep Groups</strong>, <strong>Adaptive Size</strong>, <strong>Use Polypaint</strong>, <strong>Symmetry</strong> and <strong>Half / Same / Double</strong> work as in ZBrush.
+</li>
+<li>
+<strong>ProjectAll</strong> (<strong>Tool &gt; SubTool &gt; Project</strong>) puts the sculpted detail and polypaint back onto the divided quads, with <strong>Dist</strong>, <strong>Mean</strong> and <strong>PA Blur</strong>, and respects the mask.
+</li>
+</ul>
+<p>See <a href="retopology.html">Quad retopology and detail projection</a>.</p>
+<h3 id="performance-at-tens-of-millions-of-polygons">Performance at tens of millions of polygons<a class="anchor" href="#performance-at-tens-of-millions-of-polygons" aria-label="Link to this section">#</a></h3>
+<p>Sculpting a 33 million triangle model on a laptop now keeps up with the display: a medium brush costs about 10 ms per dab instead of 400, and turning the view runs at 50-70 frames a second instead of 32.</p>
+<ul>
+<li>
+<strong>Brushes use every core</strong>: every brush, mask and paint stroke, the normal updates and the picking structure. Results are exactly the same as on one core.
+</li>
+<li>
+<strong>Strokes send the graphics card only what they changed.</strong> Before, a dab with symmetry on a subdivided model re-sent most of the mesh.
+</li>
+<li>
+<strong>Fast undo</strong>: undo keeps only the vertices a stroke changed, and the first polypaint stroke on a model no longer copies the whole mesh for undo.
+</li>
+<li>
+<strong>Less memory</strong>: about 30% less per triangle for a sculpting mesh.
+</li>
+<li>
+<strong>Faster projects</strong>: saving and opening big projects is faster, and projects over 4 GB save (ZIP64).
+</li>
+<li>
+<strong>Preferences &gt; Performance</strong>: Antialiasing (Off to 8x), <strong>Fast Navigation</strong> (big scenes drop antialiasing while the view moves), Multithreading, what your last stroke cost per dab, and the memory the scene holds. A SubTool too big for the graphics card is left out of the view with a message, instead of failing.
+</li>
+<li>
+<code>sculptforge --bench</code> measures your machine.
+</li>
+</ul>
+<p>See <a href="performance.html">Performance and big meshes</a>.</p>
 <h2 id="version-042">Version 0.4.2<a class="anchor" href="#version-042" aria-label="Link to this section">#</a></h2>
 <h3 id="texture-painting-on-uv-maps">Texture painting on UV maps<a class="anchor" href="#texture-painting-on-uv-maps" aria-label="Link to this section">#</a></h3>
 <p>Paint into a texture instead of the vertices, so the colour detail comes from the texture (1K to 8K), not from the mesh: sharp decals, pores and freckles on a light game mesh.</p>

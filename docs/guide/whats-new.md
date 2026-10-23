@@ -72,6 +72,26 @@ See [Baking normal and displacement maps](baking.md).
 
 See [Quad retopology and detail projection](retopology.md).
 
+### Performance at tens of millions of polygons
+
+Sculpting a 33 million triangle model on a laptop now keeps up with the display: a medium brush costs about
+10 ms per dab instead of 400, and turning the view runs at 50-70 frames a second instead of 32.
+
+- **Brushes use every core**: every brush, mask and paint stroke, the normal updates and the picking structure.
+  Results are exactly the same as on one core.
+- **Strokes send the graphics card only what they changed.** Before, a dab with symmetry on a subdivided model
+  re-sent most of the mesh.
+- **Fast undo**: undo keeps only the vertices a stroke changed, and the first polypaint stroke on a model no
+  longer copies the whole mesh for undo.
+- **Less memory**: about 30% less per triangle for a sculpting mesh.
+- **Faster projects**: saving and opening big projects is faster, and projects over 4 GB save (ZIP64).
+- **Preferences > Performance**: Antialiasing (Off to 8x), **Fast Navigation** (big scenes drop antialiasing
+  while the view moves), Multithreading, what your last stroke cost per dab, and the memory the scene holds. A
+  SubTool too big for the graphics card is left out of the view with a message, instead of failing.
+- `sculptforge --bench` measures your machine.
+
+See [Performance and big meshes](performance.md).
+
 ## Version 0.4.2
 
 ### Texture painting on UV maps

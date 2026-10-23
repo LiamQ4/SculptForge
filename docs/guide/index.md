@@ -50,8 +50,9 @@ You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<
 ## Reference
 
 25. [Keyboard and mouse](shortcuts.md)
-26. [Troubleshooting and FAQ](troubleshooting.md)
-27. [Glossary](glossary.md)
+26. [Performance and big meshes](performance.md)
+27. [Troubleshooting and FAQ](troubleshooting.md)
+28. [Glossary](glossary.md)
 
 ## Getting help
 

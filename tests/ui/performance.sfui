@@ -79,3 +79,19 @@ type "##Command palette" "fast navigation"
 expect_text Fast Navigation
 shot command-palette
 key escape
+
+# The guide's picture: the lion bust divided twice (750k triangles), a stroke, the panel.
+drop ../../assets/demo/lion-head.glb
+run subdiv_divide
+run subdiv_divide
+expect_value triangles > 700000
+key f
+hold alt
+orbit 300 0
+hold none
+stroke 0.35 0.3 0.65 0.35
+expect_value last_stroke_dabs > 3
+click "Preferences##palette.preferences"
+expect_text dabs,
+shot performance-lion
+key escape

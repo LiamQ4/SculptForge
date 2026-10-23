@@ -54,6 +54,7 @@ for what is planned.
 | SelectLasso, SelectRect | **Tool > Visibility**: pick the shape, then <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag (add <kbd>Alt</kbd> to hide). See [Polygroups](polygroups.md) |
 | Solo | **Solo** on the right shelf or in **Tool > SubTool** |
 | Spotlight | Not yet |
+| Preferences > Performance, Preferences > Mem | **Preferences > Performance**: Antialiasing, Fast Navigation, Multithreading, the last stroke's cost and memory. See [Performance](performance.md) |
 | Store Config | **Store Config**, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> (**Preferences > Config**) |
 | Stroke (Dots, DragRect, Spray) | **Stroke** types Dots, DragRect, Spray, LazyMouse |
 | SubTool | **SubTool**: same idea, <kbd>Alt</kbd>+click to select. See [SubTools](subtools.md) |
@@ -104,6 +105,11 @@ for what is planned.
 | Normal map | A map of surface directions that makes a low-poly shade like the high-poly. Tangent-space maps are relative to the surface (for engines), object-space maps to the model. See [Baking](baking.md) |
 | Texel | One pixel of a texture. Texture painting paints texels; their 3D position on the model decides the brush falloff |
 | UV island | A piece of the surface flattened into the texture square. Auto UV cuts the model into islands along seams |
+| Antialiasing (AA) | Smoothing the 3D view's edges with several samples per pixel (Off, 2x, 4x, 8x in **Preferences > Performance**). See [Performance](performance.md) |
+| BVH | Bounding volume hierarchy: the structure SculptForge uses to find the surface under the cursor and the vertices under a brush. Its update time is shown per dab in **Preferences > Performance** |
+| Dab | One step of a brush along a stroke. Its cost per dab decides whether a stroke keeps up with the display (under 16 ms at 60 Hz). See [Performance](performance.md) |
+| Fast Navigation | Drawing scenes of 10 million triangles or more without antialiasing while the view moves, so it keeps up. See [Performance](performance.md) |
+| Multithreading | Brushes, normal and BVH updates and saving spread over every processor core; same results either way. See [Performance](performance.md) |
 
 ## See also
 
