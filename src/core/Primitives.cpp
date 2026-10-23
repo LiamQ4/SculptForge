@@ -68,6 +68,7 @@ Mesh makePlane(int resolution, float size) {
             uint32_t a = j * (n + 1) + i, b = a + 1, c = a + (n + 1), d = c + 1;
             m.triangles.push_back({a, c, b});
             m.triangles.push_back({b, c, d});
+            m.pairQuad(uint32_t(m.triangles.size() - 2), uint32_t(m.triangles.size() - 1));
         }
     }
     finalize(m);
@@ -94,6 +95,7 @@ Mesh makeCube(int resolution, float size) {
                 const uint32_t a = first + uint32_t(j * (n + 1) + i), b = a + 1, c = a + uint32_t(n + 1), d = c + 1;
                 raw.triangles.push_back({a, c, b}); // (v x u) = outward normal on every side
                 raw.triangles.push_back({b, c, d});
+                raw.pairQuad(uint32_t(raw.triangles.size() - 2), uint32_t(raw.triangles.size() - 1));
                 raw.polygroups.push_back(uint32_t(f + 1));
                 raw.polygroups.push_back(uint32_t(f + 1));
             }
@@ -204,6 +206,21 @@ Mesh loopSubdivide(const Mesh& src) {
             const glm::vec2 ua = src.uvs[ti * 3], ub = src.uvs[ti * 3 + 1], uc = src.uvs[ti * 3 + 2];
             const glm::vec2 uab = (ua + ub) * 0.5f, ubc = (ub + uc) * 0.5f, uca = (uc + ua) * 0.5f;
             out.uvs.insert(out.uvs.end(), {ua, uab, uca, ub, ubc, uab, uc, uca, ubc, uab, ubc, uca});
+        }
+    }
+    // A quad (t, u) splits into four quads: each child at a diagonal corner pairs with the partner's child at the
+    // same corner, and the child at the far corner with its own centre triangle (children 0..2 sit at corners
+    // x, y, z; child 3 is the centre).
+    if (src.quadPartners.size() == nt) {
+        for (uint32_t ti = 0; ti < nt; ++ti) {
+            const uint32_t u = src.quadPartners[ti];
+            const int e = u == Mesh::kNoQuad ? -1 : src.quadDiagonal(ti, u);
+            if (e < 0) continue;
+            const glm::uvec3& t = src.triangles[ti];
+            out.pairQuad(ti * 4 + uint32_t((e + 2) % 3), ti * 4 + 3);
+            for (int c : {e, (e + 1) % 3})
+                for (uint32_t k = 0; k < 3; ++k)
+                    if (src.triangles[u][k] == t[c]) out.pairQuad(ti * 4 + uint32_t(c), u * 4 + k);
         }
     }
     finalize(out);

@@ -104,7 +104,7 @@ action registry, the same source as the Controls window.
 | Action | Keys | What it does |
 |---|---|---|
 | Fullscreen | <kbd>F11</kbd> | Fill the screen with SculptForge (again: back to a window). |
-| Wireframe | <kbd>W</kbd> or <kbd>Shift</kbd>+<kbd>F</kbd> | Show the mesh's triangles over the surface (ZBrush PolyFrame). |
+| Wireframe | <kbd>W</kbd> or <kbd>Shift</kbd>+<kbd>F</kbd> | Show the mesh's polygons (quads and triangles) over the surface (ZBrush PolyFrame). |
 
 ### Script
 

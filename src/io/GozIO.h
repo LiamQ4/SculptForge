@@ -7,7 +7,8 @@
 //
 // .GoZ carries positions, tri/quad faces, per-face-corner UVs, polygroups,
 // mask and polypaint. Quads are triangulated on import as (a,b,c) + (a,c,d)
-// in consecutive triangles, and export pairs such triangles back into quads.
+// and kept paired (Mesh::quadPartners); export writes the pairs back as quads
+// (meshes without kept quads pair consecutive (a,b,c),(a,c,d) triangles).
 // ZBrush's own .ZTL/.ZPR files are proprietary and cannot be read.
 #pragma once
 
@@ -30,7 +31,7 @@ struct GozInfo {
 };
 
 struct GozWriteOptions {
-    bool quads = true; // pair (a,b,c)+(a,c,d) triangles back into quads
+    bool quads = true; // write quad pairs (Mesh::quadPartners) back as quads
 };
 
 // Parses an in-memory .GoZ file. Positions are converted from ZBrush's

@@ -131,12 +131,22 @@ void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::
     w.line("{");
     ++w.depth;
     writeExtent(w, base.bounds());
-    w.indent();
-    w.s += "int[] faceVertexCounts = [";
-    for (size_t i = 0; i < mesh.triangleCount(); ++i) w.s += i ? ", 3" : "3";
-    w.s += "]\n";
-    w.array("int[] faceVertexIndices", mesh.triangles, [&](const glm::uvec3& t) {
-        w.s += std::to_string(t.x) + ", " + std::to_string(t.y) + ", " + std::to_string(t.z);
+    // Quads where the mesh keeps them (Mesh::quadPartners), else triangles.
+    std::vector<glm::uvec4> faces;
+    std::vector<int> counts;
+    faces.reserve(mesh.triangleCount());
+    for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
+        glm::uvec4 f;
+        const int corners = mesh.exportFace(t, f);
+        if (corners == 0) continue;
+        faces.push_back(f);
+        counts.push_back(corners);
+    }
+    w.array("int[] faceVertexCounts", counts, [&](int n) { w.s += std::to_string(n); });
+    size_t face = 0;
+    w.array("int[] faceVertexIndices", faces, [&](const glm::uvec4& f) {
+        w.s += std::to_string(f.x) + ", " + std::to_string(f.y) + ", " + std::to_string(f.z);
+        if (counts[face++] == 4) w.s += ", " + std::to_string(f.w);
     });
     w.line("rel material:binding = <" + material + ">");
     w.array("normal3f[] normals", base.normals, [&](const glm::vec3& n) { w.vec3(n); });
@@ -747,6 +757,7 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
                     error = "Mesh " + p.path + " has fewer indices than its face counts need";
                     return false;
                 }
+                const uint32_t firstTri = uint32_t(m.triangles.size());
                 for (size_t k = 1; k + 1 < n; ++k) {
                     glm::uvec3 t(uint32_t(indexValue(indices->nums[cursor], pts.size())),
                                  uint32_t(indexValue(indices->nums[cursor + k], pts.size())),
@@ -758,8 +769,10 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
                     if (leftHanded) std::swap(t.y, t.z);
                     m.triangles.push_back(t + glm::uvec3(baseIndex));
                 }
+                if (n == 4) m.pairQuad(firstTri, firstTri + 1); // a quad stays paired (Mesh::quadPartners)
                 cursor += n;
             }
+            if (m.hasQuads()) m.quadPartners.resize(m.triangles.size(), Mesh::kNoQuad);
             for (auto& l : layers) l.delta.resize(m.positions.size(), glm::vec3(0.0f));
             // Blend shapes bound to this mesh.
             const Value* names = p.get("skel:blendShapes");

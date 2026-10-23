@@ -9,12 +9,32 @@ All of them work on the **active SubTool** and, except the LOD preview, are undo
 
 ## At a glance
 
-| Tool | Where | Triangles | Keeps sculpt layers | Keeps mask and polypaint | Keeps polygroups, hidden faces, UVs |
-|---|---|---|---|---|---|
-| Subdivide | **Tool > Geometry > Subdivide**, <kbd>Ctrl</kbd>+<kbd>D</kbd> | x4 per level | Yes | Yes (interpolated) | Yes |
-| Voxel Remesh | **Tool > Remesh > Voxel Remesh** | Set by resolution | Baked in | Yes (transferred) | No (reset) |
-| Decimate | **Tool > Geometry > Decimate** | Reduced | Yes | Yes | Yes |
-| LOD chain | **Tool > Export** | One level per ratio step | Yes, on every level | Yes | Yes |
+| Tool | Where | Triangles | Quads | Keeps sculpt layers | Keeps mask and polypaint | Keeps polygroups, hidden faces, UVs |
+|---|---|---|---|---|---|---|
+| Subdivide | **Tool > Geometry > Subdivide**, <kbd>Ctrl</kbd>+<kbd>D</kbd> | x4 per level | Each quad becomes four | Yes | Yes (interpolated) | Yes |
+| Voxel Remesh | **Tool > Remesh > Voxel Remesh** | Set by resolution | All quads (new ones) | Baked in | Yes (transferred) | No (reset) |
+| Decimate | **Tool > Geometry > Decimate** | Reduced | No, all triangles | Yes | Yes | Yes |
+| LOD chain | **Tool > Export** | One level per ratio step | LOD0 keeps them; lower levels are triangles | Yes, on every level | Yes | Yes |
+
+## Quads and triangles
+
+SculptForge sculpts on triangles, but it remembers which pairs of triangles were one quad. A model you open
+from ZBrush (GoZ), Blender or Maya (OBJ, FBX, PLY, USD) keeps its quads: **PolyF** draws them as quads, without
+the diagonal, and OBJ, FBX, PLY, USD and GoZ exports write them back as quads, corner for corner. Polygons with
+more than four sides are split into triangles. The new **Plane** and **Cube** are made of quads, and so is the
+result of a voxel remesh.
+
+Sculpting, masking, polypaint, sculpt layers, undo, SubTools and project files all keep the quads. Subdivide
+turns every quad into four quads. Two things turn quads into triangles:
+
+- **Decimate** (and the lower levels of a LOD chain) collapses edges, so its result is all triangles.
+- When the two halves of a quad end up in different polygroups, or one half is deleted, they show and export as
+  two triangles.
+
+glTF (`.glb`) and STL only hold triangles, so those exports always write triangles.
+
+> **ZBrush:** This keeps the quads you bring in; it doesn't make new ones from a triangle mesh. Quad retopology
+> (ZRemesher) is on the roadmap.
 
 ## Subdivide
 
@@ -23,6 +43,7 @@ multiplies the triangle count by four and rounds off the shape slightly, like ZB
 
 - Sculpt layers are subdivided with the mesh, so blend shapes keep working.
 - Mask, polypaint and UVs are interpolated; polygroups and hidden faces carry over.
+- Each quad becomes four quads; triangles become four triangles.
 - SculptForge refuses to subdivide past 50 million triangles.
 
 > **Not yet:** multiresolution sculpting. Subdivide replaces the mesh with a denser one; there are no subdivision
@@ -54,12 +75,14 @@ What happens to your data:
 - Polygroups, hidden faces and UVs are reset (everything becomes visible, one polygroup, no UVs). Hidden parts are
   remeshed too.
 - Separate pieces that don't touch stay separate pieces; overlapping ones are merged.
+- The new surface is made of even quads (the original's quads are rebuilt, not kept).
 
 To remesh several SubTools into one, first combine them with **Merge visible...** or **Merge down...** in
 [SubTools](subtools.md#merge-subtools).
 
-> **ZBrush:** There is no Project option, Groups-aware remesh or Blur slider yet, and the remesh produces
-> triangles, not quads. For quad retopology (ZRemesher) see the roadmap: it is not available yet.
+> **ZBrush:** There is no Project option, Groups-aware remesh or Blur slider yet. Like DynaMesh, the remesh
+> produces an even grid of quads, not flowing edge loops. For quad retopology (ZRemesher) see the roadmap: it is
+> not available yet.
 
 ## Decimate
 
@@ -69,7 +92,7 @@ of triangles to keep (0.05 to 0.95, default 0.50).
 
 Decimation keeps open borders in place, and because it only removes vertices, every remaining vertex keeps its
 exact sculpt layer offsets, mask and polypaint. Polygroups, hidden flags and UVs survive on the remaining
-triangles.
+triangles. The result is all triangles: quads are not kept.
 
 Use it to make a lighter version of a finished sculpt for export, 3D printing or a review, or to bring a dense
 scan down to something you can work with.

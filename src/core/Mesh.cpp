@@ -42,12 +42,79 @@ std::vector<uint8_t>& Mesh::ensureHidden() {
     return hidden;
 }
 
+std::vector<uint32_t>& Mesh::ensureQuadPartners() {
+    if (quadPartners.size() != triangles.size()) quadPartners.assign(triangles.size(), kNoQuad);
+    return quadPartners;
+}
+
+void Mesh::pairQuad(uint32_t t, uint32_t u) {
+    // Grows (rather than resets) the array, so pairs can be recorded while triangles are being added.
+    if (quadPartners.size() < triangles.size()) quadPartners.resize(triangles.size(), kNoQuad);
+    quadPartners[t] = u;
+    quadPartners[u] = t;
+}
+
+int Mesh::quadDiagonal(uint32_t t, uint32_t u) const {
+    if (t == u || t >= triangles.size() || u >= triangles.size()) return -1;
+    const glm::uvec3& a = triangles[t];
+    const glm::uvec3& b = triangles[u];
+    if (a.x == a.y || a.y == a.z || a.x == a.z || b.x == b.y || b.y == b.z || b.x == b.z) return -1;
+    for (int e = 0; e < 3; ++e)
+        for (int k = 0; k < 3; ++k)
+            if (b[k] == a[(e + 1) % 3] && b[(k + 1) % 3] == a[e]) {
+                const uint32_t far = b[(k + 2) % 3];
+                return far == a[(e + 2) % 3] ? -1 : e; // the same triangle twice is no quad
+            }
+    return -1;
+}
+
+int Mesh::exportFace(uint32_t t, glm::uvec4& face) const {
+    const glm::uvec3& a = triangles[t];
+    const uint32_t u = quadPartnerAt(t);
+    const int e = u == kNoQuad ? -1 : quadDiagonal(t, u);
+    if (e < 0) {
+        face = glm::uvec4(a, kNoQuad);
+        return 3;
+    }
+    if (u < t) return 0;
+    const glm::uvec3& b = triangles[u];
+    uint32_t far = b.x;
+    for (int k = 0; k < 3; ++k)
+        if (b[k] != a[e] && b[k] != a[(e + 1) % 3]) far = b[k];
+    face = glm::uvec4(a[(e + 1) % 3], a[(e + 2) % 3], a[e], far);
+    return 4;
+}
+
+size_t Mesh::quadCount() const {
+    size_t n = 0;
+    for (uint32_t t = 0; t < quadPartners.size(); ++t) {
+        const uint32_t u = quadPartnerAt(t);
+        n += u != kNoQuad && u > t;
+    }
+    return n;
+}
+
 void Mesh::sanitizeAttributes() {
     if (!mask.empty() && mask.size() != positions.size()) clearMask();
     if (!colors.empty() && colors.size() != positions.size()) clearColors();
     if (!polygroups.empty() && polygroups.size() != triangles.size()) clearPolygroups();
     if (!hidden.empty() && hidden.size() != triangles.size()) clearHidden();
     if (!uvs.empty() && uvs.size() != triangles.size() * 3) std::vector<glm::vec2>().swap(uvs);
+    if (!quadPartners.empty() && quadPartners.size() != triangles.size()) clearQuads();
+    // Quad pairs must be mutual and share an edge: unpair anything an edit or a malformed file left behind.
+    bool anyQuad = false;
+    for (uint32_t t = 0; t < quadPartners.size(); ++t) {
+        const uint32_t u = quadPartners[t];
+        if (u == kNoQuad) continue;
+        if (u >= quadPartners.size() || quadPartners[u] != t || quadDiagonal(t, u) < 0) quadPartners[t] = kNoQuad;
+        else anyQuad = true;
+    }
+    // A triangle unpaired above may still be named by its former partner, visited earlier.
+    for (uint32_t t = 0; t < quadPartners.size(); ++t) {
+        const uint32_t u = quadPartners[t];
+        if (u != kNoQuad && quadPartners[u] != t) quadPartners[t] = kNoQuad;
+    }
+    if (!anyQuad) clearQuads();
 }
 
 void Mesh::rebuildTopology() {
@@ -266,15 +333,18 @@ Mesh weldImported(const Mesh& m, const std::vector<SculptLayer>& layers) {
     }
     const size_t nt = m.triangles.size();
     const bool tGroups = m.polygroups.size() == nt, tHidden = m.hidden.size() == nt, tUvs = m.uvs.size() == nt * 3;
+    std::vector<uint32_t> newTriangle(m.hasQuads() ? nt : 0, Mesh::kNoQuad);
     for (size_t ti = 0; ti < nt; ++ti) {
         const auto& t = m.triangles[ti];
         glm::uvec3 nt3(remap[t.x], remap[t.y], remap[t.z]);
         if (nt3.x == nt3.y || nt3.y == nt3.z || nt3.x == nt3.z) continue;
+        if (!newTriangle.empty()) newTriangle[ti] = uint32_t(welded.triangles.size());
         welded.triangles.push_back(nt3);
         if (tGroups) welded.polygroups.push_back(m.polygroups[ti]);
         if (tHidden) welded.hidden.push_back(m.hidden[ti]);
         if (tUvs) welded.uvs.insert(welded.uvs.end(), m.uvs.begin() + std::ptrdiff_t(ti * 3), m.uvs.begin() + std::ptrdiff_t(ti * 3 + 3));
     }
+    if (!newTriangle.empty()) remapQuads(m, newTriangle, welded);
     if (!layers.empty()) {
         welded.base = welded.positions;
         for (const auto& src : layers) {
@@ -288,6 +358,32 @@ Mesh weldImported(const Mesh& m, const std::vector<SculptLayer>& layers) {
     welded.rebuildTopology();
     welded.recomputeAllNormals();
     return welded;
+}
+
+void remapQuads(const Mesh& src, const std::vector<uint32_t>& newIndex, Mesh& dst) {
+    const size_t nt = src.triangleCount();
+    if (src.quadPartners.size() != nt || newIndex.size() != nt) return;
+    std::vector<uint32_t> partners(dst.triangleCount(), Mesh::kNoQuad);
+    bool any = false;
+    for (size_t t = 0; t < nt; ++t) {
+        const uint32_t u = src.quadPartners[t], nt0 = newIndex[t];
+        if (u >= nt || nt0 >= partners.size() || newIndex[u] >= partners.size()) continue;
+        partners[nt0] = newIndex[u];
+        any = true;
+    }
+    if (any) dst.quadPartners = std::move(partners);
+    else dst.clearQuads();
+}
+
+void appendQuads(Mesh& dst, size_t firstTriangle, const Mesh& src) {
+    const size_t st = src.triangleCount();
+    const bool srcQuads = st > 0 && src.quadPartners.size() == st;
+    if (!srcQuads && dst.quadPartners.empty()) return;
+    dst.quadPartners.resize(firstTriangle, Mesh::kNoQuad);
+    for (size_t t = 0; t < st; ++t) {
+        const uint32_t u = srcQuads ? src.quadPartners[t] : Mesh::kNoQuad;
+        dst.quadPartners.push_back(u == Mesh::kNoQuad ? u : uint32_t(u + firstTriangle));
+    }
 }
 
 glm::vec3 srgbToLinear(const glm::vec3& c) {

@@ -10,6 +10,7 @@
 | `polygroups` | `std::vector<uint32_t>`   | triangles      | every triangle in group 0 |
 | `hidden`     | `std::vector<uint8_t>`    | triangles      | all visible          |
 | `uvs`        | `std::vector<glm::vec2>`  | 3 x triangles  | no UVs (corner order = triangle order) |
+| `quadPartners` | `std::vector<uint32_t>` | triangles      | no quads (`Mesh::kNoQuad` = a plain triangle) |
 
 - Mask: 0 = free, 1 = fully masked. Colors: **linear** RGB 0..1 (OBJ/PLY convert from sRGB via
   `srgbToLinear`/`linearToSrgb`; glTF COLOR_0 is already linear).
@@ -17,6 +18,19 @@
   (all adjacent triangles hidden); safe on empty attributes. Write after `ensureMask()` /
   `ensureColors()` / `ensurePolygroups()` / `ensureHidden()`; `clearMask()` etc. free them again.
 - `rebuildTopology()` drops wrongly sized attributes (`sanitizeAttributes()`): fill them first.
+
+## Quads
+Meshes are triangles, but `quadPartners[t]` names the triangle `t` forms a quad with (an imported quad split in
+two, a Plane/Cube cell, a voxel-remesh cell). Pairs are mutual, share one edge wound oppositely, and
+`sanitizeAttributes()` unpairs anything else, so a topology change can never leave a stale pair (at worst it
+loses some). Record pairs with `pairQuad(t, u)` after pushing both triangles (it grows the array; resize it to the
+triangle count before `rebuildTopology()` if triangles follow). Read with `quadPartnerAt(t)`, which also
+requires both halves to share a polygroup: what PolyF shows as a quad and what exporters write as one.
+- Display: `Renderer::uploadFaces` builds GL_LINES edges without the diagonals for meshes with quads.
+- Export: `exportFace(t, face)` gives 4 corners (in winding order; an `(a,b,c)+(a,c,d)` split gives `(a,b,c,d)`),
+  3, or 0 for the second half of a quad. OBJ, FBX, PLY, USD and GoZ use it; glTF and STL stay triangles.
+- Building a mesh from some triangles of another: `remapQuads(src, newIndex, dst)`; appending:
+  `appendQuads(dst, firstTriangle, src)`.
 
 ## Telling the renderer
 - Vertex attributes (mask, colors): `mesh.markDirty(v)` per vertex or `markAllDirty()`.
@@ -26,13 +40,16 @@
   Hidden triangles are left out of the index buffer. Toggles live in the View menu.
 
 ## Preservation through topology changes
-| Operation | mask / colors | polygroups / hidden | uvs |
-|-----------|---------------|---------------------|-----|
-| `loopSubdivide` (Primitives.cpp) | linear interpolation | children inherit | corner midpoints |
-| `decimate` / `generateLods` (Decimate.cpp) | exact (vertices are a subset) | surviving faces keep theirs | follow kept vertex (approximate at seams) |
-| `voxelRemesh` (Voxel.cpp) | nearest original vertex (`transferVertexAttributes`) | **reset** (visible, group 0) | dropped |
-| `weldImported` (Mesh.cpp) | first vertex of each welded group | per kept triangle | per kept triangle |
-| primitives, image relief/inflate | empty | empty | empty |
+| Operation | mask / colors | polygroups / hidden | uvs | quadPartners |
+|-----------|---------------|---------------------|-----|--------------|
+| `loopSubdivide` (Primitives.cpp) | linear interpolation | children inherit | corner midpoints | each quad -> 4 quads |
+| `decimate` / `generateLods` (Decimate.cpp) | exact (vertices are a subset) | surviving faces keep theirs | follow kept vertex (approximate at seams) | dropped |
+| `voxelRemesh` (Voxel.cpp) | nearest original vertex (`transferVertexAttributes`) | **reset** (visible, group 0) | dropped | new: every surface-nets quad |
+| `weldImported` (Mesh.cpp) | first vertex of each welded group | per kept triangle | per kept triangle | pairs of kept triangles |
+| `extractTriangles` / split / delete hidden (Polygroups.cpp) | per kept vertex | per kept triangle | per kept triangle | pairs with both halves kept |
+| `mergeMeshes` (SubTools.cpp) | concatenated | concatenated | concatenated | concatenated (ids shifted) |
+| plane / cube primitives | empty | cube: one group per side | empty | every grid cell |
+| icosphere, image relief/inflate | empty | empty | empty | empty |
 
 New topology operations must do the same (`transferVertexAttributes(src, dst)` for rebuilt surfaces).
 

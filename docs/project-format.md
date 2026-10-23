@@ -25,6 +25,7 @@ read by `loadProject` (src/core/Project.cpp). Commands: `save_project path=...`,
 | `mesh.mask` / `colors` | subtools/i/mesh/mask.bin, colors.bin | f32 x1 / x3 per vertex (linear RGB) |
 | `mesh.polygroups` / `hidden` | subtools/i/mesh/polygroups.bin, hidden.bin | u32 / u8 per triangle |
 | `mesh.uvs` | subtools/i/mesh/uvs.bin | f32 x2 per triangle corner |
+| `mesh.quad_partners` | subtools/i/mesh/quad_partners.bin | u32 per triangle: the triangle it forms a quad with, 0xFFFFFFFF = none. Readers drop pairs that aren't mutual or don't share an edge. Added without a version bump: older readers ignore it and load triangles |
 | `layers[k].delta` | subtools/i/layers/<k>.bin | f32 x3 per vertex, plus `name`, `weight` |
 
 | Manifest key (top level) | File | Layout |

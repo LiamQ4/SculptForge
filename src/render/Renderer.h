@@ -106,6 +106,7 @@ private:
         bool fresh = true; // nothing uploaded yet
         std::vector<float> curvature;
         GLsizei indexCount = 0;
+        GLsizei lineCount = 0; // wireframe edge indices after the triangles (meshes with quads; 0 = draw triangles)
         size_t vertexCapacity = 0;
     };
     MeshSlot& slot(uint32_t id); // created on first use
@@ -122,6 +123,7 @@ private:
     std::vector<DrawItem> drawList_;      // visible meshes, in scene order
     std::vector<glm::uvec3> visibleTris_; // scratch for uploadFaces
     std::vector<uint32_t> visibleGroups_;
+    std::vector<uint32_t> wireLines_; // scratch for uploadFaces: wireframe edges of meshes with quads
     std::vector<GLuint> matcapTextures_; // one per built-in matcap (core/Matcap.h)
 };
 

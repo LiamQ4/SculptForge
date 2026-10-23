@@ -286,6 +286,7 @@ bool parseGoz(std::span<const uint8_t> data, Mesh& out, std::string& error, GozI
         if (quad) ++gi.quads;
         else ++gi.triangles;
         const int tris[2][3] = {{0, 1, 2}, {0, 2, 3}};
+        const size_t firstTri = m.triangles.size();
         for (int t = 0; t < (quad ? 2 : 1); ++t) {
             glm::uvec3 tri(f.v[tris[t][0]], f.v[tris[t][1]], f.v[tris[t][2]]);
             if (tri.x == tri.y || tri.y == tri.z || tri.x == tri.z) continue;
@@ -294,7 +295,9 @@ bool parseGoz(std::span<const uint8_t> data, Mesh& out, std::string& error, GozI
             if (haveUvs)
                 for (int c = 0; c < 3; ++c) m.uvs.push_back(faceUvs[fi * 4 + size_t(tris[t][c])]);
         }
+        if (m.triangles.size() == firstTri + 2) m.pairQuad(uint32_t(firstTri), uint32_t(firstTri + 1));
     }
+    if (m.hasQuads()) m.quadPartners.resize(m.triangles.size(), Mesh::kNoQuad);
     if (m.triangles.empty()) {
         error = "GoZ file has no valid faces";
         return false;
@@ -315,7 +318,7 @@ std::vector<uint8_t> writeGoz(const Mesh& mesh, const std::string& name, const G
     const bool uvs = mesh.uvs.size() == nt * 3;
     const bool groups = mesh.polygroups.size() == nt;
 
-    // Faces (and their 4 UV corners), re-pairing quads split as (a,b,c),(a,c,d).
+    // Faces (and their 4 UV corners), quads written back as quads.
     std::vector<Face> faces;
     std::vector<glm::vec2> faceUvs;
     std::vector<uint16_t> faceGroups;
@@ -333,11 +336,40 @@ std::vector<uint8_t> writeGoz(const Mesh& mesh, const std::string& name, const G
         if (groupIds.empty()) return uint16_t(g);
         return uint16_t(size_t(std::lower_bound(groupIds.begin(), groupIds.end(), g) - groupIds.begin()) & 0xffffu);
     };
+    // Meshes that keep their quads (Mesh::quadPartners) write exactly those; others (older projects) fall back
+    // to pairing consecutive (a,b,c),(a,c,d) triangles.
+    const bool keptQuads = mesh.hasQuads();
+    auto uvOf = [&](uint32_t tri, uint32_t v) {
+        const glm::uvec3& tv = mesh.triangles[tri];
+        return mesh.uvs[tri * 3 + (tv.x == v ? 0 : tv.y == v ? 1 : 2)];
+    };
+    // A kept quad starting at `t` (exportFace(t) == 4) is written as one face unless a UV seam runs along its
+    // diagonal (GoZ has one UV per face corner); then both halves are written as triangles.
+    auto quadUvsMatch = [&](uint32_t t, const glm::uvec4& q) {
+        if (!uvs) return true;
+        const uint32_t u = mesh.quadPartnerAt(t);
+        return uvOf(u, q.x) == uvOf(t, q.x) && uvOf(u, q.z) == uvOf(t, q.z);
+    };
     for (size_t t = 0; t < nt; ++t) {
         const glm::uvec3& a = mesh.triangles[t];
         const glm::vec2* ua = uvs ? &mesh.uvs[t * 3] : nullptr;
         bool paired = false;
-        if (options.quads && t + 1 < nt) {
+        if (options.quads && keptQuads) {
+            glm::uvec4 q;
+            const int corners = mesh.exportFace(uint32_t(t), q);
+            if (corners == 0) {
+                const uint32_t first = mesh.quadPartnerAt(uint32_t(t));
+                mesh.exportFace(first, q);
+                if (quadUvsMatch(first, q)) continue; // written with its partner
+            } else if (corners == 4 && quadUvsMatch(uint32_t(t), q)) {
+                paired = true;
+                faces.push_back({{q.x, q.y, q.z, q.w}});
+                if (uvs) {
+                    const uint32_t u = mesh.quadPartnerAt(uint32_t(t));
+                    faceUvs.insert(faceUvs.end(), {uvOf(uint32_t(t), q.x), uvOf(uint32_t(t), q.y), uvOf(uint32_t(t), q.z), uvOf(u, q.w)});
+                }
+            }
+        } else if (options.quads && t + 1 < nt) {
             const glm::uvec3& b = mesh.triangles[t + 1];
             const glm::vec2* ub = uvs ? &mesh.uvs[(t + 1) * 3] : nullptr;
             paired = b.x == a.x && b.y == a.z && b.z != a.y && b.z != a.x && b.z != a.z &&
@@ -353,7 +385,7 @@ std::vector<uint8_t> writeGoz(const Mesh& mesh, const std::string& name, const G
             if (uvs) faceUvs.insert(faceUvs.end(), {ua[0], ua[1], ua[2], glm::vec2(0.0f, 0.0f)}); // GoB pads with (0, 1) in GoZ space
         }
         if (groups) faceGroups.push_back(gozGroup(mesh.polygroups[t]));
-        if (paired) ++t;
+        if (paired && !keptQuads) ++t;
     }
 
     Writer w;
@@ -663,6 +695,7 @@ void appendMesh(Mesh& dst, const Mesh& src) {
     const uint32_t off = uint32_t(dst.vertexCount());
     const size_t dv = dst.vertexCount(), dt = dst.triangleCount();
     const size_t sv = src.vertexCount(), st = src.triangleCount();
+    appendQuads(dst, dt, src);
     dst.positions.insert(dst.positions.end(), src.positions.begin(), src.positions.end());
     for (const auto& t : src.triangles) dst.triangles.push_back(t + glm::uvec3(off));
     appendAttribute(dst.mask, dv, src.mask, sv, 0.0f);

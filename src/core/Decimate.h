@@ -13,7 +13,8 @@ namespace sf {
 // Collapses keep one endpoint, so output vertices are a subset of the input's
 // and sculpt layers / blend shapes, mask and colours carry over exactly;
 // surviving triangles keep their polygroup and hidden flag, and corner UVs
-// follow the kept vertex.
+// follow the kept vertex. A decimated result is all triangles (quad pairs are
+// dropped).
 Mesh decimate(const Mesh& src, size_t targetTriangles);
 
 // LOD chain: lods[0] is a copy of `src`, each following level has

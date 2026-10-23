@@ -13,7 +13,8 @@ size_t UndoRecord::approxBytes() const {
                                         8 * sizeof(uint32_t)) +
                  mesh->triangleCount() * (sizeof(glm::uvec3) + sizeof(glm::vec3) + 4 * sizeof(uint32_t)) +
                  mesh->mask.size() * sizeof(float) + mesh->colors.size() * sizeof(glm::vec3) +
-                 mesh->polygroups.size() * sizeof(uint32_t) + mesh->hidden.size() + mesh->uvs.size() * sizeof(glm::vec2);
+                 mesh->polygroups.size() * sizeof(uint32_t) + mesh->hidden.size() + mesh->uvs.size() * sizeof(glm::vec2) +
+                 mesh->quadPartners.size() * sizeof(uint32_t);
     return bytes;
 }
 

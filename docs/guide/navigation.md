@@ -64,8 +64,9 @@ unusual scale.
 
 These live on the right shelf and in the **Render** palette:
 
-- **PolyF** (<kbd>W</kbd> or <kbd>Shift</kbd>+<kbd>F</kbd>): shows the triangles of the active SubTool over
-  the surface, ZBrush's PolyFrame. Useful for judging mesh density before you subdivide or remesh.
+- **PolyF** (<kbd>W</kbd> or <kbd>Shift</kbd>+<kbd>F</kbd>): shows the polygons of the active SubTool over
+  the surface, ZBrush's PolyFrame. Quads show as quads (see [Quads and triangles](geometry.md#quads-and-triangles)).
+  Useful for judging mesh density before you subdivide or remesh.
 - **Groups**: colours each polygroup.
 - **Mask**: darkens masked areas.
 - **Paint**: shows polypaint colours (off shows the plain material).

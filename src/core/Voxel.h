@@ -39,11 +39,11 @@ bool makeVoxelGrid(const AABB& box, int resolution, int padding, VoxelGrid& grid
 std::vector<uint8_t> solidifyShell(const VoxelGrid& shell, float threshold, int closeRadius, bool keepAllParts = false);
 
 // Smooth surface of a solid occupancy grid (blurred, iso 0.5, surface nets),
-// followed by `smoothIterations` of Taubin smoothing. Triangles face outwards.
+// followed by `smoothIterations` of Taubin smoothing. Triangles face outwards, in quad pairs.
 Mesh meshFromSolid(const VoxelGrid& grid, const std::vector<uint8_t>& solid, int smoothIterations);
 
 // Surface where `field` crosses `iso` (samples above it are inside), surface nets,
-// then `smoothIterations` of Taubin smoothing. Triangles face outwards.
+// then `smoothIterations` of Taubin smoothing. Triangles face outwards, in quad pairs (Mesh::quadPartners).
 Mesh meshFromField(const VoxelGrid& grid, const std::vector<float>& field, float iso, int smoothIterations);
 
 // Signed distance in cells from each sample to `mesh` (positive inside, by `solid`; exact within `band` cells of the
@@ -56,7 +56,8 @@ void rasterizeMeshShell(const Mesh& mesh, VoxelGrid& grid);
 // Rebuilds the mesh as an even, watertight surface (`resolution` cells across
 // its longest side). Overlapping parts are merged. Sculpt layers are baked.
 // Mask and colours transfer from the nearest original vertex; polygroups,
-// hidden flags and UVs reset (all visible, group 0, no UVs).
+// hidden flags and UVs reset (all visible, group 0, no UVs); the original's
+// quads are dropped and the result is all quads of its own.
 Mesh voxelRemesh(const Mesh& mesh, int resolution, std::string* error = nullptr);
 
 } // namespace sf

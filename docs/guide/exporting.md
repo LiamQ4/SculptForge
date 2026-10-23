@@ -14,16 +14,20 @@ or mark it saved, so your next <kbd>Ctrl</kbd>+<kbd>S</kbd> still saves the proj
 |---|---|---|---|
 | glTF binary (`.glb`) | **File > Export GLB...** (<kbd>Ctrl</kbd>+<kbd>E</kbd>) | One node per SubTool, sculpt layers as morph targets, polypaint as vertex colour | Games, Blender, three.js, web viewers |
 | LOD chain (`.glb` per level) | **File > Export LOD Chain...** | As GLB, one file per level, blend shapes on every level | Game engines |
-| OpenUSD (`.usda`, `.usdz`) | **File > Export USD / USDZ...** | One Mesh prim per SubTool, layers as UsdSkel blend shapes, polypaint as `displayColor`, loaded splats | Film pipelines, Omniverse, Apple AR Quick Look |
-| FBX for Unreal (`.fbx`) | **File > Export FBX for Unreal...** | Unreal naming and scale, LOD group, layers as blend shapes | Unreal Engine (by hand) |
-| Wavefront OBJ (`.obj`) | **File > Export OBJ...** | One `o` object per SubTool, polygroups as `g` groups, polypaint as vertex colour. Layers are baked into the current blend | Any 3D app, ZBrush |
-| ZBrush GoZ (`.GoZ`) | **File > ZBrush (GoZ) > Export GoZ...** | Polygroups, mask, polypaint, UVs, quads that came from ZBrush | ZBrush |
-| STL (`.stl`) | **File > ZBrush (GoZ) > Export STL...** | Geometry only, visible SubTools merged | 3D printing |
-| PLY (`.ply`) | `export_ply` command | Geometry and polypaint, visible SubTools merged | Scan tools, MeshLab, Blender |
-| FBX (general) | `export_fbx` command | One model per SubTool, blend shapes, optional LOD groups | Other FBX pipelines |
+| OpenUSD (`.usda`, `.usdz`) | **File > Export USD / USDZ...** | One Mesh prim per SubTool, quads, layers as UsdSkel blend shapes, polypaint as `displayColor`, loaded splats | Film pipelines, Omniverse, Apple AR Quick Look |
+| FBX for Unreal (`.fbx`) | **File > Export FBX for Unreal...** | Unreal naming and scale, quads, LOD group, layers as blend shapes | Unreal Engine (by hand) |
+| Wavefront OBJ (`.obj`) | **File > Export OBJ...** | One `o` object per SubTool, quads, polygroups as `g` groups, polypaint as vertex colour. Layers are baked into the current blend | Any 3D app, ZBrush |
+| ZBrush GoZ (`.GoZ`) | **File > ZBrush (GoZ) > Export GoZ...** | Quads, polygroups, mask, polypaint, UVs | ZBrush |
+| STL (`.stl`) | **File > ZBrush (GoZ) > Export STL...** | Geometry only (triangles), visible SubTools merged | 3D printing |
+| PLY (`.ply`) | `export_ply` command | Geometry, quads and polypaint, visible SubTools merged | Scan tools, MeshLab, Blender |
+| FBX (general) | `export_fbx` command | One model per SubTool, quads, blend shapes, optional LOD groups | Other FBX pipelines |
 
 The GLB, LOD chain and FBX for Unreal exports are also in the **Tool** palette under **Export**, together with
 the LOD and Unreal settings.
+
+"Quads" means the quads the model came in with (or got from Plane, Cube, Subdivide or Voxel Remesh) are written
+as quads, the rest as triangles; see [Quads and triangles](geometry.md#quads-and-triangles). glTF and STL can
+only hold triangles.
 
 ![The Tool > Export sub-palette with a generated LOD chain and the Unreal Engine settings](images/export.jpg)
 
@@ -167,8 +171,8 @@ ZBrush doesn't run on Linux, so there the bridge needs a custom folder; GoZ file
 3. SculptForge receives it automatically and updates the matching SubTools. Each update is an undo step on
    that SubTool.
 
-GoZ keeps polygroups, mask, polypaint and UVs. Quads from ZBrush are split into triangle pairs for sculpting
-and rebuilt into quads when you send the mesh back. GoZ has no hidden-face flag, so hidden faces are sent like
+GoZ keeps polygroups, mask, polypaint and UVs. Quads from ZBrush stay quads: PolyF shows them as quads, and
+they go back to ZBrush as the same quads. GoZ has no hidden-face flag, so hidden faces are sent like
 any others.
 
 > **ZBrush:** SculptForge cannot open ZBrush's own `.ZTL` and `.ZPR` files (they are proprietary and

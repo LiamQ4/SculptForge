@@ -217,7 +217,7 @@ void App::initActions() {
         nullptr, [this] { return symmetry_.x; }, nullptr, "Mirror strokes across the X axis (left / right).");
     add("view.wireframe", "Wireframe", "Render", "W / Shift+F", [this] { renderSettings_.wireframe = !renderSettings_.wireframe; },
         ICON_LC_GRID_3X3, nullptr, [this] { return renderSettings_.wireframe; }, nullptr,
-        "Show the mesh's triangles over the surface (ZBrush PolyFrame).");
+        "Show the mesh's polygons (quads and triangles) over the surface (ZBrush PolyFrame).");
     add("view.frame", "Frame model", "Transform", "F", [this] { camera_.frame(sceneBounds()); }, ICON_LC_SCAN, nullptr, nullptr,
         nullptr, "Fit the whole model in the view.");
     add("color.pick", "Pick colour", "Color", "C", [this] { pickColorUnderCursor(); }, ICON_LC_PIPETTE, nullptr, nullptr, nullptr,
