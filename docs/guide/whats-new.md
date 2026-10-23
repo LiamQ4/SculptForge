@@ -44,6 +44,24 @@ back to Draw (also on the top shelf and in the **Transform** palette).
 <kbd>W</kbd> no longer toggles the wireframe: use <kbd>Shift</kbd>+<kbd>F</kbd> (as in ZBrush) or **PolyF** on the
 right shelf. See [Moving, rotating and posing](gizmo.md).
 
+### Normal, displacement and AO map baking
+
+Bake the detail of a high-poly sculpt into maps on a low-poly's UVs, for game engines and renderers:
+**Tool > Bake**.
+
+- **Six maps in one go**: tangent-space normal, object-space normal, displacement (16-bit PNG with mid-grey =
+  0, plus a 32-bit EXR in world units), ambient occlusion, cavity and colour (polypaint or texture).
+- **Right in every engine.** Tangent-space maps use MikkTSpace tangents, as Blender, Unreal, Unity and Godot
+  do; pick the OpenGL or DirectX green convention.
+- **Check it on the model.** The low-poly shows its baked normal map in the viewport as soon as the bake ends,
+  next to the high-poly.
+- **ZBrush-style controls**: source SubTool, 1K-8K, anti-aliasing, automatic or manual front and rear ray
+  distances, padding around UV islands. Bakes run in the background on every core, with progress and Cancel.
+- **Send to Unreal** brings the normal map along, set up as a normal map. The `bake` command does it all from
+  scripts.
+
+See [Baking normal and displacement maps](baking.md).
+
 ## Version 0.4.2
 
 ### Texture painting on UV maps

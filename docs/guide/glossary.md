@@ -27,6 +27,7 @@ for what is planned.
 | Group Masked | **Tool > Polygroups > From mask** (`polygroup_from_mask`) |
 | Group Visible | **Tool > Polygroups > Merge visible** (`polygroup_merge_visible`) |
 | Groups By Normals | **Tool > Polygroups > By normals** with an angle (`polygroup_auto_by_normals`) |
+| Bake, Multi Map Exporter (normal / displacement / AO maps) | **Tool > Bake** (`bake`): tangent and object-space normal, displacement, AO, cavity and colour maps from a high-poly SubTool onto a low-poly's UVs. See [Baking](baking.md) |
 | Layers (sculpt layers) | **Tool > Layers**: sculpt layers with weights, exported as blend shapes. See [Layers](layers.md) |
 | LazyMouse | **LazyMouse** stroke type (Stroke palette) |
 | LightBox | **LightBox**, <kbd>,</kbd> (comma) |
@@ -92,7 +93,12 @@ for what is planned.
 | Shelves, palettes, trays | The interface around the canvas: shelves hold the most-used controls, palettes hold everything, trays hold pinned palettes. See [The interface](interface.md) |
 | Studio brush folder | A shared, read-only brush folder for a team (`SCULPTFORGE_BRUSH_PATH`). See [For studios](studios.md) |
 | Paint target (Vertex / Texture) | Where painting goes on a SubTool that has a texture: its vertices (polypaint) or its texture. Top shelf, next to **Rgb**. See [Texture painting](texture-painting.md#vertex-or-texture) |
-| Padding (gutter) | The few texels around each UV island that texture painting also fills, so seams don't show. See [Texture painting](texture-painting.md) |
+| Padding (gutter) | The few texels around each UV island that texture painting and baking also fill, so seams don't show. See [Texture painting](texture-painting.md) and [Baking](baking.md) |
+| Bake | Capture a high-poly's detail as images (maps) on a low-poly's UVs. See [Baking](baking.md) |
+| Cage (front / rear distance) | How far in front of and behind the low-poly the bake's rays look for the high-poly. See [Baking](baking.md#how-the-bake-works) |
+| Displacement map | A map of how far the high-poly lies from the low-poly along its normal; mid-grey = 0. See [Baking](baking.md#displacement-mid-grey-is-zero) |
+| MikkTSpace | The standard way of computing tangents that game engines share, so tangent-space normal maps look the same everywhere. See [Baking](baking.md) |
+| Normal map | A map of surface directions that makes a low-poly shade like the high-poly. Tangent-space maps are relative to the surface (for engines), object-space maps to the model. See [Baking](baking.md) |
 | Texel | One pixel of a texture. Texture painting paints texels; their 3D position on the model decides the brush falloff |
 | UV island | A piece of the surface flattened into the texture square. Auto UV cuts the model into islands along seams |
 

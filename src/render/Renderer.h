@@ -27,12 +27,23 @@ struct RenderSettings {
     bool dimInactive = true;   // SubTools other than the active one render slightly darker (ZBrush style)
 };
 
+// A baked tangent-space normal map to preview on a mesh (core/Bake.h): RGB8 rows bottom-up, with the
+// MikkTSpace tangent + sign of every triangle corner it was baked against. `serial` changes with the data.
+struct NormalMapView {
+    uint64_t serial = 0;
+    int width = 0, height = 0;
+    const std::vector<uint8_t>* rgb = nullptr;
+    const std::vector<glm::vec4>* tangents = nullptr;
+    bool flipGreen = false; // DirectX convention (green down)
+};
+
 // One mesh of the scene for Renderer::syncScene: a SubTool, keyed by its stable id.
 struct SceneMesh {
     uint32_t id = 0;
     Mesh* mesh = nullptr;
     bool active = false; // gets mask darkening, polygroup colours and wireframe; never dimmed
     bool visible = true; // hidden meshes keep their GPU slot but aren't drawn (or uploaded)
+    const NormalMapView* normalMap = nullptr; // shade with this normal map (needs the mesh's UVs)
 };
 
 // Part of the target the 3D view is drawn into (framebuffer pixels, origin bottom-left); the rest is
@@ -87,7 +98,7 @@ public:
 private:
     void drawSplats(const glm::mat4& view, const glm::mat4& proj, int fbWidth, int fbHeight, float opacity);
 
-    GLuint meshProgram_ = 0, meshTexProgram_ = 0, wireProgram_ = 0, bgProgram_ = 0, splatProgram_ = 0;
+    GLuint meshProgram_ = 0, meshTexProgram_ = 0, meshNormalProgram_ = 0, wireProgram_ = 0, bgProgram_ = 0, splatProgram_ = 0;
     // Splats: per-splat data in a texture buffer, drawn as instanced quads in back-to-front order.
     GLuint splatVao_ = 0, splatData_ = 0, splatTexture_ = 0, splatOrder_ = 0;
     GLsizei splatCount_ = 0;
@@ -110,6 +121,10 @@ private:
         GLuint paintTexture = 0;          // the painted texture (sRGB, mipmapped)
         uint64_t textureSerial = 0, textureRevision = 0;
         int textureW = 0, textureH = 0;
+        // Baked normal map preview (NormalMapView): the map, and the tangents per drawn corner (texture buffer).
+        GLuint normalTexture = 0, tangentData = 0, tangentTexture = 0;
+        uint64_t normalSerial = 0;
+        bool hasTangents = false, tangentsStale = true, normalFlipGreen = false;
         bool hasColors = false, hasMask = false, hasGroups = false, hasUvs = false;
         bool fresh = true; // nothing uploaded yet
         std::vector<float> curvature;
@@ -119,9 +134,10 @@ private:
     };
     MeshSlot& slot(uint32_t id); // created on first use
     static void freeSlot(MeshSlot& s);
-    void sync(MeshSlot& s, Mesh& mesh);
+    void sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap = nullptr);
+    void syncNormalMap(MeshSlot& s, const Mesh& mesh, const NormalMapView* normalMap);
     static void updateCurvature(MeshSlot& s, const Mesh& mesh, uint32_t begin, uint32_t end);
-    void uploadFaces(MeshSlot& s, const Mesh& mesh);
+    void uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs);
     void syncTexture(MeshSlot& s, Mesh& mesh);
     void drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings);
     std::vector<MeshSlot> slots_;

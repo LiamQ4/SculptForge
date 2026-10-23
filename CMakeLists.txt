@@ -61,6 +61,10 @@ add_library(sculptforge_core STATIC
   src/core/MultiresCommands.cpp
   src/core/AutoUv.cpp
   third_party/xatlas/xatlas.cpp
+  src/core/Bake.cpp
+  src/core/BakeImage.cpp
+  src/core/Tangents.cpp
+  third_party/mikktspace/mikktspace.c
   src/core/Matcap.cpp
   src/core/Project.cpp
   src/core/Guide.cpp
@@ -76,12 +80,12 @@ add_library(sculptforge_core STATIC
   src/io/GozCommands.cpp
   src/io/StlIO.cpp
 )
-target_include_directories(sculptforge_core PUBLIC src PRIVATE third_party/stb third_party/ufbx third_party/xatlas)
+target_include_directories(sculptforge_core PUBLIC src PRIVATE third_party/stb third_party/ufbx third_party/xatlas third_party/mikktspace)
 # Third-party C code: compile quietly.
 if(MSVC)
-  set_source_files_properties(third_party/ufbx/ufbx.c third_party/xatlas/xatlas.cpp PROPERTIES COMPILE_OPTIONS "/w")
+  set_source_files_properties(third_party/ufbx/ufbx.c third_party/xatlas/xatlas.cpp third_party/mikktspace/mikktspace.c PROPERTIES COMPILE_OPTIONS "/w")
 else()
-  set_source_files_properties(third_party/ufbx/ufbx.c third_party/xatlas/xatlas.cpp PROPERTIES COMPILE_OPTIONS "-w")
+  set_source_files_properties(third_party/ufbx/ufbx.c third_party/xatlas/xatlas.cpp third_party/mikktspace/mikktspace.c PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 target_link_libraries(sculptforge_core PUBLIC glm::glm)
 target_compile_definitions(sculptforge_core PUBLIC GLM_FORCE_XYZW_ONLY)
@@ -166,6 +170,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelTexture.cpp
     src/app/PanelGeometry.cpp
     src/app/Gizmo.cpp
+    src/app/PanelBake.cpp
     src/app/PanelGoz.cpp
     src/app/PanelProject.cpp
     src/app/PanelSubTools.cpp

@@ -340,6 +340,7 @@ int App::runUiTest(int w, int h, int fps) {
         pollUnreal();
         pollGenerator();
         pollAutoUv();
+        pollBake();
         updateCameraAspect();
 
         Demo::beginFrame();
@@ -492,6 +493,7 @@ int App::runRecording() {
         pollBrushRequest();
         pollUnreal();
         pollAutoUv();
+        pollBake();
         updateCameraAspect();
 
         Demo::beginFrame();
@@ -556,6 +558,7 @@ int App::run() {
         pollUnreal();
         pollGoz();
         pollAutoUv();
+        pollBake();
 
         int fbW = 0, fbH = 0, winW = 0, winH = 0;
         SDL_GetWindowSizeInPixels(window_, &fbW, &fbH);
@@ -1067,6 +1070,11 @@ void App::processPendingFiles() {
         files.swap(pendingFiles_);
     }
     for (const auto& f : files) {
+        if (f.action == FileAction::SaveObj || f.action == FileAction::ExportGlb || f.action == FileAction::ExportLods ||
+            f.action == FileAction::ExportUsd || f.action == FileAction::ExportUnreal) {
+            const auto folder = std::filesystem::path(std::u8string(f.path.begin(), f.path.end())).parent_path().u8string();
+            lastExportFolder_.assign(folder.begin(), folder.end()); // baked maps go beside exports (PanelBake.cpp)
+        }
         switch (f.action) {
         case FileAction::OpenObj: openPath(f.path); break;
         case FileAction::OpenImage: openPath(f.path); break;
@@ -1119,7 +1127,8 @@ void App::syncScene() {
     for (int i = 0; i < doc_.subtoolCount(); ++i) {
         SubTool& s = doc_.subtools[size_t(i)];
         const bool active = i == doc_.activeSubtool;
-        scene.push_back({s.id, active ? &shown : &s.mesh, active, s.visible});
+        Mesh* mesh = active ? &shown : &s.mesh;
+        scene.push_back({s.id, mesh, active, s.visible, bakeNormalMap(s.id, *mesh)});
     }
     renderer_.syncScene(scene);
     renderer_.syncSplats(doc_.splats, doc_.splatsVersion);
@@ -1211,7 +1220,7 @@ void App::drawUi() {
                                "version 3 or later. It comes with ABSOLUTELY NO WARRANTY.");
             ImGui::Spacing();
             ImGui::TextWrapped("Built with SDL 3 (zlib), Dear ImGui (MIT), GLM (MIT), stb (MIT/public domain), ufbx "
-                               "(MIT/public domain), xatlas (MIT) and the Inter typeface (SIL OFL 1.1). Uses libcurl (curl license) "
+                               "(MIT/public domain), xatlas (MIT), MikkTSpace (zlib) and the Inter typeface (SIL OFL 1.1). Uses libcurl (curl license) "
                                "where available.");
             ImGui::Spacing();
             if (ImGui::Button("License")) SDL_OpenURL("https://github.com/islandmed/SculptForge/blob/main/LICENSE");
@@ -1292,6 +1301,7 @@ void App::sendToUnreal() {
     import.assetName = r.assetName;
     import.skeletal = r.skeletal;
     import.lods = r.lodCount > 1;
+    import.normalMapPath = bakedNormalMapFile(import.normalMapDirectX); // Tool > Bake's last normal map, if it fits
     status_ = "Sending " + r.assetName + " to Unreal...";
     auto promise = std::make_shared<std::promise<std::string>>();
     pendingUnreal_ = promise->get_future();

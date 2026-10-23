@@ -404,6 +404,22 @@ private:
     std::unique_ptr<AutoUvJob> autoUv_;
     int textureSizeChoice_ = 1;          // 1K, 2K, 4K, 8K
     bool showUvView_ = false;            // Texture Map > Show UVs
+    // Bake sub-palette (PanelBake.cpp): normal / displacement / AO / cavity / colour maps from a high-poly onto
+    // the active SubTool's UVs (core/Bake.h), on a worker thread, and the baked normal map shown on the model.
+    void drawBakeContents();
+    void registerBakeUiActions();
+    void startBake();
+    void pollBake();
+    // The normal map to preview on SubTool `id` (null when none, it is turned off, or the mesh changed).
+    const NormalMapView* bakeNormalMap(uint32_t id, const Mesh& mesh);
+    bool bakeBusy() const;
+    // The last bake's normal map PNG when its SubTool is shown and still fits it (Send to Unreal takes it along).
+    std::string bakedNormalMapFile(bool& directX);
+    // UI test values: bake_running, baked_maps (maps in the last bake), bake_size, bake_files, normal_map_preview
+    // (1 when the active SubTool shows a baked normal map); NaN for other names.
+    double bakeTestValue(const std::string& name);
+    std::shared_ptr<struct BakeUiState> bake_;
+    std::string lastExportFolder_; // where the last export went: the default folder for baked maps
     // Cached UV wireframe of the active SubTool for the UV view: segments in 0..1 UV space.
     std::vector<glm::vec2> uvLines_;
     uint64_t uvLinesKey_ = 0;

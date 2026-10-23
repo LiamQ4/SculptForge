@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Commands.h"
 
+#include "core/Bake.h"
 #include "core/BrushAlpha.h"
 #include "core/BrushLibrary.h"
 #include "core/Decimate.h"
@@ -760,6 +761,7 @@ CommandRegistry::CommandRegistry() {
     registerTransformCommands(*this); // transform (core/MeshTransform.h)
     registerPaintCommands(*this); // core/Polypaint.cpp
     registerGozCommands(*this); // goz_import/export/send/receive, export_stl (io/GozCommands.cpp)
+    registerBakeCommands(*this); // bake (core/Bake.cpp)
     registerProjectCommands(*this); // keep last (core/Project.cpp)
 }
 

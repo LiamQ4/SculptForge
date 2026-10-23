@@ -357,6 +357,11 @@ void App::drawPalette_Tool() {
         drawTextureMapContents();
         Demo::popScope();
     }
+    if (subpalette("tool.bake", "Bake")) {
+        Demo::pushScope("Bake");
+        drawBakeContents();
+        Demo::popScope();
+    }
     if (subpalette("tool.geometry", "Geometry")) {
         Demo::pushScope("Geometry");
         drawGeometrySection();

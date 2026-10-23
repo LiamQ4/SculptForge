@@ -77,7 +77,48 @@ void main() {
 }
 )";
 
-// Compiled twice: as is, and with TEXTURED defined (after kMeshGS, multiplying the painted texture in).
+// Baked normal map preview (core/Bake.h): kMeshGS plus each corner's MikkTSpace tangent (xyz, bitangent sign
+// in w), fetched like the UVs and turned into view space.
+const char* kMeshNormalGS = R"(#version 330 core
+layout(triangles) in;
+layout(triangle_strip, max_vertices = 3) out;
+in vec3 vNormal[];
+in vec3 vPos[];
+in float vCurvature[];
+in vec3 vColor[];
+in float vMask[];
+uniform samplerBuffer uUvs;      // RG32F, 3 corners per drawn triangle
+uniform samplerBuffer uTangents; // RGBA32F, 3 corners per drawn triangle
+uniform mat4 uView;
+out FragData {
+    vec3 vNormal;
+    vec3 vPos;
+    float vCurvature;
+    vec3 vColor;
+    float vMask;
+    vec2 vUv;
+    vec4 vTangent;
+} o;
+void main() {
+    for (int i = 0; i < 3; ++i) {
+        o.vNormal = vNormal[i];
+        o.vPos = vPos[i];
+        o.vCurvature = vCurvature[i];
+        o.vColor = vColor[i];
+        o.vMask = vMask[i];
+        o.vUv = texelFetch(uUvs, gl_PrimitiveIDIn * 3 + i).xy;
+        vec4 t = texelFetch(uTangents, gl_PrimitiveIDIn * 3 + i);
+        o.vTangent = vec4(mat3(uView) * t.xyz, t.w);
+        gl_PrimitiveID = gl_PrimitiveIDIn;
+        gl_Position = gl_in[i].gl_Position;
+        EmitVertex();
+    }
+    EndPrimitive();
+}
+)";
+
+// Compiled three times: as is, with TEXTURED defined (after kMeshGS, multiplying the painted texture in), and
+// with NORMALMAP too (after kMeshNormalGS: a baked normal map bends the shading normal). (after kMeshGS, multiplying the painted texture in).
 const char* kMeshFS = R"(
 #ifdef TEXTURED
 in FragData {
@@ -87,8 +128,16 @@ in FragData {
     vec3 vColor;
     float vMask;
     vec2 vUv;
+#ifdef NORMALMAP
+    vec4 vTangent;
+#endif
 };
 uniform sampler2D uPaintTex; // sRGB texture: samples come back linear
+#ifdef NORMALMAP
+uniform sampler2D uNormalTex; // baked tangent-space normal map (linear RGB)
+uniform int uHasPaint;        // 1: a painted texture is bound to uPaintTex too
+uniform int uNormalFlipY;     // 1: DirectX convention (green down)
+#endif
 #else
 in vec3 vNormal;
 in vec3 vPos;
@@ -128,10 +177,21 @@ void main() {
     if (uGroups == 1) albedo = tint = groupColor(texelFetch(uGroupIds, gl_PrimitiveID).r);
     else if (uGroups == 2) albedo = tint = groupColor(0u);
     else if (uPaint == 1) albedo = tint = vColor;
-#ifdef TEXTURED
+#if defined(NORMALMAP)
+    if (uGroups == 0 && uHasPaint == 1) albedo = tint = (uPaint == 1 ? vColor : vec3(1.0)) * texture(uPaintTex, vUv).rgb;
+#elif defined(TEXTURED)
     if (uGroups == 0) albedo = tint = (uPaint == 1 ? vColor : vec3(1.0)) * texture(uPaintTex, vUv).rgb;
 #endif
     vec3 n = normalize(vNormal);
+#ifdef NORMALMAP
+    // MikkTSpace's pixel shader: bitangent rebuilt per pixel, n = normalize(tn.x T + tn.y B + tn.z N).
+    vec3 tn = texture(uNormalTex, vUv).xyz * 2.0 - 1.0;
+    if (uNormalFlipY == 1) tn.y = -tn.y;
+    vec3 T = vTangent.xyz - n * dot(n, vTangent.xyz);
+    T = dot(T, T) > 1e-12 ? normalize(T) : vec3(1.0, 0.0, 0.0);
+    vec3 B = (vTangent.w < 0.0 ? -1.0 : 1.0) * cross(n, T);
+    n = normalize(tn.x * T + tn.y * B + tn.z * n);
+#endif
     if (!gl_FrontFacing) n = -n;
     vec3 v = normalize(-vPos);
     if (uMatcap == 1) {
@@ -252,6 +312,9 @@ void main() {
 )";
 
 constexpr GLenum kTexture2 = 0x84C2; // GL_TEXTURE2 (matcap)
+constexpr GLenum kTexture5 = 0x84C5; // kTexture5 (baked normal map)
+constexpr GLenum kTexture6 = 0x84C6; // kTexture6 (its tangents)
+constexpr GLenum kRgb = 0x1907, kRgb8 = 0x8051; // GL_RGB, GL_RGB8
 
 GLuint compile(GLenum type, const char* src, std::string& error, const char* prefix = nullptr) {
     GLuint s = gl::CreateShader(type);
@@ -326,6 +389,8 @@ bool Renderer::init(std::string& error) {
     if (!meshProgram_) return false;
     meshTexProgram_ = link(kMeshVS, kMeshFS, error, "#version 330 core\n#define TEXTURED\n", kMeshGS);
     if (!meshTexProgram_) return false;
+    meshNormalProgram_ = link(kMeshVS, kMeshFS, error, "#version 330 core\n#define TEXTURED\n#define NORMALMAP\n", kMeshNormalGS);
+    if (!meshNormalProgram_) return false;
     wireProgram_ = link(kMeshVS, kWireFS, error);
     if (!wireProgram_) return false;
     bgProgram_ = link(kBgVS, kBgFS, error);
@@ -417,6 +482,9 @@ void Renderer::freeSlot(MeshSlot& s) {
     gl::DeleteBuffers(1, &s.uvData);
     gl::DeleteTextures(1, &s.uvTexture);
     if (s.paintTexture) gl::DeleteTextures(1, &s.paintTexture);
+    if (s.normalTexture) gl::DeleteTextures(1, &s.normalTexture);
+    if (s.tangentData) gl::DeleteBuffers(1, &s.tangentData);
+    if (s.tangentTexture) gl::DeleteTextures(1, &s.tangentTexture);
     gl::DeleteVertexArrays(1, &s.vao);
     s = MeshSlot();
 }
@@ -430,6 +498,7 @@ void Renderer::shutdown() {
     gl::DeleteVertexArrays(1, &emptyVao_);
     gl::DeleteProgram(meshProgram_);
     gl::DeleteProgram(meshTexProgram_);
+    gl::DeleteProgram(meshNormalProgram_);
     gl::DeleteProgram(wireProgram_);
     gl::DeleteProgram(bgProgram_);
     gl::DeleteProgram(splatProgram_);
@@ -544,7 +613,7 @@ void Renderer::updateCurvature(MeshSlot& s, const Mesh& mesh, uint32_t begin, ui
 // triangle in draw order (looked up by gl_PrimitiveID). Meshes with quads
 // (Mesh::quadPartners) also get wireframe edges without the quad diagonals,
 // stored as GL_LINES indices after the triangles.
-void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh) {
+void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs) {
     const size_t nt = mesh.triangleCount();
     const bool hidden = mesh.hidden.size() == nt && nt > 0;
     const bool groups = mesh.polygroups.size() == nt && nt > 0;
@@ -599,8 +668,10 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh) {
         gl::BindTexture(GL_TEXTURE_BUFFER, 0);
         gl::BindBuffer(GL_TEXTURE_BUFFER, 0);
     }
-    // Texture painting: the UVs of every drawn triangle's corners, looked up by gl_PrimitiveID.
-    const bool textured = hasTexture(mesh) && drawn * 3 <= size_t(std::max(maxTexels, 0));
+    // Texture painting (and a baked normal map preview): the UVs of every drawn triangle's corners, looked up
+    // by gl_PrimitiveID.
+    const bool textured = wantUvs && mesh.hasUvs() && drawn * 3 <= size_t(std::max(maxTexels, 0));
+    s.tangentsStale = true;
     if (textured) {
         visibleUvs_.clear();
         if (hidden) {
@@ -642,13 +713,17 @@ void Renderer::syncScene(const std::vector<SceneMesh>& scene) {
     drawList_.clear();
     for (const SceneMesh& m : scene) {
         if (!m.visible || !m.mesh) continue; // hidden: keeps its dirty state until shown
-        sync(slot(m.id), *m.mesh);
+        sync(slot(m.id), *m.mesh, m.normalMap);
         drawList_.push_back({m.id, m.active});
     }
 }
 
-void Renderer::sync(MeshSlot& s, Mesh& mesh) {
+void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap) {
     const size_t nv = mesh.vertexCount();
+    if (normalMap && (!normalMap->rgb || !normalMap->tangents || normalMap->tangents->size() != mesh.uvs.size() ||
+                      !mesh.hasUvs() || normalMap->rgb->size() != size_t(normalMap->width) * size_t(normalMap->height) * 3))
+        normalMap = nullptr; // made for another mesh
+    const bool wantUvs = hasTexture(mesh) || normalMap;
     const bool full = s.fresh || mesh.topologyDirty || nv != s.vertexCapacity;
     const bool ranged = !full && mesh.dirtyBegin < mesh.dirtyEnd && mesh.dirtyEnd <= nv;
     const GLintptr off3 = ranged ? GLintptr(mesh.dirtyBegin * sizeof(glm::vec3)) : 0;
@@ -663,7 +738,7 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh) {
         gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(glm::vec3)), mesh.normals.data(), GL_DYNAMIC_DRAW);
         gl::BindBuffer(GL_ARRAY_BUFFER, s.curvBuffer);
         gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(float)), s.curvature.data(), GL_DYNAMIC_DRAW);
-        uploadFaces(s, mesh);
+        uploadFaces(s, mesh, wantUvs);
         s.vertexCapacity = nv;
     } else if (ranged) {
         gl::BindBuffer(GL_ARRAY_BUFFER, s.posBuffer);
@@ -674,8 +749,9 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh) {
         gl::BindBuffer(GL_ARRAY_BUFFER, s.curvBuffer);
         gl::BufferSubData(GL_ARRAY_BUFFER, off1, size1, s.curvature.data() + mesh.dirtyBegin);
     }
-    if (!full && (mesh.facesDirty || hasTexture(mesh) != s.hasUvs)) uploadFaces(s, mesh);
+    if (!full && (mesh.facesDirty || wantUvs != s.hasUvs)) uploadFaces(s, mesh, wantUvs);
     syncTexture(s, mesh);
+    syncNormalMap(s, mesh, normalMap);
 
     // Optional per-vertex attributes: a full upload when they appear (or the
     // mesh changed), the dirty range otherwise, and a disabled array when absent.
@@ -744,6 +820,53 @@ void Renderer::syncTexture(MeshSlot& s, Mesh& mesh) {
     gl::BindTexture(GL_TEXTURE_2D, 0);
     s.textureRevision = tex->revision;
     tex->clearDirty();
+}
+
+// The baked normal map preview: the map uploads when its serial changes, the tangents (in draw order, without
+// hidden triangles, like the UVs) whenever the faces were re-uploaded too.
+void Renderer::syncNormalMap(MeshSlot& s, const Mesh& mesh, const NormalMapView* nm) {
+    if (!nm || !s.hasUvs) {
+        if (s.normalTexture) gl::DeleteTextures(1, &s.normalTexture);
+        s.normalTexture = 0;
+        s.normalSerial = 0;
+        s.hasTangents = false;
+        return;
+    }
+    if (!s.normalTexture || s.normalSerial != nm->serial) {
+        if (!s.normalTexture) gl::GenTextures(1, &s.normalTexture);
+        gl::BindTexture(GL_TEXTURE_2D, s.normalTexture);
+        gl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        gl::TexImage2D(GL_TEXTURE_2D, 0, GLint(kRgb8), nm->width, nm->height, 0, kRgb, GL_UNSIGNED_BYTE, nm->rgb->data());
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(GL_LINEAR_MIPMAP_LINEAR));
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(GL_LINEAR));
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE));
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE));
+        gl::GenerateMipmap(GL_TEXTURE_2D);
+        gl::BindTexture(GL_TEXTURE_2D, 0);
+        s.normalSerial = nm->serial;
+        s.tangentsStale = true;
+    }
+    s.normalFlipGreen = nm->flipGreen;
+    if (!s.tangentsStale && s.hasTangents) return;
+    if (!s.tangentData) gl::GenBuffers(1, &s.tangentData);
+    if (!s.tangentTexture) gl::GenTextures(1, &s.tangentTexture);
+    const std::vector<glm::vec4>& all = *nm->tangents;
+    std::vector<glm::vec4> visible;
+    const bool hidden = mesh.hidden.size() == mesh.triangleCount() && mesh.triangleCount() > 0;
+    if (hidden) {
+        visible.reserve(all.size());
+        for (size_t t = 0; t < mesh.triangleCount(); ++t)
+            if (!mesh.hidden[t]) visible.insert(visible.end(), {all[t * 3], all[t * 3 + 1], all[t * 3 + 2]});
+    }
+    const std::vector<glm::vec4>& tans = hidden ? visible : all;
+    gl::BindBuffer(GL_TEXTURE_BUFFER, s.tangentData);
+    gl::BufferData(GL_TEXTURE_BUFFER, GLsizeiptr(tans.size() * sizeof(glm::vec4)), tans.data(), GL_STATIC_DRAW);
+    gl::BindTexture(GL_TEXTURE_BUFFER, s.tangentTexture);
+    gl::TexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, s.tangentData);
+    gl::BindTexture(GL_TEXTURE_BUFFER, 0);
+    gl::BindBuffer(GL_TEXTURE_BUFFER, 0);
+    s.hasTangents = true;
+    s.tangentsStale = false;
 }
 
 GLuint Renderer::paintTexture(uint32_t id) const {
@@ -898,7 +1021,7 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
 
     const GLuint matcap = matcapTexture(settings.matcap);
     const MatcapCavity cavity = matcapCavity(settings.matcap);
-    for (GLuint prog : {meshTexProgram_, meshProgram_}) { // the plain program stays bound
+    for (GLuint prog : {meshNormalProgram_, meshTexProgram_, meshProgram_}) { // the plain program stays bound
         setMatrices(prog);
         gl::Uniform3fv(gl::GetUniformLocation(prog, "uBaseColor"), 1, glm::value_ptr(settings.baseColor));
         gl::Uniform1i(gl::GetUniformLocation(prog, "uGroupIds"), 1);
@@ -907,6 +1030,8 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
         gl::Uniform2f(gl::GetUniformLocation(prog, "uMatcapCavity"), cavity.crease, cavity.ridge);
         gl::Uniform1i(gl::GetUniformLocation(prog, "uUvs"), 3);
         gl::Uniform1i(gl::GetUniformLocation(prog, "uPaintTex"), 4);
+        gl::Uniform1i(gl::GetUniformLocation(prog, "uNormalTex"), 5);
+        gl::Uniform1i(gl::GetUniformLocation(prog, "uTangents"), 6);
     }
     gl::ActiveTexture(kTexture2);
     gl::BindTexture(GL_TEXTURE_2D, matcap);
@@ -916,6 +1041,10 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
     for (const DrawItem& item : drawList_)
         if (const MeshSlot* s = findSlot(item.id); s && s->indexCount > 0) drawSlot(*s, item.active, settings);
     gl::Disable(GL_POLYGON_OFFSET_FILL);
+    gl::ActiveTexture(kTexture5);
+    gl::BindTexture(GL_TEXTURE_2D, 0);
+    gl::ActiveTexture(kTexture6);
+    gl::BindTexture(GL_TEXTURE_BUFFER, 0);
     gl::ActiveTexture(GL_TEXTURE3);
     gl::BindTexture(GL_TEXTURE_BUFFER, 0);
     gl::ActiveTexture(GL_TEXTURE4);
@@ -956,14 +1085,25 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
 void Renderer::drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings) {
     // A painted texture shows through the textured program (polypaint still multiplies it).
     const bool textured = s.hasUvs && s.paintTexture && settings.showPolypaint && settings.showTexture;
-    const GLuint prog = textured ? meshTexProgram_ : meshProgram_;
+    // A baked normal map preview bends the shading normal (core/Bake.h).
+    const bool normalMapped = s.hasUvs && s.normalTexture && s.hasTangents;
+    const GLuint prog = normalMapped ? meshNormalProgram_ : textured ? meshTexProgram_ : meshProgram_;
     gl::UseProgram(prog);
-    if (textured) {
+    if (textured || normalMapped) {
         gl::ActiveTexture(GL_TEXTURE3);
         gl::BindTexture(GL_TEXTURE_BUFFER, s.uvTexture);
         gl::ActiveTexture(GL_TEXTURE4);
-        gl::BindTexture(GL_TEXTURE_2D, s.paintTexture);
+        gl::BindTexture(GL_TEXTURE_2D, textured ? s.paintTexture : 0);
         gl::ActiveTexture(GL_TEXTURE0);
+    }
+    if (normalMapped) {
+        gl::ActiveTexture(kTexture5);
+        gl::BindTexture(GL_TEXTURE_2D, s.normalTexture);
+        gl::ActiveTexture(kTexture6);
+        gl::BindTexture(GL_TEXTURE_BUFFER, s.tangentTexture);
+        gl::ActiveTexture(GL_TEXTURE0);
+        gl::Uniform1i(gl::GetUniformLocation(prog, "uHasPaint"), textured ? 1 : 0);
+        gl::Uniform1i(gl::GetUniformLocation(prog, "uNormalFlipY"), s.normalFlipGreen ? 1 : 0);
     }
     gl::Uniform1i(gl::GetUniformLocation(prog, "uPaint"), settings.showPolypaint && s.hasColors ? 1 : 0);
     gl::Uniform1i(gl::GetUniformLocation(prog, "uShowMask"), active && settings.showMask && s.hasMask ? 1 : 0);

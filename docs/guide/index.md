@@ -40,16 +40,17 @@ You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<
 
 ## Files and pipelines
 
-19. [Exporting, Unreal and ZBrush](exporting.md)
-20. [Projects, autosave and QuickSave](projects.md)
-21. [Scripting and automation](scripting.md)
-22. [SculptForge for studios](studios.md)
+19. [Baking normal and displacement maps](baking.md)
+20. [Exporting, Unreal and ZBrush](exporting.md)
+21. [Projects, autosave and QuickSave](projects.md)
+22. [Scripting and automation](scripting.md)
+23. [SculptForge for studios](studios.md)
 
 ## Reference
 
-23. [Keyboard and mouse](shortcuts.md)
-24. [Troubleshooting and FAQ](troubleshooting.md)
-25. [Glossary](glossary.md)
+24. [Keyboard and mouse](shortcuts.md)
+25. [Troubleshooting and FAQ](troubleshooting.md)
+26. [Glossary](glossary.md)
 
 ## Getting help
 

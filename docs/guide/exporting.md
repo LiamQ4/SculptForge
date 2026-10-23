@@ -100,6 +100,7 @@ Python remote execution.
 | Sculpt layers | A **skeletal mesh** `SK_<Name>` with one **morph target** per layer (Unreal adds a single root bone) |
 | Several visible SubTools | One FBX model per SubTool, combined into one asset on import |
 | Any | A material slot `M_Clay`, and the real-world size from **Height** |
+| A baked normal map ([Tool > Bake](baking.md)) | The texture `T_<Name>_N`, set up as a normal map (Unreal on this computer only) |
 
 Sending the same asset again updates it in place (same name and folder), so references in your levels stay
 intact.

@@ -8,4 +8,5 @@ expect_text "Version 0.4.2"
 expect_text "Next version (in development)"
 expect_text "Subdivision levels"
 expect_text "Gizmo 3D: move, scale, rotate and pose"
+# The newest section is on screen (the in-development one while a version is being built).
 shot whats-new

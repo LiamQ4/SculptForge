@@ -213,6 +213,30 @@ std::string unrealImportScript(const UnrealImport& im) {
         py += "    f.write(r.read())\n";
         fileExpr = "fbx_path";
     }
+    if (!im.normalMapPath.empty() && im.downloadUrl.empty()) {
+        // The baked normal map first (its result line comes before the mesh's, which the caller reads last).
+        std::string texName = im.assetName.rfind("SM_", 0) == 0 || im.assetName.rfind("SK_", 0) == 0 ? im.assetName.substr(3) : im.assetName;
+        texName = "T_" + texName + "_N";
+        py += "try:\n";
+        py += "    ttask = unreal.AssetImportTask()\n";
+        py += "    ttask.set_editor_property('filename', " + pyString(im.normalMapPath) + ")\n";
+        py += "    ttask.set_editor_property('destination_path', " + pyString(im.destination) + ")\n";
+        py += "    ttask.set_editor_property('destination_name', " + pyString(texName) + ")\n";
+        py += "    ttask.set_editor_property('replace_existing', True)\n";
+        py += "    ttask.set_editor_property('automated', True)\n";
+        py += "    ttask.set_editor_property('save', True)\n";
+        py += "    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([ttask])\n";
+        py += "    for p in list(ttask.get_editor_property('imported_object_paths') or []):\n";
+        py += "        tex = unreal.load_asset(p)\n";
+        py += "        if isinstance(tex, unreal.Texture2D):\n";
+        py += "            tex.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)\n";
+        py += "            tex.set_editor_property('srgb', False)\n";
+        py += std::string("            tex.set_editor_property('flip_green_channel', ") + (im.normalMapDirectX ? "False" : "True") + ")\n";
+        py += "            unreal.EditorAssetLibrary.save_loaded_asset(tex)\n";
+        py += "            print('SCULPTFORGE_TEXTURE ' + p)\n";
+        py += "except Exception as e:\n";
+        py += "    unreal.log_warning('SculptForge: normal map import failed (' + str(e) + ')')\n";
+    }
     py += "task = unreal.AssetImportTask()\n";
     py += "task.set_editor_property('filename', " + fileExpr + ")\n";
     py += "task.set_editor_property('destination_path', " + pyString(im.destination) + ")\n";
@@ -301,6 +325,7 @@ bool sendToUnreal(const UnrealEndpoint& endpoint, const UnrealImport& import, st
         return false;
     }
     message = "Sent to Unreal (" + target->projectName + "): " + imported;
+    if (output.find("SCULPTFORGE_TEXTURE ") != std::string::npos) message += " + normal map";
     return true;
 }
 
