@@ -464,7 +464,7 @@ private:
     struct RetopoSettings {
         int target = 5000;
         float adaptive = 0.5f;
-        bool keepGroups = false, detectEdges = true, usePolypaint = false, symmetry = false, keepOriginal = false;
+        bool keepGroups = false, detectEdges = true, usePolypaint = false, symmetry = true, keepOriginal = false;
         float projectDist = 0.02f;
         int projectBlur = 0;
         bool projectMean = false, projectGeometry = true, projectPolypaint = true;

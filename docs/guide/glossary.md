@@ -96,6 +96,7 @@ for what is planned.
 | Studio brush folder | A shared, read-only brush folder for a team (`SCULPTFORGE_BRUSH_PATH`). See [For studios](studios.md) |
 | Paint target (Vertex / Texture) | Where painting goes on a SubTool that has a texture: its vertices (polypaint) or its texture. Top shelf, next to **Rgb**. See [Texture painting](texture-painting.md#vertex-or-texture) |
 | QRemesh | SculptForge's automatic quad retopology (ZBrush's ZRemesher), in **Tool > Geometry**. See [Quad retopology](retopology.md) |
+| Mirror plane (QRemesh) | The plane QRemesh's **Symmetry** mirrors across: the model's own middle (the world's centre plane when the model is symmetric about it), found from the model. Like ZBrush's local symmetry. See [Quad retopology](retopology.md#qremesh) |
 | Padding (gutter) | The few texels around each UV island that texture painting and baking also fill, so seams don't show. See [Texture painting](texture-painting.md) and [Baking](baking.md) |
 | Bake | Capture a high-poly's detail as images (maps) on a low-poly's UVs. See [Baking](baking.md) |
 | Cage (front / rear distance) | How far in front of and behind the low-poly the bake's rays look for the high-poly. See [Baking](baking.md#how-the-bake-works) |

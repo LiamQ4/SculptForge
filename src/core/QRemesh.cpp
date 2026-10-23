@@ -17,6 +17,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
+#include <limits>
 #include <numeric>
 #include <unordered_map>
 
@@ -667,6 +669,8 @@ struct UnionFind {
 
 struct PolyMesh {
     std::vector<vec3> P, N;
+    std::vector<uint8_t> feature; // per vertex: on a hard edge / border (1) or a corner (2)
+    std::vector<vec3> featureDir; // the line's direction (feature 1)
     std::vector<std::vector<uint32_t>> faces;
     size_t cornerCount() const {
         size_t c = 0;
@@ -674,6 +678,8 @@ struct PolyMesh {
         return c;
     }
 };
+
+constexpr float kApartCos = -0.1f; // clusters whose normals are more than ~95 degrees apart don't merge
 
 // Turns the fields on level `l` into a polygon mesh (faces wound counter-clockwise about the normals).
 // Faces that are mostly mesh boundary (the outside of an open surface, the symmetry cut) are left out.
@@ -701,24 +707,33 @@ PolyMesh extractPolygons(const Level& l) {
     std::sort(collapse.begin(), collapse.end(), [](const Link& a, const Link& b) { return a.cost < b.cost; });
 
     // Merge vertices that sit on the same lattice corner, unless that drags a cluster too far.
+    // Clusters facing apart (the two sides of a part thinner than a quad, the faces either side of a sharp
+    // rim) stay apart: the vertices become neighbours instead, so the thin part keeps its thickness.
     UnionFind uf(n);
-    std::vector<vec3> sum(l.O);
+    std::vector<vec3> sum(l.O), nsum(n);
+    for (uint32_t i = 0; i < n; ++i) nsum[i] = l.N[i] * std::max(l.A[i], 1e-30f);
     std::vector<float> cnt(n, 1.0f);
     for (const Link& c : collapse) {
         uint32_t a = uf.find(c.i), b = uf.find(c.j);
         if (a == b) continue;
         const float s = 0.5f * (l.S[c.i] + l.S[c.j]);
         if (glm::length(sum[a] / cnt[a] - sum[b] / cnt[b]) > 0.45f * s) continue;
+        if (glm::dot(safeNormalize(nsum[a]), safeNormalize(nsum[b])) < kApartCos) {
+            links.push_back({c.i, c.j, 0.0f});
+            continue;
+        }
         if (cnt[a] < cnt[b]) std::swap(a, b);
         uf.parent[b] = a;
         sum[a] += sum[b];
+        nsum[a] += nsum[b];
         cnt[a] += cnt[b];
     }
     std::vector<uint32_t> cluster(n, kNone);
     PolyMesh pm;
     std::vector<vec3> qOf;
     std::vector<float> area, scale;
-    std::vector<uint8_t> boundary;
+    std::vector<uint8_t> boundary, feature; // feature: 1 = on a hard edge / border line, 2 = a corner
+    std::vector<vec3> featureDir;
     for (uint32_t i = 0; i < n; ++i) {
         const uint32_t r = uf.find(i);
         if (cluster[r] == kNone) {
@@ -729,9 +744,13 @@ PolyMesh extractPolygons(const Level& l) {
             area.push_back(0.0f);
             scale.push_back(0.0f);
             boundary.push_back(0);
+            feature.push_back(0);
+            featureDir.push_back(vec3(0.0f));
         }
         const uint32_t c = cluster[r];
         cluster[i] = c;
+        if (l.ctype[i] == kPoint) feature[c] = 2;
+        else if (l.ctype[i] == kLine && feature[c] == 0) feature[c] = 1, featureDir[c] = l.cdir[i];
         pm.N[c] += l.N[i] * l.A[i];
         area[c] += l.A[i];
         scale[c] = std::max(scale[c], l.S[i]);
@@ -762,7 +781,15 @@ PolyMesh extractPolygons(const Level& l) {
     auto hasEdge = [&](uint32_t a, uint32_t b) { return std::binary_search(adj[a].begin(), adj[a].end(), b); };
     auto len2 = [&](uint32_t a, uint32_t b) { return glm::dot(pm.P[a] - pm.P[b], pm.P[a] - pm.P[b]); };
 
-    // A quad lattice has no 3-cycles: drop the longest edge of each (a diagonal from a lattice mismatch).
+    // An edge running along a hard edge or border (both ends on it, in its direction): the feature's loop.
+    auto alongFeature = [&](uint32_t a, uint32_t b) {
+        if (!feature[a] || !feature[b]) return false;
+        const vec3 d = safeNormalize(pm.P[b] - pm.P[a]);
+        return (feature[a] == 1 && std::abs(glm::dot(d, featureDir[a])) > 0.9f) ||
+               (feature[b] == 1 && std::abs(glm::dot(d, featureDir[b])) > 0.9f);
+    };
+    // A quad lattice has no 3-cycles: drop the longest edge of each (a diagonal from a lattice mismatch), but
+    // keep the edges along features (across a part thinner than a quad the diagonal can be the shorter).
     for (int round = 0; round < 8; ++round) {
         std::vector<std::pair<uint32_t, uint32_t>> drop;
         for (uint32_t u = 0; u < nc; ++u)
@@ -770,10 +797,12 @@ PolyMesh extractPolygons(const Level& l) {
                 if (v <= u) continue;
                 for (uint32_t w : adj[u]) {
                     if (w <= v || !hasEdge(v, w)) continue;
+                    const std::pair<uint32_t, uint32_t> sides[3] = {{u, v}, {v, w}, {u, w}};
                     std::pair<uint32_t, uint32_t> e{u, v};
-                    float best = len2(u, v);
-                    if (const float d = len2(v, w); d > best) best = d, e = {v, w};
-                    if (const float d = len2(u, w); d > best) best = d, e = {u, w};
+                    float best = -1.0f;
+                    for (int pass = 0; pass < 2 && best < 0.0f; ++pass)
+                        for (auto [a, b] : sides)
+                            if ((pass == 1 || !alongFeature(a, b)) && len2(a, b) > best) best = len2(a, b), e = {a, b};
                     drop.push_back(e);
                 }
             }
@@ -870,6 +899,8 @@ PolyMesh extractPolygons(const Level& l) {
                 remap[v] = uint32_t(out.P.size());
                 out.P.push_back(pm.P[v]);
                 out.N.push_back(pm.N[v]);
+                out.feature.push_back(feature[v]);
+                out.featureDir.push_back(featureDir[v]);
             }
             v = remap[v];
         }
@@ -958,17 +989,27 @@ void splitLargeFaces(PolyMesh& pm) {
 
 struct QuadMesh {
     std::vector<vec3> P;
+    std::vector<uint8_t> feature; // per vertex: lies on a hard edge / border line
     std::vector<glm::uvec4> quads; // counter-clockwise
+    std::vector<glm::uvec3> tris;  // pieces kept as they were (the lattice found no quads on them)
 };
 
 // Every n-sided face becomes n quads (corner, edge midpoint, centre, edge midpoint).
 QuadMesh splitIntoQuads(const PolyMesh& pm) {
     QuadMesh q;
     q.P = pm.P;
+    q.feature = pm.feature;
     std::unordered_map<uint64_t, uint32_t> mids;
     auto mid = [&](uint32_t a, uint32_t b) {
         auto [it, inserted] = mids.try_emplace(edgeKey(a, b), uint32_t(q.P.size()));
-        if (inserted) q.P.push_back(0.5f * (pm.P[a] + pm.P[b]));
+        if (inserted) {
+            q.P.push_back(0.5f * (pm.P[a] + pm.P[b]));
+            // The middle of an edge running along a feature line is on it too.
+            const vec3 d = safeNormalize(pm.P[b] - pm.P[a]);
+            q.feature.push_back(pm.feature[a] && pm.feature[b] &&
+                                ((pm.feature[a] == 1 && std::abs(glm::dot(d, pm.featureDir[a])) > 0.9f) ||
+                                 (pm.feature[b] == 1 && std::abs(glm::dot(d, pm.featureDir[b])) > 0.9f)));
+        }
         return it->second;
     };
     for (const auto& f : pm.faces) {
@@ -977,6 +1018,7 @@ QuadMesh splitIntoQuads(const PolyMesh& pm) {
         for (uint32_t v : f) c += pm.P[v];
         const uint32_t center = uint32_t(q.P.size());
         q.P.push_back(c / float(n));
+        q.feature.push_back(0);
         for (size_t k = 0; k < n; ++k) {
             const uint32_t prev = f[(k + n - 1) % n], cur = f[k], next = f[(k + 1) % n];
             q.quads.push_back({cur, mid(cur, next), center, mid(prev, cur)});
@@ -1021,21 +1063,25 @@ void removeDoublets(QuadMesh& q) {
     }
     std::vector<uint32_t> remap(q.P.size(), kNone);
     std::vector<vec3> P;
+    std::vector<uint8_t> feature;
     for (auto& f : q.quads)
         for (int k = 0; k < 4; ++k) {
             if (remap[f[k]] == kNone) {
                 remap[f[k]] = uint32_t(P.size());
                 P.push_back(q.P[f[k]]);
+                feature.push_back(q.feature[f[k]]);
             }
             f[k] = remap[f[k]];
         }
     q.P.swap(P);
+    q.feature.swap(feature);
 }
 
 struct Snapper {
     const TriangleBVH* surface = nullptr;
     const SegmentBVH* boundary = nullptr; // open edges of the source (incl. the symmetry cut)
-    const SegmentBVH* borders = nullptr;  // polygroup borders (Keep Groups)
+    const SegmentBVH* borders = nullptr;  // polygroup borders (Keep Groups) and hard edges
+    const SegmentBVH* corners = nullptr;  // where several of those meet (as zero-length segments)
     float reach = 1.0f;
 };
 
@@ -1088,8 +1134,32 @@ void relax(QuadMesh& q, const Snapper& snap, int iterations, float edge, const Q
     if (snap.borders && !snap.borders->empty())
         for (uint32_t v = 0; v < nv; ++v) {
             SurfaceHit hit;
-            if (open[v] == 0 && snap.borders->closestPoint(q.P[v], 0.2f * edge, hit)) open[v] = 1;
+            if (open[v] == 0 && (q.feature[v] || snap.borders->closestPoint(q.P[v], 0.2f * edge, hit))) open[v] = 1;
         }
+    // Corners of the source (a box's, a thin slab's) each pin their nearest quad vertex, so they stay sharp.
+    std::vector<uint8_t> pinned(nv, 0);
+    if (snap.corners) {
+        // Closest pairs first, each corner and each vertex used once (a thin part's corners are close together).
+        struct Pair {
+            float d;
+            uint32_t corner, v;
+            vec3 at;
+        };
+        std::vector<Pair> pairs;
+        for (uint32_t v = 0; v < nv; ++v) {
+            SurfaceHit hit;
+            if (snap.corners->closestPoint(q.P[v], 0.75f * edge, hit)) pairs.push_back({hit.distance, hit.prim, v, hit.position});
+        }
+        std::sort(pairs.begin(), pairs.end(), [](const Pair& a, const Pair& b) { return a.d < b.d; });
+        std::unordered_map<uint32_t, uint8_t> cornerUsed;
+        for (const Pair& p : pairs) {
+            if (pinned[p.v] || cornerUsed[p.corner]) continue;
+            cornerUsed[p.corner] = 1;
+            pinned[p.v] = 1;
+            q.P[p.v] = p.at;
+            if (open[p.v] == 0) open[p.v] = 1;
+        }
+    }
     std::vector<std::vector<uint32_t>> borderNb(nv);
     for (uint32_t v = 0; v < nv; ++v)
         if (open[v] == 1)
@@ -1101,7 +1171,7 @@ void relax(QuadMesh& q, const Snapper& snap, int iterations, float edge, const Q
         parallelFor(nv, [&](size_t b, size_t e) {
             for (size_t v = b; v < e; ++v) {
                 const auto& ring = open[v] == 2 ? openNb[v] : open[v] == 1 && borderNb[v].size() == 2 ? borderNb[v] : nb[v];
-                if (ring.empty() || (open[v] == 1 && borderNb[v].size() != 2)) {
+                if (pinned[v] || ring.empty() || (open[v] == 1 && borderNb[v].size() != 2)) {
                     next[v] = q.P[v];
                     continue;
                 }
@@ -1114,7 +1184,8 @@ void relax(QuadMesh& q, const Snapper& snap, int iterations, float edge, const Q
             }
         });
         parallelFor(nv, [&](size_t b, size_t e) {
-            for (size_t v = b; v < e; ++v) q.P[v] = project(uint32_t(v), next[v], normal[v]);
+            for (size_t v = b; v < e; ++v)
+                if (!pinned[v]) q.P[v] = project(uint32_t(v), next[v], normal[v]);
         });
         if (progress && !progress(p0 + (p1 - p0) * float(it + 1) / float(std::max(iterations, 1)))) {
             cancelled = true;
@@ -1123,58 +1194,103 @@ void relax(QuadMesh& q, const Snapper& snap, int iterations, float edge, const Q
     }
 }
 
-} // namespace
+// Connected pieces of the working surface (triangles sharing vertices): the piece of each triangle.
+std::vector<uint32_t> pieceOfTriangles(const WorkMesh& m, size_t& count) {
+    UnionFind uf(m.P.size());
+    for (const glm::uvec3& t : m.T) {
+        const uint32_t a = uf.find(t.x);
+        if (const uint32_t b = uf.find(t.y); b != a) uf.parent[b] = a;
+        if (const uint32_t c = uf.find(t.z), r = uf.find(t.x); c != r) uf.parent[c] = r;
+    }
+    std::vector<uint32_t> id(m.P.size(), kNone), piece(m.T.size());
+    count = 0;
+    for (size_t t = 0; t < m.T.size(); ++t) {
+        const uint32_t r = uf.find(m.T[t].x);
+        if (id[r] == kNone) id[r] = uint32_t(count++);
+        piece[t] = id[r];
+    }
+    return piece;
+}
 
-bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::string& error,
-             const QRemeshProgress& progress, QRemeshStats* stats) {
-    const auto start = std::chrono::steady_clock::now();
-    static const bool timing = std::getenv("SF_QREMESH_TIMING") != nullptr; // stage times on stderr
-    auto report = [&](float f) {
-        if (timing)
-            std::fprintf(stderr, "qremesh %.2f: %.3f s\n", f,
-                         std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
-        if (progress && !progress(std::clamp(f, 0.0f, 1.0f))) {
-            error = "QRemesh cancelled";
-            return false;
-        }
-        return true;
-    };
-    auto mark = [&](const char* what) {
-        if (timing)
-            std::fprintf(stderr, "  %-28s %.3f s\n", what,
-                         std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
-    };
-    if (source.triangleCount() == 0) {
-        error = "QRemesh: the SubTool is empty";
-        return false;
+// Sorts the pieces into meshes: piece i goes to mesh slot[i] (kNone: left out). Vertices keep their order
+// (the hierarchy and the field sweeps follow it, so a mesh remeshes as those pieces would alone).
+std::vector<WorkMesh> gatherPieces(const WorkMesh& m, const std::vector<uint32_t>& piece, const std::vector<uint32_t>& slot,
+                                   size_t slots) {
+    std::vector<WorkMesh> out(slots);
+    std::vector<uint32_t> slotOfVertex(m.P.size(), kNone), local(m.P.size(), kNone);
+    for (size_t t = 0; t < m.T.size(); ++t)
+        if (const uint32_t s = slot[piece[t]]; s != kNone)
+            for (int k = 0; k < 3; ++k) slotOfVertex[m.T[t][k]] = s;
+    for (uint32_t v = 0; v < m.P.size(); ++v) {
+        const uint32_t s = slotOfVertex[v];
+        if (s == kNone) continue;
+        local[v] = uint32_t(out[s].P.size());
+        out[s].P.push_back(m.P[v]);
+        if (!m.color.empty()) out[s].color.push_back(m.color[v]);
     }
-    const int target = std::clamp(opt.targetQuads, 16, 2'000'000);
-    const int axis = opt.symmetryAxis >= 0 && opt.symmetryAxis <= 2 ? opt.symmetryAxis : -1;
+    for (size_t t = 0; t < m.T.size(); ++t) {
+        const uint32_t s = slot[piece[t]];
+        if (s == kNone) continue;
+        const glm::uvec3 tri = m.T[t];
+        out[s].T.push_back({local[tri.x], local[tri.y], local[tri.z]});
+        out[s].group.push_back(m.group[t]);
+    }
+    return out;
+}
 
-    // Working surface (one half with symmetry).
-    WorkMesh work;
-    work.P = source.positions;
-    work.T = source.triangles;
-    work.group.resize(work.T.size());
-    for (uint32_t t = 0; t < work.T.size(); ++t) work.group[t] = source.polygroupAt(t);
-    if (opt.usePolypaint && source.hasColors()) work.color = source.colors;
-    const AABB box = source.bounds();
-    const float diag = glm::length(box.extent());
-    if (!(diag > 0.0f)) {
-        error = "QRemesh: the SubTool has no size";
-        return false;
-    }
-    if (axis >= 0) {
-        work = cutAtPlane(work, axis, 1e-6f * diag);
-        if (work.T.empty()) {
-            error = "QRemesh: nothing on the positive side of the symmetry plane";
-            return false;
+// How far the surface is from its own mirror image about the plane (axis coordinate = c): the distances of
+// mirrored sample points (triangle centres) to the surface, area-weighted mean and 98th percentile.
+struct MirrorFit {
+    float mean = 0.0f, high = 0.0f;
+};
+MirrorFit mirrorFit(const TriangleBVH& surface, const WorkMesh& m, int axis, float c, float reach) {
+    const size_t step = std::max<size_t>(1, m.T.size() / 20000);
+    const size_t n = (m.T.size() + step - 1) / step;
+    std::vector<std::pair<float, float>> d(n); // (distance, area)
+    parallelFor(n, [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i) {
+            const glm::uvec3 t = m.T[i * step];
+            vec3 p = (m.P[t.x] + m.P[t.y] + m.P[t.z]) / 3.0f;
+            p[axis] = 2.0f * c - p[axis];
+            SurfaceHit hit;
+            d[i] = {surface.closestPoint(p, reach, hit) ? hit.distance : reach,
+                    0.5f * glm::length(glm::cross(m.P[t.y] - m.P[t.x], m.P[t.z] - m.P[t.x]))};
         }
+    });
+    double sum = 0.0, area = 0.0;
+    for (auto [dist, a] : d) sum += double(dist) * a, area += a;
+    MirrorFit f;
+    if (area <= 0.0) return f;
+    f.mean = float(sum / area);
+    std::sort(d.begin(), d.end());
+    double acc = 0.0;
+    for (auto [dist, a] : d) {
+        acc += a;
+        f.high = dist;
+        if (acc >= 0.98 * area) break;
     }
+    return f;
+}
+
+// One piece of the working surface, remeshed: its quads (empty when the lattice found none), the vertices on
+// the symmetry cut, and the lattice size used.
+struct PieceResult {
+    QuadMesh mesh;
+    std::vector<uint8_t> seam;
+    float spacing = 0.0f;
+    int attempts = 0;
+};
+
+// The field-aligned remesh of one connected piece to about `wantQuads` quads. False on cancel.
+bool remeshPiece(WorkMesh work, int axis, double wantQuads, const QRemeshOptions& opt, float diag,
+                 const std::function<bool(float)>& report, const std::function<void(const char*)>& mark,
+                 PieceResult& res) {
+    static const bool timing = std::getenv("SF_QREMESH_TIMING") != nullptr;
+    const QRemeshProgress progress = [&](float f) { return report(f); };
     double area = 0.0;
     for (const glm::uvec3& t : work.T) area += 0.5 * glm::length(glm::cross(work.P[t.y] - work.P[t.x], work.P[t.z] - work.P[t.x]));
     // Coarse lattice spacing: the extracted faces (about target / 4 of them, each split into ~4 quads).
-    const double faces = std::max(4.0, double(target) / 4.0 / (axis >= 0 ? 2.0 : 1.0));
+    const double faces = std::max(4.0, wantQuads / 4.0);
     float spacing = float(std::sqrt(area / faces));
     const bool adaptive = opt.adaptive > 0.01f || !work.color.empty();
     const float wantEdge = spacing / 4.0f; // about four graph vertices per lattice edge
@@ -1320,9 +1436,7 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
     // Position field and extraction; the lattice size is corrected until the quad count is near the target.
     PolyMesh poly;
     QuadMesh qm;
-    QRemeshStats st;
     float sp = spacing;
-    const double wantQuads = double(target) / (axis >= 0 ? 2.0 : 1.0);
     for (int attempt = 0; attempt < 4; ++attempt) {
         setScale(sp);
         Level& top = levels.back();
@@ -1352,22 +1466,23 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
         splitLargeFaces(poly);
         qm = splitIntoQuads(poly);
         removeDoublets(qm);
-        st.attempts = attempt + 1;
+        res.attempts = attempt + 1;
         const double quads = double(qm.quads.size());
         if (quads <= 0.0) break;
         const double ratio = quads / wantQuads;
         if (std::abs(ratio - 1.0) < 0.05 || attempt == 3) break;
         sp *= float(std::sqrt(ratio));
     }
-    if (qm.quads.empty()) {
-        error = "QRemesh could not build quads on this surface (try a higher Target or turn Keep Groups off)";
-        return false;
-    }
+    if (qm.quads.empty()) return true; // no quads: the caller tries a finer lattice or keeps the piece as it is
     if (!report(0.85f)) return false;
 
     // Snap to the sculpt and relax.
-    SegmentBVH boundaryBvh, borderBvh;
+    SegmentBVH boundaryBvh, borderBvh, cornerBvh;
     {
+        std::vector<vec3> c;
+        for (uint32_t i = 0; i < levels[0].size(); ++i)
+            if (levels[0].ctype[i] == kPoint) c.push_back(levels[0].V[i]);
+        cornerBvh.build(c, c);
         std::vector<vec3> a, b;
         for (auto& s : boundarySegs) a.push_back(s.first), b.push_back(s.second);
         boundaryBvh.build(std::move(a), std::move(b));
@@ -1376,26 +1491,235 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
         borderBvh.build(std::move(a), std::move(b));
     }
     Snapper snap{&surface, boundaryBvh.empty() ? nullptr : &boundaryBvh, borderBvh.empty() ? nullptr : &borderBvh,
-                 spacing * 4.0f + 1e-3f * diag};
+                 cornerBvh.empty() ? nullptr : &cornerBvh, spacing * 4.0f + 1e-3f * diag};
     bool cancelled = false;
     relax(qm, snap, std::max(opt.smoothIterations, 0), sp * 0.5f, progress, 0.85f, 0.95f, cancelled);
-    if (cancelled) {
-        error = "QRemesh cancelled";
-        return false;
-    }
+    if (cancelled) return false;
 
-    // Symmetry: mirror the half, welding the vertices on the plane.
+    // Vertices on the symmetry cut: open edges lying on the plane.
+    res.seam.assign(qm.P.size(), 0);
     if (axis >= 0) {
         std::unordered_map<uint64_t, int> edgeUse;
         for (const auto& f : qm.quads)
             for (int k = 0; k < 4; ++k) ++edgeUse[edgeKey(f[k], f[(k + 1) % 4])];
-        std::vector<uint8_t> seam(qm.P.size(), 0);
         for (auto [key, uses] : edgeUse)
             if (uses == 1) {
                 const uint32_t a = uint32_t(key >> 32), b = uint32_t(key & 0xffffffffu);
-                if (std::abs(qm.P[a][axis]) < 0.3f * sp && std::abs(qm.P[b][axis]) < 0.3f * sp) seam[a] = seam[b] = 1;
+                if (std::abs(qm.P[a][axis]) < 0.3f * sp && std::abs(qm.P[b][axis]) < 0.3f * sp) res.seam[a] = res.seam[b] = 1;
             }
-        const size_t nv = qm.P.size(), nq = qm.quads.size();
+    }
+    res.spacing = sp;
+    res.mesh = std::move(qm);
+    return true;
+
+}
+
+} // namespace
+
+bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::string& error,
+             const QRemeshProgress& progress, QRemeshStats* stats) {
+    const auto start = std::chrono::steady_clock::now();
+    static const bool timing = std::getenv("SF_QREMESH_TIMING") != nullptr; // stage times on stderr
+    auto report = [&](float f) {
+        if (timing)
+            std::fprintf(stderr, "qremesh %.2f: %.3f s\n", f,
+                         std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+        if (progress && !progress(std::clamp(f, 0.0f, 1.0f))) {
+            error = "QRemesh cancelled";
+            return false;
+        }
+        return true;
+    };
+    auto mark = [&](const char* what) {
+        if (timing)
+            std::fprintf(stderr, "  %-28s %.3f s\n", what,
+                         std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+    };
+    if (source.triangleCount() == 0) {
+        error = "QRemesh: the SubTool is empty";
+        return false;
+    }
+    const int target = std::clamp(opt.targetQuads, 16, 2'000'000);
+    const int askedAxis = opt.symmetryAxis >= 0 && opt.symmetryAxis <= 2 ? opt.symmetryAxis : -1;
+    QRemeshStats st;
+
+    WorkMesh work;
+    work.P = source.positions;
+    work.T = source.triangles;
+    work.group.resize(work.T.size());
+    for (uint32_t t = 0; t < work.T.size(); ++t) work.group[t] = source.polygroupAt(t);
+    if (opt.usePolypaint && source.hasColors()) work.color = source.colors;
+    const AABB box = source.bounds();
+    const float diag = glm::length(box.extent());
+    if (!(diag > 0.0f)) {
+        error = "QRemesh: the SubTool has no size";
+        return false;
+    }
+
+    // The whole sculpt as a query surface: the symmetry test, attributes, and the snap of mirrored vertices.
+    TriangleBVH full;
+    auto buildFull = [&] {
+        if (full.empty()) full.build(source.positions, source.triangles);
+    };
+
+    // Symmetry: find the mirror plane (the world's, or the model's own when it sits off the origin) and check
+    // the model really is mirror-symmetric about it; a model that isn't is remeshed without symmetry rather
+    // than having one side replaced by the other.
+    int axis = -1;
+    float center = 0.0f;
+    if (askedAxis >= 0) {
+        buildFull();
+        double totalArea = 0.0;
+        for (const glm::uvec3& t : work.T)
+            totalArea += 0.5 * glm::length(glm::cross(work.P[t.y] - work.P[t.x], work.P[t.z] - work.P[t.x]));
+        const float edge = float(std::sqrt(totalArea / double(target)));
+        std::vector<float> candidates;
+        if (opt.symmetryAuto) {
+            candidates = {0.0f, box.center()[askedAxis]};
+            double c = 0.0;
+            for (const glm::uvec3& t : work.T) {
+                const float a = 0.5f * glm::length(glm::cross(work.P[t.y] - work.P[t.x], work.P[t.z] - work.P[t.x]));
+                c += double(a) * double(work.P[t.x][askedAxis] + work.P[t.y][askedAxis] + work.P[t.z][askedAxis]) / 3.0;
+            }
+            if (totalArea > 0.0) candidates.push_back(float(c / totalArea));
+        } else {
+            candidates = {opt.symmetryCenter};
+        }
+        MirrorFit best;
+        best.mean = std::numeric_limits<float>::max();
+        for (float c : candidates) {
+            const MirrorFit f = mirrorFit(full, work, askedAxis, c, 0.25f * diag);
+            if (timing)
+                std::fprintf(stderr, "  symmetry plane %.4f: mean %.4f, 98%% %.4f (edge %.4f)\n", c, f.mean, f.high, edge);
+            if (f.mean < best.mean) best = f, center = c;
+        }
+        st.symmetryCenter = center;
+        st.asymmetry = edge > 0.0f ? best.mean / edge : 0.0f;
+        if (best.mean <= 0.2f * edge && best.high <= 1.0f * edge) axis = askedAxis;
+        mark("symmetry plane");
+    }
+    st.symmetryAxis = askedAxis;
+    st.symmetryUsed = axis >= 0;
+    if (axis >= 0) {
+        for (vec3& p : work.P) p[axis] -= center;
+        work = cutAtPlane(work, axis, 1e-6f * diag);
+        if (work.T.empty()) {
+            error = "QRemesh: nothing on the positive side of the symmetry plane";
+            return false;
+        }
+    }
+
+    // Small separate pieces (eyes, teeth, rivets: fewer than ~100 quads by their area) are remeshed on their
+    // own with a few dozen quads at least, so they don't vanish between the lattice corners of the big ones;
+    // the rest share one field (and the target, by curvature, as before).
+    const double wantQuads = double(target) / (axis >= 0 ? 2.0 : 1.0);
+    constexpr double kOwnFieldBelow = 100.0, kMinPieceQuads = 32.0;
+    std::vector<WorkMesh> parts;
+    std::vector<double> partArea, budget;
+    {
+        size_t count = 0;
+        const std::vector<uint32_t> piece = pieceOfTriangles(work, count);
+        st.pieces = count;
+        std::vector<double> pieceArea(count, 0.0);
+        double area = 0.0;
+        for (size_t t = 0; t < work.T.size(); ++t) {
+            const glm::uvec3 tri = work.T[t];
+            const double a = 0.5 * glm::length(glm::cross(work.P[tri.y] - work.P[tri.x], work.P[tri.z] - work.P[tri.x]));
+            pieceArea[piece[t]] += a;
+            area += a;
+        }
+        const double biggest = count ? *std::max_element(pieceArea.begin(), pieceArea.end()) : 0.0;
+        std::vector<uint8_t> small(count, 0);
+        double smallTotal = 0.0, bigArea = 0.0;
+        std::vector<double> smallBudget(count, 0.0);
+        for (size_t i = 0; i < count; ++i) {
+            const double share = wantQuads * pieceArea[i] / std::max(area, 1e-30);
+            if (share >= kOwnFieldBelow || pieceArea[i] >= biggest) {
+                bigArea += pieceArea[i];
+                continue;
+            }
+            small[i] = 1;
+            // Adaptive Size: a small piece is tightly curved, so it gets denser quads than its area alone gives
+            // (up to the 1 / 0.45^2 the curvature allows within a piece); sizes as the radius of a sphere of the
+            // same area, against the biggest piece's.
+            double weight = 1.0;
+            if (opt.adaptive > 0.01f)
+                weight = std::clamp(std::pow(std::sqrt(biggest / std::max(pieceArea[i], 1e-30)) / 4.0, 1.2 * double(opt.adaptive)),
+                                    1.0, 4.9);
+            smallBudget[i] = std::max(share * weight, kMinPieceQuads);
+            smallTotal += smallBudget[i];
+        }
+        if (smallTotal == 0.0) {
+            parts.push_back(std::move(work));
+            partArea.push_back(bigArea);
+            budget.push_back(wantQuads);
+        } else {
+            std::vector<uint32_t> slot(count, kNone);
+            size_t slots = bigArea > 0.0 ? 1 : 0;
+            if (bigArea > 0.0) {
+                partArea.push_back(bigArea);
+                budget.push_back(std::max(wantQuads - smallTotal, 0.5 * wantQuads));
+            }
+            for (size_t i = 0; i < count; ++i) {
+                if (!small[i]) {
+                    slot[i] = 0;
+                    continue;
+                }
+                slot[i] = uint32_t(slots++);
+                partArea.push_back(pieceArea[i]);
+                budget.push_back(smallBudget[i]);
+            }
+            parts = gatherPieces(work, piece, slot, slots);
+        }
+        work = WorkMesh{};
+    }
+    size_t totalTris = 0;
+    for (const WorkMesh& p : parts) totalTris += p.T.size();
+    if (!report(0.03f)) return false;
+
+    QuadMesh qm;
+    std::vector<uint8_t> seam;
+    size_t trisDone = 0;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const float f0 = 0.03f + 0.9f * float(trisDone) / float(std::max<size_t>(totalTris, 1));
+        const float f1 = 0.03f + 0.9f * float(trisDone + parts[i].T.size()) / float(std::max<size_t>(totalTris, 1));
+        trisDone += parts[i].T.size();
+        const std::function<bool(float)> pieceReport = [&](float f) { return report(f0 + (f1 - f0) * f); };
+        PieceResult r;
+        // A piece the lattice misses is tried again finer, then kept as it is (its own triangles).
+        for (int attempt = 0; attempt < 3 && r.mesh.quads.empty(); ++attempt) {
+            r = PieceResult{};
+            if (!remeshPiece(parts[i], axis, budget[i] * std::pow(2.5, attempt), opt, diag, pieceReport, mark, r)) {
+                error = "QRemesh cancelled";
+                return false;
+            }
+            st.attempts += r.attempts;
+        }
+        const uint32_t base = uint32_t(qm.P.size());
+        if (r.mesh.quads.empty()) {
+            const WorkMesh& p = parts[i];
+            qm.P.insert(qm.P.end(), p.P.begin(), p.P.end());
+            for (const glm::uvec3& t : p.T) qm.tris.push_back(t + glm::uvec3(base));
+            for (const vec3& v : p.P) seam.push_back(axis >= 0 && std::abs(v[axis]) <= 1e-6f * diag);
+            continue;
+        }
+        if (timing)
+            std::fprintf(stderr, "  piece %zu: %zu triangles, area %.4g, budget %.0f -> %zu quads\n", i, parts[i].T.size(),
+                         partArea[i], budget[i], r.mesh.quads.size());
+        qm.P.insert(qm.P.end(), r.mesh.P.begin(), r.mesh.P.end());
+        for (const glm::uvec4& q : r.mesh.quads) qm.quads.push_back(q + glm::uvec4(base));
+        seam.insert(seam.end(), r.seam.begin(), r.seam.end());
+    }
+    parts.clear();
+    if (qm.quads.empty() && qm.tris.empty()) {
+        error = "QRemesh could not build quads on this surface (try a higher Target or turn Keep Groups off)";
+        return false;
+    }
+    if (!report(0.94f)) return false;
+
+    // Symmetry: mirror the half, welding the vertices on the plane.
+    if (axis >= 0) {
+        const size_t nv = qm.P.size(), nq = qm.quads.size(), nt = qm.tris.size();
         std::vector<uint32_t> mirror(nv);
         for (uint32_t v = 0; v < nv; ++v) {
             if (seam[v]) {
@@ -1412,25 +1736,38 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
             const glm::uvec4 q = qm.quads[f];
             qm.quads.push_back({mirror[q.w], mirror[q.z], mirror[q.y], mirror[q.x]});
         }
+        for (size_t f = 0; f < nt; ++f) {
+            const glm::uvec3 t = qm.tris[f];
+            qm.tris.push_back({mirror[t.z], mirror[t.y], mirror[t.x]});
+        }
+        for (vec3& p : qm.P) p[axis] += center;
+        // A model only nearly symmetric: the topology stays mirrored, each side sits on its own surface.
+        if (st.asymmetry > 1e-3f)
+            parallelFor(qm.P.size(), [&](size_t b, size_t e) {
+                for (size_t v = b; v < e; ++v) {
+                    SurfaceHit hit;
+                    if (full.closestPoint(qm.P[v], 0.25f * diag, hit)) qm.P[v] = hit.position;
+                }
+            });
     }
 
-    // Output mesh: each quad as two triangles split along corner 0 - 2.
+    // Output mesh: each quad as two triangles split along corner 0 - 2, then any pieces kept as triangles.
     Mesh m;
     m.positions = qm.P;
-    m.triangles.reserve(qm.quads.size() * 2);
+    m.triangles.reserve(qm.quads.size() * 2 + qm.tris.size());
     for (const auto& q : qm.quads) {
         const uint32_t t = uint32_t(m.triangles.size());
         m.triangles.push_back({q.x, q.y, q.z});
         m.triangles.push_back({q.x, q.z, q.w});
         m.pairQuad(t, t + 1);
     }
+    for (const glm::uvec3& t : qm.tris) m.triangles.push_back(t);
     if (!report(0.96f)) return false;
 
     // Attributes from the closest point of the original sculpt.
     const bool needAttr = source.hasMask() || source.hasColors() || opt.keepGroups;
     if (needAttr) {
-        TriangleBVH full;
-        full.build(source.positions, source.triangles);
+        buildFull();
         const float reach = diag;
         if (source.hasMask() || source.hasColors()) {
             if (source.hasMask()) m.ensureMask();
@@ -1450,7 +1787,7 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
         }
         if (opt.keepGroups && source.hasPolygroups()) {
             m.ensurePolygroups();
-            const size_t nq = m.triangles.size() / 2;
+            const size_t nq = qm.quads.size();
             parallelFor(nq, [&](size_t b, size_t e) {
                 for (size_t q = b; q < e; ++q) {
                     const glm::uvec3 t0 = m.triangles[2 * q], t1 = m.triangles[2 * q + 1];
@@ -1460,6 +1797,12 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
                     m.polygroups[2 * q] = m.polygroups[2 * q + 1] = g;
                 }
             });
+            for (size_t t = 2 * nq; t < m.triangles.size(); ++t) {
+                const glm::uvec3 tri = m.triangles[t];
+                SurfaceHit hit;
+                const vec3 c = (m.positions[tri.x] + m.positions[tri.y] + m.positions[tri.z]) / 3.0f;
+                m.polygroups[t] = full.closestPoint(c, reach, hit) ? source.polygroupAt(hit.prim) : 0u;
+            }
         }
     }
     m.rebuildTopology();

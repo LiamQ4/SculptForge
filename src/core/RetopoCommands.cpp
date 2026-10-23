@@ -37,12 +37,24 @@ std::string applyQRemesh(Document& doc, Mesh result, bool keepOriginal, const QR
     }
     doc.replaceMeshUndoable(std::move(result), "QRemesh");
     const size_t faces = st.quads + st.triangles;
-    char buf[256];
-    std::snprintf(buf, sizeof buf, "QRemesh: %zu quads%s from %zu triangles (%.0f%% quads%s) in %.1f s%s", st.quads,
+    std::string sym;
+    if (st.symmetryAxis >= 0) {
+        const char axis = char('X' + st.symmetryAxis);
+        char s[160];
+        if (!st.symmetryUsed)
+            std::snprintf(s, sizeof s, "; Symmetry off: the model isn't mirror-symmetric across %c", axis);
+        else if (std::abs(st.symmetryCenter) > 1e-6f)
+            std::snprintf(s, sizeof s, "; mirrored across %c = %.3g (the model's middle)", axis, double(st.symmetryCenter));
+        else
+            std::snprintf(s, sizeof s, "; mirrored across %c", axis);
+        sym = s;
+    }
+    char buf[512];
+    std::snprintf(buf, sizeof buf, "QRemesh: %zu quads%s from %zu triangles (%.0f%% quads%s) in %.1f s%s%s", st.quads,
                   st.triangles ? (" + " + std::to_string(st.triangles) + " triangles").c_str() : "", before,
                   faces ? 100.0 * double(st.quads) / double(faces) : 0.0,
                   st.nonManifoldEdges ? (", " + std::to_string(st.nonManifoldEdges) + " non-manifold edges").c_str() : "",
-                  st.seconds, keepOriginal ? "; the original is kept as a hidden SubTool" : "");
+                  st.seconds, sym.c_str(), keepOriginal ? "; the original is kept as a hidden SubTool" : "");
     return buf;
 }
 
@@ -60,7 +72,11 @@ void registerRetopoCommands(CommandRegistry& reg) {
                                         "loop. Default true.", false},
               {"use_polypaint", T::Bool, "Use the polypaint as a density guide: red areas get up to 4x the quads, blue "
                                          "areas down to a quarter.", false},
-              {"symmetry", T::String, "Mirror the topology across x, y or z (the plane through the origin). Default: none.", false},
+              {"symmetry", T::String, "Mirror the topology across x, y or z. The mirror plane is found from the model (the "
+                                      "world's centre plane, or the model's own middle when it sits off-centre); a model "
+                                      "that isn't mirror-symmetric is remeshed without symmetry. Default: none.", false},
+              {"symmetry_center", T::Number, "Use this mirror plane instead (its coordinate along the symmetry axis, e.g. 0 "
+                                             "for the world's centre).", false},
               {"keep_original", T::Bool, "Keep the original as a hidden SubTool below (for project_all). Default false.", false},
               {"smooth", T::Number, "Relaxation passes on the surface (0-30). Default 6.", false},
               {"seed", T::Number, "Random start of the direction field (results are repeatable per seed).", false},
@@ -75,6 +91,10 @@ void registerRetopoCommands(CommandRegistry& reg) {
                  o.detectEdges = argBool(a, "detect_edges", true);
                  o.usePolypaint = argBool(a, "use_polypaint", false);
                  o.symmetryAxis = symmetryAxisArg(argString(a, "symmetry"));
+                 if (a.contains("symmetry_center")) {
+                     o.symmetryAuto = false;
+                     o.symmetryCenter = float(argNumber(a, "symmetry_center", 0.0));
+                 }
                  o.smoothIterations = int(std::clamp(argNumber(a, "smooth", 6), 0.0, 30.0));
                  o.seed = uint32_t(std::max(0.0, argNumber(a, "seed", 1)));
                  Mesh out;
