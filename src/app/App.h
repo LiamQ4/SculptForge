@@ -91,7 +91,7 @@ public:
     void queueFile(FileAction action, std::string path);
 
 private:
-    enum class Drag { None, Stroke, Orbit, Pan, Zoom, MaskCanvas, SubToolClick };
+    enum class Drag { None, Stroke, Orbit, Pan, Zoom, MaskCanvas, SubToolClick, Select };
 
     void handleEvent(const SDL_Event& e);
     void onMouseDown(float x, float y, Uint8 button);
@@ -284,10 +284,13 @@ private:
 
     // Masking (PanelMasking.cpp): Ctrl strokes paint mask, Ctrl+Alt erases;
     // Ctrl+click on the background inverts it, Ctrl+drag there clears it.
+    // With MaskLasso / MaskRect, Ctrl+drag draws the shape instead.
     void drawMaskingSection();
     void beginMaskStroke(float x, float y);
     void maskCanvasMove(float x, float y);
     void maskCanvasRelease();
+    bool maskSelectMouseDown(float x, float y, SDL_Keymod mod); // true if it took the click
+    void maskSelectMouseUp();
     bool strokeMask_ = false; // the current stroke edits the mask
     float maskStrength_ = 1.0f;
     int maskIterations_ = 1;
@@ -299,9 +302,25 @@ private:
     bool polygroupMouseDown(float x, float y, SDL_Keymod mod); // true if it took the click
     void polygroupMouseUp();
     void drawPolygroupsSection();
-    void drawPolygroupOverlay();
-    bool hideRectActive_ = false;
-    float hideRectX_ = 0.0f, hideRectY_ = 0.0f;
+    // Screen selections (Selection.cpp): the rectangle or lasso dragged for
+    // visibility (Ctrl+Shift, ZBrush SelectRect / SelectLasso) or for the mask
+    // (Ctrl, MaskRect / MaskLasso). Pen is the mask's brush-stroke mode.
+    enum class SelectShape { Pen, Lasso, Rect };
+    enum class SelectTarget { Hide, Mask };
+    void beginSelection(float x, float y, SelectTarget target, SelectShape shape);
+    void selectionMove(float x, float y);
+    void selectionMouseUp();
+    // Runs the rectangle or lasso command for the dragged shape with its view
+    // (points in -1..1); false for a lasso too small to enclose anything.
+    bool runSelection(const char* rectCommand, const char* lassoCommand, Args args);
+    void drawSelectionOverlay();
+    SelectShape maskShape_ = SelectShape::Pen;
+    SelectShape hideShape_ = SelectShape::Rect;
+    SelectTarget selectTarget_ = SelectTarget::Hide;
+    SelectShape selectShape_ = SelectShape::Rect;
+    // Window pixels: the start, then the lasso's points (a rectangle's other corner is the cursor).
+    std::vector<ImVec2> selectPath_;
+    bool selectMoved_ = false; // left the click slop: a drag, not a click
     float polygroupAngle_ = 30.0f;
     // visiblePolygroupCount is O(triangles): recomputed only when the key below changes.
     size_t visibleGroups_ = 0;

@@ -50,6 +50,9 @@ std::vector<uint8_t> hiddenInverted(const Mesh& mesh);
 // behind the camera count as outside.
 std::vector<uint8_t> hiddenByRect(const Mesh& mesh, const glm::mat4& viewProj, glm::vec2 rectMin, glm::vec2 rectMax,
                                   bool hideInside);
+// The same with a lasso: a closed polygon of NDC points (even-odd inside test).
+std::vector<uint8_t> hiddenByLasso(const Mesh& mesh, const glm::mat4& viewProj, const std::vector<glm::vec2>& lasso,
+                                   bool hideInside);
 
 // True when every triangle of `group` is visible and no other is.
 bool polygroupIsolated(const Mesh& mesh, uint32_t group);
@@ -61,7 +64,7 @@ Mesh deleteHiddenTriangles(const Mesh& mesh);
 Mesh extractTriangles(const Mesh& mesh, const std::vector<uint8_t>& keep);
 
 // Adds the polygroup and visibility commands (polygroup_*, hide_polygroup,
-// isolate_polygroup, show_all, invert_visibility, hide_rect, delete_hidden).
+// isolate_polygroup, show_all, invert_visibility, hide_rect, hide_lasso, delete_hidden).
 void registerPolygroupCommands(CommandRegistry& registry);
 
 } // namespace sf

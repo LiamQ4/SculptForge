@@ -1,13 +1,14 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Masking: mask strokes (symmetry, erase, undo), the mask_* commands and
-// brushes honouring a painted mask.
+// Masking: mask strokes (symmetry, erase, undo), the mask_* commands, the
+// rectangle and lasso mask selections and brushes honouring a painted mask.
 #include "TestHarness.h"
 
 #include "core/Commands.h"
 #include "core/Masking.h"
 #include "core/Primitives.h"
+#include "core/ScreenSelect.h"
 #include "core/Sculpt.h"
 
 #include <algorithm>
@@ -131,7 +132,7 @@ TEST(painted_mask_protects_from_brushes) {
 TEST(mask_commands_registered) {
     const std::string schema = registry().toolSchemaJson();
     for (const char* name : {"mask_clear", "mask_all", "mask_invert", "mask_blur", "mask_sharpen", "mask_grow",
-                             "mask_shrink", "mask_by_cavity", "mask_by_polygroup"}) {
+                             "mask_shrink", "mask_by_cavity", "mask_by_polygroup", "mask_rect", "mask_lasso"}) {
         CHECK(registry().find(name) != nullptr);
         CHECK(schema.find(std::string("\"") + name + "\"") != std::string::npos);
     }
@@ -265,4 +266,80 @@ TEST(mask_by_polygroup) {
     CHECK(registry().execute(d, "undo").ok);
     CHECK(registry().execute(d, "undo").ok);
     CHECK(countMasked(m, 0.0f) == 0);
+}
+
+TEST(screen_polygon_inside_test) {
+    // A concave "C" opening to the right, and a long many-sided circle (band lookups).
+    const ScreenPolygon c({{-1, -1}, {1, -1}, {1, -0.5f}, {-0.5f, -0.5f}, {-0.5f, 0.5f}, {1, 0.5f}, {1, 1}, {-1, 1}});
+    CHECK(c.valid());
+    CHECK(c.contains({-0.75f, 0.0f}) && c.contains({0.5f, -0.75f}) && c.contains({0.5f, 0.75f}));
+    CHECK(!c.contains({0.25f, 0.0f}) && !c.contains({1.5f, 0.0f}) && !c.contains({0.0f, 1.5f}));
+    std::vector<glm::vec2> ring;
+    for (int i = 0; i < 400; ++i) {
+        const float a = float(i) / 400.0f * 6.2831853f;
+        ring.push_back({std::cos(a), std::sin(a)});
+    }
+    const ScreenPolygon circle(ring);
+    int wrong = 0;
+    for (int y = -12; y <= 12; ++y)
+        for (int x = -12; x <= 12; ++x) {
+            const glm::vec2 p(float(x) / 10.0f, float(y) / 10.0f);
+            const float r = glm::length(p);
+            if (std::abs(r - 1.0f) > 0.02f && circle.contains(p) != (r < 1.0f)) ++wrong;
+        }
+    CHECK(wrong == 0);
+    // Too few points or no area: nothing is inside.
+    CHECK(!ScreenPolygon({{0, 0}, {1, 1}}).valid());
+    CHECK(!ScreenPolygon({{0, 0}, {1, 0}, {2, 0}}).valid());
+}
+
+TEST(mask_rect_and_lasso) {
+    Document d = makeDoc(makeIcosphere(3));
+    const Mesh& m = d.mesh;
+    // Default view: the mesh seen from the front, NDC spanning its bounds. Mask x < 0 (both sides of the sphere).
+    CHECK(registry().execute(d, "mask_rect", {{"x0", -1.0}, {"y0", -1.0}, {"x1", 0.0}, {"y1", 1.0}}).ok);
+    int wrong = 0;
+    for (uint32_t v = 0; v < m.vertexCount(); ++v)
+        if (std::abs(m.positions[v].x) > 1e-3f && (m.mask[v] == 1.0f) != (m.positions[v].x < 0.0f)) ++wrong;
+    CHECK(wrong == 0 && countMasked(m) > 0);
+    CHECK(d.undo.canUndo() && d.modified);
+
+    // Alt (unmask) with a lasso triangle over the bottom-left quarter: there, x < 0 and y < 0, is free again.
+    CHECK(registry().execute(d, "mask_lasso", {{"points", std::string("-1.5 0  0 0  0 -1.5  -1.5 -1.5")}, {"unmask", true}}).ok);
+    wrong = 0;
+    for (uint32_t v = 0; v < m.vertexCount(); ++v) {
+        const glm::vec3 p = m.positions[v];
+        if (std::abs(p.x) < 1e-3f || std::abs(p.y) < 1e-3f) continue;
+        if ((m.mask[v] == 1.0f) != (p.x < 0.0f && p.y > 0.0f)) ++wrong;
+    }
+    CHECK(wrong == 0);
+
+    // Undo steps back one selection at a time.
+    CHECK(registry().execute(d, "undo").ok);
+    wrong = 0;
+    for (uint32_t v = 0; v < m.vertexCount(); ++v)
+        if (std::abs(m.positions[v].x) > 1e-3f && (m.mask[v] == 1.0f) != (m.positions[v].x < 0.0f)) ++wrong;
+    CHECK(wrong == 0);
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(countMasked(m, 0.0f) == 0);
+
+    // Partial strength, an explicit identity view (NDC = world), and hidden vertices keep their mask.
+    Document h = makeDoc(makeIcosphere(3));
+    h.mesh.ensureHidden();
+    for (uint32_t t = 0; t < h.mesh.triangleCount(); ++t) h.mesh.hidden[t] = uint8_t(h.mesh.positions[h.mesh.triangles[t].x].y > 0.5f);
+    const std::string identity = "1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1";
+    CHECK(registry().execute(h, "mask_rect", {{"x0", -2.0}, {"y0", -2.0}, {"x1", 2.0}, {"y1", 2.0}, {"strength", 0.5},
+                                              {"view_proj", identity}}).ok);
+    bool ok = true;
+    for (uint32_t v = 0; v < h.mesh.vertexCount(); ++v) ok &= h.mesh.mask[v] == (h.mesh.vertexHidden(v) ? 0.0f : 0.5f);
+    CHECK(ok);
+
+    // A selection that misses changes nothing and adds no undo step; bad arguments are errors.
+    Document e = makeDoc(makeIcosphere(2));
+    CHECK(registry().execute(e, "mask_rect", {{"x0", 5.0}, {"y0", 5.0}, {"x1", 6.0}, {"y1", 6.0}}).ok);
+    CHECK(!e.undo.canUndo());
+    CHECK(!registry().execute(e, "mask_lasso", {{"points", std::string("0 0 1 1")}}).ok);
+    CHECK(!registry().execute(e, "mask_lasso", {{"points", std::string("0 0 1 1 0 x")}}).ok);
+    CHECK(!registry().execute(e, "mask_lasso", {}).ok); // points is required
+    CHECK(!registry().execute(e, "mask_rect", {{"view_proj", std::string("1 2 3")}}).ok);
 }

@@ -140,11 +140,12 @@ action registry, the same source as the Controls window.
 | Paint the mask | Hold <kbd>Ctrl</kbd> while stroking on the model |
 | Erase the mask | Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd> while stroking on the model |
 | Invert the mask | <kbd>Ctrl</kbd>+click the background |
-| Clear the mask | <kbd>Ctrl</kbd>+drag on the background |
+| Clear the mask | <kbd>Ctrl</kbd>+drag on the background (with **MaskPen**) |
+| Mask inside a lasso or rectangle | <kbd>Ctrl</kbd>+drag with **MaskLasso** or **MaskRect** picked in **Tool > Masking** (add <kbd>Alt</kbd>: unmask) |
 | Isolate a polygroup | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click it (again: invert the visibility) |
 | Hide a polygroup | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd>+click it |
 | Show everything | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click the background |
-| Hide outside a rectangle | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag (add <kbd>Alt</kbd>: hide inside) |
+| Hide outside a rectangle or lasso | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag (add <kbd>Alt</kbd>: hide inside); **SelectRect** or **SelectLasso** in **Tool > Visibility** |
 | Select a SubTool | <kbd>Alt</kbd>+click it in the view |
 | Pan, zoom or orbit with a button | Drag on **Move**, **Zoom** or **Rotate** on the right shelf |
 | Help on any control | Hold <kbd>Ctrl</kbd> and point at it (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>: scripting parameters) |

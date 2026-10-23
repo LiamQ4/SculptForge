@@ -3,58 +3,39 @@
 //
 // Polygroups and visibility UI: the Tools panel section and the ZBrush
 // Ctrl+Shift viewport gestures (click to isolate / hide a group or show all,
-// drag a rectangle to hide outside or, with Alt, inside it). Every action
-// goes through the command registry (see core/Polygroups.cpp).
+// drag a rectangle or lasso to hide outside or, with Alt, inside it; the
+// shape is tracked and drawn by Selection.cpp). Every action goes through
+// the command registry (see core/Polygroups.cpp).
 #include "app/App.h"
 
-#include "core/Polygroups.h"
+#include "app/Ui.h"
 
-#include <cmath>
-#include <cstdio>
-#include <string>
+#include "core/Polygroups.h"
 
 namespace sf {
 
 namespace {
 
-constexpr float kClickSlopPx = 4.0f;
-
 bool ctrlShiftDown(SDL_Keymod mod) {
     return (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0 && (mod & SDL_KMOD_SHIFT) != 0;
-}
-
-std::string matrixString(const glm::mat4& m) {
-    std::string s;
-    char buf[32];
-    for (int i = 0; i < 16; ++i) {
-        std::snprintf(buf, sizeof buf, "%s%.9g", i ? " " : "", double(m[i / 4][i % 4]));
-        s += buf;
-    }
-    return s;
 }
 
 } // namespace
 
 bool App::polygroupMouseDown(float x, float y, SDL_Keymod mod) {
     if (!ctrlShiftDown(mod) || previewLod_ >= 0) return false;
-    hideRectActive_ = true;
-    hideRectX_ = x;
-    hideRectY_ = y;
+    beginSelection(x, y, SelectTarget::Hide, hideShape_);
     return true;
 }
 
 void App::polygroupMouseUp() {
-    hideRectActive_ = false;
     const bool alt = (inputMods() & SDL_KMOD_ALT) != 0;
-    const CanvasRect c = canvasRect();
-    if (c.w <= 0.0f || c.h <= 0.0f) return;
-
-    if (std::abs(mouseX_ - hideRectX_) < kClickSlopPx && std::abs(mouseY_ - hideRectY_) < kClickSlopPx) {
+    if (!selectMoved_) {
         // Click: isolate the group under the cursor (again: invert), Alt hides it,
         // empty canvas shows everything.
         doc_.syncBvh();
         RayHit hit;
-        if (!pick(hideRectX_, hideRectY_, hit)) {
+        if (!pick(selectPath_.front().x, selectPath_.front().y, hit)) {
             if (doc_.mesh.hasHidden()) runCommand("show_all");
             return;
         }
@@ -64,30 +45,8 @@ void App::polygroupMouseUp() {
         else runCommand("isolate_polygroup", {{"group", double(group)}});
         return;
     }
-
-    // Drag: rectangle in normalised device coordinates (y up).
-    auto ndc = [&](float px, float py) { return glm::vec2((px - c.x) / c.w * 2.0f - 1.0f, 1.0f - (py - c.y) / c.h * 2.0f); };
-    const glm::vec2 a = ndc(hideRectX_, hideRectY_), b = ndc(mouseX_, mouseY_);
-    runCommand("hide_rect", {{"x0", double(a.x)},
-                             {"y0", double(a.y)},
-                             {"x1", double(b.x)},
-                             {"y1", double(b.y)},
-                             {"inside", alt},
-                             {"view_proj", matrixString(camera_.projection() * camera_.view())}});
-}
-
-void App::drawPolygroupOverlay() {
-    if (!hideRectActive_) return;
-    if (std::abs(mouseX_ - hideRectX_) < kClickSlopPx && std::abs(mouseY_ - hideRectY_) < kClickSlopPx) return;
-    // Green keeps the inside, red hides it (Alt).
-    const bool alt = (inputMods() & SDL_KMOD_ALT) != 0;
-    const ImU32 line = alt ? IM_COL32(255, 110, 110, 230) : IM_COL32(120, 230, 140, 230);
-    const ImU32 fill = alt ? IM_COL32(255, 110, 110, 40) : IM_COL32(120, 230, 140, 30);
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
-    const ImVec2 p0(std::fmin(hideRectX_, mouseX_), std::fmin(hideRectY_, mouseY_));
-    const ImVec2 p1(std::fmax(hideRectX_, mouseX_), std::fmax(hideRectY_, mouseY_));
-    dl->AddRectFilled(p0, p1, fill);
-    dl->AddRect(p0, p1, line, 0.0f, 0, 1.5f);
+    // Drag: keep the inside of the rectangle or lasso, or with Alt hide it.
+    runSelection("hide_rect", "hide_lasso", {{"inside", alt}});
 }
 
 void App::drawPolygroupsSection() {
@@ -110,7 +69,8 @@ void App::drawPolygroupsSection() {
         renderSettings_.showPolygroups = true;
     };
     const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-    if (ImGui::Button("By normals", ImVec2(half, 0))) group("polygroup_auto_by_normals", {{"angle", double(polygroupAngle_)}});
+    if (ImGui::Button("By normals", ImVec2(half, 0)))
+        group("polygroup_auto_by_normals", {{"angle", double(polygroupAngle_)}});
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("New group wherever the surface turns more than the angle");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
@@ -126,6 +86,7 @@ void App::drawPolygroupsSection() {
 }
 
 void App::drawVisibilitySection() {
+    ui::Segmented(*this, {"select.rect", "select.lasso"});
     const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
     ImGui::BeginDisabled(!doc_.mesh.hasHidden());
     if (ImGui::Button("Show all", ImVec2(half, 0))) runCommand("show_all");
@@ -137,7 +98,7 @@ void App::drawVisibilitySection() {
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Ctrl+Shift+click a group to isolate it, +Alt to hide it, on the background to show all.\n"
-                          "Ctrl+Shift+drag hides outside the rectangle (Alt: inside).");
+                          "Ctrl+Shift+drag hides outside the rectangle or lasso (Alt: inside).");
 }
 
 } // namespace sf

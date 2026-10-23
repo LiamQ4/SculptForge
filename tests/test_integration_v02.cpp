@@ -264,9 +264,9 @@ TEST(v02_goz_keeps_mask_paint_and_groups) {
 TEST(v02_commands_registered_together) {
     for (const char* name :
          {"mask_clear", "mask_all", "mask_invert", "mask_blur", "mask_sharpen", "mask_grow", "mask_shrink",
-          "mask_by_cavity", "mask_by_polygroup", "polygroup_auto_by_normals", "polygroup_by_connectivity",
+          "mask_by_cavity", "mask_by_polygroup", "mask_rect", "mask_lasso", "polygroup_auto_by_normals", "polygroup_by_connectivity",
           "polygroup_from_mask", "polygroup_clear", "polygroup_merge_visible", "hide_polygroup", "isolate_polygroup",
-          "show_all", "invert_visibility", "hide_rect", "delete_hidden", "brush_set_alpha", "set_color", "paint_fill",
+          "show_all", "invert_visibility", "hide_rect", "hide_lasso", "delete_hidden", "brush_set_alpha", "set_color", "paint_fill",
           "paint_clear", "paint_from_cavity", "export_ply", "goz_import", "goz_export", "goz_send", "goz_receive",
           "export_stl", "save_project", "open_project"})
         CHECK(registry().find(name) != nullptr);

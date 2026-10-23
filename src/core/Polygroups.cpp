@@ -3,13 +3,11 @@
 #include "core/Polygroups.h"
 
 #include "core/Commands.h"
-
-#include <glm/gtc/matrix_transform.hpp>
+#include "core/ScreenSelect.h"
 
 #include <algorithm>
 #include <cmath>
 #include <set>
-#include <sstream>
 #include <string>
 
 namespace sf {
@@ -146,15 +144,18 @@ bool groupExists(const Mesh& m, uint32_t group) {
     return false;
 }
 
-// Front orthographic view of the mesh (+Z, like image_project), used by
-// hide_rect when no matrix is given: NDC -1..1 spans the bounds.
-glm::mat4 frontViewProj(const Mesh& m) {
-    const AABB b = m.bounds();
-    const glm::vec3 half = glm::max(b.extent() * 0.5f, glm::vec3(1e-6f));
-    const float depth = glm::length(b.extent()) + 1.0f;
-    const glm::vec3 eye = b.center() + glm::vec3(0, 0, depth);
-    return glm::ortho(-half.x, half.x, -half.y, half.y, 0.01f, depth * 2.0f) *
-           glm::lookAt(eye, b.center(), glm::vec3(0, 1, 0));
+// Hides or keeps the visible triangles by whether their centre projects inside a screen shape.
+template <class Inside>
+std::vector<uint8_t> hiddenByShape(const Mesh& mesh, const glm::mat4& viewProj, Inside inside, bool hideInside) {
+    std::vector<uint8_t> hidden = currentHidden(mesh);
+    for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
+        if (hidden[t]) continue;
+        const glm::uvec3& tri = mesh.triangles[t];
+        const glm::vec3 c = (mesh.positions[tri.x] + mesh.positions[tri.y] + mesh.positions[tri.z]) / 3.0f;
+        glm::vec2 ndc;
+        if ((projectToNdc(viewProj, c, ndc) && inside(ndc)) == hideInside) hidden[t] = 1;
+    }
+    return unlessAllHidden(std::move(hidden));
 }
 
 } // namespace
@@ -239,20 +240,15 @@ std::vector<uint8_t> hiddenInverted(const Mesh& mesh) {
 std::vector<uint8_t> hiddenByRect(const Mesh& mesh, const glm::mat4& viewProj, glm::vec2 rectMin, glm::vec2 rectMax,
                                   bool hideInside) {
     const glm::vec2 lo = glm::min(rectMin, rectMax), hi = glm::max(rectMin, rectMax);
-    std::vector<uint8_t> hidden = currentHidden(mesh);
-    for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
-        if (hidden[t]) continue;
-        const glm::uvec3& tri = mesh.triangles[t];
-        const glm::vec3 c = (mesh.positions[tri.x] + mesh.positions[tri.y] + mesh.positions[tri.z]) / 3.0f;
-        const glm::vec4 clip = viewProj * glm::vec4(c, 1.0f);
-        bool inside = false;
-        if (clip.w > 1e-8f) {
-            const glm::vec2 ndc = glm::vec2(clip) / clip.w;
-            inside = ndc.x >= lo.x && ndc.x <= hi.x && ndc.y >= lo.y && ndc.y <= hi.y;
-        }
-        if (inside == hideInside) hidden[t] = 1;
-    }
-    return unlessAllHidden(std::move(hidden));
+    return hiddenByShape(
+        mesh, viewProj, [&](glm::vec2 p) { return p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y; },
+        hideInside);
+}
+
+std::vector<uint8_t> hiddenByLasso(const Mesh& mesh, const glm::mat4& viewProj, const std::vector<glm::vec2>& lasso,
+                                   bool hideInside) {
+    const ScreenPolygon polygon(lasso);
+    return hiddenByShape(mesh, viewProj, [&](glm::vec2 p) { return polygon.contains(p); }, hideInside);
 }
 
 bool polygroupIsolated(const Mesh& mesh, uint32_t group) {
@@ -321,18 +317,20 @@ void registerPolygroupCommands(CommandRegistry& reg) {
     using T = ParamSpec::Type;
 
     // --- Polygroups ---
-    reg.add({"polygroup_auto_by_normals",
-             "Split the visible surface into polygroups wherever it turns more than an angle (each flat side of a "
-             "box becomes a group), like ZBrush Auto Groups / Groups By Normals.",
-             {{"angle", T::Number, "Largest normal deviation inside one group, in degrees (1-180). Default 30.", false}},
-             [](Document& doc, const Args& a) -> CommandResult {
-                 const float angle = float(std::clamp(argNumber(a, "angle", 30.0), 1.0, 180.0));
-                 commitPolygroups(doc, groupsByNormals(doc.mesh, angle), "Groups by Normals");
-                 return {true, groupSummary(doc.mesh)};
-             }});
+    reg.add(
+        {"polygroup_auto_by_normals",
+         "Split the visible surface into polygroups wherever it turns more than an angle (each flat side of a "
+         "box becomes a group), like ZBrush Auto Groups / Groups By Normals.",
+         {{"angle", T::Number, "Largest normal deviation inside one group, in degrees (1-180). Default 30.", false}},
+         [](Document& doc, const Args& a) -> CommandResult {
+             const float angle = float(std::clamp(argNumber(a, "angle", 30.0), 1.0, 180.0));
+             commitPolygroups(doc, groupsByNormals(doc.mesh, angle), "Groups by Normals");
+             return {true, groupSummary(doc.mesh)};
+         }});
 
     reg.add({"polygroup_by_connectivity",
-             "Give every disconnected piece of the visible mesh its own polygroup (like ZBrush Auto Groups).", {},
+             "Give every disconnected piece of the visible mesh its own polygroup (like ZBrush Auto Groups).",
+             {},
              [](Document& doc, const Args&) -> CommandResult {
                  commitPolygroups(doc, groupsByConnectivity(doc.mesh), "Groups by Connectivity");
                  return {true, groupSummary(doc.mesh)};
@@ -409,19 +407,36 @@ void registerPolygroupCommands(CommandRegistry& reg) {
               {"view_proj", T::String, "Optional 16 numbers: column-major view-projection matrix.", false}},
              [](Document& doc, const Args& a) -> CommandResult {
                  if (doc.mesh.triangleCount() == 0) return {false, "The mesh is empty"};
-                 glm::mat4 vp = frontViewProj(doc.mesh);
-                 const std::string matrix = argString(a, "view_proj");
-                 if (!matrix.empty()) {
-                     std::istringstream s(matrix);
-                     for (int i = 0; i < 16; ++i)
-                         if (!(s >> vp[i / 4][i % 4])) return {false, "view_proj needs 16 numbers"};
-                 }
+                 glm::mat4 vp;
+                 std::string error;
+                 if (!viewProjArg(doc.mesh, a, vp, error)) return {false, error};
                  const glm::vec2 lo(float(argNumber(a, "x0", -1)), float(argNumber(a, "y0", -1)));
                  const glm::vec2 hi(float(argNumber(a, "x1", 1)), float(argNumber(a, "y1", 1)));
                  const bool inside = argBool(a, "inside", false);
                  std::vector<uint8_t> hidden = hiddenByRect(doc.mesh, vp, lo, hi, inside);
                  if (hidden.empty())
                      return {false, inside ? "That would hide everything" : "Nothing visible inside the rectangle"};
+                 commitHidden(doc, hidden, inside ? "Hide Inside" : "Hide Outside");
+                 return {true, visibleSummary(doc.mesh)};
+             }});
+
+    reg.add({"hide_lasso",
+             "Lasso selection (ZBrush SelectLasso, Ctrl+Shift+drag): keep the visible triangles inside a screen "
+             "polygon and hide the rest, or hide the inside instead. Points are normalised (-1..1, y up) in the given "
+             "view; without a view they span the mesh seen from the front (+Z).",
+             {{"points", T::String, "The lasso: at least 3 points as \"x0 y0 x1 y1 ...\" (-1..1, y up).", true},
+              {"inside", T::Bool, "Hide the inside instead of the outside (ZBrush: Alt held).", false},
+              {"view_proj", T::String, "Optional 16 numbers: column-major view-projection matrix.", false}},
+             [](Document& doc, const Args& a) -> CommandResult {
+                 if (doc.mesh.triangleCount() == 0) return {false, "The mesh is empty"};
+                 glm::mat4 vp;
+                 std::vector<glm::vec2> lasso;
+                 std::string error;
+                 if (!viewProjArg(doc.mesh, a, vp, error) || !lassoArg(a, lasso, error)) return {false, error};
+                 const bool inside = argBool(a, "inside", false);
+                 std::vector<uint8_t> hidden = hiddenByLasso(doc.mesh, vp, lasso, inside);
+                 if (hidden.empty())
+                     return {false, inside ? "That would hide everything" : "Nothing visible inside the lasso"};
                  commitHidden(doc, hidden, inside ? "Hide Inside" : "Hide Outside");
                  return {true, visibleSummary(doc.mesh)};
              }});
