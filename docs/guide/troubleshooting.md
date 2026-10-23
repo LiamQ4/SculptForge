@@ -42,7 +42,7 @@ documentation** opens links to it).
 - Check the triangle count in the title strip (**Tris**). Millions of triangles on a laptop GPU are heavy;
   **Tool > Geometry > Decimate** or a lower **Voxel Remesh** resolution brings it down. See
   [Subdivide, Remesh, Decimate and LODs](geometry.md).
-- Turn off **Wireframe** (<kbd>W</kbd>) on dense meshes.
+- Turn off **Wireframe** (<kbd>Shift</kbd>+<kbd>F</kbd>) on dense meshes.
 - Hide SubTools you aren't working on, or **Solo** the active one.
 - A large Gaussian splat capture costs GPU time too: lower the count with **Clean floaters**, or untick
   **Show** in the **Splats** palette while you sculpt.

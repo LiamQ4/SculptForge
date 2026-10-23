@@ -8,7 +8,9 @@ read by `loadProject` (src/core/Project.cpp). Commands: `save_project path=...`,
 - `manifest.json`: always first. `format` = `"SculptForge project"`, `version` (integer, currently 4),
   `app_version`, then `subtools` (one entry per SubTool, in list order), `active_subtool` (index),
   `brushes` (recipe JSON), `active_brush` (name), optional `splats`, and app-owned keys (`camera`,
-  `render`, `brush`, `symmetry`).
+  `render`, `brush`, `symmetry`, `gizmo`). `gizmo` (added in 0.5 without a version bump; older readers
+  ignore it) holds the Gizmo 3D's `pivot`, `pivot_placed`, `orient_surface`, `axis_x` / `axis_y` (its
+  surface axes), `use_mask`, `all_subtools` and `falloff`.
 - Each `subtools[i]` holds `name`, `visible` (bool), `mesh`, `layers`, `active_layer` (sculpt layer
   strokes go into, -1 = base) and, for a mesh that came from ZBrush, `goz_name` (the GoZ object name
   that `goz_send` / `goz_receive` match on).

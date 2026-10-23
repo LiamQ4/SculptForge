@@ -11,6 +11,7 @@ size_t UndoRecord::approxBytes() const {
                    polygroups.bytes() + (paint ? paint->bytes() : 0) +
                    (textureTiles ? textureTiles->bytes() : 0) + (texture ? texture->bytes() : 0) +
                    (subdiv ? subdiv->bytes() : 0);
+    for (const auto& l : layerOffsets) bytes += l.bytes();
     if (mesh)
         bytes += mesh->vertexCount() * ((2 + (mesh->base.empty() ? 0 : 1 + mesh->layers.size())) * sizeof(glm::vec3) +
                                         8 * sizeof(uint32_t)) +
@@ -159,9 +160,13 @@ void UndoStack::apply(UndoRecord& r, Mesh& mesh, BVH& bvh) {
     }
     if (!r.positions.empty()) {
         r.positions.swapWith(mesh.layerTarget(r.layer));
+        for (size_t i = 0; i < r.layerOffsets.size() && i < mesh.layers.size(); ++i)
+            r.layerOffsets[i].swapWith(mesh.layers[i].delta);
         mesh.evaluate(r.positions.indices);
         mesh.updateNormals(r.positions.indices);
-        bvh.refit(mesh, r.positions.indices);
+        // Refits only grow boxes: after moving much of the mesh (a transform), tighten the whole tree instead.
+        if (r.positions.indices.size() * 4 > mesh.vertexCount()) bvh.refitAll(mesh);
+        else bvh.refit(mesh, r.positions.indices);
     }
     if (!r.mask.empty()) {
         r.mask.swapWith(mesh.ensureMask());

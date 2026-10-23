@@ -30,25 +30,26 @@ You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<
 12. [Texture painting](texture-painting.md)
 13. [Sculpt layers and blend shapes](layers.md)
 14. [Subdivision levels](subdivision-levels.md)
-15. [Subdivide, remesh, decimate and LODs](geometry.md)
+15. [Moving, rotating and posing (Gizmo 3D)](gizmo.md)
+16. [Subdivide, remesh, decimate and LODs](geometry.md)
 
 ## AI and capture
 
-16. [Image and text to 3D](generate-3d.md)
-17. [Gaussian splats](splats.md)
+17. [Image and text to 3D](generate-3d.md)
+18. [Gaussian splats](splats.md)
 
 ## Files and pipelines
 
-18. [Exporting, Unreal and ZBrush](exporting.md)
-19. [Projects, autosave and QuickSave](projects.md)
-20. [Scripting and automation](scripting.md)
-21. [SculptForge for studios](studios.md)
+19. [Exporting, Unreal and ZBrush](exporting.md)
+20. [Projects, autosave and QuickSave](projects.md)
+21. [Scripting and automation](scripting.md)
+22. [SculptForge for studios](studios.md)
 
 ## Reference
 
-22. [Keyboard and mouse](shortcuts.md)
-23. [Troubleshooting and FAQ](troubleshooting.md)
-24. [Glossary](glossary.md)
+23. [Keyboard and mouse](shortcuts.md)
+24. [Troubleshooting and FAQ](troubleshooting.md)
+25. [Glossary](glossary.md)
 
 ## Getting help
 

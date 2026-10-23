@@ -35,6 +35,8 @@ add_library(sculptforge_core STATIC
   src/core/Polygroups.cpp
   src/core/ScreenSelect.cpp
   src/core/SubTools.cpp
+  src/core/MeshTransform.cpp
+  src/core/TransformCommands.cpp
   src/core/Decimate.cpp
   src/core/Script.cpp
   src/core/Json.cpp
@@ -163,6 +165,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelPaintLayers.cpp
     src/app/PanelTexture.cpp
     src/app/PanelGeometry.cpp
+    src/app/Gizmo.cpp
     src/app/PanelGoz.cpp
     src/app/PanelProject.cpp
     src/app/PanelSubTools.cpp

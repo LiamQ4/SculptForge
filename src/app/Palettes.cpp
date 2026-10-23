@@ -404,6 +404,8 @@ void App::drawPalette_Tool() {
 }
 
 void App::drawPalette_Transform() {
+    ImGui::TextDisabled("Gizmo 3D");
+    drawGizmoContents(false);
     ImGui::TextDisabled("Symmetry");
     segmented(*this, {"transform.symmetry_x", "transform.symmetry_y", "transform.symmetry_z"});
     actionRow(*this, {"view.frame", "subtool.solo"});

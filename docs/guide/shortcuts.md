@@ -104,7 +104,7 @@ action registry, the same source as the Controls window.
 | Action | Keys | What it does |
 |---|---|---|
 | Fullscreen | <kbd>F11</kbd> | Fill the screen with SculptForge (again: back to a window). |
-| Wireframe | <kbd>W</kbd> or <kbd>Shift</kbd>+<kbd>F</kbd> | Show the mesh's polygons (quads and triangles) over the surface (ZBrush PolyFrame). |
+| Wireframe | <kbd>Shift</kbd>+<kbd>F</kbd> | Show the mesh's polygons (quads and triangles) over the surface (ZBrush PolyFrame). |
 
 ### Script
 
@@ -124,7 +124,11 @@ action registry, the same source as the Controls window.
 
 | Action | Keys | What it does |
 |---|---|---|
+| Draw | <kbd>Q</kbd> | Draw mode: brushes sculpt and paint (leaves the Gizmo 3D). |
 | Frame | <kbd>F</kbd> | Fit the whole model in the view. |
+| Move | <kbd>W</kbd> | Gizmo 3D, Move: drag an arrow to move along an axis, a square to move in a plane, the centre to move in the view. Masked parts stay; Shift snaps to the grid; Alt+drag moves only the gizmo. W again: back to Draw. |
+| Rotate | <kbd>R</kbd> | Gizmo 3D, Rotate: drag a ring to turn about that axis, the outer ring to turn in the view. Mask the body and put the pivot at a joint to pose a limb. Shift snaps to 15 degrees. R again: back to Draw. |
+| Scale | <kbd>E</kbd> | Gizmo 3D, Scale: drag a box to stretch along an axis or the centre to scale evenly (right or up: bigger). Shift snaps to 10% steps. E again: back to Draw. |
 | X | <kbd>X</kbd> | Mirror strokes across X (left and right). |
 
 <!-- END GENERATED: shortcuts -->
@@ -149,6 +153,9 @@ action registry, the same source as the Controls window.
 | Show everything | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click the background |
 | Hide outside a rectangle or lasso | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag (add <kbd>Alt</kbd>: hide inside); **SelectRect** or **SelectLasso** in **Tool > Visibility** |
 | Select a SubTool | <kbd>Alt</kbd>+click it in the view |
+| Move, scale or rotate with the Gizmo 3D | <kbd>W</kbd>, <kbd>E</kbd> or <kbd>R</kbd>, then drag a handle; hold <kbd>Shift</kbd> to snap (15 degrees, the grid, 10%) |
+| Move the gizmo only | <kbd>Alt</kbd>+drag a gizmo handle |
+| Put the gizmo's pivot on the model | <kbd>Alt</kbd>+click the model in Move, Scale or Rotate mode |
 | Pan, zoom or orbit with a button | Drag on **Move**, **Zoom** or **Rotate** on the right shelf |
 | Help on any control | Hold <kbd>Ctrl</kbd> and point at it (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>: scripting parameters) |
 | Assign a shortcut | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+click any button, then press the key |
@@ -213,7 +220,6 @@ doesn't exist yet:
 | <kbd>D</kbd> / <kbd>Shift</kbd>+<kbd>D</kbd> (subdivision level up / down) | No subdivision levels yet; <kbd>Ctrl</kbd>+<kbd>D</kbd> subdivides once and can be undone |
 | <kbd>Space</kbd> (QuickMenu) | No QuickMenu; use the left-shelf tiles, <kbd>B</kbd>, <kbd>M</kbd>, <kbd>S</kbd> and <kbd>I</kbd> |
 | <kbd>O</kbd> (Focal Shift) | No focal shift setting |
-| <kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd> (Draw, Move, Scale, Rotate gizmo) | No transform gizmo; <kbd>W</kbd> toggles the wireframe (PolyF) |
 | <kbd>Ctrl</kbd>+<kbd>W</kbd> (group masked) | **Tool > Polygroups > From mask** |
 | <kbd>Shift</kbd> (snap the view while rotating) | No view snapping yet |
 | <kbd>H</kbd> (hide the ZScript window) | <kbd>`</kbd> toggles the console |

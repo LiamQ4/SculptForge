@@ -667,6 +667,7 @@ void App::onMouseDown(float x, float y, Uint8 button) {
     if (button == SDL_BUTTON_LEFT) {
         if (polygroupMouseDown(x, y, mod)) return;
         if (maskSelectMouseDown(x, y, mod)) return;
+        if (gizmoMouseDown(x, y, mod)) return; // Gizmo 3D handles, pivot clicks (Gizmo.cpp)
         // Alt+click on another SubTool selects it (ZBrush); Alt+drag stays an inverted stroke or a pan.
         if ((mod & SDL_KMOD_ALT) && !ctrlDown(mod) && !(mod & SDL_KMOD_SHIFT) && doc_.subtoolCount() > 1) {
             const int target = pickSubtool(x, y);
@@ -727,6 +728,7 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     case Drag::MaskCanvas: maskCanvasMove(x, y); break;
     case Drag::SubToolClick: subtoolClickMove(x, y); break;
     case Drag::Select: selectionMove(x, y); break;
+    case Drag::Gizmo: gizmoDragTo(x, y); break;
     case Drag::None: break;
     }
 }
@@ -750,6 +752,7 @@ void App::onMouseUp() {
     if (drag_ == Drag::Stroke) endStroke();
     if (drag_ == Drag::MaskCanvas) maskCanvasRelease();
     if (drag_ == Drag::SubToolClick) subtoolClickRelease();
+    gizmoRelease();
     drag_ = Drag::None;
     dragFromPen_ = false;
     penNavButton_ = 0;
@@ -1187,8 +1190,10 @@ void App::drawUi() {
                                                 IM_COL32(255, 190, 120, 255), banner.c_str());
     }
     const ImVec2 mouse(mouseX_, mouseY_);
+    drawGizmo(); // Gizmo 3D handles and panel (Gizmo.cpp)
+    // In Gizmo mode the brush ring shows only while Ctrl masks.
     if (((!ImGui::GetIO().WantCaptureMouse && canvasRect().contains(mouse.x, mouse.y)) || drag_ == Drag::Stroke) &&
-        !hideBrushCursor_ && drag_ != Drag::Select)
+        !hideBrushCursor_ && drag_ != Drag::Select && (!gizmoActive() || drag_ == Drag::Stroke || ctrlDown(inputMods())))
         drawBrushCursor();
     drawSelectionOverlay();
     drawBrushLibraryPopups();

@@ -7,4 +7,5 @@ expect_guide whats-new.md
 expect_text "Version 0.4.2"
 expect_text "Next version (in development)"
 expect_text "Subdivision levels"
+expect_text "Gizmo 3D: move, scale, rotate and pose"
 shot whats-new

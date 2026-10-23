@@ -139,13 +139,13 @@ click "SubTool##tool.subtool"
 expect "SubTools/Append"
 
 # Wireframe, polygroup colours and the LOD preview are for the active SubTool only.
-key w
+key shift+f
 expect_value wireframe == 1
 click "Polygroups"
 click "Show polygroups"
 shot active-overlays
 click "Show polygroups"
-key w
+key shift+f
 click "Export"
 click "Generate LOD chain"
 shot lod-preview

@@ -26,6 +26,24 @@ without losing anything.
 
 See [Subdivision levels](subdivision-levels.md).
 
+### Gizmo 3D: move, scale, rotate and pose
+
+ZBrush's Gizmo 3D, with the same keys: <kbd>W</kbd> Move, <kbd>E</kbd> Scale, <kbd>R</kbd> Rotate, <kbd>Q</kbd>
+back to Draw (also on the top shelf and in the **Transform** palette).
+
+- **Handles over the model.** Arrows, plane squares and a free-move centre; axis rings and a view ring; axis
+  boxes and a uniform centre. <kbd>Shift</kbd> snaps to 15 degrees, the grid or 10% steps.
+- **Only the unmasked part moves**, so posing is: mask the body, <kbd>Alt</kbd>+click the shoulder to put the
+  pivot there, raise **Falloff** for a soft joint, turn the arm. With X symmetry both arms move together.
+- **Pivot tools**: <kbd>Alt</kbd>+drag the gizmo to move it alone, **Reset**, **To Surface**, World or Surface
+  axes.
+- **Numeric entry** in the Gizmo 3D panel, **All SubTools** (Transpose All), one undo step per drag, sculpt
+  layers move with the surface, and the `transform` command for scripts.
+- Fast on big models: a drag frame on 1.3 million triangles takes about 10 ms.
+
+<kbd>W</kbd> no longer toggles the wireframe: use <kbd>Shift</kbd>+<kbd>F</kbd> (as in ZBrush) or **PolyF** on the
+right shelf. See [Moving, rotating and posing](gizmo.md).
+
 ## Version 0.4.2
 
 ### Texture painting on UV maps

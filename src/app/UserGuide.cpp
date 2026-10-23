@@ -432,6 +432,9 @@ std::string UserGuide::chapterFor(const std::string& palette, const std::string&
     if (starts("Generate")) return "generate-3d.md";
     if (starts("Splats")) return "splats.md";
     if (starts("Script")) return "scripting.md";
+    if (starts("Transform > Gizmo") || idStarts("gizmo.") || actionId == "tool.draw" || actionId == "tool.move" ||
+        actionId == "tool.scale" || actionId == "tool.rotate")
+        return "gizmo.md";
     if (starts("Transform")) return idStarts("transform.symmetry") ? "sculpting.md" : "navigation.md";
     if (starts("Render") || starts("Edit") || starts("Help") || starts("Palettes") || starts("Preferences") ||
         starts("LightBox"))

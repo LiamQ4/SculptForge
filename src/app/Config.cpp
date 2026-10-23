@@ -241,7 +241,7 @@ void App::initActions() {
         nullptr, nullptr, nullptr, "Make the brush 10% larger (hold to repeat).");
     add("transform.symmetry_x", "Symmetry X", "Transform", "X", [this] { symmetry_.x = !symmetry_.x; }, ICON_LC_FLIP_HORIZONTAL_2,
         nullptr, [this] { return symmetry_.x; }, nullptr, "Mirror strokes across the X axis (left / right).");
-    add("view.wireframe", "Wireframe", "Render", "W / Shift+F", [this] { renderSettings_.wireframe = !renderSettings_.wireframe; },
+    add("view.wireframe", "Wireframe", "Render", "Shift+F", [this] { renderSettings_.wireframe = !renderSettings_.wireframe; },
         ICON_LC_GRID_3X3, nullptr, [this] { return renderSettings_.wireframe; }, nullptr,
         "Show the mesh's polygons (quads and triangles) over the surface (ZBrush PolyFrame).");
     add("view.frame", "Frame model", "Transform", "F", [this] { camera_.frame(sceneBounds()); }, ICON_LC_SCAN, nullptr, nullptr,
@@ -330,6 +330,7 @@ void App::initActions() {
     // the same id and own P (Paint), the symmetry toggles and Tab.
     registerShellActions();
     registerTextureUiActions(); // Tool > Texture Map, the Vertex / Texture paint target (PanelTexture.cpp)
+    registerGizmoActions();     // Q W E R: Draw, and the Gizmo 3D's Move, Scale, Rotate (Gizmo.cpp)
 
     // Every command, so the command palette finds anything scriptable.
     actions_.registerCommands(

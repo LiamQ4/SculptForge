@@ -217,6 +217,17 @@ void App::storeProjectSettings() {
     sym.set("y", symmetry_.y);
     sym.set("z", symmetry_.z);
     s.set("symmetry", std::move(sym));
+
+    Json gizmo = Json::object(); // Gizmo 3D (Gizmo.cpp): where the pivot is and the options
+    gizmo.set("pivot", vec3Json(gizmo_.pivot));
+    gizmo.set("pivot_placed", gizmo_.pivotPlaced);
+    gizmo.set("orient_surface", gizmo_.orientSurface);
+    gizmo.set("axis_x", vec3Json(gizmo_.frame[0]));
+    gizmo.set("axis_y", vec3Json(gizmo_.frame[1]));
+    gizmo.set("use_mask", gizmo_.useMask);
+    gizmo.set("all_subtools", gizmo_.all);
+    gizmo.set("falloff", double(gizmo_.falloff));
+    s.set("gizmo", std::move(gizmo));
 }
 
 // Lenient: anything missing keeps its current value.
@@ -265,10 +276,33 @@ void App::applyProjectSettings() {
         readBool(sym, "y", symmetry_.y);
         readBool(sym, "z", symmetry_.z);
     }
+    if (const Json& g = s["gizmo"]; g.isObject()) {
+        gizmo_.centreKey = ~uint64_t(0);
+        updateGizmoPivot(); // the opened scene's centre, then the saved pivot over it
+        glm::vec3 x = gizmo_.frame[0], y = gizmo_.frame[1];
+        readVec3(g["pivot"], gizmo_.pivot);
+        readBool(g, "pivot_placed", gizmo_.pivotPlaced);
+        readBool(g, "orient_surface", gizmo_.orientSurface);
+        readVec3(g["axis_x"], x);
+        readVec3(g["axis_y"], y);
+        if (glm::length(glm::cross(x, y)) > 1e-3f) { // orthonormal again, whatever the file holds
+            x = glm::normalize(x);
+            const glm::vec3 z = glm::normalize(glm::cross(x, y));
+            gizmo_.frame = glm::mat3(x, glm::cross(z, x), z);
+        }
+        readBool(g, "use_mask", gizmo_.useMask);
+        readBool(g, "all_subtools", gizmo_.all);
+        readFloat(g, "falloff", gizmo_.falloff);
+        gizmo_.falloff = std::clamp(gizmo_.falloff, 0.0f, 1.0f);
+        if (!gizmo_.pivotPlaced) updateGizmoPivot();
+        gizmo_.undoSteps.clear();
+        gizmo_.redoSteps.clear();
+    }
 }
 
 void App::afterCommand(const std::string& name, const Args& args, const CommandResult& r) {
     if (!r.ok) return;
+    if (name == "undo" || name == "redo") gizmoAfterUndo(name == "redo");
     const std::string path = argString(args, "path", doc_.path);
     const bool project = name == "open_project" || (name == "open" && isProjectPath(path));
     if (project) {

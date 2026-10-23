@@ -104,6 +104,7 @@ the ones you will use most:
 | Polygroups | `polygroup_auto_by_normals` | `angle` (default 30) |
 | Visibility | `isolate_polygroup`, `hide_polygroup` | `group` (required) |
 | Visibility | `show_all`, `delete_hidden` | |
+| Transform | `transform` | `translate`, `rotate`, `scale`, `pivot`, `orient`, `masked`, `falloff`, `symmetry`, `all` ([Gizmo 3D](gizmo.md#scripting)) |
 | SubTools | `subtool_append` | `type` (sphere, cube, plane) or `path`, `name`, `size` |
 | SubTools | `subtool_select` | `index` or `name` |
 | Polypaint | `set_color`, `paint_fill` | `color`, `area` (unmasked, masked, all) |

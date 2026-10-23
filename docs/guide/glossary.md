@@ -38,7 +38,7 @@ for what is planned.
 | MatCap | **Material**: seven MatCaps, Sculpt the default, plus Studio (<kbd>M</kbd>). Custom MatCap images not yet. See [Polypaint](polypaint.md) |
 | Morph target | A [sculpt layer](layers.md); exported as glTF morph targets and FBX/USD blend shapes |
 | Mrgb, M (material channel) | Not yet: there is no per-vertex material channel |
-| Polyframe (PolyF, Shift+F) | **PolyF** on the right shelf, <kbd>W</kbd> or <kbd>Shift</kbd>+<kbd>F</kbd> |
+| Polyframe (PolyF, Shift+F) | **PolyF** on the right shelf, or <kbd>Shift</kbd>+<kbd>F</kbd> |
 | Polygroups | **Polygroups**: same idea, same Ctrl+Shift gestures. See [Polygroups and visibility](polygroups.md) |
 | Polypaint | **Polypaint**: Paint brush (<kbd>P</kbd>), Rgb, fills, cavity paint. See [Polypaint](polypaint.md) |
 | Polypaint layers | **Tool > Paint Layers**: Photoshop-style colour layers with blend modes. See [Paint layers](polypaint.md#paint-layers) |
@@ -57,7 +57,8 @@ for what is planned.
 | SubTool | **SubTool**: same idea, <kbd>Alt</kbd>+click to select. See [SubTools](subtools.md) |
 | Texture Map, New From Polypaint | **Tool > Texture Map**: **New Texture** (1K-8K) and paint straight into it, or **Polypaint > Texture**. See [Texture painting](texture-painting.md) |
 | Texture palette | Not yet as a palette of texture images. **Tool > Texture Map > Import Texture** loads an image onto the UVs |
-| Transpose, Gizmo 3D | Not yet. Use the **Move** brush, or move the camera with the right-shelf buttons |
+| Transpose, Gizmo 3D (Move W, Scale E, Rotate R) | **Gizmo 3D**: same keys, arrows, rings and boxes; masked parts stay, Falloff softens the joint. See [Gizmo 3D](gizmo.md) |
+| Transpose All | **All SubTools** in the Gizmo 3D panel. See [Gizmo 3D](gizmo.md#all-subtools) |
 | UV Master (Unwrap) | **Tool > Texture Map > Auto UV** (`uv_auto`). UVs that come in with a model are kept. Seams and UV editing not yet. See [Texture painting](texture-painting.md) |
 | Zadd / Zsub | **Zadd** / **Zsub** on the top shelf; <kbd>Alt</kbd> flips for one stroke |
 | ZPlugin | No in-app plugin system yet. Automate with the Python module, `sculptforge-cli` and MCP ([Scripting](scripting.md)) |
@@ -80,9 +81,12 @@ for what is planned.
 | Console | The script console (backtick key): every action appears as a script line |
 | Ctrl help | Hold <kbd>Ctrl</kbd> and point at a control to see what it does, its shortcut and its command |
 | Gaussian splat | A 3D capture made of soft coloured blobs (from phone scanning apps). Load one as a reference, convert it to a mesh, or turn a sculpt into splats. See [Gaussian splats](splats.md) |
+| Falloff (Gizmo 3D) | How far a gizmo move eases in from the mask's edge, as a share of the SubTool's size: a soft joint when posing. See [Gizmo 3D](gizmo.md#posing-a-limb) |
 | Generate 3D | Turn an image or a description into a sculptable model. See [Image and text to 3D](generate-3d.md) |
+| Gizmo 3D | The Move / Scale / Rotate handles (<kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd>) for placing and posing a SubTool or its unmasked part. See [Gizmo 3D](gizmo.md) |
 | LOD chain | A series of lighter copies of a model (LOD0, LOD1...) for game engines. See [Geometry](geometry.md#lod-chains) |
 | MCP | Model Context Protocol: `sculptforge-cli --mcp` lets AI agents such as Claude run SculptForge commands |
+| Pivot | The point the Gizmo 3D turns and scales about. <kbd>Alt</kbd>+click the model to put it there. See [The pivot](gizmo.md#the-pivot) |
 | Subdivide | One-way subdivision without levels (**Tool > Geometry > Subdivide**, `subdivide`); **Divide** keeps the levels |
 | Send to Unreal | Export and import a model into a running Unreal Editor in one step (<kbd>Ctrl</kbd>+<kbd>U</kbd>) |
 | Shelves, palettes, trays | The interface around the canvas: shelves hold the most-used controls, palettes hold everything, trays hold pinned palettes. See [The interface](interface.md) |

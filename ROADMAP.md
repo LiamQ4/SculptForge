@@ -114,7 +114,7 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
 - ✅ Automatic UV unwrapping (Auto UV, xatlas) and texture painting on UV maps (v0.5)
 - 📋 Normal / displacement map baking
 - 📋 Performance at 20-100M polygons, multithreaded brushes, fast undo
-- 📋 A transpose / gizmo tool for posing and moving parts
+- ✅ Gizmo 3D for moving, scaling, rotating and posing parts (W / E / R, masked falloff, Transpose All) (v0.5)
 
 ## Phase 3 — AI assistant, beyond brushes
 
