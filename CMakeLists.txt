@@ -164,6 +164,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelPolypaint.cpp
     src/app/PanelPaintLayers.cpp
     src/app/PanelTexture.cpp
+    src/app/PanelRetopo.cpp
     src/app/PanelGoz.cpp
     src/app/PanelProject.cpp
     src/app/PanelSubTools.cpp

@@ -20,6 +20,7 @@
 #include "core/Image.h"
 #include "core/Document.h"
 #include "core/AutoUv.h"
+#include "core/QRemesh.h"
 #include "core/Stroke.h"
 #include "core/Tablet.h"
 #include "core/Texture.h"
@@ -406,6 +407,33 @@ private:
     // Cached UV wireframe of the active SubTool for the UV view: segments in 0..1 UV space.
     std::vector<glm::vec2> uvLines_;
     uint64_t uvLinesKey_ = 0;
+    // Geometry > QRemesh (quad retopology on a worker thread) and SubTool > Project (ProjectAll); PanelRetopo.cpp.
+    void registerRetopoUiActions();
+    void drawQRemeshContents();
+    void drawProjectContents();
+    void startQRemesh();
+    void pollQRemesh();
+    struct QRemeshJob {
+        std::future<bool> done;
+        std::shared_ptr<std::atomic<float>> progress;
+        std::shared_ptr<std::atomic<bool>> cancel;
+        std::shared_ptr<Mesh> result;
+        std::shared_ptr<QRemeshStats> stats;
+        std::shared_ptr<std::string> error;
+        uint32_t subtool = 0;  // SubTool id it remeshes
+        size_t triangles = 0;  // the mesh must still have this many triangles when it finishes
+        bool keepOriginal = false;
+        Args args;             // the equivalent qremesh command, for the console
+    };
+    std::unique_ptr<QRemeshJob> qremesh_;
+    struct RetopoSettings {
+        int target = 5000;
+        float adaptive = 0.5f;
+        bool keepGroups = false, detectEdges = true, usePolypaint = false, symmetry = false, keepOriginal = false;
+        float projectDist = 0.02f;
+        int projectBlur = 0;
+        bool projectMean = false, projectGeometry = true, projectPolypaint = true;
+    } retopo_;
     const BrushRecipe* strokeRecipe() const; // recipe the current stroke sculpts with (none for Smooth / paint only)
     // ZBrush GoZ bridge and GoZ/STL files (PanelGoz.cpp).
     void drawGozMenu();

@@ -341,6 +341,9 @@ void App::drawPalette_Tool() {
         Demo::pushScope("SubTools");
         drawSubToolsContents();
         Demo::popScope();
+        Demo::pushScope("Project");
+        drawProjectContents(); // ProjectAll (PanelRetopo.cpp)
+        Demo::popScope();
     }
     if (subpalette("tool.layers", "Layers")) {
         Demo::pushScope("Layers");
@@ -367,6 +370,9 @@ void App::drawPalette_Tool() {
         ImGui::SetNextItemWidth(-1);
         ui::SliderInside("##decimate", &decimateRatio_, 0.05f, 0.95f, "Keep %.2f");
         ui::HelpText("Keep", nullptr, "Fraction of the triangles Decimate keeps.", "Tool > Geometry");
+        Demo::pushScope("QRemesh");
+        drawQRemeshContents(); // quad retopology (PanelRetopo.cpp)
+        Demo::popScope();
     }
     if (subpalette("tool.remesh", "Remesh")) {
         const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;

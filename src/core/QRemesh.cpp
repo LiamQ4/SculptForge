@@ -106,15 +106,16 @@ inline float compatIndex(const vec3& v0, const vec3& n0, const vec3& q0, const v
     const vec3 t0 = glm::cross(n0, q0), t1 = glm::cross(n1, q1);
     const vec3 mid = middlePoint(v0, n0, v1, n1);
     const ivec2 b0 = floorIndex(o0, q0, t0, 1.0f / s0, mid), b1 = floorIndex(o1, q1, t1, 1.0f / s1, mid);
+    vec3 p1[4];
+    for (int b = 0; b < 4; ++b) p1[b] = latticePoint(o1, q1, t1, s1, b1 + ivec2(b & 1, b >> 1));
     float best = std::numeric_limits<float>::max();
     for (int a = 0; a < 4; ++a) {
         const ivec2 c0 = b0 + ivec2(a & 1, a >> 1);
         const vec3 p0 = latticePoint(o0, q0, t0, s0, c0);
         for (int b = 0; b < 4; ++b) {
-            const ivec2 c1 = b1 + ivec2(b & 1, b >> 1);
-            const vec3 d = p0 - latticePoint(o1, q1, t1, s1, c1);
+            const vec3 d = p0 - p1[b];
             const float cost = glm::dot(d, d);
-            if (cost < best) best = cost, i0 = c0, i1 = c1;
+            if (cost < best) best = cost, i0 = c0, i1 = b1 + ivec2(b & 1, b >> 1);
         }
     }
     return best;
@@ -344,23 +345,63 @@ Level buildFinest(const WorkMesh& m, bool keepGroups, float sharpCos, std::vecto
         uint32_t t0, t1;
         int count;
     };
-    std::unordered_map<uint64_t, uint32_t> edgeIndex;
-    edgeIndex.reserve(m.T.size() * 2);
+    // Each edge found from its lower vertex: the triangles around a vertex, their edges to higher vertices.
+    std::vector<uint32_t> vtOff(nv + 1, 0), vt(m.T.size() * 3);
+    for (const glm::uvec3& t : m.T)
+        for (int k = 0; k < 3; ++k) ++vtOff[t[k] + 1];
+    for (size_t i = 0; i < nv; ++i) vtOff[i + 1] += vtOff[i];
+    {
+        std::vector<uint32_t> fill(vtOff.begin(), vtOff.end() - 1);
+        for (uint32_t t = 0; t < m.T.size(); ++t)
+            for (int k = 0; k < 3; ++k) vt[fill[m.T[t][k]]++] = t;
+    }
+    std::vector<uint32_t> edgeOff(nv + 1, 0);
     std::vector<EdgeInfo> edges;
-    edges.reserve(m.T.size() * 3 / 2 + 16);
-    for (uint32_t t = 0; t < m.T.size(); ++t)
-        for (int k = 0; k < 3; ++k) {
-            const uint32_t a = m.T[t][k], b = m.T[t][(k + 1) % 3];
-            if (a == b) continue;
-            auto [it, inserted] = edgeIndex.try_emplace(edgeKey(a, b), uint32_t(edges.size()));
-            if (inserted)
-                edges.push_back({std::min(a, b), std::max(a, b), t, kNone, 1});
+    auto vertexEdges = [&](uint32_t a, auto&& emit) {
+        std::pair<uint32_t, uint32_t> local[64]; // (other vertex, triangle)
+        std::vector<std::pair<uint32_t, uint32_t>> big;
+        size_t n = 0;
+        auto push = [&](uint32_t b, uint32_t t) {
+            if (n < 64) local[n++] = {b, t};
             else {
-                EdgeInfo& e = edges[it->second];
-                if (e.count == 1) e.t1 = t;
-                ++e.count;
+                if (big.empty()) big.assign(local, local + 64);
+                big.push_back({b, t});
+                ++n;
+            }
+        };
+        for (uint32_t k = vtOff[a]; k < vtOff[a + 1]; ++k) {
+            const uint32_t t = vt[k];
+            for (int e = 0; e < 3; ++e) {
+                const uint32_t x = m.T[t][e], y = m.T[t][(e + 1) % 3];
+                if (x == y) continue;
+                if (x == a && y > a) push(y, t);
+                else if (y == a && x > a) push(x, t);
             }
         }
+        std::pair<uint32_t, uint32_t>* p = big.empty() ? local : big.data();
+        std::sort(p, p + n);
+        for (size_t i = 0; i < n;) {
+            size_t j = i;
+            while (j < n && p[j].first == p[i].first) ++j;
+            emit(EdgeInfo{a, p[i].first, p[i].second, j - i > 1 ? p[i + 1].second : kNone, int(j - i)});
+            i = j;
+        }
+    };
+    parallelFor(nv, [&](size_t b0, size_t e0) {
+        for (size_t a = b0; a < e0; ++a) {
+            uint32_t count = 0;
+            vertexEdges(uint32_t(a), [&](const EdgeInfo&) { ++count; });
+            edgeOff[a + 1] = count;
+        }
+    });
+    for (size_t i = 0; i < nv; ++i) edgeOff[i + 1] += edgeOff[i];
+    edges.resize(edgeOff[nv]);
+    parallelFor(nv, [&](size_t b0, size_t e0) {
+        for (size_t a = b0; a < e0; ++a) {
+            uint32_t at = edgeOff[a];
+            vertexEdges(uint32_t(a), [&](const EdgeInfo& e) { edges[at++] = e; });
+        }
+    });
     // CSR adjacency.
     l.off.assign(nv + 1, 0);
     for (const EdgeInfo& e : edges) ++l.off[e.a + 1], ++l.off[e.b + 1];
@@ -491,30 +532,50 @@ bool downsample(Level& f, Level& c) {
     const size_t nc = c.V.size();
     if (nc >= n) return false;
 
-    // Coarse adjacency: neighbours' parents, weights summed.
-    std::vector<std::vector<std::pair<uint32_t, float>>> lists(nc);
-    for (uint32_t i = 0; i < n; ++i)
-        for (uint32_t k = f.off[i]; k < f.off[i + 1]; ++k) {
-            const uint32_t a = up[i], b = up[f.adj[k]];
-            if (a != b) lists[a].push_back({b, f.w[k]});
-        }
-    c.off.assign(nc + 1, 0);
-    c.adj.clear();
-    c.w.clear();
-    for (uint32_t v = 0; v < nc; ++v) {
-        auto& l = lists[v];
-        std::sort(l.begin(), l.end(), [](auto& x, auto& y) { return x.first < y.first; });
-        for (size_t k = 0; k < l.size(); ++k) {
-            if (!c.adj.empty() && c.off[v] < c.adj.size() && c.adj.back() == l[k].first) {
-                c.w.back() += l[k].second;
-                continue;
-            }
-            c.adj.push_back(l[k].first);
-            c.w.push_back(l[k].second);
-        }
-        c.off[v + 1] = uint32_t(c.adj.size());
-        std::vector<std::pair<uint32_t, float>>().swap(l);
+    // Coarse adjacency: the children's neighbours' parents, weights summed (per coarse vertex, in parallel).
+    std::vector<uint32_t> chOff(nc + 1, 0), ch(n);
+    for (uint32_t i = 0; i < n; ++i) ++chOff[up[i] + 1];
+    for (size_t v = 0; v < nc; ++v) chOff[v + 1] += chOff[v];
+    {
+        std::vector<uint32_t> fill(chOff.begin(), chOff.end() - 1);
+        for (uint32_t i = 0; i < n; ++i) ch[fill[up[i]]++] = i;
     }
+    auto gather = [&](uint32_t v, std::vector<std::pair<uint32_t, float>>& l) {
+        l.clear();
+        for (uint32_t k = chOff[v]; k < chOff[v + 1]; ++k) {
+            const uint32_t i = ch[k];
+            for (uint32_t a = f.off[i]; a < f.off[i + 1]; ++a)
+                if (const uint32_t b = up[f.adj[a]]; b != v) l.push_back({b, f.w[a]});
+        }
+        std::sort(l.begin(), l.end(), [](auto& x, auto& y) { return x.first < y.first; });
+        size_t w = 0;
+        for (size_t k = 0; k < l.size(); ++k) {
+            if (w > 0 && l[w - 1].first == l[k].first) l[w - 1].second += l[k].second;
+            else l[w++] = l[k];
+        }
+        l.resize(w);
+    };
+    c.off.assign(nc + 1, 0);
+    parallelFor(nc, [&](size_t b0, size_t e0) {
+        std::vector<std::pair<uint32_t, float>> l;
+        for (size_t v = b0; v < e0; ++v) {
+            gather(uint32_t(v), l);
+            c.off[v + 1] = uint32_t(l.size());
+        }
+    });
+    for (size_t v = 0; v < nc; ++v) c.off[v + 1] += c.off[v];
+    c.adj.resize(c.off[nc]);
+    c.w.resize(c.off[nc]);
+    parallelFor(nc, [&](size_t b0, size_t e0) {
+        std::vector<std::pair<uint32_t, float>> l;
+        for (size_t v = b0; v < e0; ++v) {
+            gather(uint32_t(v), l);
+            for (size_t k = 0; k < l.size(); ++k) {
+                c.adj[c.off[v] + k] = l[k].first;
+                c.w[c.off[v] + k] = l[k].second;
+            }
+        }
+    });
     computeMeanEdge(c);
     return true;
 }
@@ -1076,6 +1137,11 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
         }
         return true;
     };
+    auto mark = [&](const char* what) {
+        if (timing)
+            std::fprintf(stderr, "  %-28s %.3f s\n", what,
+                         std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+    };
     if (source.triangleCount() == 0) {
         error = "QRemesh: the SubTool is empty";
         return false;
@@ -1112,8 +1178,10 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
     const float wantEdge = spacing / (adaptive ? 6.0f : 4.0f);
 
     // Surface the quads snap to (before any subdivision for density: same surface).
+    mark("prepare");
     TriangleBVH surface;
     surface.build(work.P, work.T);
+    mark("surface bvh");
     if (!report(0.05f)) return false;
 
     std::vector<std::pair<vec3, vec3>> boundarySegs, borderSegs;
@@ -1121,7 +1189,9 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
     work = refineLongEdges(std::move(work), 1.5f * wantEdge, std::max<size_t>(4'000'000, work.T.size()));
     std::vector<Level> levels;
     const float sharpCos = opt.detectEdges ? std::cos(glm::radians(50.0f)) : 2.0f;
+    mark("refine");
     levels.push_back(buildFinest(work, opt.keepGroups, sharpCos, boundarySegs, boundaryIsCut, borderSegs, axis));
+    mark("finest level");
     if (!report(0.10f)) return false;
     // Hierarchy down to a few vertices; fields are solved from the top to the finest level dense enough.
     while (levels.back().size() > 64 && levels.size() < 40) {
@@ -1133,6 +1203,7 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
         }
         levels.push_back(std::move(c));
     }
+    mark("hierarchy");
     size_t base = 0;
     while (base + 1 < levels.size() && levels[base + 1].meanEdge <= wantEdge) ++base;
     if (!report(0.20f)) return false;

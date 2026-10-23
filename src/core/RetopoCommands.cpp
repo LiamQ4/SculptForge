@@ -55,6 +55,8 @@ void registerRetopoCommands(CommandRegistry& reg) {
               {"adaptive", T::Number, "Adaptive Size 0-1: 0 = even quads, 1 = small quads in curved areas, big "
                                       "ones on flat areas. Default 0.5.", false},
               {"keep_groups", T::Bool, "Keep Groups: edge loops follow the polygroup borders and the groups are kept.", false},
+              {"detect_edges", T::Bool, "Detect Edges: hard edges (faces meeting at more than 50 degrees) get an edge "
+                                        "loop. Default true.", false},
               {"use_polypaint", T::Bool, "Use the polypaint as a density guide: red areas get up to 4x the quads, blue "
                                          "areas down to a quarter.", false},
               {"symmetry", T::String, "Mirror the topology across x, y or z (the plane through the origin). Default: none.", false},
@@ -67,6 +69,7 @@ void registerRetopoCommands(CommandRegistry& reg) {
                  o.targetQuads = int(std::clamp(argNumber(a, "target", 5000), 16.0, 2'000'000.0));
                  o.adaptive = float(std::clamp(argNumber(a, "adaptive", 0.5), 0.0, 1.0));
                  o.keepGroups = argBool(a, "keep_groups", false);
+                 o.detectEdges = argBool(a, "detect_edges", true);
                  o.usePolypaint = argBool(a, "use_polypaint", false);
                  o.symmetryAxis = symmetryAxisArg(argString(a, "symmetry"));
                  o.smoothIterations = int(std::clamp(argNumber(a, "smooth", 6), 0.0, 30.0));
