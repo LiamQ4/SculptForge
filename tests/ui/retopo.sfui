@@ -49,8 +49,10 @@ key ctrl+shift+z
 expect_value quads > 2400
 
 # Half / Same / Double set the target from the current polygon count.
+# (2400-4400 polygons doubled can't start with a 3, unlike the dragged target of about 3000.)
 click "QRemesh/Double"
-expect_text "Target Polygons 6"
+expect_text "Target Polygons"
+expect_no_text "Target Polygons 3"
 
 # Divide twice, show the original and project its detail back.
 run subdivide levels=2
