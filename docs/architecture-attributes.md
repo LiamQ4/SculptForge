@@ -53,6 +53,15 @@ requires both halves to share a polygroup: what PolyF shows as a quad and what e
 
 New topology operations must do the same (`transferVertexAttributes(src, dst)` for rebuilt surfaces).
 
+## Paint layers (src/core/PaintLayer.h)
+With paint layers, `colors` is a cache: the composited stack of `paintBase` (the Base layer) and
+`paintLayers` (per-vertex colour + alpha, opacity, blend mode, visible, locked); `activePaintLayer` is where
+painting goes. Paint through `paintVertex()` (it writes the active layer and recomposites that vertex) and
+record undo with `Sculptor::recordColor` / `UndoRecord::captureColors`, which capture the active layer.
+Subset operations call `copyPaintLayers(src, dst, kept)`, `loopSubdivide` calls `subdividePaintLayers`;
+anything else that changes the vertex count flattens the stack (`sanitizePaintLayers`, run by
+`rebuildTopology`), keeping the look in `colors`.
+
 ## Undo (src/core/Undo.h)
 `UndoRecord` holds sparse `UndoChannel`s: `positions` (layer target), `mask`, `colors`
 (per vertex), `hidden`, `polygroups` (per triangle), or a full `mesh` snapshot. Snapshots

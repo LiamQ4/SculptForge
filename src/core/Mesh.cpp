@@ -115,6 +115,7 @@ void Mesh::sanitizeAttributes() {
         if (u != kNoQuad && quadPartners[u] != t) quadPartners[t] = kNoQuad;
     }
     if (!anyQuad) clearQuads();
+    sanitizePaintLayers(*this);
 }
 
 void Mesh::rebuildTopology() {

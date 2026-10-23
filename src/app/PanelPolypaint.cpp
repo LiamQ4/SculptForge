@@ -49,6 +49,12 @@ void App::paintAt(const DabParams& p) {
 
 void App::beginPaintStroke() {
     paintSnapshot_.reset();
+    const Mesh& m = doc_.mesh;
+    if (strokePaint_ && !m.paintLayers.empty() && m.activePaintLayer >= 0 &&
+        m.activePaintLayer < int(m.paintLayers.size()) && !paintLayerEditable(m, m.activePaintLayer)) {
+        const PaintLayer& l = m.paintLayers[size_t(m.activePaintLayer)];
+        status_ = "Paint layer '" + l.name + "' is " + (l.locked ? "locked" : "hidden");
+    }
     if (strokePaint_ && !doc_.mesh.hasColors()) paintSnapshot_ = std::make_unique<Mesh>(doc_.mesh);
 }
 
@@ -105,6 +111,14 @@ void App::drawPalette_Color() {
         if (i % 5 != 4) ImGui::SameLine();
     }
     ImGui::TextDisabled("C over the model picks its colour");
+    {
+        const Mesh& m = doc_.mesh;
+        const bool layered = !m.paintLayers.empty() && m.activePaintLayer >= 0 && m.activePaintLayer < int(m.paintLayers.size());
+        ImGui::TextDisabled("Painting on: %s", layered ? m.paintLayers[size_t(m.activePaintLayer)].name.c_str() : "Base");
+        ui::HelpText("Paint layer", nullptr,
+                     "The paint layer the Paint brush and fills write into. Add and arrange layers in Tool > Paint Layers.",
+                     "Color");
+    }
 
     const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
     const std::string hex = colorToHex(doc_.paintColor);
@@ -121,6 +135,7 @@ void App::drawPalette_Color() {
     ImGui::BeginDisabled(!doc_.mesh.hasColors());
     if (ImGui::Button("Clear", ImVec2(half, 0))) runCommand("paint_clear");
     ImGui::EndDisabled();
+    ui::HelpText("Clear", nullptr, "Remove all polypaint from the SubTool, paint layers included (undoable).", "Color");
     ImGui::Checkbox("Show polypaint", &renderSettings_.showPolypaint);
 }
 

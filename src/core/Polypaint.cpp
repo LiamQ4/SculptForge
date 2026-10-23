@@ -110,8 +110,8 @@ std::string colorToHex(const glm::vec3& linear) {
 size_t paintDab(Sculptor& sculptor, Mesh& mesh, const BVH& bvh, const DabParams& p, const glm::vec3& color,
                 Symmetry sym) {
     if (!sculptor.strokeActive() || mesh.vertexCount() == 0 || p.radius <= 0.0f) return 0;
-    auto& colors = mesh.ensureColors();
-    const glm::vec3 target = p.invert ? glm::vec3(1.0f) : color; // Alt paints back to white
+    if (!paintLayerEditable(mesh, mesh.paintLayers.empty() ? -1 : mesh.activePaintLayer)) return 0; // locked / hidden layer
+    mesh.ensureColors();
     const float s = std::clamp(p.strength, 0.0f, 1.0f) * std::clamp(p.pressure, 0.0f, 1.0f);
     static thread_local std::vector<uint32_t> verts;
     size_t changed = 0;
@@ -123,8 +123,7 @@ size_t paintDab(Sculptor& sculptor, Mesh& mesh, const BVH& bvh, const DabParams&
             const float w = brushFalloff(glm::distance(mesh.positions[v], center), p.radius) * s * vertexInfluence(mesh, v);
             if (w <= 0.0f) continue;
             sculptor.recordColor(mesh, v);
-            colors[v] = glm::mix(colors[v], target, std::min(w, 1.0f));
-            mesh.markDirty(v);
+            paintVertex(mesh, v, color, w, p.invert); // Alt paints Base back to white, erases a layer
             ++changed;
         }
     }
@@ -133,14 +132,15 @@ size_t paintDab(Sculptor& sculptor, Mesh& mesh, const BVH& bvh, const DabParams&
 
 size_t paintFill(Mesh& mesh, const glm::vec3& color, PaintArea area, float amount) {
     if (mesh.vertexCount() == 0) return 0;
-    auto& colors = mesh.ensureColors();
+    if (!paintLayerEditable(mesh, mesh.paintLayers.empty() ? -1 : mesh.activePaintLayer)) return 0;
+    mesh.ensureColors();
     amount = std::clamp(amount, 0.0f, 1.0f);
     size_t changed = 0;
     for (uint32_t v = 0; v < mesh.vertexCount(); ++v) {
         if (mesh.hasHidden() && mesh.vertexHidden(v)) continue;
         const float w = areaWeight(mesh, v, area) * amount;
         if (w <= 0.0f) continue;
-        colors[v] = glm::mix(colors[v], color, w);
+        paintVertex(mesh, v, color, w);
         ++changed;
     }
     mesh.markAllDirty();
@@ -185,14 +185,15 @@ std::vector<float> cavityMap(const Mesh& mesh, int smoothing) {
 
 size_t paintFromCavity(Mesh& mesh, const glm::vec3& color, float strength, int smoothing) {
     if (mesh.vertexCount() == 0) return 0;
+    if (!paintLayerEditable(mesh, mesh.paintLayers.empty() ? -1 : mesh.activePaintLayer)) return 0;
     const std::vector<float> cavity = cavityMap(mesh, std::clamp(smoothing, 0, 50));
-    auto& colors = mesh.ensureColors();
+    mesh.ensureColors();
     strength = std::clamp(strength, 0.0f, 1.0f);
     size_t changed = 0;
     for (uint32_t v = 0; v < mesh.vertexCount(); ++v) {
         const float w = cavity[v] * strength * vertexInfluence(mesh, v);
         if (w <= 0.0f) continue;
-        colors[v] = glm::mix(colors[v], color, w);
+        paintVertex(mesh, v, color, w);
         ++changed;
     }
     mesh.markAllDirty();
@@ -250,6 +251,15 @@ UndoRecord colorUndo(const Mesh& mesh, std::string label) {
     return r;
 }
 
+// Why the active paint layer can't be painted ("" = it can).
+std::string paintBlocked(const Mesh& mesh) {
+    if (mesh.paintLayers.empty() || mesh.activePaintLayer < 0) return {};
+    const PaintLayer& l = mesh.paintLayers[size_t(mesh.activePaintLayer)];
+    if (l.locked) return "Paint layer '" + l.name + "' is locked";
+    if (!l.visible) return "Paint layer '" + l.name + "' is hidden";
+    return {};
+}
+
 const char* kColorHelp = "Colour: rrggbb or #rrggbb (quote it in scripts), r,g,b (0-1 or 0-255) or a name (white, black, red, skin, bone, ...).";
 
 } // namespace
@@ -272,7 +282,7 @@ void registerPaintCommands(CommandRegistry& registry) {
                   }});
 
     registry.add({"paint_fill",
-                  "Fill the mesh with a polypaint colour (undoable). By default the mask is respected: only "
+                  "Fill the active paint layer with a polypaint colour (undoable). By default the mask is respected: only "
                   "unmasked areas are painted. Hidden faces are never painted.",
                   {{"color", T::String, std::string(kColorHelp) + " Default: the current paint colour.", false},
                    {"area", T::String, "unmasked (default), masked (only the masked area) or all (ignore the mask).", false},
@@ -289,18 +299,22 @@ void registerPaintCommands(CommandRegistry& registry) {
                       else if (areaName == "all") area = PaintArea::All;
                       else return {false, "area must be unmasked, masked or all"};
                       if (area == PaintArea::Masked && !doc.mesh.hasMask()) return {false, "Nothing is masked"};
+                      if (std::string why = paintBlocked(doc.mesh); !why.empty()) return {false, why};
                       doc.undo.push(colorUndo(doc.mesh, "Fill Color"));
                       const size_t n = paintFill(doc.mesh, c, area, float(argNumber(a, "strength", 1.0)));
                       doc.modified = true;
                       return {true, "Filled " + std::to_string(n) + " vertices with " + colorToHex(c)};
                   }});
 
-    registry.add({"paint_clear", "Remove all polypaint from the mesh (undoable).", {},
+    registry.add({"paint_clear", "Remove all polypaint from the mesh, paint layers included (undoable).", {},
                   [](Document& doc, const Args&) -> CommandResult {
                       if (!doc.mesh.hasColors()) return {true, "The mesh has no polypaint"};
                       // A snapshot, so redo removes the attribute again instead of leaving white paint.
                       Mesh cleared = doc.mesh;
                       cleared.clearColors();
+                      cleared.paintLayers.clear();
+                      cleared.paintBase.clear();
+                      cleared.activePaintLayer = -1;
                       doc.replaceMeshUndoable(std::move(cleared), "Clear Polypaint");
                       return {true, "Polypaint cleared"};
                   }});
@@ -316,6 +330,7 @@ void registerPaintCommands(CommandRegistry& registry) {
                       glm::vec3 c = srgbToLinear(glm::vec3(0.16f, 0.1f, 0.08f));
                       std::string err;
                       if (!colorArg(a, c, err) && !err.empty()) return {false, err};
+                      if (std::string why = paintBlocked(doc.mesh); !why.empty()) return {false, why};
                       doc.undo.push(colorUndo(doc.mesh, "Paint Cavity"));
                       const size_t n = paintFromCavity(doc.mesh, c, float(argNumber(a, "strength", 0.7)),
                                                        int(argNumber(a, "smoothing", 2)));
@@ -335,6 +350,7 @@ void registerPaintCommands(CommandRegistry& registry) {
                       if (!savePlyMesh(path, mesh, err)) return {false, err};
                       return {true, "Exported " + path + (mesh.hasColors() ? " (with polypaint)" : "")};
                   }});
+    registerPaintLayerCommands(registry); // paint_layer_* (core/PaintLayer.cpp)
 }
 
 } // namespace sf

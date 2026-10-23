@@ -309,6 +309,7 @@ Mesh extractTriangles(const Mesh& mesh, const std::vector<uint8_t>& keep) {
             out.layers.push_back(std::move(nl));
         }
     }
+    copyPaintLayers(mesh, out, kept);
     if (!anyHidden) out.clearHidden();
     remapQuads(mesh, newTriangle, out); // a quad loses its pairing when only one half is kept
     out.rebuildTopology();

@@ -238,6 +238,7 @@ Mesh decimate(const Mesh& src, size_t targetTriangles) {
             out.layers.push_back(std::move(nl));
         }
     }
+    copyPaintLayers(src, out, kept);
     out.rebuildTopology();
     out.recomputeAllNormals();
     return out;

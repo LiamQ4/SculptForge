@@ -524,6 +524,13 @@ private:
     void drawPalette_Transform();
     void drawAlphaSection();
     void drawLayersContents();
+    // Paint Layers sub-palette (PanelPaintLayers.cpp).
+    void drawPaintLayersContents();
+    int renamingPaintLayer_ = -2; // layer being renamed inline (-2 = none)
+    bool focusPaintRename_ = false;
+    char paintRenameBuffer_[64] = "";
+    int listedPaintLayer_ = -2;       // active row last scrolled into view
+    float paintOpacityDrag_ = -1.0f;  // opacity before the slider drag (-1 = not dragging)
     void drawGameExportContents();
     void drawVisibilitySection();
     void drawSubToolsContents();

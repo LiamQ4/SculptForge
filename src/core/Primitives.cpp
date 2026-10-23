@@ -186,6 +186,12 @@ Mesh loopSubdivide(const Mesh& src) {
     };
     if (src.mask.size() == nv) out.mask = interpolateLinear(src.mask);
     if (src.colors.size() == nv) out.colors = interpolateLinear(src.colors);
+    if (!src.paintLayers.empty()) {
+        std::vector<glm::uvec3> midpoints; // new vertex, parent a, parent b
+        midpoints.reserve(edges.size());
+        for (const auto& [key, e] : edges) midpoints.push_back({e.index, uint32_t(key >> 32), uint32_t(key & 0xffffffffu)});
+        subdividePaintLayers(src, out, next, midpoints);
+    }
 
     const size_t nt = src.triangles.size();
     const bool groups = src.polygroups.size() == nt, hidden = src.hidden.size() == nt, uvs = src.uvs.size() == nt * 3;

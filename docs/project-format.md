@@ -27,12 +27,22 @@ read by `loadProject` (src/core/Project.cpp). Commands: `save_project path=...`,
 | `mesh.uvs` | subtools/i/mesh/uvs.bin | f32 x2 per triangle corner |
 | `mesh.quad_partners` | subtools/i/mesh/quad_partners.bin | u32 per triangle: the triangle it forms a quad with, 0xFFFFFFFF = none. Readers drop pairs that aren't mutual or don't share an edge. Added without a version bump: older readers ignore it and load triangles |
 | `layers[k].delta` | subtools/i/layers/<k>.bin | f32 x3 per vertex, plus `name`, `weight` |
+| `paint_layers.base` | subtools/i/paint/base.bin | f32 x3 per vertex: the Base paint layer (linear RGB) |
+| `paint_layers.layers[k].color` / `alpha` | subtools/i/paint/<k>_color.bin, <k>_alpha.bin | f32 x3 / x1 per vertex, plus `name`, `opacity` (0-1), `blend`, `visible`, `locked` |
 
 | Manifest key (top level) | File | Layout |
 |--------------|------|--------|
 | `splats.*` | splats/*.bin | positions x3, rotations x4 (x,y,z,w), scales x3, opacities x1, sh x3 per coefficient; plus `count`, `sh_degree`, `name`, `transform` (16 floats, column-major) |
 
 Optional attributes are simply absent when the mesh doesn't have them.
+
+### Paint layers
+`subtools[i].paint_layers` (only written when the SubTool has paint layers; src/core/PaintLayer.h) holds
+`active` (the layer painting writes into, -1 = Base), `base` and `layers` (bottom to top). `blend` is one of
+`normal`, `multiply`, `screen`, `overlay`, `soft_light`, `add`, `subtract`, `darken`, `lighten`, `difference`
+(unknown modes load as `normal`). `mesh.colors` still holds the composited stack, so readers that don't know
+`paint_layers` (SculptForge 0.3 and earlier) open the project with the paint flattened, and the key needs no
+version bump.
 
 Loading replaces the scene: every SubTool comes back with its name, visibility, attributes, layers,
 active layer and GoZ name, the saved active SubTool is selected, every SubTool starts with an empty
