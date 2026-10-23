@@ -508,6 +508,11 @@ void Renderer::shutdown() {
     gl::DeleteBuffers(1, &splatOrder_);
     gl::DeleteTextures(1, &splatTexture_);
     gl::DeleteVertexArrays(1, &splatVao_);
+    if (viewFbo_) {
+        gl::DeleteFramebuffers(1, &viewFbo_);
+        gl::DeleteRenderbuffers(2, viewRb_);
+        viewFbo_ = 0;
+    }
 }
 
 void Renderer::syncSplats(const SplatCloud& c, uint64_t version) {
@@ -745,6 +750,12 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs) {
     if (wireLines_.capacity() > (size_t(1) << 16)) std::vector<uint32_t>().swap(wireLines_);
 }
 
+bool Renderer::outOfMemory(uint32_t id) const {
+    for (const MeshSlot& s : slots_)
+        if (s.id == id) return s.outOfMemory;
+    return false;
+}
+
 void Renderer::syncScene(const std::vector<SceneMesh>& scene) {
     // Free the slots of SubTools that are gone (deleted, merged, a new scene).
     for (size_t i = 0; i < slots_.size();) {
@@ -794,6 +805,25 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap) {
     if (full) {
         uploadFaces(s, mesh, wantUvs);
         s.vertexCapacity = nv;
+        // A mesh too big for the GPU's memory isn't drawn (rather than taking the driver down); the next full
+        // upload (e.g. after Lower Res or a decimation) tries again.
+        s.outOfMemory = false;
+        for (int i = 0; i < 16; ++i) {
+            const GLenum e = gl::GetError();
+            if (e == GL_NO_ERROR) break;
+            s.outOfMemory = s.outOfMemory || e == GL_OUT_OF_MEMORY;
+        }
+        if (s.outOfMemory) {
+            for (GLuint b : {s.posBuffer, s.nrmBuffer, s.curvBuffer}) {
+                gl::BindBuffer(GL_ARRAY_BUFFER, b);
+                gl::BufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+            }
+            gl::BindVertexArray(s.vao);
+            gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, 0, nullptr, GL_STATIC_DRAW);
+            gl::BindVertexArray(0);
+            s.indexCount = 0;
+            s.lineCount = 0;
+        }
     }
     if (!full && (mesh.facesDirty || wantUvs != s.hasUvs)) uploadFaces(s, mesh, wantUvs);
     syncTexture(s, mesh);
@@ -962,6 +992,62 @@ bool Renderer::renderToImage(const Camera& camera, int width, int height, const 
     gl::DeleteFramebuffers(2, fbo);
     gl::DeleteRenderbuffers(3, rb);
     return ok;
+}
+
+bool Renderer::viewTarget(int width, int height, int samples) {
+    if (viewFbo_ && width == viewW_ && height == viewH_ && samples == viewSamples_) return true;
+    if (width == viewW_ && height == viewH_ && samples == viewFailed_) return false; // don't retry every frame
+    if (viewFbo_) {
+        gl::DeleteFramebuffers(1, &viewFbo_);
+        gl::DeleteRenderbuffers(2, viewRb_);
+        viewFbo_ = 0;
+    }
+    for (int i = 0; i < 16 && gl::GetError() != GL_NO_ERROR; ++i) {
+    }
+    gl::GenFramebuffers(1, &viewFbo_);
+    gl::GenRenderbuffers(2, viewRb_);
+    gl::BindRenderbuffer(GL_RENDERBUFFER, viewRb_[0]);
+    gl::RenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_RGBA8, width, height);
+    gl::BindRenderbuffer(GL_RENDERBUFFER, viewRb_[1]);
+    gl::RenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH_COMPONENT24, width, height);
+    gl::BindFramebuffer(GL_FRAMEBUFFER, viewFbo_);
+    gl::FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, viewRb_[0]);
+    gl::FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, viewRb_[1]);
+    const bool ok = gl::CheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE && gl::GetError() == GL_NO_ERROR;
+    gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+    viewW_ = width;
+    viewH_ = height;
+    if (!ok) {
+        gl::DeleteFramebuffers(1, &viewFbo_);
+        gl::DeleteRenderbuffers(2, viewRb_);
+        viewFbo_ = 0;
+        viewSamples_ = 0;
+        viewFailed_ = samples;
+        return false;
+    }
+    viewSamples_ = samples;
+    viewFailed_ = 0;
+    return true;
+}
+
+int Renderer::drawView(const Camera& camera, int width, int height, const RenderSettings& settings, const Viewport& viewport,
+                       int samples) {
+    GLint maxSamples = 1;
+    gl::GetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+    samples = std::clamp(samples, 1, std::max(1, int(maxSamples)));
+    while (samples > 1 && !viewTarget(width, height, samples)) samples /= 2;
+    if (samples <= 1) {
+        gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+        draw(camera, width, height, settings, viewport);
+        return 1;
+    }
+    gl::BindFramebuffer(GL_FRAMEBUFFER, viewFbo_);
+    draw(camera, width, height, settings, viewport);
+    gl::BindFramebuffer(GL_READ_FRAMEBUFFER, viewFbo_);
+    gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    gl::BlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+    return samples;
 }
 
 bool Renderer::beginCapture(int width, int height, std::string& error) {

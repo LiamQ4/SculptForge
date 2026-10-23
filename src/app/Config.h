@@ -30,6 +30,10 @@ struct UiPrefs {
     int cameraNotch = 0;        // keep the UI out of a laptop's camera notch: 0 automatic, 1 always, 2 never
     bool turntable = false;     // rotation: false = free, about the screen axes (ZBrush); true = turntable (Y up)
     TabletSettings tablet;      // Preferences > Tablet: pressure curve, eraser, pen buttons
+    // Preferences > Performance (PanelPerformance.cpp).
+    int antialiasing = 4;       // samples per pixel in the 3D view: 1 (off), 2, 4 or 8
+    bool fastNavigation = true; // big scenes draw without antialiasing while the view moves
+    bool multithreading = true; // brushes, normals and BVH updates on every core (off: one thread)
 };
 
 Json toJson(const UiPrefs& prefs);

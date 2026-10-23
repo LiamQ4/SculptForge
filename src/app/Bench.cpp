@@ -9,11 +9,15 @@
 #include "render/GL.h"
 #include "render/Renderer.h"
 
+#include "core/Image.h"
+
 #include <SDL3/SDL.h>
 
 #include <chrono>
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 
 namespace sf {
 
@@ -33,8 +37,8 @@ int runAppBenchmark(BenchCommandLine cl) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
-    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0); // as in the app: the view antialiases in its own target
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
     SDL_Window* window = SDL_CreateWindow("SculptForge benchmark", 1600, 960, SDL_WINDOW_OPENGL | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!window) {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -69,7 +73,7 @@ int runAppBenchmark(BenchCommandLine cl) {
             gl::Finish();
             return msSince(t);
         };
-        gpu.orbitFrameMs = [&](Mesh& m) {
+        gpu.orbitFrameMs = [&](Mesh& m, int samples) {
             int w = 0, h = 0;
             SDL_GetWindowSizeInPixels(window, &w, &h);
             Camera camera;
@@ -86,11 +90,29 @@ int runAppBenchmark(BenchCommandLine cl) {
                 }
                 SDL_PumpEvents();
                 camera.yaw = float(i) * 6.2831853f / float(frames);
-                renderer.draw(camera, w, h, settings);
+                renderer.drawView(camera, w, h, settings, {}, samples);
                 SDL_GL_SwapWindow(window);
             }
             gl::Finish();
-            return msSince(t) / frames;
+            const double ms = msSince(t) / frames;
+            // SF_BENCH_SHOT=prefix: one frame as the window shows it, read back, to check the view draws right.
+            if (const char* shot = std::getenv("SF_BENCH_SHOT")) {
+                renderer.drawView(camera, w, h, settings, {}, samples);
+                Image img;
+                img.width = w;
+                img.height = h;
+                img.rgba.resize(size_t(w) * size_t(h) * 4);
+                gl::PixelStorei(GL_PACK_ALIGNMENT, 1);
+                gl::ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
+                std::vector<uint8_t> flipped(img.rgba.size());
+                for (int y = 0; y < h; ++y)
+                    std::copy_n(img.rgba.data() + size_t(h - 1 - y) * size_t(w) * 4, size_t(w) * 4, flipped.data() + size_t(y) * size_t(w) * 4);
+                img.rgba = std::move(flipped);
+                for (size_t i = 3; i < img.rgba.size(); i += 4) img.rgba[i] = 255;
+                std::string err;
+                img.savePng(std::string(shot) + "-" + std::to_string(m.triangleCount()) + "-" + std::to_string(samples) + "x.png", err);
+            }
+            return ms;
         };
         code = runBenchCommandLine(cl, "## With the GPU (sculptforge --bench)\n\n", &gpu);
         renderer.shutdown();

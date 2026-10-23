@@ -47,6 +47,9 @@ Json toJson(const UiPrefs& p) {
     j.set("turntable", p.turntable);
     j.set("alphabeticalPalettes", p.alphabeticalPalettes);
     j.set("tablet", toJson(p.tablet));
+    j.set("antialiasing", double(p.antialiasing));
+    j.set("fastNavigation", p.fastNavigation);
+    j.set("multithreading", p.multithreading);
     return j;
 }
 
@@ -65,6 +68,10 @@ void fromJson(const Json& j, UiPrefs& p) {
     p.turntable = j["turntable"].asBool(p.turntable);
     p.alphabeticalPalettes = j["alphabeticalPalettes"].asBool(p.alphabeticalPalettes);
     fromJson(j["tablet"], p.tablet);
+    const int aa = int(j["antialiasing"].asNumber(p.antialiasing));
+    p.antialiasing = aa >= 8 ? 8 : aa >= 4 ? 4 : aa >= 2 ? 2 : 1;
+    p.fastNavigation = j["fastNavigation"].asBool(p.fastNavigation);
+    p.multithreading = j["multithreading"].asBool(p.multithreading);
 }
 
 namespace {
@@ -333,6 +340,7 @@ void App::initActions() {
     registerGizmoActions();     // Q W E R: Draw, and the Gizmo 3D's Move, Scale, Rotate (Gizmo.cpp)
     registerBakeUiActions();    // Tool > Bake (PanelBake.cpp)
     registerRetopoUiActions(); // Geometry > QRemesh, SubTool > ProjectAll (PanelRetopo.cpp)
+    registerPerformanceUiActions(); // Preferences > Performance (PanelPerformance.cpp)
 
     // Every command, so the command palette finds anything scriptable.
     actions_.registerCommands(
@@ -399,6 +407,7 @@ bool App::readUiConfig(const std::string& path, std::string& err) {
     layout_.customize = customize;
     actions_.overridesFromJson(j["shortcuts"]);
     fromJson(j["prefs"], uiPrefs_);
+    applyPerformancePrefs();
     return true;
 }
 

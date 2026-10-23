@@ -425,6 +425,25 @@ private:
     // Cached UV wireframe of the active SubTool for the UV view: segments in 0..1 UV space.
     std::vector<glm::vec2> uvLines_;
     uint64_t uvLinesKey_ = 0;
+    // Preferences > Performance (PanelPerformance.cpp): antialiasing and fast navigation, multithreading, what the
+    // last stroke cost per dab, and memory. viewSamples() picks this frame's 3D view samples.
+    void registerPerformanceUiActions();
+    void drawPerformanceSection();
+    int viewSamples();
+    void applyPerformancePrefs();
+    void notePerformanceFrame(double syncMs); // after syncScene: upload time, GPU memory warnings
+    struct PerfState {
+        glm::mat4 lastView{0.0f};
+        double lastCameraMove = -1.0; // seconds (SDL ticks)
+        bool fastNow = false;         // this frame draws without antialiasing (fast navigation)
+        int samplesUsed = 0;          // what the renderer managed last frame (fewer when out of memory)
+        double strokeSyncMs = 0.0;    // upload time summed over the open stroke's frames
+        int strokeFrames = 0;
+        SculptTimings lastStroke;     // the last finished stroke
+        double lastStrokeSyncMs = 0.0;
+        int lastStrokeFrames = 0;
+        bool gpuOutOfMemory = false;
+    } perf_;
     // Geometry > QRemesh (quad retopology on a worker thread) and SubTool > Project (ProjectAll); PanelRetopo.cpp.
     void registerRetopoUiActions();
     void drawQRemeshContents();

@@ -3,6 +3,7 @@
 #include "core/Commands.h"
 
 #include "core/Bake.h"
+#include "core/Benchmark.h"
 #include "core/BrushAlpha.h"
 #include "core/BrushLibrary.h"
 #include "core/Decimate.h"
@@ -761,6 +762,7 @@ CommandRegistry::CommandRegistry() {
     registerSubToolCommands(*this);
     registerSubdivCommands(*this); // subdiv_* (core/MultiresCommands.cpp)
     registerTransformCommands(*this); // transform (core/MeshTransform.h)
+    registerPerformanceCommands(*this); // perf_info, set_multithreading (core/Benchmark.cpp)
     registerPaintCommands(*this); // core/Polypaint.cpp
     registerGozCommands(*this); // goz_import/export/send/receive, export_stl (io/GozCommands.cpp)
     registerBakeCommands(*this); // bake (core/Bake.cpp)

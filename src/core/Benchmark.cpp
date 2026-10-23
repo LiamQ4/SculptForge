@@ -3,6 +3,7 @@
 #include "core/Benchmark.h"
 
 #include "core/BrushRecipe.h"
+#include "core/Commands.h"
 #include "core/Document.h"
 #include "core/Multires.h"
 #include "core/Polypaint.h"
@@ -26,6 +27,18 @@
 
 namespace sf {
 
+namespace {
+
+std::string fmt(const char* f, double v) {
+    char buf[64];
+    std::snprintf(buf, sizeof buf, f, v);
+    return buf;
+}
+
+std::string millions(double n) { return n >= 1e6 ? fmt("%.1fM", n / 1e6) : fmt("%.0fk", n / 1e3); }
+
+} // namespace
+
 size_t residentBytes() {
 #if defined(__linux__)
     std::ifstream f("/proc/self/statm");
@@ -33,6 +46,51 @@ size_t residentBytes() {
     if (f >> pages >> resident) return resident * size_t(sysconf(_SC_PAGESIZE));
 #endif
     return 0;
+}
+
+MemoryUse documentMemory(const Document& doc) {
+    MemoryUse u;
+    for (int i = 0; i < doc.subtoolCount(); ++i) {
+        const bool active = i == doc.activeSubtool;
+        const SubTool& st = doc.subtools[size_t(i)];
+        const Mesh& m = doc.subtoolMesh(i);
+        u.mesh += m.memoryBytes();
+        u.bvh += (active ? doc.bvh : st.bvh).memoryBytes();
+        u.levels += subdivBytes(m);
+        u.undo += (active ? doc.undo : st.undo).undoBytes();
+        u.triangles += m.triangleCount();
+        u.vertices += m.vertexCount();
+        if (st.visible) // positions, normals, curvature (+ colours, mask) per vertex; indices per triangle
+            u.gpu += m.vertexCount() * (28 + (m.hasColors() ? 12 : 0) + (m.hasMask() ? 4 : 0)) + m.triangleCount() * 12;
+    }
+    return u;
+}
+
+void registerPerformanceCommands(CommandRegistry& registry) {
+    registry.add({"perf_info",
+                  "Performance information: the threads brushes use, and the memory the scene holds (meshes, BVHs, "
+                  "subdivision levels, undo history, GPU buffers), per SubTool and in total.",
+                  {},
+                  [](Document& doc, const Args&) -> CommandResult {
+                      auto mb = [](size_t b) { return fmt("%.1f MB", double(b) / 1e6); };
+                      const MemoryUse u = documentMemory(doc);
+                      std::string msg = "Threads " + std::to_string(ThreadPool::shared().threads()) +
+                                        (ThreadPool::shared().serial() ? " (multithreading off)" : "") + "; " +
+                                        millions(double(u.triangles)) + " triangles; memory " + mb(u.total()) + " (meshes " +
+                                        mb(u.mesh) + ", BVH " + mb(u.bvh) + ", subdivision levels " + mb(u.levels) +
+                                        ", undo " + mb(u.undo) + "), GPU buffers about " + mb(u.gpu);
+                      return {true, msg};
+                  }});
+    registry.add({"set_multithreading",
+                  "Run brushes, normal and BVH updates, project saving and other per-dab work on every core (on, the "
+                  "default) or on one thread (off: slower, for comparing or troubleshooting). Results are the same.",
+                  {{"enabled", ParamSpec::Type::Bool, "true = every core, false = one thread.", true}},
+                  [](Document&, const Args& a) -> CommandResult {
+                      const bool on = argBool(a, "enabled", true);
+                      ThreadPool::shared().setSerial(!on);
+                      return {true, on ? "Multithreading on (" + std::to_string(ThreadPool::shared().threads()) + " threads)"
+                                       : std::string("Multithreading off (one thread)")};
+                  }});
 }
 
 Mesh makeBenchSphere(size_t triangles) {
@@ -149,14 +207,6 @@ StrokeStats runStroke(Document& doc, const BenchBrush& b, int dabs, const BenchG
     if (gpu && gpu->upload) gpu->upload(m);
     return st;
 }
-
-std::string fmt(const char* f, double v) {
-    char buf[64];
-    std::snprintf(buf, sizeof buf, f, v);
-    return buf;
-}
-
-std::string millions(double n) { return n >= 1e6 ? fmt("%.1fM", n / 1e6) : fmt("%.0fk", n / 1e3); }
 
 } // namespace
 
@@ -327,8 +377,11 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         }
         if (gpu && gpu->orbitFrameMs) {
             log("  orbit");
-            const double f = gpu->orbitFrameMs(m);
-            md << "| Orbit: frame time | " << fmt("%.1f", f) << " (" << fmt("%.0f", 1000.0 / std::max(f, 1e-3)) << " fps) |\n";
+            for (int samples : {4, 1}) {
+                const double f = gpu->orbitFrameMs(m, samples);
+                md << "| Orbit: frame time, " << (samples == 1 ? "Fast Navigation (no antialiasing)" : "4x antialiasing") << " | "
+                   << fmt("%.1f", f) << " (" << fmt("%.0f", 1000.0 / std::max(f, 1e-3)) << " fps) |\n";
+            }
         }
         md << "\n";
         if (o.partial) o.partial(md.str());

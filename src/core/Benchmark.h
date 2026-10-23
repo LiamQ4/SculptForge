@@ -19,11 +19,14 @@
 
 namespace sf {
 
+struct Document;
+
 struct BenchGpu {
     // Uploads what the mesh marked dirty and waits for the GPU; returns milliseconds. First call: everything.
     std::function<double(Mesh&)> upload;
-    // Average milliseconds per frame over a turn around the mesh (already uploaded).
-    std::function<double(Mesh&)> orbitFrameMs;
+    // Average milliseconds per frame over a turn around the mesh (already uploaded), drawn with `samples`
+    // antialiasing samples as the app's view draws (1 = Fast Navigation while the view moves).
+    std::function<double(Mesh&, int samples)> orbitFrameMs;
     std::string description; // GPU / driver, for the report
 };
 
@@ -58,5 +61,21 @@ Mesh makeBenchSphere(size_t triangles);
 
 // Resident memory of this process in bytes (0 where unknown).
 size_t residentBytes();
+
+// What the scene holds in memory, summed over SubTools (Preferences > Performance, perf_info).
+struct MemoryUse {
+    size_t mesh = 0;   // meshes with topology (Mesh::memoryBytes)
+    size_t bvh = 0;    // acceleration structures
+    size_t levels = 0; // subdivision level stacks (subdivBytes)
+    size_t undo = 0;   // undo history (UndoStack::undoBytes)
+    size_t gpu = 0;    // vertex and index buffers the renderer keeps for the visible SubTools (an estimate)
+    size_t triangles = 0, vertices = 0;
+    size_t total() const { return mesh + bvh + levels + undo; }
+};
+MemoryUse documentMemory(const Document& doc);
+
+class CommandRegistry;
+// perf_info (threads, memory) and set_multithreading.
+void registerPerformanceCommands(CommandRegistry& registry);
 
 } // namespace sf
