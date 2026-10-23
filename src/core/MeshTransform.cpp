@@ -246,7 +246,6 @@ void TransformSession::apply(Mesh& mesh, const MeshTransform& t) {
         }
     }
     std::vector<glm::vec3>& target = layered_ ? mesh.base : mesh.positions;
-    const bool exactNormals = verts_.size() < 200000; // big drags turn normals and fix them in finish()
     parallelRange(verts_.size(), [&](size_t b, size_t e) {
         for (size_t i = b; i < e; ++i) {
             const Level& L = table_[side_[i] * stride + level_[i]];
@@ -254,21 +253,19 @@ void TransformSession::apply(Mesh& mesh, const MeshTransform& t) {
             if (L.translateOnly) {
                 target[v] = base_[i] + L.offset;
                 for (size_t k = 0; k < deltas_.size(); ++k) mesh.layers[k].delta[v] = deltas_[k][i];
-                if (!exactNormals) mesh.normals[v] = normals_[i];
+                mesh.normals[v] = normals_[i];
                 continue;
             }
             target[v] = L.linear * base_[i] + L.offset;
             for (size_t k = 0; k < deltas_.size(); ++k) mesh.layers[k].delta[v] = L.linear * deltas_[k][i];
-            if (!exactNormals) {
-                const glm::vec3 n = L.normal * normals_[i];
-                const float len = glm::length(n);
-                mesh.normals[v] = len > 1e-20f ? n / len : normals_[i];
-            }
+            const glm::vec3 n = L.normal * normals_[i];
+            const float len = glm::length(n);
+            mesh.normals[v] = len > 1e-20f ? n / len : normals_[i];
         }
     });
     if (layered_) mesh.evaluate(verts_);
-    if (exactNormals) mesh.updateNormals(verts_);
-    else if (!boundary_.empty()) mesh.updateNormals(boundary_);
+    // Rigidly moved normals just turn (above); recompute them only where neighbours move differently.
+    if (!boundary_.empty()) mesh.updateNormals(boundary_);
     mesh.markDirty(verts_.front());
     mesh.markDirty(verts_.back());
     moved_ = !t.identity();
@@ -298,8 +295,8 @@ UndoRecord TransformSession::finish(Mesh& mesh, BVH& bvh, std::string label) {
         writeBack(mesh); // an identity transform: leave the mesh exactly as it was
         return r;
     }
-    // Keeps the mesh's face-normal cache right for later strokes (big drags only turned the normals).
-    if (verts_.size() >= 200000) mesh.updateNormals(verts_);
+    // Recomputed once from the final positions: keeps the mesh's face-normal cache right for later strokes.
+    mesh.updateNormals(verts_);
     if (verts_.size() * 4 > mesh.vertexCount()) bvh.refitAll(mesh);
     else bvh.refit(mesh, verts_);
     r.label = std::move(label);
