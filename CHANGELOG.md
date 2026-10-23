@@ -6,6 +6,8 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-22
+
 ### User guide
 - A complete user guide (21 chapters, from the interface and every brush to Send to Unreal, scripting and
   troubleshooting, with screenshots) built into the app: Help > User Guide (Shift+F1), with contents, full-text
@@ -193,5 +195,7 @@ First public release.
 - Rez package (`packaging/rez`).
 - Headless thumbnail/turntable rendering and scripted demo recording.
 
+[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/islandmed/SculptForge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/islandmed/SculptForge/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/islandmed/SculptForge/releases/tag/v0.1.0

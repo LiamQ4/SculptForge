@@ -44,7 +44,7 @@ the GPL covers the program, not your models.
 
 ## What it doesn't do yet
 
-SculptForge is young (version 0.2 plus the features in development since then). Some things ZBrush artists
+SculptForge is young (version 0.3). Some things ZBrush artists
 rely on are still on the roadmap:
 
 - Multiresolution sculpting (subdivision levels you can step up and down). Subdivide works, but it is a

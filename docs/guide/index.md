@@ -3,7 +3,7 @@
 This guide explains every part of SculptForge, the free, open-source sculpting app for VFX, animation and games:
 how the interface is organised, how to sculpt, mask, paint and manage SubTools, how to generate models with AI,
 and how to get your work into a game engine, a film pipeline or ZBrush. It is written for SculptForge
-0.2 and the features in development since then.
+0.3.
 
 You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<kbd>F1</kbd>) or on the
 [SculptForge website](https://islandmed.github.io/SculptForge/guide/). If you're coming from ZBrush, start with
