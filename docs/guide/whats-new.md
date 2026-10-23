@@ -72,6 +72,28 @@ See [Baking normal and displacement maps](baking.md).
 
 See [Quad retopology and detail projection](retopology.md).
 
+### Polish
+
+- **Your paint survives Auto UV and retopology.** Auto UV on a painted SubTool moves the texture and its layers
+  onto the new UVs. Voxel Remesh and QRemesh have a **Keep Texture** option (on by default) that unwraps the new
+  surface and projects the texture onto it, and merging SubTools keeps their textures in one. Each is a single
+  undo step. See [Texture painting](texture-painting.md#uvs-and-geometry).
+- **Faster, safer Auto UV on dense sculpts:** no more crash or folded UVs on dense smooth meshes, and a
+  million-triangle sculpt unwraps in a quarter of a minute or so. Decimate keeps the texture exact across UV
+  seams.
+- **Subdivision levels, polished.** Tools that rebuild the mesh (remesh, Decimate, QRemesh, Subdivide, Delete
+  Hidden, merge and split) tell you they removed the levels and that the level you were on became the new base;
+  <kbd>Ctrl</kbd>+<kbd>Z</kbd> brings them all back. Sculpt layers' fine detail turns with a low level you pose
+  with the Gizmo, and SubTools you aren't working on no longer hold cached levels in memory.
+- **QRemesh symmetry follows your model.** Symmetry (now on by default) mirrors across the model's own middle, so
+  a model away from the centre comes out mirror-symmetric too. If the model isn't symmetric, QRemesh remeshes it
+  whole and tells you. Eyes, teeth and rivets get their own quads instead of disappearing, and thin hard-edged
+  parts such as blades and fins keep both sides and their edges. See [Quad retopology](retopology.md).
+- **Tidier top shelf:** the **Vertex / Texture** paint target only shows when the SubTool has a texture.
+- **Exports checked by other tools:** textured GLB, USD/USDZ, FBX and OBJ files were checked with the Khronos
+  validator, OpenUSD and ufbx, and the texture is the right way up in each. A model saved as `my scene.obj` now
+  writes `my_scene.mtl` so other apps find it. See [Exporting](exporting.md).
+
 ## Version 0.4.2
 
 ### Texture painting on UV maps

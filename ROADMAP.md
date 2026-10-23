@@ -138,6 +138,8 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
   exported to PLY, glTF, OBJ, USD and GoZ; Photoshop-style paint layers with blend modes (v0.4)
 - ✅ Texture painting on UV maps (resolution independent of the mesh), with the same paint layers; Auto UV,
   polypaint <-> texture, PNG next to OBJ / glTF / USD / FBX / GoZ exports (v0.5)
+- ✅ Textures survive Auto UV, voxel remesh, QRemesh, Decimate and merges (Keep Texture, v0.5); textured
+  exports validated with the Khronos glTF validator, OpenUSD and ufbx (v0.5)
 - 📋 UV editing (seams, relax, pack options), UDIM tiles; ✅ texture baking (normal/displacement, v0.5)
 - ✅ STL import (binary and ASCII) and binary export
 - 📋 Binary USD (usdc), SPZ-compressed splats, USD references/payloads

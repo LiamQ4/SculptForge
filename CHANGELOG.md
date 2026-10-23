@@ -89,6 +89,44 @@ All notable changes to SculptForge are listed here. The format follows
 - New guide chapter "Quad retopology and detail projection", glossary entries; UI test `tests/ui/retopo.sfui`,
   unit tests `tests/test_retopo.cpp` (manifold, quad %, target count, Hausdorff distance, projection error).
 
+### Polish of the v0.5 features (known issues fixed)
+- Auto UV on a SubTool with a painted texture now moves the paint and every texture layer onto the new UVs
+  instead of scrambling it (each texel of a new UV triangle samples the old texture at the same point of the same
+  triangle, islands padded 8 texels); one undo step restores the old UVs and texture (`uv_auto
+  keep_texture=false` for the old behaviour). 1.05M triangles, 4K texture with a layer: 0.2-0.3 s.
+- Keep Texture (Tool > Remesh, Tool > Geometry > QRemesh; `keep_texture` on `remesh` and `qremesh`, default on):
+  the rebuilt surface gets Auto UVs and the texture, all layers, is projected onto it from the old surface, in the
+  same undo step. Voxel Remesh of a painted SubTool runs in the background with progress and Cancel. Merging
+  SubTools (`subtool_merge_down`, `subtool_merge_visible`) keeps their textures in one texture on new Auto UVs.
+- Decimate no longer scrambles a texture at UV seams (seam vertices stay in place).
+- Auto UV no longer crashes or folds UVs on dense smooth meshes (e.g. the default 82k-triangle sphere): fixed in
+  third_party/xatlas. UV islands are capped at about 4000 triangles, so a 1.3M-triangle sculpt unwraps in about
+  16 s instead of minutes.
+- Subdivision levels: Voxel Remesh, Decimate, QRemesh, Subdivide, Delete Hidden and merging or splitting SubTools
+  say in the status line that they removed the levels and which one became the new base ("Subdivision levels
+  removed: SDiv 3 of 5 kept as the new base"); undo restores every level (now covered by tests).
+- Subdivision levels: a sculpt layer's fine detail now turns and bends with a low level rotated with the Gizmo 3D
+  or reshaped (layer details are stored relative to the surface). Project format 5; format 4 projects are
+  converted when they open.
+- Subdivision levels: only the active SubTool keeps its recently visited levels cached; selecting another SubTool
+  frees 50-170 MB per SubTool with 1.8M triangles (the first level step after coming back takes about 0.1 s).
+- QRemesh: Symmetry mirrors across the model's own middle plane, so models away from the world centre work. A
+  model that isn't mirror-symmetric is remeshed without symmetry and the status line says so; a nearly symmetric
+  one keeps mirrored topology on each side's own surface. Symmetry is on by default in the panel; new
+  `symmetry_center` argument for a fixed plane.
+- QRemesh: small separate pieces (eyes, rivets) are no longer dropped: they are remeshed on their own with at
+  least 32 quads, or kept as they were. Parts thinner than a quad (blades, fins, slabs) keep both sides and their
+  hard edges (thin slab: mean error 2.2% -> 0.05% of its size, Hausdorff 8.8% -> 2.6%).
+- Top shelf: the Vertex / Texture paint target is hidden while the SubTool has no texture, instead of sitting
+  there greyed out (docs/ui-design.md now states the rule for contextual shelf buttons); Draw Size and Strength
+  shrink to fit when the row is full.
+- Exports: the `.mtl` and PNGs written beside a model whose file name has spaces use `_` instead (OBJ's `mtllib`
+  and MTL's `map_Kd` split names at spaces). Textured exports were validated with other tools: Khronos glTF
+  validator (no errors or warnings), OpenUSD's validators (no issues), ufbx strict mode, and a texture
+  orientation check per format; `tools/export_check/run.sh` repeats it.
+- UI tests: `wait_idle` waits for several idle frames in a row, which fixes the flaky `ui_lightbox` under a
+  loaded parallel ctest.
+
 ### Changed
 - Wireframe (PolyF) is Shift+F only: W is now the Gizmo 3D's Move, as in ZBrush.
 
