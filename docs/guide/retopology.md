@@ -36,7 +36,7 @@ Both steps are single undo steps (<kbd>Ctrl</kbd>+<kbd>Z</kbd>).
 | **Keep Groups** | Edge loops run exactly along the polygroup borders, and the result keeps the polygroups |
 | **Detect Edges** | Hard edges, where faces meet at more than 50 degrees, get an edge loop, so boxes and bevels stay crisp (on by default) |
 | **Use Polypaint** | Paint where you want density: red areas get up to four times the quads, blue areas down to a quarter, white areas are unchanged |
-| **Symmetry** | Remesh one half and mirror it, welded on the seam, for exactly symmetric topology. It mirrors across the plane through the origin on the axis chosen in the **Transform** palette (X if none) |
+| **Symmetry** | Remesh one half and mirror it, welded on the seam, for exactly symmetric topology (on by default). It mirrors on the axis chosen in the **Transform** palette (X if none), across the model's own middle plane: the world's centre plane when the model is symmetric about it, otherwise the plane through the model's middle, so a model moved away from the centre works too. A model that isn't mirror-symmetric is remeshed whole instead, and the status line says "Symmetry off: the model isn't mirror-symmetric"; one that is nearly symmetric (a bump on one side) gets mirrored topology that follows each side's own surface |
 | **Keep Original** | Keep the SubTool as it was, hidden, below the new one, ready for ProjectAll. Off: the SubTool is replaced, as in ZBrush (undo brings it back) |
 
 What happens to your data:
@@ -49,8 +49,13 @@ What happens to your data:
   resolution until you project it back onto a divided copy).
 - Polygroups are kept with **Keep Groups**; otherwise the result is one polygroup. UVs and the texture are
   dropped: unwrap again with **Tool > Texture Map > Auto UV**.
-- Hidden parts are remeshed too. Very small separate pieces (smaller than a quad or two) can disappear; raise
-  the target or QRemesh them separately.
+- Hidden parts are remeshed too.
+- Separate pieces stay separate and none is dropped: small ones (eyes, teeth, rivets, anything that would get
+  fewer than about 100 quads) are remeshed on their own with at least 32 quads, more for small round pieces
+  with Adaptive Size. A piece the grid can't cover at all is kept as it was (as triangles).
+- Thin parts (a blade, a fin, a slab thinner than a quad) keep both their sides, and with **Detect Edges** their
+  hard edges keep a loop each and their corners stay put. Their corners can still be cut a little when the
+  part is much thinner than a quad: raise the target, or use polypaint density there.
 
 ### Guiding the edge flow
 
@@ -102,7 +107,7 @@ straight along the normal, it takes the closest point within **Dist**.
 
 | Command | Options |
 |---|---|
-| `qremesh` | `target` (16 to 2,000,000, default 5000), `adaptive` (0-1, default 0.5), `keep_groups`, `detect_edges` (default true), `use_polypaint`, `symmetry` (`x`, `y` or `z`), `keep_original`, `smooth` (relaxation passes, default 6), `seed` |
+| `qremesh` | `target` (16 to 2,000,000, default 5000), `adaptive` (0-1, default 0.5), `keep_groups`, `detect_edges` (default true), `use_polypaint`, `symmetry` (`x`, `y` or `z`; off by default in scripts; the mirror plane is found from the model), `symmetry_center` (use this plane instead, e.g. `0` for the world's centre), `keep_original`, `smooth` (relaxation passes, default 6), `seed` |
 | `project_all` | `distance` (0.001-1, default 0.02), `mean`, `blur` (0-20), `geometry` (default true), `polypaint` (default true), `source` (one SubTool's name instead of all visible ones) |
 
 ```sh
