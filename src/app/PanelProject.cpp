@@ -180,6 +180,7 @@ void App::storeProjectSettings() {
     cam.set("distance", double(camera_.distance));
     cam.set("yaw", double(camera_.yaw));
     cam.set("pitch", double(camera_.pitch));
+    cam.set("roll", double(camera_.roll));
     cam.set("fov_y", double(camera_.fovY));
     s.set("camera", std::move(cam));
 
@@ -221,6 +222,8 @@ void App::applyProjectSettings() {
         readFloat(cam, "distance", camera_.distance);
         readFloat(cam, "yaw", camera_.yaw);
         readFloat(cam, "pitch", camera_.pitch);
+        camera_.roll = 0.0f; // projects from before free rotation have none
+        readFloat(cam, "roll", camera_.roll);
         readFloat(cam, "fov_y", camera_.fovY);
         camera_.distance = std::max(camera_.distance, 1e-4f);
         camera_.fovY = std::clamp(camera_.fovY, 0.05f, 3.0f);

@@ -28,6 +28,7 @@ struct UiPrefs {
     std::string libraryFolder;  // "" = Documents/SculptForge
     bool alphabeticalPalettes = false; // strict A-Z palette bar like ZBrush (default: File, Edit first)
     int cameraNotch = 0;        // keep the UI out of a laptop's camera notch: 0 automatic, 1 always, 2 never
+    bool turntable = false;     // rotation: false = free, about the screen axes (ZBrush); true = turntable (Y up)
     TabletSettings tablet;      // Preferences > Tablet: pressure curve, eraser, pen buttons
 };
 

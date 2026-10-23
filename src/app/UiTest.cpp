@@ -11,9 +11,10 @@
 //   key COMBO                e.g. enter, escape, ctrl+z, ctrl+shift+z, 3, comma, backtick, tab, f3
 //   hold MODS                ctrl / shift / alt / ctrl+shift ... or none (for strokes and drags)
 //   stroke U0 V0 U1 V1 [S]   brush stroke across the model (fractions of its on-screen bounds)
-//   drag X0 Y0 X1 Y1 [S]     left-drag in window fractions (rectangle hide, sliders...)
+//   drag X0 Y0 X1 Y1 [S] [release]  left-drag in window fractions (rectangle hide, sliders...); release:
+//                            let go of the held modifiers halfway (ZBrush's Alt-drag, release Alt to zoom)
 //   drag_item LABEL DX DY [S] left-drag from the item by DX DY pixels (scrubbing, dragging a tile out)
-//   orbit DX DY              right-drag on the background, in pixels
+//   orbit DX DY              right-drag on the background, in pixels (with the held modifiers)
 //   run COMMANDS             sculptforge-cli commands, e.g. run new_sphere subdivisions=4
 //   drop FILE                as if FILE were dropped onto the window (relative to the script's folder)
 //   env NAME VALUE           set an environment variable; $SCRIPT_DIR is the script's folder
@@ -38,7 +39,9 @@
 //                            moved (vertices moved since `snapshot`), moved_max / moved_sum (distance),
 //                            moved_out (summed movement along the snapshot's normals: > 0 out, < 0 in),
 //                            pen_pressure (raw), brush_pressure (after the curve; 1 for the mouse),
-//                            stroking (1 while a stroke is open), camera_yaw (degrees), camera_pan (target offset);
+//                            stroking (1 while a stroke is open), camera_yaw / camera_pitch / camera_roll (degrees),
+//                            camera_up (the view's up vector . world Y), camera_aligned (1 when looking along a world
+//                            axis), camera_distance, camera_pan (target offset);
 //                            N may be $NAME or $NAME*K for a value kept by `remember`
 //   (mesh values are the active SubTool's)
 //   snapshot                 remember the active mesh's vertices (for the moved* values)
@@ -263,6 +266,14 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "brush_pressure") return app_.strokePressure();
     if (name == "stroking") return app_.drag_ == App::Drag::Stroke ? 1.0 : 0.0;
     if (name == "camera_yaw") return glm::degrees(app_.camera_.yaw);
+    if (name == "camera_pitch") return glm::degrees(app_.camera_.pitch);
+    if (name == "camera_roll") return glm::degrees(app_.camera_.roll);
+    if (name == "camera_up") return (app_.camera_.orientation() * glm::vec3(0, 1, 0)).y;
+    if (name == "camera_aligned") {
+        const glm::vec3 f = glm::abs(app_.camera_.forward());
+        return std::max({f.x, f.y, f.z}) > 0.99999f ? 1.0 : 0.0;
+    }
+    if (name == "camera_distance") return app_.camera_.distance;
     if (name == "camera_pan") return glm::length(app_.camera_.target);
     if (name == "groups") {
         std::set<uint32_t> ids(m.polygroups.begin(), m.polygroups.end());
@@ -480,7 +491,8 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
     } else if (verb == "drag") {
         if (!need(4)) return false;
         const float x0 = num(1, 0), y0 = num(2, 0), x1 = num(3, 0), y1 = num(4, 0), seconds = num(5, 0.4f);
-        steps_.push_back([this, x0, y0, x1, y1, seconds](float t) {
+        const bool release = w.size() > 6 && w[6] == "release";
+        steps_.push_back([this, x0, y0, x1, y1, seconds, release](float t) {
             int ww = 0, wh = 0;
             SDL_GetWindowSize(app_.window_, &ww, &wh);
             const ImVec2 a(x0 * float(ww), y0 * float(wh)), b(x1 * float(ww), y1 * float(wh));
@@ -490,6 +502,10 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             }
             if (!buttonDown_ && t < seconds) mouseButton(true, SDL_BUTTON_LEFT);
             const float u = std::min(t / seconds, 1.0f);
+            if (release && u >= 0.5f && held_ != SDL_KMOD_NONE) {
+                held_ = SDL_KMOD_NONE;
+                SDL_SetModState(SDL_KMOD_NONE);
+            }
             mouseMotion(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u);
             if (t >= seconds) {
                 mouseButton(false, SDL_BUTTON_LEFT);

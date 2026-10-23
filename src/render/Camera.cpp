@@ -3,6 +3,8 @@
 #include "render/Camera.h"
 
 #include <glm/gtc/matrix_transform.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/euler_angles.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -10,7 +12,8 @@
 namespace sf {
 
 glm::quat Camera::orientation() const {
-    return glm::angleAxis(yaw, glm::vec3(0, 1, 0)) * glm::angleAxis(pitch, glm::vec3(1, 0, 0));
+    return glm::angleAxis(yaw, glm::vec3(0, 1, 0)) * glm::angleAxis(pitch, glm::vec3(1, 0, 0)) *
+           glm::angleAxis(roll, glm::vec3(0, 0, 1));
 }
 
 glm::vec3 Camera::position() const { return target + orientation() * glm::vec3(0, 0, distance); }
@@ -25,8 +28,43 @@ glm::mat4 Camera::view() const {
 glm::mat4 Camera::projection() const { return glm::perspective(fovY, aspect, nearPlane(), farPlane()); }
 
 void Camera::orbit(float dx, float dy) {
+    if (roll != 0.0f) { // coming from free orbiting: stand the view upright again
+        const glm::vec3 f = forward();
+        yaw = std::atan2(-f.x, -f.z);
+        pitch = std::asin(std::clamp(f.y, -1.0f, 1.0f));
+        roll = 0.0f;
+    }
     yaw -= dx * 0.008f;
     pitch = std::clamp(pitch - dy * 0.008f, -glm::radians(89.0f), glm::radians(89.0f));
+}
+
+void Camera::orbitFree(float dx, float dy) {
+    // Turning the camera about its own up and right axes: the model follows the cursor on screen.
+    setOrientation(orientation() * glm::angleAxis(-dx * 0.008f, glm::vec3(0, 1, 0)) *
+                   glm::angleAxis(-dy * 0.008f, glm::vec3(1, 0, 0)));
+}
+
+void Camera::setOrientation(const glm::quat& q) {
+    glm::extractEulerAngleYXZ(glm::mat4_cast(glm::normalize(q)), yaw, pitch, roll);
+    if (std::abs(roll) < 1e-6f) roll = 0.0f;
+}
+
+glm::quat Camera::snapped(const glm::quat& q) {
+    auto nearestAxis = [](const glm::vec3& v, const glm::vec3* avoid) {
+        glm::vec3 best(0.0f);
+        float bestDot = -2.0f;
+        for (int axis = 0; axis < 3; ++axis)
+            for (float sign : {1.0f, -1.0f}) {
+                glm::vec3 a(0.0f);
+                a[axis] = sign;
+                if (avoid && std::abs(glm::dot(a, *avoid)) > 0.5f) continue;
+                if (glm::dot(v, a) > bestDot) bestDot = glm::dot(v, a), best = a;
+            }
+        return best;
+    };
+    const glm::vec3 back = nearestAxis(q * glm::vec3(0, 0, 1), nullptr); // camera +Z points away from the view
+    const glm::vec3 up = nearestAxis(q * glm::vec3(0, 1, 0), &back);
+    return glm::quat_cast(glm::mat3(glm::cross(up, back), up, back));
 }
 
 void Camera::pan(float dx, float dy, float viewportHeight) {

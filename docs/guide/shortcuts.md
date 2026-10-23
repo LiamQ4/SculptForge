@@ -134,9 +134,9 @@ action registry, the same source as the Controls window.
 | Sculpt | Left-drag on the model |
 | Invert the brush (subtract) | Hold <kbd>Alt</kbd> while sculpting |
 | Smooth | Hold <kbd>Shift</kbd> while sculpting (works with any brush, and with Paint) |
-| Rotate | Left-drag on the background, or right-drag |
-| Pan | <kbd>Alt</kbd>+left-drag on the background, middle-drag, or <kbd>Shift</kbd>+right-drag |
-| Zoom | Mouse wheel, <kbd>Ctrl</kbd>+middle-drag, or <kbd>Ctrl</kbd>+left-drag on the background (when nothing is masked) |
+| Rotate | Left-drag on the background, or right-drag; hold <kbd>Shift</kbd> to snap to an axis view |
+| Pan | <kbd>Alt</kbd>+left-drag on the background, <kbd>Alt</kbd>+right-drag, or middle-drag |
+| Zoom | Mouse wheel; <kbd>Alt</kbd>+drag on the background then release <kbd>Alt</kbd>; <kbd>Ctrl</kbd>+right-drag; <kbd>Ctrl</kbd>+middle-drag; or <kbd>Ctrl</kbd>+left-drag on the background (when nothing is masked) |
 | Paint the mask | Hold <kbd>Ctrl</kbd> while stroking on the model |
 | Erase the mask | Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd> while stroking on the model |
 | Invert the mask | <kbd>Ctrl</kbd>+click the background |

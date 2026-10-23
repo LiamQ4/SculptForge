@@ -5,25 +5,31 @@ how to frame the model, and which display toggles help while you sculpt.
 
 ## How the camera works
 
-The camera orbits around a target point, like a turntable: dragging sideways turns the model around its
-vertical axis and dragging up or down tilts it, stopping just short of looking straight down or up so the view
-never flips over. Panning moves the target; zooming moves the camera closer to it or further away. The view is
-a perspective view with a 35 degree field of view.
+The camera orbits around a target point. By default rotation is **free**, as in ZBrush: dragging turns the
+model about the screen's own axes, so it follows the cursor and can roll right over the top. Hold
+<kbd>Shift</kbd> while rotating to snap to the nearest front, back, side, top or bottom view; let go of
+<kbd>Shift</kbd> and the drag carries on from where the cursor is. If you prefer the model to stay upright, as
+in Blender or Maya, set **Preferences > Interface > Rotation** to **Turntable**: sideways drags then turn the
+model around its vertical axis and up-down drags tilt it, stopping just short of looking straight down or up.
+
+Panning moves the target; zooming moves the camera closer to it or further away. The view is a perspective
+view with a 35 degree field of view.
 
 Navigation starts only on the canvas. A drag that begins on a shelf, a tray or a palette never moves the
 camera.
 
-> **ZBrush:** dragging on the background rotates, <kbd>Alt</kbd>+drag pans and the right-shelf Move, Zoom and
-> Rotate buttons work as in ZBrush. SculptForge's left-drag zoom uses <kbd>Ctrl</kbd> rather than ZBrush's
-> <kbd>Alt</kbd>-then-release gesture.
+> **ZBrush:** the gestures are ZBrush's. Dragging on the background (or right-dragging) rotates, with
+> <kbd>Shift</kbd> to snap; <kbd>Alt</kbd>+drag pans, and letting go of <kbd>Alt</kbd> while still dragging
+> zooms; <kbd>Ctrl</kbd>+right-drag zooms and <kbd>Alt</kbd>+right-drag pans, as with ZBrush's right-click
+> navigation. The right-shelf Move, Zoom and Rotate buttons work as in ZBrush.
 
 ## Mouse and pen
 
 | To | Do this |
 |---|---|
-| Rotate | Left-drag on the background, or right-drag anywhere on the canvas |
-| Pan | <kbd>Alt</kbd>+left-drag on the background, middle-drag, or <kbd>Shift</kbd>+right-drag |
-| Zoom | Mouse wheel, <kbd>Ctrl</kbd>+middle-drag, or <kbd>Ctrl</kbd>+left-drag on the background |
+| Rotate | Left-drag on the background, or right-drag anywhere on the canvas; add <kbd>Shift</kbd> to snap to an axis view |
+| Pan | <kbd>Alt</kbd>+left-drag on the background, <kbd>Alt</kbd>+right-drag, or middle-drag |
+| Zoom | Mouse wheel; <kbd>Alt</kbd>+left-drag on the background, then let go of <kbd>Alt</kbd> and keep dragging; <kbd>Ctrl</kbd>+right-drag; <kbd>Ctrl</kbd>+middle-drag; or <kbd>Ctrl</kbd>+left-drag on the background |
 | Frame the model | <kbd>F</kbd>, or **Frame** on the right shelf |
 
 "Background" means any part of the canvas where the cursor isn't over the model. A left-drag that starts on

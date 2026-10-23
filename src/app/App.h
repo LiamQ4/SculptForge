@@ -97,6 +97,7 @@ private:
     void onMouseDown(float x, float y, Uint8 button);
     void onMouseMove(float x, float y, float dx, float dy, bool fromPen);
     void onMouseUp();
+    void orbitBy(float dx, float dy); // a rotation drag: free or turntable (Preferences), Shift snaps
     void onKey(SDL_Keycode key, SDL_Keymod mod);
 
     bool pick(float x, float y, RayHit& hit) const; // the active SubTool (what brushes work on)
@@ -171,6 +172,11 @@ private:
 
     // Input / stroke state
     Drag drag_ = Drag::None;
+    // Rotation drags: the unsnapped view, so Shift (snap to an axis) can be pressed and released mid-drag.
+    Camera orbitRaw_;
+    bool orbitStarted_ = false;
+    bool panFromAlt_ = false;       // a pan started with Alt: releasing Alt mid-drag zooms (ZBrush)
+    bool forceTurntable_ = false;   // demos orbit like a turntable whatever the preference
     float mouseX_ = 0.0f, mouseY_ = 0.0f;
     float lastX_ = 0.0f, lastY_ = 0.0f, residual_ = 0.0f;
     bool lastInputPen_ = false; // the last mouse event came from a pen (SDL_PEN_MOUSEID)

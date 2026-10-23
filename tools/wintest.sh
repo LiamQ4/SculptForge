@@ -6,11 +6,12 @@
 #
 #   tools/wintest.sh                 build build-win<arch>, run every test
 #   tools/wintest.sh -R ui_subtools  extra arguments go to ctest
+#   tools/wintest.sh --x64           build for x64 (on an ARM machine: build only, for tools/winvm/winvm.sh)
 #
 # The Windows architecture follows the host: ARM64 on an ARM machine (Wine runs ARM64 Windows programs
 # natively; its x64 emulation is too unreliable for tests), x64 on an x86 machine. This complements CI's
-# MSVC builds and the Windows VM (tools/winvm.sh): it catches Windows API, path and file-sharing issues, not
-# MSVC-only compiler problems.
+# MSVC builds and the Windows VM (tools/winvm/winvm.sh): it catches Windows API, path and file-sharing
+# issues, not MSVC-only compiler problems.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -22,8 +23,14 @@ case "$(uname -m)" in
   x86_64)        HOST=x86_64;  TARGET=x86_64;  ARCH=x64;   PROCESSOR=AMD64 ;;
   *) echo "wintest: unsupported host $(uname -m)" >&2; exit 1 ;;
 esac
+RUN_TESTS=1
+if [ "${1:-}" = --x64 ]; then
+  shift
+  [ "$HOST" = x86_64 ] || RUN_TESTS=0
+  TARGET=x86_64; ARCH=x64; PROCESSOR=AMD64
+fi
 
-command -v wine >/dev/null || { echo "wintest: install wine first" >&2; exit 1; }
+[ $RUN_TESTS = 0 ] || command -v wine >/dev/null || { echo "wintest: install wine first" >&2; exit 1; }
 
 TOOLCHAIN=$CACHE/llvm-mingw-$LLVM_MINGW-ucrt-ubuntu-22.04-$HOST
 if [ ! -x "$TOOLCHAIN/bin/$TARGET-w64-mingw32-clang++" ]; then
@@ -44,6 +51,10 @@ cmake -S "$ROOT" -B "$BUILD" -Wno-dev \
   -DCMAKE_EXE_LINKER_FLAGS=-static -DCMAKE_CROSSCOMPILING_EMULATOR=wine \
   -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF -DSCULPTFORGE_BUILD_PYTHON=OFF >/dev/null
 cmake --build "$BUILD" --parallel
+if [ $RUN_TESTS = 0 ]; then
+  echo "wintest: built $BUILD; test it on Windows with: tools/winvm/winvm.sh test --build $BUILD"
+  exit 0
+fi
 
 # A prefix of our own, so tests never touch the user's Wine setup.
 export WINEPREFIX=$CACHE/wine-$ARCH WINEDEBUG=-all

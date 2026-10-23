@@ -43,6 +43,7 @@ Json toJson(const UiPrefs& p) {
     j.set("lightboxAtStartup", p.lightboxAtStartup);
     j.set("libraryFolder", p.libraryFolder);
     j.set("cameraNotch", double(p.cameraNotch));
+    j.set("turntable", p.turntable);
     j.set("alphabeticalPalettes", p.alphabeticalPalettes);
     j.set("tablet", toJson(p.tablet));
     return j;
@@ -60,6 +61,7 @@ void fromJson(const Json& j, UiPrefs& p) {
     p.lightboxAtStartup = j["lightboxAtStartup"].asBool(p.lightboxAtStartup);
     if (j["libraryFolder"].isString()) p.libraryFolder = j["libraryFolder"].asString();
     p.cameraNotch = std::clamp(int(j["cameraNotch"].asNumber(p.cameraNotch)), 0, 2);
+    p.turntable = j["turntable"].asBool(p.turntable);
     p.alphabeticalPalettes = j["alphabeticalPalettes"].asBool(p.alphabeticalPalettes);
     fromJson(j["tablet"], p.tablet);
 }
@@ -720,6 +722,18 @@ void drawInterfaceSection(App& app) {
     ui::HelpText("UI scale", nullptr,
                  "Size of text and controls. Automatic follows the display. Takes effect the next time SculptForge starts "
                  "(Store Config to keep it).",
+                 "Preferences > Interface");
+    static const char* kRotation[] = {"Free (ZBrush)", "Turntable"};
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo("##rotation", (std::string("Rotation: ") + kRotation[p.turntable ? 1 : 0]).c_str())) {
+        for (int i = 0; i < 2; ++i)
+            if (ImGui::Selectable(kRotation[i], (i == 1) == p.turntable)) p.turntable = i == 1;
+        ImGui::EndCombo();
+    }
+    ui::HelpText("Rotation", nullptr,
+                 "Free: dragging turns the model about the screen's axes and can roll it over the top, as in ZBrush; press "
+                 "Shift while rotating to snap to the nearest front, side, top or bottom view. Turntable: the model stays "
+                 "upright and turns about its vertical axis, as in Blender or Maya.",
                  "Preferences > Interface");
     static const char* kNotch[] = {"Automatic", "Always reserve", "Off"};
     ImGui::SetNextItemWidth(-FLT_MIN);

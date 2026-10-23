@@ -453,6 +453,7 @@ int App::runRecording() {
     demo_ = std::make_unique<Demo>(*this);
     std::string err;
     const bool testing = !options_.uiTest.empty();
+    forceTurntable_ = !testing; // demos' scripted camera moves are turntable orbits
     if (testing ? !demo_->loadScript(options_.uiTest, err)
                 : !demo_->load(options_.demo.empty() ? "sculpt" : options_.demo, err)) {
         SDL_Log("%s", err.c_str());
@@ -686,9 +687,12 @@ void App::onMouseDown(float x, float y, Uint8 button) {
         } else {
             // Dragging on empty space navigates (ZBrush style).
             drag_ = (mod & SDL_KMOD_ALT) ? Drag::Pan : ctrlDown(mod) ? Drag::Zoom : Drag::Orbit;
+            panFromAlt_ = drag_ == Drag::Pan;
         }
     } else if (button == SDL_BUTTON_RIGHT) {
-        drag_ = (mod & SDL_KMOD_SHIFT) ? Drag::Pan : Drag::Orbit;
+        // ZBrush's right-click navigation: rotate (Shift snaps), Alt pans (release Alt to zoom), Ctrl zooms.
+        drag_ = (mod & SDL_KMOD_ALT) ? Drag::Pan : ctrlDown(mod) ? Drag::Zoom : Drag::Orbit;
+        panFromAlt_ = (mod & SDL_KMOD_ALT) != 0;
     } else if (button == SDL_BUTTON_MIDDLE) {
         drag_ = (mod & SDL_KMOD_CTRL) ? Drag::Zoom : Drag::Pan;
     }
@@ -699,9 +703,11 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     mouseY_ = y;
     lastInputPen_ = fromPen;
     if (!fromPen && dragFromPen_ && drag_ != Drag::None) return; // a pen drag ignores a stray mouse
+    // ZBrush: start a pan with Alt, then let go of Alt while still dragging to zoom.
+    if (drag_ == Drag::Pan && panFromAlt_ && !(inputMods() & SDL_KMOD_ALT)) drag_ = Drag::Zoom;
     switch (drag_) {
     case Drag::Stroke: strokeTo(x, y); break;
-    case Drag::Orbit: camera_.orbit(dx, dy); break;
+    case Drag::Orbit: orbitBy(dx, dy); break;
     case Drag::Pan: camera_.pan(dx, dy, canvasHeight()); break;
     case Drag::Zoom: camera_.zoom(-dy * 0.05f); break;
     case Drag::MaskCanvas: maskCanvasMove(x, y); break;
@@ -710,7 +716,21 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     }
 }
 
+void App::orbitBy(float dx, float dy) {
+    if (!orbitStarted_) {
+        orbitRaw_ = camera_;
+        orbitStarted_ = true;
+    }
+    if (uiPrefs_.turntable || forceTurntable_) orbitRaw_.orbit(dx, dy);
+    else orbitRaw_.orbitFree(dx, dy);
+    // Holding Shift snaps to the nearest view along an axis; letting go continues from where the cursor took it.
+    if (inputMods() & SDL_KMOD_SHIFT) camera_.setOrientation(Camera::snapped(orbitRaw_.orientation()));
+    else camera_.setOrientation(orbitRaw_.orientation());
+}
+
 void App::onMouseUp() {
+    orbitStarted_ = false;
+    panFromAlt_ = false;
     if (hideRectActive_) polygroupMouseUp();
     if (drag_ == Drag::Stroke) endStroke();
     if (drag_ == Drag::MaskCanvas) maskCanvasRelease();
