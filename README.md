@@ -51,8 +51,8 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 | Gaussian splats, OpenUSD / USDZ | **Built in** | No |
 | AI agents (MCP), headless scripting | **Built in** | ZScript |
 | Masking, polygroups, visibility (Ctrl / Ctrl+Shift, lasso or rectangle), polypaint, MatCaps | **Yes** | Yes |
-| Polypaint layers with blend modes (Multiply, Overlay, Screen...) | **Yes** (new) | Opacity only |
-| Quads kept from import, shown and exported as quads | **Yes** (new) | Yes |
+| Polypaint layers with blend modes (Multiply, Overlay, Screen...) | **Yes** (new in 0.4) | Opacity only |
+| Quads kept from import, shown and exported as quads | **Yes** (new in 0.4) | Yes |
 | SubTools (separate meshes: append, split, merge, solo, Alt+click to select) | **Yes** (new in 0.3) | Yes |
 | GoZ exchange with ZBrush | **Yes** (new in 0.2; not yet tested against a live ZBrush) | Yes |
 | Multiresolution (subdivision levels), dynamic topology, ZRemesher-class retopology, UV unwrapping | Not yet ([roadmap](ROADMAP.md)) | Yes |
@@ -60,10 +60,11 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models over with GoZ (`.GoZ` files
 keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 
-> **Status: early release (v0.3).** The core sculpting, pipeline and AI features work and are tested on every
-> commit. Version 0.3 adds SubTools, a ZBrush-style interface, graphics tablet support, ComfyUI, a brush library
-> with a community gallery and a full user guide (see the [changelog](CHANGELOG.md)). Multiresolution sculpting, dynamic topology, retopology, UV unwrapping and texture
-> painting are still on the [roadmap](ROADMAP.md).
+> **Status: early release (v0.4).** The core sculpting, pipeline and AI features work and are tested on every
+> commit. Version 0.4 makes SculptForge feel like ZBrush (free rotation, lasso masking, a sculpting material),
+> keeps quads, and adds Photoshop-style paint layers; 0.3 added SubTools, the ZBrush-style interface, tablets,
+> ComfyUI and the user guide (see the [changelog](CHANGELOG.md)). Multiresolution sculpting, dynamic topology,
+> retopology, UV unwrapping and texture painting are still on the [roadmap](ROADMAP.md).
 
 ## Features
 

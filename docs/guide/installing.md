@@ -19,19 +19,39 @@ first time you open it, and how to build it from source.
 
 ## Download
 
-Download the latest release from the [releases
-page](https://github.com/islandmed/SculptForge/releases/latest). Pick the file for your system:
+Each link below downloads the newest version. Pick the one for your system:
 
-| System | File | How to install |
+| System | Download | How to install |
 |---|---|---|
-| Windows 10/11 (x64) | `SculptForge-<version>-windows-x86_64.exe` | Run the installer (adds a Start menu shortcut) |
-| Windows, portable | `SculptForge-<version>-windows-x86_64.zip` | Unzip anywhere and run `bin\sculptforge.exe` |
-| macOS 11+ (Apple Silicon and Intel) | `SculptForge-<version>-darwin-universal.dmg` | Open the disk image and drag SculptForge to Applications |
-| Ubuntu, Debian, Mint, Pop!_OS | `sculptforge_<version>_amd64.deb` or `..._arm64.deb` | `sudo apt install ./sculptforge_*.deb` |
-| Fedora, RHEL, Rocky, Alma 8+ | `sculptforge-<version>...x86_64.rpm` or `...aarch64.rpm` | `sudo dnf install ./sculptforge-*.rpm` |
-| Any Linux | `SculptForge-<version>-linux-x86_64.AppImage` or `...-arm64.AppImage` | `chmod +x` the file, then run it |
+| Windows 10/11 (x64) | [Installer (.exe)](https://github.com/islandmed/SculptForge/releases/latest/download/SculptForge-windows-x86_64-setup.exe) | Run the installer (adds a Start menu shortcut) |
+| Windows, portable | [Portable .zip](https://github.com/islandmed/SculptForge/releases/latest/download/SculptForge-windows-x86_64-portable.zip) | Unzip anywhere and run `bin\sculptforge.exe` |
+| macOS 11+ (Apple Silicon and Intel) | [SculptForge.dmg](https://github.com/islandmed/SculptForge/releases/latest/download/SculptForge-macos.dmg) | Open the disk image and drag SculptForge to Applications |
+| Ubuntu, Debian, Mint, Pop!_OS | [.deb for x86_64](https://github.com/islandmed/SculptForge/releases/latest/download/sculptforge_amd64.deb) or [ARM64](https://github.com/islandmed/SculptForge/releases/latest/download/sculptforge_arm64.deb) | `sudo apt install ./sculptforge_amd64.deb` |
+| Fedora, RHEL, Rocky, Alma 8+ | [.rpm for x86_64](https://github.com/islandmed/SculptForge/releases/latest/download/sculptforge.x86_64.rpm) or [ARM64](https://github.com/islandmed/SculptForge/releases/latest/download/sculptforge.aarch64.rpm) | `sudo dnf install ./sculptforge.x86_64.rpm` |
+| Any Linux | [AppImage for x86_64](https://github.com/islandmed/SculptForge/releases/latest/download/SculptForge-linux-x86_64.AppImage) or [ARM64](https://github.com/islandmed/SculptForge/releases/latest/download/SculptForge-linux-arm64.AppImage) | `chmod +x` the file, then run it |
 | Arch Linux | `packaging/arch/PKGBUILD` in the source | `makepkg -si` in that folder (an AUR package is planned) |
 | Studio pipelines | `SculptForge-<version>-...-vfx2026.tar.gz` or `...-vfx2027.tar.gz` | See [SculptForge for studios](studios.md) |
+
+Most PCs are x86_64; ARM64 is for ARM laptops, Raspberry Pi and Apple Silicon Macs running Linux. Older
+versions are on the [releases page](https://github.com/islandmed/SculptForge/releases).
+
+### Install with one command
+
+Instead of downloading by hand you can install (or update) with one command. On macOS and Linux it installs
+for your user only, with no administrator password:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/islandmed/SculptForge/main/install/install.sh | sh
+```
+
+On Windows, in PowerShell (it downloads and starts the installer):
+
+```powershell
+irm https://raw.githubusercontent.com/islandmed/SculptForge/main/install/install.ps1 | iex
+```
+
+Both check the download against the release's checksums before installing. To uninstall on macOS or Linux,
+run the first command with `sh -s -- --uninstall` at the end instead of `sh`.
 
 Every release also has a `SHA256SUMS.txt` file with the checksum of each download, so you can confirm a file
 arrived intact.

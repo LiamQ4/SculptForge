@@ -424,6 +424,7 @@ private:
     bool openUnsavedPopup_ = false;
     bool continueAfterSave_ = false; // run discardAction_ once the Save As dialog saved
     bool offerRestore_ = false;
+    bool showWhatsNew_ = false; // the first start after an update opens the guide's What's New chapter
     int autosaveMinutes_ = 5; // 0 = off
     float autosaveTimer_ = 0.0f;
     uint64_t autosaveRevision_ = ~uint64_t(0);

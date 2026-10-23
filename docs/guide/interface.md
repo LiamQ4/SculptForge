@@ -68,9 +68,9 @@ Interface > Palettes strictly A-Z (ZBrush order)**.
 | **Script** | Console, Run script file, Copy session as script, Clear console |
 | **Splats** | Gaussian splat tools: show, flip, turn, fit, clean floaters, convert to mesh, sculpt to splats, save, clear |
 | **Stroke** | The stroke types (Dots, DragRect, Spray, LazyMouse) and their settings |
-| **Tool** | The active SubTool with Open, Save and Import, and the SubTool, Layers, Geometry, Remesh, Masking, Polygroups, Visibility, Export and Display sub-palettes |
+| **Tool** | The active SubTool with Open, Save and Import, and the SubTool, Layers, Paint Layers, Geometry, Remesh, Masking, Polygroups, Visibility, Export and Display sub-palettes |
 | **Transform** | Symmetry X, Y and Z, Frame, Solo, PolyF |
-| **Help** | Controls, User Guide, Command palette, Website & documentation, Report a problem, About SculptForge |
+| **Help** | Controls, User Guide, What's New, Command palette, Website & documentation, Report a problem, About SculptForge |
 
 ### Sub-palettes
 

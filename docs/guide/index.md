@@ -3,7 +3,7 @@
 This guide explains every part of SculptForge, the free, open-source sculpting app for VFX, animation and games:
 how the interface is organised, how to sculpt, mask, paint and manage SubTools, how to generate models with AI,
 and how to get your work into a game engine, a film pipeline or ZBrush. It is written for SculptForge
-0.3.
+0.4.
 
 You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<kbd>F1</kbd>) or on the
 [SculptForge website](https://islandmed.github.io/SculptForge/guide/). If you're coming from ZBrush, start with
@@ -14,38 +14,39 @@ You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<
 ## Getting started
 
 1. [Welcome to SculptForge](welcome.md)
-2. [Installing SculptForge](installing.md)
-3. [The interface](interface.md)
-4. [Navigating the view](navigation.md)
+2. [What's new](whats-new.md)
+3. [Installing SculptForge](installing.md)
+4. [The interface](interface.md)
+5. [Navigating the view](navigation.md)
 
 ## Sculpting
 
-5. [Sculpting and brushes](sculpting.md)
-6. [Brush Lab and sharing brushes](brush-lab.md)
-7. [Masking](masking.md)
-8. [Polygroups and visibility](polygroups.md)
-9. [SubTools](subtools.md)
-10. [Polypaint and materials](polypaint.md)
-11. [Sculpt layers and blend shapes](layers.md)
-12. [Subdivide, remesh, decimate and LODs](geometry.md)
+6. [Sculpting and brushes](sculpting.md)
+7. [Brush Lab and sharing brushes](brush-lab.md)
+8. [Masking](masking.md)
+9. [Polygroups and visibility](polygroups.md)
+10. [SubTools](subtools.md)
+11. [Polypaint and materials](polypaint.md)
+12. [Sculpt layers and blend shapes](layers.md)
+13. [Subdivide, remesh, decimate and LODs](geometry.md)
 
 ## AI and capture
 
-13. [Image and text to 3D](generate-3d.md)
-14. [Gaussian splats](splats.md)
+14. [Image and text to 3D](generate-3d.md)
+15. [Gaussian splats](splats.md)
 
 ## Files and pipelines
 
-15. [Exporting, Unreal and ZBrush](exporting.md)
-16. [Projects, autosave and QuickSave](projects.md)
-17. [Scripting and automation](scripting.md)
-18. [SculptForge for studios](studios.md)
+16. [Exporting, Unreal and ZBrush](exporting.md)
+17. [Projects, autosave and QuickSave](projects.md)
+18. [Scripting and automation](scripting.md)
+19. [SculptForge for studios](studios.md)
 
 ## Reference
 
-19. [Keyboard and mouse](shortcuts.md)
-20. [Troubleshooting and FAQ](troubleshooting.md)
-21. [Glossary](glossary.md)
+20. [Keyboard and mouse](shortcuts.md)
+21. [Troubleshooting and FAQ](troubleshooting.md)
+22. [Glossary](glossary.md)
 
 ## Getting help
 

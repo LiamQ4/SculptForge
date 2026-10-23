@@ -25,6 +25,7 @@
     <div class="wrap nav-inner">
       <a class="brand" href="#top"><img src="img/logo.svg?v=2" alt="" width="34" height="34"><span>SculptForge</span></a>
       <nav aria-label="Main">
+        <a href="#whats-new">What's new</a>
         <a href="#features">Features</a>
         <a href="#demos">Demos</a>
         <a href="#vfx">VFX &amp; Animation</a>
@@ -40,8 +41,8 @@
     <section class="hero">
       <div class="wrap hero-grid">
         <div class="hero-copy">
-          <a class="new-badge" href="#vfx"><span>VFX Reference Platform</span>
-            CY2026 &amp; CY2027 for VFX and animation →</a>
+          <a class="new-badge" href="#whats-new"><span>New in 0.4</span>
+            ZBrush navigation, lasso masking, paint layers →</a>
           <p class="eyebrow">The free, open-source alternative to ZBrush</p>
           <h1><span class="nowrap">Sculpt it.</span> <span class="nowrap">Forge it.</span><br><span class="accent">Ship it.</span></h1>
           <p class="lede">Digital sculpting for <strong>VFX, animation and game studios</strong> on Linux, macOS and
@@ -88,6 +89,47 @@
       </div>
     </a>
 
+    <section id="whats-new" class="section alt">
+      <div class="wrap">
+        <h2>What's new in 0.4</h2>
+        <p class="section-lede">Shaped by feedback from a working ZBrush modeler: SculptForge now feels like home
+          if ZBrush is second nature. <a href="guide/whats-new.html">Everything that changed</a> ·
+          <a href="https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md">changelog</a></p>
+        <div class="grid">
+          <article class="card">
+            <h3>Navigation like ZBrush</h3>
+            <p>Free rotation that rolls over the top, Shift to snap to front, side or top views, and Alt+drag then
+              release Alt to zoom. Prefer an upright turntable? It's one setting away.</p>
+          </article>
+          <article class="card">
+            <h3>Lasso and rectangle masking</h3>
+            <p>MaskLasso and MaskRect: Ctrl+drag a shape to mask what's inside, Ctrl+Alt to unmask. SelectLasso
+              isolates or hides any free-hand area with Ctrl+Shift.</p>
+          </article>
+          <article class="card">
+            <h3>Paint layers with blend modes</h3>
+            <p>Photoshop-style polypaint layers: Multiply, Screen, Overlay, Soft Light and more, each with its own
+              opacity, lock and visibility. Something ZBrush has never had.</p>
+          </article>
+          <article class="card">
+            <h3>Quads stay quads</h3>
+            <p>Models from ZBrush, OBJ, FBX or USD keep their quads in the wireframe and on export. Subdivide makes
+              quads, and voxel remesh gives an even quad grid.</p>
+          </article>
+          <article class="card">
+            <h3>A material made for sculpting</h3>
+            <p>The new Sculpt default: plain clay under a strong key light with deep crease shading, so every
+              stroke reads clearly.</p>
+          </article>
+          <article class="card">
+            <h3>One-click downloads</h3>
+            <p>Download buttons get the newest build directly, and one command installs or updates SculptForge
+              on Windows, macOS or Linux.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <section id="features" class="section">
       <div class="wrap">
         <h2>Everything a sculptor needs, nothing in the way</h2>
@@ -101,8 +143,8 @@
           </article>
           <article class="card">
             <h3>Masking and polygroups</h3>
-            <p>Hold Ctrl to paint a mask, mask by cavity, and grow, shrink or blur it. Auto-group by angle or by
-              piece, then Ctrl+Shift+click to isolate a group and work on just that part.</p>
+            <p>Hold Ctrl to paint a mask or drag a lasso or rectangle, mask by cavity, and grow, shrink or blur it.
+              Auto-group by angle or by piece, then Ctrl+Shift+click to isolate a group and work on just that part.</p>
           </article>
           <article class="card">
             <h3>SubTools</h3>
@@ -110,9 +152,9 @@
               to pick one, and export each as its own object to glTF, FBX, USD or straight back to ZBrush.</p>
           </article>
           <article class="card">
-            <h3>Polypaint and MatCaps</h3>
-            <p>Paint colour straight onto the sculpt, tint the cavities, and judge forms under Red Wax, Clay, Skin,
-              Bronze, Chrome or White materials.</p>
+            <h3>Polypaint, layers and MatCaps</h3>
+            <p>Paint colour straight onto the sculpt in layers with blend modes, tint the cavities, and judge forms
+              under the Sculpt, Red Wax, Clay, Skin, Bronze, Chrome or White materials.</p>
           </article>
           <article class="card">
             <h3>Works with ZBrush</h3>
@@ -315,7 +357,7 @@ rez-env sculptforge -- sculptforge troll.usda \
     <section id="download" class="section alt">
       <div class="wrap">
         <h2>Download</h2>
-        <p class="section-lede">Version 0.3.0. All builds come from the
+        <p class="section-lede">Version 0.4.0. All builds come from the
           <a href="https://github.com/islandmed/SculptForge/releases/latest">latest GitHub release</a>, with
           SHA-256 checksums.</p>
         <div class="downloads">

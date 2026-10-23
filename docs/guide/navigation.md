@@ -84,10 +84,9 @@ These live on the right shelf and in the **Render** palette:
 
 ## Not yet
 
-> **Not yet:** SculptForge has no orthographic view, no snapping to front, side or top views, no rotation
-> around the point under the cursor (the camera always orbits its target, which Frame sets to the scene
-> centre), no floor grid and no saved camera views. Pan the target onto the area you're working on to orbit
-> around it.
+> **Not yet:** SculptForge has no orthographic view, no rotation around the point under the cursor (the
+> camera always orbits its target, which Frame sets to the scene centre), no floor grid and no saved camera
+> views. Pan the target onto the area you're working on to orbit around it.
 
 ## See also
 

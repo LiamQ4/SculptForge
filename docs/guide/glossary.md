@@ -33,19 +33,21 @@ for what is planned.
 | Local symmetry, radial symmetry | Not yet. Symmetry is X, Y and Z across the world axes |
 | Mask by Cavity | **Tool > Masking > By cavity** (`mask_by_cavity`) |
 | Masking (Ctrl) | Hold <kbd>Ctrl</kbd> to paint the mask, <kbd>Ctrl</kbd>+<kbd>Alt</kbd> to erase. See [Masking](masking.md) |
-| Mask Lasso, Select Lasso | Not yet. Rectangle hide works: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag |
+| MaskLasso, MaskRect | **Tool > Masking**: pick the shape, then <kbd>Ctrl</kbd>+drag (add <kbd>Alt</kbd> to unmask). See [Masking](masking.md) |
 | MatCap | **Material**: seven MatCaps, Sculpt the default, plus Studio (<kbd>M</kbd>). Custom MatCap images not yet. See [Polypaint](polypaint.md) |
 | Morph target | A [sculpt layer](layers.md); exported as glTF morph targets and FBX/USD blend shapes |
 | Mrgb, M (material channel) | Not yet: there is no per-vertex material channel |
 | Polyframe (PolyF, Shift+F) | **PolyF** on the right shelf, <kbd>W</kbd> or <kbd>Shift</kbd>+<kbd>F</kbd> |
 | Polygroups | **Polygroups**: same idea, same Ctrl+Shift gestures. See [Polygroups and visibility](polygroups.md) |
 | Polypaint | **Polypaint**: Paint brush (<kbd>P</kbd>), Rgb, fills, cavity paint. See [Polypaint](polypaint.md) |
+| Polypaint layers | **Tool > Paint Layers**: Photoshop-style colour layers with blend modes. See [Paint layers](polypaint.md#paint-layers) |
 | Projection Master | Not yet. **Generate > Stamp** projects an image onto the model from the view |
 | QuickSave | **QuickSave** in the title strip; the last 10 are kept. See [Projects](projects.md#quicksave) |
 | Rgb | **Rgb** on the top shelf (paint while sculpting) |
 | Rgb Intensity, Z Intensity | **Strength** (top shelf, <kbd>I</kbd>) |
 | Sculptris Pro, dynamic topology | Not yet |
 | SDiv, D / Shift+D (subdivision levels) | Not yet: Subdivide is a single, destructive step |
+| SelectLasso, SelectRect | **Tool > Visibility**: pick the shape, then <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag (add <kbd>Alt</kbd> to hide). See [Polygroups](polygroups.md) |
 | Solo | **Solo** on the right shelf or in **Tool > SubTool** |
 | Spotlight | Not yet |
 | Store Config | **Store Config**, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> (**Preferences > Config**) |

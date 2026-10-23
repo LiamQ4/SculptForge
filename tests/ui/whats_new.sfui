@@ -1,0 +1,9 @@
+# Help > What's New opens the guide's What's New chapter (it also opens by itself once after an update).
+run new_sphere subdivisions=3
+click "Help##palette.help"
+click "What's New##help.whats_new"
+expect_value guide_open == 1
+expect_guide whats-new.md
+expect_text Version 0.4
+expect_text Navigation that works like ZBrush
+shot whats-new

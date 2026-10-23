@@ -86,9 +86,9 @@ retopology, a full ZBrush feature list, rendering/animation (use Blender).
 - 📋 Multiresolution: subdivision levels you can step up/down while keeping detail
 - 📋 Dynamic topology (local remeshing under the brush)
 - ✅ Alphas (round, square, noise or any grayscale image) and stroke types (dots, drag-rect, spray, lazy mouse)
-- 📋 Stencils; marquee / lasso masking and lasso hiding
+- ✅ MaskLasso / MaskRect and SelectLasso (v0.4); 📋 stencils, MaskCurve
 - ✅ More brushes: Clay Buildup, Dam Standard, Snake Hook, Trim (dynamic), Layer, Nudge
-- ✅ MatCap materials (six built in), with the existing cavity shading on top
+- ✅ MatCap materials (seven built in, with a high-contrast Sculpt default since v0.4), with cavity shading on top
 - 📋 Ambient occlusion shading
 - ✅ Project file format (`.sfproj`: mesh, layers, mask, polypaint, polygroups, visibility, UVs, splats, brushes,
   view settings), quit-with-unsaved-changes prompt, recent files, autosave with restore
@@ -98,7 +98,24 @@ retopology, a full ZBrush feature list, rendering/animation (use Blender).
 - 📋 Multithreaded brush evaluation, partial GPU uploads per BVH node
 - 📋 Benchmarks: brush latency at 1M / 5M / 20M triangles in CI
 
-## Phase 3 — AI assistant, beyond brushes (v0.4)
+## Done in v0.4 — feels like ZBrush
+
+Shaped by feedback from a working ZBrush modeler: ZBrush navigation (free rotation, Shift snap, Alt-release
+zoom, right-click navigation), lasso / rectangle masking and hiding, a Sculpt default material, quads kept
+through import, editing and export, Photoshop-style paint layers, and an `install/` folder with
+always-latest downloads.
+
+## Next (v0.5) — the ZBrush workflow core
+
+Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox forums:
+
+- 📋 Multiresolution subdivision levels (step up and down, keep detail, reconstruct)
+- 📋 ZRemesher-class quad retopology with guides and density, plus Project / Project All detail transfer
+- 📋 UV unwrapping and normal / displacement map baking
+- 📋 Performance at 20-100M polygons, multithreaded brushes, fast undo
+- 📋 A transpose / gizmo tool for posing and moving parts
+
+## Phase 3 — AI assistant, beyond brushes
 
 - 📋 Chat assistant that drives any SculptForge command (tool calling over the existing registry)
 - 📋 OS keychain storage for API keys
@@ -113,10 +130,11 @@ retopology, a full ZBrush feature list, rendering/animation (use Blender).
 ## Phase 4 — Advanced modeling (v0.5+)
 
 - 📋 Boolean merge/subtract on the voxel pipeline; sharper voxel remesh (signed distance instead of occupancy)
-- 📋 Retopology tools and quad remeshing
-- 📋 Multiple subtools/objects, layers
+- 🚧 Quads: imported quads kept, shown and exported as quads, quad subdivision and quad voxel remesh (v0.4);
+  📋 ZRemesher-class retopology from triangle meshes
 - ✅ Polypaint: Paint brush, RGB while sculpting, colour pick, fill (respecting the mask), cavity paint;
-  exported to PLY, glTF, OBJ, USD and GoZ
+  exported to PLY, glTF, OBJ, USD and GoZ; Photoshop-style paint layers with blend modes (v0.4)
+- 📋 Texture painting on UV maps (resolution independent of the mesh), with the same paint layers
 - 📋 UV unwrapping and editing, texture baking (normal/displacement)
 - ✅ STL import (binary and ASCII) and binary export
 - 📋 Binary USD (usdc), SPZ-compressed splats, USD references/payloads

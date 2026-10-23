@@ -6,6 +6,8 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-22
+
 Shaped by feedback from a working ZBrush modeler and a survey of ZBrush and Mudbox forums.
 
 ### Feels like ZBrush
@@ -34,6 +36,11 @@ Shaped by feedback from a working ZBrush modeler and a survey of ZBrush and Mudb
   merge down, flatten, duplicate and reorder work as in Photoshop. Something ZBrush never had.
 - Exports use the composited colours; projects keep the layers (older versions open them flattened). New
   `paint_layer_*` script commands.
+
+### Documentation
+- What's New: a new user-guide chapter listing what changed in each version, under **Help > What's New**. It
+  opens by itself the first time a new version starts. The website shows "What's new in 0.4" up front.
+- The guide, glossary, roadmap and install chapter cover everything above, with direct download links.
 
 ### Install
 - `install/`: direct download links that always get the newest build, what to do after downloading, and
@@ -233,7 +240,8 @@ First public release.
 - Rez package (`packaging/rez`).
 - Headless thumbnail/turntable rendering and scripted demo recording.
 
-[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/islandmed/SculptForge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/islandmed/SculptForge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/islandmed/SculptForge/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/islandmed/SculptForge/releases/tag/v0.1.0

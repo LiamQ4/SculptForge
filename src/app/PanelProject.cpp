@@ -75,8 +75,12 @@ void App::initProject() {
         for (const auto& p : prefs["recent_files"].items())
             if (p.isString()) recentFiles_.push_back(p.asString());
         autosaveMinutes_ = std::clamp(int(prefs["autosave_minutes"].asNumber(autosaveMinutes_)), 0, 120);
+        // Updated since the last start (a new install has no prefs yet and gets the LightBox instead).
+        const std::string lastSeen = prefs["last_seen_version"].isString() ? prefs["last_seen_version"].asString() : "";
+        showWhatsNew_ = lastSeen != SCULPTFORGE_VERSION;
     }
     recentFiles_ = pruneRecentFiles(std::move(recentFiles_), fileExists);
+    saveProjectPrefs(); // records this version, so What's New shows once
 
     // An autosave newer than the last clean exit means the previous session ended unexpectedly.
     std::error_code ec;
@@ -101,6 +105,7 @@ void App::saveProjectPrefs() {
     for (const auto& p : recentFiles_) recent.push(p);
     prefs.set("recent_files", std::move(recent));
     prefs.set("autosave_minutes", autosaveMinutes_);
+    prefs.set("last_seen_version", std::string(SCULPTFORGE_VERSION));
     std::ofstream(fsPath(prefDir_ + "project.json"), std::ios::binary | std::ios::trunc) << prefs.dump(true);
 }
 
@@ -365,6 +370,10 @@ void App::drawProjectPopups() {
     if (offerRestore_) {
         ImGui::OpenPopup(kRestorePopup);
         offerRestore_ = false;
+    }
+    if (showWhatsNew_) {
+        guide_.open("whats-new.md");
+        showWhatsNew_ = false;
     }
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal(kRestorePopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
