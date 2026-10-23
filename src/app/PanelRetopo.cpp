@@ -9,6 +9,8 @@
 #include "app/Demo.h"
 #include "app/Ui.h"
 
+#include "core/TextureTransfer.h"
+
 #include <algorithm>
 #include <thread>
 
@@ -87,15 +89,29 @@ void App::startQRemesh() {
     if (o.usePolypaint) job->args["use_polypaint"] = true;
     if (o.symmetryAxis >= 0) job->args["symmetry"] = std::string(1, char('x' + o.symmetryAxis));
     if (job->keepOriginal) job->args["keep_original"] = true;
+    const bool keepTexture = keepTexture_;
+    if (!keepTexture && hasTexture(doc_.mesh)) job->args["keep_texture"] = false;
+    job->textureNote = std::make_shared<std::string>();
 
     std::promise<bool> promise;
     job->done = promise.get_future();
     std::thread([promise = std::move(promise), source = std::make_shared<Mesh>(doc_.mesh), o, progress = job->progress,
-                 cancel = job->cancel, result = job->result, stats = job->stats, error = job->error]() mutable {
-        const bool ok = qremesh(*source, o, *result, *error, [&](float f) {
-            progress->store(f);
+                 cancel = job->cancel, result = job->result, stats = job->stats, error = job->error,
+                 note = job->textureNote, keepTexture]() mutable {
+        // With a texture to keep, QRemesh takes the first 80% of the bar and Auto UV + transfer the rest.
+        const float share = hasTexture(*source) && keepTexture ? 0.8f : 1.0f;
+        bool ok = qremesh(*source, o, *result, *error, [&](float f) {
+            progress->store(f * share);
             return !cancel->load();
         }, stats.get());
+        if (ok) *note = carryTextureNote(*source, *result, keepTexture, [&](float f) {
+            progress->store(share + (1.0f - share) * f);
+            return !cancel->load();
+        });
+        if (ok && cancel->load()) {
+            ok = false;
+            *error = "QRemesh cancelled";
+        }
         promise.set_value(ok);
     }).detach();
     qremesh_ = std::move(job);
@@ -124,7 +140,7 @@ void App::pollQRemesh() {
     }
     if (index != doc_.activeSubtool) doc_.selectSubtool(index);
     if (doc_.sculptor.strokeActive()) endStroke();
-    CommandResult r{true, applyQRemesh(doc_, std::move(*job->result), job->keepOriginal, *job->stats)};
+    CommandResult r{true, applyQRemesh(doc_, std::move(*job->result), job->keepOriginal, *job->stats) + *job->textureNote};
     status_ = r.message;
     lastCommandOk_ = true;
     clearLods();
@@ -204,6 +220,10 @@ void App::drawQRemeshContents() {
                  "Keep the SubTool as it was, hidden, right below the new one (\"<name> Original\"), ready to "
                  "ProjectAll its detail back. Off: replace it, as ZBrush does (undo brings it back).",
                  kQRemeshPath);
+    if (hasTexture(doc_.mesh)) { // only matters for a painted SubTool
+        ImGui::SameLine(half + style.ItemSpacing.x);
+        drawKeepTextureCheckbox(kQRemeshPath);
+    }
 }
 
 void App::drawProjectContents() {

@@ -66,6 +66,21 @@ Mesh decimate(const Mesh& src, size_t targetTriangles) {
     for (uint32_t f = 0; f < nt; ++f)
         for (int c = 0; c < 3; ++c) vFaces[F[f][c]].push_back(f);
 
+    // Vertices on a UV seam (corners with different UVs) stay put: collapsing one would give the corners on
+    // the other side of the seam UVs from the wrong island, scrambling a painted texture there. Other vertices
+    // collapse onto a kept vertex, whose UV in the collapsing faces' island the moved corners then take (exact).
+    std::vector<char> uvSeam(nv, 0);
+    if (!FUV.empty()) {
+        std::vector<glm::vec2> firstUv(nv, glm::vec2(-1e30f));
+        for (uint32_t f = 0; f < nt; ++f)
+            for (int c = 0; c < 3; ++c) {
+                const uint32_t v = F[f][c];
+                const glm::vec2 uv = FUV[size_t(f) * 3 + size_t(c)];
+                if (firstUv[v].x == -1e30f) firstUv[v] = uv;
+                else if (glm::any(glm::greaterThan(glm::abs(firstUv[v] - uv), glm::vec2(1e-6f)))) uvSeam[v] = 1;
+            }
+    }
+
     // Area-weighted plane quadrics.
     std::vector<Quadric> Q(nv);
     std::vector<glm::dvec3> faceN(nt);
@@ -134,6 +149,7 @@ Mesh decimate(const Mesh& src, size_t targetTriangles) {
         heap.pop();
         const uint32_t u = c.from, v = c.to;
         if (!vAlive[u] || !vAlive[v] || version[u] != c.fromVersion || version[v] != c.toVersion) continue;
+        if (uvSeam[u]) continue;
 
         shared.clear();
         for (uint32_t f : vFaces[u]) {
@@ -171,12 +187,21 @@ Mesh decimate(const Mesh& src, size_t targetTriangles) {
         }
         if (!ok) continue;
 
-        // Corners that move from u to v take v's UV from a collapsed face
-        // (approximate across UV seams).
+        // Corners that move from u to v take v's UV from a collapsed face (u is not on a seam, so all of its
+        // faces lie in one UV island; skip the collapse if the collapsed faces disagree about v's UV).
         glm::vec2 uvOfV(0.0f);
-        if (!FUV.empty())
-            for (int k = 0; k < 3; ++k)
-                if (F[shared[0]][k] == v) uvOfV = FUV[size_t(shared[0]) * 3 + size_t(k)];
+        if (!FUV.empty()) {
+            bool first = true;
+            for (uint32_t f : shared)
+                for (int k = 0; k < 3; ++k)
+                    if (F[f][k] == v) {
+                        const glm::vec2 uv = FUV[size_t(f) * 3 + size_t(k)];
+                        if (!first && glm::any(glm::greaterThan(glm::abs(uv - uvOfV), glm::vec2(1e-6f)))) ok = false;
+                        uvOfV = uv;
+                        first = false;
+                    }
+            if (!ok) continue;
+        }
         for (uint32_t f : shared) {
             faceAlive[f] = 0;
             --liveFaces;

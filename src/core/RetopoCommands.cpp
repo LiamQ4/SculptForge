@@ -6,6 +6,7 @@
 #include "core/Commands.h"
 #include "core/Projection.h"
 #include "core/QRemesh.h"
+#include "core/TextureTransfer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -62,7 +63,9 @@ void registerRetopoCommands(CommandRegistry& reg) {
               {"symmetry", T::String, "Mirror the topology across x, y or z (the plane through the origin). Default: none.", false},
               {"keep_original", T::Bool, "Keep the original as a hidden SubTool below (for project_all). Default false.", false},
               {"smooth", T::Number, "Relaxation passes on the surface (0-30). Default 6.", false},
-              {"seed", T::Number, "Random start of the direction field (results are repeatable per seed).", false}},
+              {"seed", T::Number, "Random start of the direction field (results are repeatable per seed).", false},
+              {"keep_texture", T::Bool, "Keep a painted texture: Auto UV the result and project the texture onto it. "
+                                        "Default true.", false}},
              [](Document& doc, const Args& a) -> CommandResult {
                  if (doc.mesh.triangleCount() == 0) return {false, "QRemesh: the SubTool is empty"};
                  QRemeshOptions o;
@@ -78,7 +81,8 @@ void registerRetopoCommands(CommandRegistry& reg) {
                  std::string err;
                  QRemeshStats st;
                  if (!qremesh(doc.mesh, o, out, err, {}, &st)) return {false, err};
-                 return {true, applyQRemesh(doc, std::move(out), argBool(a, "keep_original", false), st)};
+                 const std::string texture = carryTextureNote(doc.mesh, out, argBool(a, "keep_texture", true));
+                 return {true, applyQRemesh(doc, std::move(out), argBool(a, "keep_original", false), st) + texture};
              }});
 
     reg.add({"project_all",

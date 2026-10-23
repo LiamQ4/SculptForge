@@ -390,6 +390,7 @@ void App::drawPalette_Tool() {
         ImGui::SliderInt("##voxres", &voxelResolution_, 64, 400, "Resolution %d");
         ui::HelpText("Resolution", nullptr, "Voxels across the model: higher keeps more detail and makes more triangles.",
                      "Tool > Remesh");
+        if (hasTexture(doc_.mesh)) drawKeepTextureCheckbox("Tool > Remesh"); // only for a painted SubTool
     }
     if (subpalette("tool.masking", "Masking")) drawMaskingSection();
     if (subpalette("tool.polygroups", "Polygroups")) drawPolygroupsSection();

@@ -262,6 +262,7 @@ private:
     std::string comfyWorkflowError_;
     bool remeshGenerated_ = true;
     int voxelResolution_ = 200;
+    bool keepTexture_ = true; // Keep Texture: remeshes carry a painted texture over (core/TextureTransfer.h)
     int splatMeshResolution_ = 192;
     int remeshResolution_ = 256;
     std::future<ai::GeneratorResult> pendingGenerator_;
@@ -429,6 +430,7 @@ private:
     void drawQRemeshContents();
     void drawProjectContents();
     void startQRemesh();
+    void drawKeepTextureCheckbox(const char* path); // Keep Texture under Remesh and QRemesh (PanelTexture.cpp)
     void pollQRemesh();
     struct QRemeshJob {
         std::future<bool> done;
@@ -441,6 +443,7 @@ private:
         size_t triangles = 0;  // the mesh must still have this many triangles when it finishes
         bool keepOriginal = false;
         Args args;             // the equivalent qremesh command, for the console
+        std::shared_ptr<std::string> textureNote; // what happened to a painted texture (Keep Texture)
     };
     std::unique_ptr<QRemeshJob> qremesh_;
     struct RetopoSettings {

@@ -60,6 +60,7 @@ add_library(sculptforge_core STATIC
   src/core/Multires.cpp
   src/core/MultiresCommands.cpp
   src/core/AutoUv.cpp
+  src/core/TextureTransfer.cpp
   src/core/SurfaceQuery.cpp
   src/core/QRemesh.cpp
   src/core/Projection.cpp

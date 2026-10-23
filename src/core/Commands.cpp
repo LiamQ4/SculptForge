@@ -19,6 +19,7 @@
 #include "core/Project.h"
 #include "core/QRemesh.h"
 #include "core/Splats.h"
+#include "core/TextureTransfer.h"
 #include "core/Voxel.h"
 #include "io/FbxIO.h"
 #include "io/GltfIO.h"
@@ -190,14 +191,18 @@ CommandRegistry::CommandRegistry() {
 
     add({"remesh",
          "Voxel remesh (like DynaMesh): rebuild the sculpt as an even, watertight surface, merging overlapping "
-         "parts and fixing broken scans or generated models. Sculpt layers are baked in.",
-         {{"resolution", T::Number, "Voxels across the longest side (32-512). Default 200; higher keeps more detail.", false}},
+         "parts and fixing broken scans or generated models. Sculpt layers are baked in. A painted texture is "
+         "kept (new Auto UVs, colour projected from the old surface) unless keep_texture=false.",
+         {{"resolution", T::Number, "Voxels across the longest side (32-512). Default 200; higher keeps more detail.", false},
+          {"keep_texture", T::Bool, "Keep a painted texture: Auto UV the result and project the texture onto it. "
+                                    "Default true.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string err;
              Mesh m = voxelRemesh(doc.mesh, std::clamp(int(argNumber(a, "resolution", 200)), 32, 512), &err);
              if (m.triangleCount() == 0) return {false, err};
+             const std::string texture = carryTextureNote(doc.mesh, m, argBool(a, "keep_texture", true));
              doc.replaceMeshUndoable(std::move(m), "Remesh");
-             return {true, "Remeshed to " + std::to_string(doc.mesh.triangleCount()) + " triangles"};
+             return {true, "Remeshed to " + std::to_string(doc.mesh.triangleCount()) + " triangles" + texture};
          }});
 
     add({"image_relief",
