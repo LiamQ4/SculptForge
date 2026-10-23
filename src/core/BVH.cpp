@@ -257,4 +257,16 @@ void BVH::refit(const Mesh& mesh, std::span<const uint32_t> movedVerts) {
     }
 }
 
+void BVH::refitAll(const Mesh& mesh) {
+    for (size_t i = nodes_.size(); i-- > 0;) { // children always have larger indices
+        Node& n = nodes_[i];
+        if (n.count > 0) {
+            recomputeLeaf(mesh, n);
+        } else {
+            n.box = nodes_[n.first].box;
+            n.box.expand(nodes_[n.first + 1].box);
+        }
+    }
+}
+
 } // namespace sf

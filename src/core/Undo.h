@@ -86,7 +86,8 @@ inline constexpr int kActivePaintLayer = -2;
 // One undoable step: any mix of sparse channels, or a full mesh snapshot
 // (topology/layer-set changes; the snapshot holds every attribute).
 //  - positions: the stroke's target array (positions, layer base or a layer's
-//    offsets; see Mesh::layerTarget), selected by `layer`
+//    offsets; see Mesh::layerTarget), selected by `layer`; layerOffsets: every
+//    layer's offsets too (transforms)
 //  - mask / colors: per-vertex mask and polypaint. `colors` holds the paint
 //    target of `paintLayer` (Mesh::colors without paint layers, else Base for
 //    -1 or that layer's colours, with its coverage in `paintAlpha`)
@@ -99,6 +100,9 @@ struct UndoRecord {
     std::string label;
     int layer = -1;
     UndoChannel<glm::vec3> positions;
+    // Transforms (core/MeshTransform.h) move the base and every sculpt layer together: with `positions` on the
+    // base (layer -1), layerOffsets[i] holds the old offsets of layer i for the same vertices.
+    std::vector<UndoChannel<glm::vec3>> layerOffsets;
     UndoChannel<float> mask;
     UndoChannel<glm::vec3> colors;
     int paintLayer = -1;

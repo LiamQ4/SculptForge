@@ -35,6 +35,8 @@ add_library(sculptforge_core STATIC
   src/core/Polygroups.cpp
   src/core/ScreenSelect.cpp
   src/core/SubTools.cpp
+  src/core/MeshTransform.cpp
+  src/core/TransformCommands.cpp
   src/core/Decimate.cpp
   src/core/Script.cpp
   src/core/Json.cpp

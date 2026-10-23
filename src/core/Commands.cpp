@@ -8,6 +8,7 @@
 #include "core/EnginePresets.h"
 #include "core/ImageTo3D.h"
 #include "core/Masking.h"
+#include "core/MeshTransform.h"
 #include "core/PathStroke.h"
 #include "core/Polygroups.h"
 #include "core/SubTools.h"
@@ -753,6 +754,7 @@ CommandRegistry::CommandRegistry() {
     registerMaskingCommands(*this);
     registerPolygroupCommands(*this);
     registerSubToolCommands(*this);
+    registerTransformCommands(*this); // transform (core/MeshTransform.h)
     registerPaintCommands(*this); // core/Polypaint.cpp
     registerGozCommands(*this); // goz_import/export/send/receive, export_stl (io/GozCommands.cpp)
     registerProjectCommands(*this); // keep last (core/Project.cpp)

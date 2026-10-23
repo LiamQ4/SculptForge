@@ -31,6 +31,8 @@ public:
     // Updates bounds after the given vertices moved. Bounds only ever grow
     // conservatively for ancestors, which keeps queries correct.
     void refit(const Mesh& mesh, std::span<const uint32_t> movedVerts);
+    // Recomputes every box (same tree) after most of the mesh moved, e.g. a whole SubTool transformed.
+    void refitAll(const Mesh& mesh);
 
     size_t nodeCount() const { return nodes_.size(); }
 
