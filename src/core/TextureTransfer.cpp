@@ -153,8 +153,18 @@ std::shared_ptr<PaintTexture> blankLike(const PaintTexture& like, bool withLayer
     auto t = makeTexture(like.width, like.height);
     if (withLayers && !like.layers.empty()) {
         t->base.assign(t->texelCount() * 4, 255);
-        t->layers = like.layers;
-        for (auto& l : t->layers) l.rgba.assign(t->texelCount() * 4, 0);
+        t->layers.reserve(like.layers.size());
+        for (const TextureLayer& l : like.layers) { // the settings, not the texels
+            TextureLayer c;
+            c.id = l.id;
+            c.name = l.name;
+            c.opacity = l.opacity;
+            c.blend = l.blend;
+            c.visible = l.visible;
+            c.locked = l.locked;
+            c.rgba.assign(t->texelCount() * 4, 0);
+            t->layers.push_back(std::move(c));
+        }
         t->activeLayer = like.activeLayer;
     }
     return t;

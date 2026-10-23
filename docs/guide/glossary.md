@@ -100,6 +100,7 @@ for what is planned.
 | Bake | Capture a high-poly's detail as images (maps) on a low-poly's UVs. See [Baking](baking.md) |
 | Cage (front / rear distance) | How far in front of and behind the low-poly the bake's rays look for the high-poly. See [Baking](baking.md#how-the-bake-works) |
 | Displacement map | A map of how far the high-poly lies from the low-poly along its normal; mid-grey = 0. See [Baking](baking.md#displacement-mid-grey-is-zero) |
+| Keep Texture | Remesh option (Voxel Remesh, QRemesh): give the new surface Auto UVs and project the painted texture onto it, so the paint survives. See [Texture painting](texture-painting.md#uvs-and-geometry) |
 | MikkTSpace | The standard way of computing tangents that game engines share, so tangent-space normal maps look the same everywhere. See [Baking](baking.md) |
 | Normal map | A map of surface directions that makes a low-poly shade like the high-poly. Tangent-space maps are relative to the surface (for engines), object-space maps to the model. See [Baking](baking.md) |
 | Texel | One pixel of a texture. Texture painting paints texels; their 3D position on the model decides the brush falloff |

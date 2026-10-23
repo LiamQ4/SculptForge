@@ -94,6 +94,10 @@ The up and down arrow buttons under the list move the active SubTool one place u
 Merging keeps every attribute, gives each original mesh its own polygroups (so you can split them again later) and
 matches sculpt layers by name. The merged SubTool starts with an empty undo history.
 
+Painted textures are kept too: the merged SubTool gets new Auto UVs and one texture, the size of the largest,
+holding each part's paint exactly (texture layers are flattened; parts without a texture are white). On big
+meshes the Auto UV takes a while. Scripts can skip it with `keep_texture=false`, which drops the textures.
+
 > **Tip:** Merge first when you want one [voxel remesh](geometry.md#voxel-remesh) to fuse several pieces into a
 > single watertight surface.
 

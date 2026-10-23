@@ -89,12 +89,27 @@ texture after giving it UVs.
 
 ## UVs and geometry
 
-- **Auto UV** replaces any existing UVs. If the SubTool already had a painted texture, the paint no longer lines
-  up with the new layout: undo the Auto UV to get the old UVs back.
+- **Auto UV** replaces any existing UVs. If the SubTool already has a painted texture, the paint moves with it:
+  every texel of the new layout takes the colour of the same point of the surface from the old one, for the Base
+  and every texture layer (with their blend modes, opacity and names), and the islands get a padded border. It
+  is one undo step: undo brings back the old UVs and the old texture exactly. Moving a 4K texture takes a fraction
+  of a second on a million triangles (the unwrap itself takes longer; see below). The paint is resampled once,
+  so very fine detail softens slightly (well under one texel).
 - [Subdividing](geometry.md#subdivide), [decimating](geometry.md#decimate), [splitting](subtools.md#split-a-subtool)
-  and duplicating keep the UVs, so the texture stays on. A [voxel remesh](geometry.md#voxel-remesh) and
-  [merging](subtools.md#merge-subtools) SubTools build new surfaces without these UVs, so they drop the texture
-  (export it first if you need it).
+  and duplicating keep the UVs, so the texture stays on. Decimate leaves the vertices on UV seams in place, so the
+  texture stays exact across seams.
+- **Keep Texture** (on by default, shown under **Tool > Remesh** and **Tool > Geometry > QRemesh** when the
+  SubTool has a texture): a [voxel remesh](geometry.md#voxel-remesh) or [QRemesh](retopology.md) builds a new
+  surface without UVs, so SculptForge unwraps the result with Auto UV and projects the texture onto it from the
+  old surface (each new texel takes the colour of the closest point of the old one), keeping every layer. It is
+  part of the same undo step. It adds the time of an Auto UV of the result, so a voxel remesh of a painted
+  SubTool runs in the background with a progress bar and **Cancel**. Turn it off to drop the texture instead
+  (the status line says so). Paint finer than the new surface's detail is kept, since it lives in the texture.
+- [Merging](subtools.md#merge-subtools) SubTools keeps their textures: the merged SubTool gets Auto UVs and one
+  texture (the size of the largest) holding each part's paint, with the texture layers flattened. Parts without
+  a texture come out white.
+- Auto UV on dense meshes: the islands are kept to about 4,000 triangles each, so a million-triangle sculpt
+  unwraps in a quarter of a minute or so and gets a few hundred islands.
 - UVs outside the 0-1 square (tiles, UDIMs) aren't painted.
 
 > **ZBrush:** ZBrush paints polypaint and converts it to a texture afterwards (**Texture Map > New From
@@ -105,7 +120,7 @@ texture after giving it UVs.
 
 | Command | What it does |
 |---|---|
-| `uv_auto` | Unwrap the active SubTool (xatlas); `resolution=4096` packs the islands for that texture size |
+| `uv_auto` | Unwrap the active SubTool (xatlas); `resolution=4096` packs the islands for that texture size. A painted texture moves onto the new UVs (`keep_texture=false` leaves it as it was) |
 | `texture_create size=2048` | Give the SubTool a texture (1024, 2048, 4096, 8192 or `1k`...`8k`) and paint into it; `from_polypaint=true` starts from the polypaint |
 | `paint_target target=texture` | Where painting goes: `vertex` or `texture` |
 | `texture_from_polypaint` | Bake the polypaint into the active texture layer |
@@ -113,6 +128,9 @@ texture after giving it UVs.
 | `texture_export path=skin.png` | Save the texture as a PNG |
 | `texture_import path=skin.png` | Load an image as the texture |
 | `texture_delete` | Remove the texture |
+
+`remesh`, `qremesh`, `subtool_merge_down` and `subtool_merge_visible` keep a texture unless you add
+`keep_texture=false`.
 
 `paint_fill`, `paint_from_cavity`, `paint_clear` and every `paint_layer_*` command work on the texture while
 `paint_target` is `texture`. See [Scripting and automation](scripting.md).

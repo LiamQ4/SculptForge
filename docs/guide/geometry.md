@@ -13,8 +13,8 @@ All of them work on the **active SubTool** and, except the LOD preview, are undo
 |---|---|---|---|---|---|---|
 | Divide (levels) | **Tool > Geometry > Divide**, <kbd>Ctrl</kbd>+<kbd>D</kbd> | x4 per level, lower levels kept | Each quad becomes four (Catmull-Clark) | Yes | Yes (interpolated) | Yes |
 | Subdivide | **Tool > Geometry > Subdivide** | x4 per level | Each quad becomes four | Yes | Yes (interpolated) | Yes |
-| Voxel Remesh | **Tool > Remesh > Voxel Remesh** | Set by resolution | All quads (new ones) | Baked in | Yes (transferred) | No (reset) |
-| QRemesh | **Tool > Geometry > QRemesh** | Set by Target Polygons | All quads, with edge loops | Baked in | Yes (transferred) | Polygroups with Keep Groups; no hidden faces or UVs |
+| Voxel Remesh | **Tool > Remesh > Voxel Remesh** | Set by resolution | All quads (new ones) | Baked in | Yes (transferred) | No (reset); a texture is kept on new UVs with Keep Texture |
+| QRemesh | **Tool > Geometry > QRemesh** | Set by Target Polygons | All quads, with edge loops | Baked in | Yes (transferred) | Polygroups with Keep Groups; no hidden faces; a texture is kept on new UVs with Keep Texture |
 | Decimate | **Tool > Geometry > Decimate** | Reduced | No, all triangles | Yes | Yes | Yes |
 | LOD chain | **Tool > Export** | One level per ratio step | LOD0 keeps them; lower levels are triangles | Yes, on every level | Yes | Yes |
 
@@ -75,8 +75,12 @@ What happens to your data:
 
 - Sculpt layers are baked into the surface: the result has no layers.
 - Mask and polypaint are transferred from the nearest original vertex.
-- Polygroups, hidden faces and UVs are reset (everything becomes visible, one polygroup, no UVs). Hidden parts are
+- Polygroups, hidden faces and UVs are reset (everything becomes visible, one polygroup). Hidden parts are
   remeshed too.
+- A painted texture is kept with **Keep Texture** (on by default, shown next to the button when the SubTool has a
+  texture): the result gets Auto UVs and the texture is projected onto it, every layer included, in the same undo
+  step. This runs in the background (Auto UV of a few hundred thousand triangles takes several seconds) with a
+  progress bar and **Cancel**. Off: the texture is dropped. See [Texture painting](texture-painting.md#uvs-and-geometry).
 - Separate pieces that don't touch stay separate pieces; overlapping ones are merged.
 - The new surface is made of even quads (the original's quads are rebuilt, not kept).
 
@@ -156,9 +160,9 @@ heavy sculpt:
 | Command | Options |
 |---|---|
 | `subdivide` | `levels` 1-4 (default 1) |
-| `remesh` | `resolution` 32-512 voxels across the longest side (default 200) |
+| `remesh` | `resolution` 32-512 voxels across the longest side (default 200); `keep_texture` (default true) |
 | `decimate` | `ratio` 0.01-1 of the triangles to keep (default 0.5), or `triangles` for an exact target |
-| `qremesh` | `target` quads (default 5000), `adaptive`, `keep_groups`, `detect_edges`, `use_polypaint`, `symmetry`, `keep_original`; see [Quad retopology](retopology.md#scripting) |
+| `qremesh` | `target` quads (default 5000), `adaptive`, `keep_groups`, `detect_edges`, `use_polypaint`, `symmetry`, `keep_original`, `keep_texture`; see [Quad retopology](retopology.md#scripting) |
 | `export_lods` | `path` (base name), `levels` 1-8 including LOD0 (default 4), `ratio` 0.1-0.9 (default 0.5) |
 
 ```sh
