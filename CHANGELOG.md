@@ -6,7 +6,7 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
-## [0.4.1] - 2026-10-23
+## [0.4.2] - 2026-10-23
 
 ### Texture painting on UV maps
 - Paint into a texture on the model's UVs instead of its vertices, so the colour detail comes from the texture
@@ -33,6 +33,8 @@ All notable changes to SculptForge are listed here. The format follows
 - Exports write the texture next to the model: OBJ with a `.mtl` (`map_Kd`), glTF/GLB with an embedded base
   colour texture, USD with a preview material, FBX and GoZ with the PNG beside the file.
 - Subdivide, decimate, split and duplicate keep the texture with the UVs.
+
+## [0.4.1] - 2026-10-23
 
 ### Fixed
 - Graphics tablets: the brush ring no longer flickers between two places, which looked like a second brush
@@ -274,7 +276,8 @@ First public release.
 - Rez package (`packaging/rez`).
 - Headless thumbnail/turntable rendering and scripted demo recording.
 
-[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/islandmed/SculptForge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/islandmed/SculptForge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/islandmed/SculptForge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/islandmed/SculptForge/compare/v0.2.0...v0.3.0

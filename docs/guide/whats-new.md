@@ -5,9 +5,7 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
-## Version 0.4.1
-
-### Texture painting on UV maps
+## Version 0.4.2: texture painting on UV maps
 
 Paint into a texture instead of the vertices, so the colour detail comes from the texture (1K to 8K), not from
 the mesh: sharp decals, pores and freckles on a light game mesh.
@@ -25,9 +23,9 @@ the mesh: sharp decals, pores and freckles on a light game mesh.
 
 See [Texture painting](texture-painting.md).
 
-### Tablet fix
+## Version 0.4.1
 
-The brush ring no longer flickers between two places on the model (it looked like
+A fix for graphics tablets: the brush ring no longer flickers between two places on the model (it looked like
 a second brush blinking, most often while masking or smoothing). Some tablet drivers, Windows Ink among them,
 send extra mouse movements beside the pen's; now, while the pen is in range, only the pen moves the brush. See
 [Pen tablets](troubleshooting.md#pen-tablets) if your pen still misbehaves.
