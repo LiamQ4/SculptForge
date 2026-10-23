@@ -552,6 +552,7 @@ private:
     void drawPaletteBar(const ShellGeometry& g);
     void drawShelf(int shelf, const CanvasRect& rect);
     void drawShelfItem(int shelf, int index, const std::string& item, bool vertical);
+    bool shelfItemShown(const std::string& item) const;
     void drawTray(bool right, const CanvasRect& rect);
     void drawDivider(bool right, const CanvasRect& rect);
     void drawPaletteDropdown();

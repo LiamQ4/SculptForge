@@ -13,6 +13,7 @@
 #include "app/Ui.h"
 #include "core/Matcap.h"
 #include "core/Polypaint.h"
+#include "core/Texture.h"
 
 #include <IconsLucide.h>
 #include <imgui_internal.h>
@@ -1078,15 +1079,16 @@ void App::drawShelf(int shelf, const CanvasRect& r) {
     }
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * s, 4.0f * s));
     bool lineStart = true;
+    int prevShown = -1; // the last item drawn on this line (contextual items may be skipped)
     for (int i = 0; i < int(list.size()); ++i) {
         const std::string& item = list[size_t(i)];
         if (item == "row") {
             lineStart = true;
             continue;
         }
-        if (item == "view.splats" && doc_.splats.empty()) continue; // only when there's a capture
-        if (!vertical && !lineStart) {
-            const std::string& prev = list[size_t(i - 1)];
+        if (!shelfItemShown(item)) continue;
+        if (!vertical && !lineStart && prevShown >= 0) {
+            const std::string& prev = list[size_t(prevShown)];
             ImGui::SameLine(0.0f, prev == "sep" || item == "sep" ? 0.0f : segmentPair(prev, item) ? 1.0f * s : 4.0f * s);
         }
         if (!vertical && item == "widget.points") { // right-aligned readout
@@ -1094,6 +1096,7 @@ void App::drawShelf(int shelf, const CanvasRect& r) {
             ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - w));
         }
         lineStart = false;
+        prevShown = i;
         drawShelfItem(shelf, i, item, vertical);
         rects.push_back(ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax()));
         indices.push_back(i);
@@ -1154,6 +1157,15 @@ void App::drawShelf(int shelf, const CanvasRect& r) {
     ImGui::End();
 }
 
+// Contextual shelf items (docs/ui-design.md, "Contextual controls"): shown only when they apply, and always in
+// Customize mode so they can still be moved or removed.
+bool App::shelfItemShown(const std::string& item) const {
+    if (layout_.customize) return true;
+    if (item == "view.splats") return !doc_.splats.empty(); // only when there's a capture
+    if (item == "draw.paint_vertex" || item == "draw.paint_texture") return hasTexture(doc_.mesh); // paint target
+    return true;
+}
+
 void App::drawShelfItem(int shelf, int index, const std::string& item, bool vertical) {
     const float s = uiScale_;
     const float winW = ImGui::GetWindowWidth();
@@ -1177,7 +1189,10 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
         }
     } else if (item == "widget.draw_size" || item == "widget.strength") {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f * s, (rowH - ImGui::GetFontSize()) * 0.5f));
-        ImGui::SetNextItemWidth(180.0f * s);
+        // 180 px each, narrower when the row is full (e.g. with the contextual Vertex / Texture buttons at 1600 px).
+        const float avail = ImGui::GetContentRegionAvail().x - (item == "widget.draw_size" ? 4.0f * s : 0.0f);
+        ImGui::SetNextItemWidth(vertical ? 180.0f * s
+                                         : std::clamp(item == "widget.draw_size" ? avail * 0.5f : avail, 120.0f * s, 180.0f * s));
         if (item == "widget.draw_size") {
             ui::SliderInside("##drawsize", &radiusPx_, 2.0f, 800.0f, "Draw Size %.0f", ImGuiSliderFlags_Logarithmic);
             ui::HelpText("Draw Size", "S", "Brush radius in screen pixels. [ and ] change it by 10%; Ctrl+click to type.", "Draw");

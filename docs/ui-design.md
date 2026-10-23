@@ -182,6 +182,7 @@ Row 1:
 - `[Sculpt | Paint]` (`paintMode_`)
 - `[Zadd | Zsub]` (`invertToggle_`)
 - `[Rgb]` (`paintRgb_`)
+- `[Vertex | Texture]` paint target (`act:draw.paint_vertex`, `act:draw.paint_texture`; contextual: only when the SubTool has a texture)
 - `Draw Size 60` slider (w 180; `radiusPx_`, `S`)
 - `Strength 0.50` slider (w 180; `strength_`, `I`)
 
@@ -191,6 +192,11 @@ Row 2:
 - `[X][Y][Z]` symmetry (`X` toggles X)
 - `[Pressure>Str] [Pressure>Size]`
 - right-aligned `5.1k / 10.2k` (ActivePoints / TotalPoints analogue: visible vs total tris)
+
+**Contextual controls.** A shelf button that only applies in some situations (the Vertex / Texture paint target
+needs a texture, Splats needs a capture) is *hidden* while it doesn't apply, rather than shown greyed out, so the
+shelves don't fill with dead buttons. Customize mode shows them all so they can be moved or removed. Palette
+entries stay visible and disabled (with the reason in Ctrl help), because palettes are where users look things up.
 
 Sliders use the ZBrush style: the label sits inside the frame (`SliderFloat("##size", ..., "Draw Size %.0f")`), and the grab is a thin accent bar.
 
