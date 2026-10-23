@@ -3,3 +3,4 @@
 *.sfbrush -text
 tools/brush-gallery/repo/** -text
 website/gallery/** -text
+tests/data/** -text
