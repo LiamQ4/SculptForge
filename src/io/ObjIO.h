@@ -11,7 +11,10 @@
 namespace sf {
 
 // Paths are UTF-8. Polygons are fan-triangulated; quads are kept paired
-// (Mesh::quadPartners) and written back as quads. UVs and normals are ignored.
+// (Mesh::quadPartners) and written back as quads. `vt` UVs are read into
+// Mesh::uvs and written back (normals are ignored); a SubTool with a texture
+// (core/Texture.h) is written with <stem>.mtl and a PNG beside the file
+// (`map_Kd`, see io/TextureExport.h).
 // "v x y z r g b" vertex colours are read into Mesh::colors and written back.
 // `g` groups become polygroups (when an object uses two or more), as ZBrush
 // writes them; `o` starts a new object, as Blender and ZBrush write SubTools.

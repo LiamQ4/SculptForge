@@ -1,7 +1,7 @@
 # SculptForge User Guide
 
 This guide explains every part of SculptForge, the free, open-source sculpting app for VFX, animation and games:
-how the interface is organised, how to sculpt, mask, paint and manage SubTools, how to generate models with AI,
+how the interface is organised, how to sculpt, mask, paint (on vertices or textures) and manage SubTools, how to generate models with AI,
 and how to get your work into a game engine, a film pipeline or ZBrush. It is written for SculptForge
 0.4.
 
@@ -27,26 +27,27 @@ You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<
 9. [Polygroups and visibility](polygroups.md)
 10. [SubTools](subtools.md)
 11. [Polypaint and materials](polypaint.md)
-12. [Sculpt layers and blend shapes](layers.md)
-13. [Subdivide, remesh, decimate and LODs](geometry.md)
+12. [Texture painting](texture-painting.md)
+13. [Sculpt layers and blend shapes](layers.md)
+14. [Subdivide, remesh, decimate and LODs](geometry.md)
 
 ## AI and capture
 
-14. [Image and text to 3D](generate-3d.md)
-15. [Gaussian splats](splats.md)
+15. [Image and text to 3D](generate-3d.md)
+16. [Gaussian splats](splats.md)
 
 ## Files and pipelines
 
-16. [Exporting, Unreal and ZBrush](exporting.md)
-17. [Projects, autosave and QuickSave](projects.md)
-18. [Scripting and automation](scripting.md)
-19. [SculptForge for studios](studios.md)
+17. [Exporting, Unreal and ZBrush](exporting.md)
+18. [Projects, autosave and QuickSave](projects.md)
+19. [Scripting and automation](scripting.md)
+20. [SculptForge for studios](studios.md)
 
 ## Reference
 
-20. [Keyboard and mouse](shortcuts.md)
-21. [Troubleshooting and FAQ](troubleshooting.md)
-22. [Glossary](glossary.md)
+21. [Keyboard and mouse](shortcuts.md)
+22. [Troubleshooting and FAQ](troubleshooting.md)
+23. [Glossary](glossary.md)
 
 ## Getting help
 

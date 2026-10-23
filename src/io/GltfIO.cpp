@@ -3,6 +3,7 @@
 #include "io/GltfIO.h"
 
 #include "core/Json.h"
+#include "io/TextureExport.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -109,15 +110,15 @@ bool saveGlb(const std::string& path, const std::vector<MeshObjectRef>& objects,
     BinWriter bin;
     struct View {
         size_t offset, length;
-        bool indices;
+        int target; // 34962 vertex data, 34963 indices, 0 none (images)
     };
     std::vector<View> views;
-    std::ostringstream accessors, meshes, nodes;
-    int accessorCount = 0;
+    std::ostringstream accessors, meshes, nodes, images, materials;
+    int accessorCount = 0, textureCount = 0;
 
     auto addVec3 = [&](const std::vector<glm::vec3>& v, bool withMinMax) {
         size_t off = bin.append(v.data(), v.size() * sizeof(glm::vec3));
-        views.push_back({off, v.size() * sizeof(glm::vec3), false});
+        views.push_back({off, v.size() * sizeof(glm::vec3), 34962});
         accessors << (accessorCount ? "," : "") << "{\"bufferView\":" << views.size() - 1
                   << ",\"componentType\":5126,\"count\":" << v.size() << ",\"type\":\"VEC3\"";
         if (withMinMax) {
@@ -126,6 +127,13 @@ bool saveGlb(const std::string& path, const std::vector<MeshObjectRef>& objects,
             accessors << ",\"min\":" << vec3Json(lo) << ",\"max\":" << vec3Json(hi);
         }
         accessors << "}";
+        return accessorCount++;
+    };
+    auto addVec2 = [&](const std::vector<glm::vec2>& v) {
+        size_t off = bin.append(v.data(), v.size() * sizeof(glm::vec2));
+        views.push_back({off, v.size() * sizeof(glm::vec2), 34962});
+        accessors << (accessorCount ? "," : "") << "{\"bufferView\":" << views.size() - 1
+                  << ",\"componentType\":5126,\"count\":" << v.size() << ",\"type\":\"VEC2\"}";
         return accessorCount++;
     };
 
@@ -140,26 +148,75 @@ bool saveGlb(const std::string& path, const std::vector<MeshObjectRef>& objects,
         baseMesh.rebuildTopology();
         baseMesh.recomputeAllNormals();
 
-        int posAcc = addVec3(baseMesh.positions, true);
-        int nrmAcc = addVec3(baseMesh.normals, false);
-        const bool colors = mesh.hasColors() && mesh.colors.size() == mesh.vertexCount();
-        int colorAcc = colors ? addVec3(mesh.colors, false) : -1; // polypaint as COLOR_0 (linear)
+        // glTF UVs are per vertex: a vertex is split where its corners have different UVs (seams).
+        // `source[i]` is the mesh vertex of glTF vertex i; meshes without UVs are written as they are.
+        const bool uvs = hasCornerUvs(mesh);
+        std::vector<uint32_t> source;
+        std::vector<glm::vec2> texcoords;
+        std::vector<glm::uvec3> triangles;
+        if (uvs) {
+            std::vector<uint32_t> head(mesh.vertexCount(), ~0u), next; // glTF vertices of each mesh vertex
+            triangles.resize(mesh.triangleCount());
+            for (size_t t = 0; t < mesh.triangleCount(); ++t)
+                for (int c = 0; c < 3; ++c) {
+                    const uint32_t v = mesh.triangles[t][c];
+                    const glm::vec2 uv(mesh.uvs[t * 3 + size_t(c)].x, 1.0f - mesh.uvs[t * 3 + size_t(c)].y); // glTF: V down
+                    uint32_t i = head[v];
+                    while (i != ~0u && texcoords[i] != uv) i = next[i];
+                    if (i == ~0u) {
+                        i = uint32_t(source.size());
+                        source.push_back(v);
+                        texcoords.push_back(uv);
+                        next.push_back(head[v]);
+                        head[v] = i;
+                    }
+                    triangles[t][c] = i;
+                }
+        }
+        auto split = [&](const std::vector<glm::vec3>& v) {
+            std::vector<glm::vec3> out;
+            out.reserve(source.size());
+            for (uint32_t i : source) out.push_back(v[i]);
+            return out;
+        };
 
-        size_t idxOff = bin.append(mesh.triangles.data(), mesh.triangleCount() * sizeof(glm::uvec3));
-        views.push_back({idxOff, mesh.triangleCount() * sizeof(glm::uvec3), true});
+        int posAcc = addVec3(uvs ? split(baseMesh.positions) : baseMesh.positions, true);
+        int nrmAcc = addVec3(uvs ? split(baseMesh.normals) : baseMesh.normals, false);
+        const bool colors = mesh.hasColors() && mesh.colors.size() == mesh.vertexCount();
+        int colorAcc = colors ? addVec3(uvs ? split(mesh.colors) : mesh.colors, false) : -1; // polypaint as COLOR_0 (linear)
+        int uvAcc = uvs ? addVec2(texcoords) : -1;
+
+        const std::vector<glm::uvec3>& tris = uvs ? triangles : mesh.triangles;
+        size_t idxOff = bin.append(tris.data(), tris.size() * sizeof(glm::uvec3));
+        views.push_back({idxOff, tris.size() * sizeof(glm::uvec3), 34963});
         accessors << ",{\"bufferView\":" << views.size() - 1 << ",\"componentType\":5125,\"count\":"
-                  << mesh.triangleCount() * 3 << ",\"type\":\"SCALAR\"}";
+                  << tris.size() * 3 << ",\"type\":\"SCALAR\"}";
         int idxAcc = accessorCount++;
 
         std::vector<int> targetAccs;
-        for (const auto& l : mesh.layers) targetAccs.push_back(addVec3(l.delta, true));
+        for (const auto& l : mesh.layers) targetAccs.push_back(addVec3(uvs ? split(l.delta) : l.delta, true));
+
+        // The texture (core/Texture.h) embedded as a PNG: image, texture and material share one index.
+        int material = -1;
+        std::vector<uint8_t> png;
+        if (encodeTexturePng(mesh, png)) {
+            const size_t off = bin.append(png.data(), png.size());
+            views.push_back({off, png.size(), 0});
+            material = textureCount++;
+            images << (material ? "," : "") << "{\"bufferView\":" << views.size() - 1 << ",\"mimeType\":\"image/png\",\"name\":\""
+                   << jsonEscape(name) << "_color\"}";
+            materials << (material ? "," : "") << "{\"name\":\"" << jsonEscape(name) << "\",\"pbrMetallicRoughness\":{"
+                      << "\"baseColorTexture\":{\"index\":" << material << "},\"metallicFactor\":0,\"roughnessFactor\":0.65}}";
+        }
 
         nodes << (oi ? "," : "") << "{\"mesh\":" << oi << ",\"name\":\"" << jsonEscape(name) << "\"}";
         std::ostringstream& json = meshes; // this object's entry in "meshes"
         json << (oi ? "," : "") << "{\"name\":\"" << jsonEscape(name) << "\",\"primitives\":[{\"attributes\":{\"POSITION\":"
              << posAcc << ",\"NORMAL\":" << nrmAcc;
         if (colors) json << ",\"COLOR_0\":" << colorAcc;
+        if (uvs) json << ",\"TEXCOORD_0\":" << uvAcc;
         json << "},\"indices\":" << idxAcc << ",\"mode\":4";
+        if (material >= 0) json << ",\"material\":" << material;
         if (!mesh.layers.empty()) {
             json << ",\"targets\":[";
             for (size_t i = 0; i < targetAccs.size(); ++i) json << (i ? "," : "") << "{\"POSITION\":" << targetAccs[i] << "}";
@@ -184,10 +241,19 @@ bool saveGlb(const std::string& path, const std::vector<MeshObjectRef>& objects,
     for (size_t i = 0; i < objects.size(); ++i) json << (i ? "," : "") << i;
     json << "]}],\"nodes\":[" << nodes.str() << "],\"meshes\":[" << meshes.str() << "],\"accessors\":["
          << accessors.str() << "],\"bufferViews\":[";
-    for (size_t i = 0; i < views.size(); ++i)
-        json << (i ? "," : "") << "{\"buffer\":0,\"byteOffset\":" << views[i].offset << ",\"byteLength\":"
-             << views[i].length << ",\"target\":" << (views[i].indices ? 34963 : 34962) << "}";
-    json << "],\"buffers\":[{\"byteLength\":" << bin.data.size() << "}]}";
+    for (size_t i = 0; i < views.size(); ++i) {
+        json << (i ? "," : "") << "{\"buffer\":0,\"byteOffset\":" << views[i].offset << ",\"byteLength\":" << views[i].length;
+        if (views[i].target) json << ",\"target\":" << views[i].target;
+        json << "}";
+    }
+    json << "],\"buffers\":[{\"byteLength\":" << bin.data.size() << "}]";
+    if (textureCount) {
+        json << ",\"images\":[" << images.str() << "],\"samplers\":[{\"magFilter\":9729,\"minFilter\":9987,"
+             << "\"wrapS\":10497,\"wrapT\":10497}],\"textures\":[";
+        for (int i = 0; i < textureCount; ++i) json << (i ? "," : "") << "{\"sampler\":0,\"source\":" << i << "}";
+        json << "],\"materials\":[" << materials.str() << "]";
+    }
+    json << "}";
 
     return writeGlbFile(path, json.str(), bin.data, error);
 }
@@ -435,6 +501,7 @@ struct GltfObject {
     std::vector<std::string> targetNames;
     std::vector<float> targetWeights;
     bool targetsConsistent = true;
+    bool uvs = false; // some primitive had TEXCOORD_0
 };
 
 bool readGltf(const std::string& path, bool split, std::vector<MeshObject>& out, std::string& error,
@@ -605,10 +672,21 @@ bool readGltf(const std::string& path, bool split, std::vector<MeshObject>& out,
                 } else if (!m.colors.empty()) {
                     m.colors.resize(m.positions.size(), glm::vec3(1.0f));
                 }
+                // TEXCOORD_0 (glTF V runs down); Mesh::uvs holds one per corner either way until the end.
+                std::vector<float> uv;
+                const Json& uvAcc = prim["attributes"]["TEXCOORD_0"];
+                if (uvAcc.isNumber()) {
+                    if (!r.readFloats(int(uvAcc.asNumber()), 2, uv)) return false;
+                    o.uvs = true;
+                }
                 for (size_t t = 0; t + 2 < idx.size(); t += 3) {
                     if (idx[t] >= pos.size() || idx[t + 1] >= pos.size() || idx[t + 2] >= pos.size())
                         return r.fail("Index out of range");
                     m.triangles.push_back({baseIndex + idx[t], baseIndex + idx[t + 1], baseIndex + idx[t + 2]});
+                    for (size_t c = 0; c < 3; ++c) {
+                        const size_t i = idx[t + c];
+                        m.uvs.push_back(i * 2 + 1 < uv.size() ? glm::vec2(uv[i * 2], 1.0f - uv[i * 2 + 1]) : glm::vec2(0.0f));
+                    }
                 }
 
                 // Morph targets -> sculpt layers (only when every primitive has the same set).
@@ -667,6 +745,7 @@ bool readGltf(const std::string& path, bool split, std::vector<MeshObject>& out,
             for (size_t k = 0; k < o.targetDeltas.size(); ++k)
                 layers.push_back({o.targetNames[k], std::move(o.targetDeltas[k]), o.targetWeights[k]});
         if (!o.m.colors.empty()) o.m.colors.resize(o.m.positions.size(), glm::vec3(1.0f));
+        if (!o.uvs) o.m.uvs.clear();
         out.push_back({o.name, weldImported(o.m, layers)});
     }
     if (out.empty() && !(splatsOut && !splatsOut->empty())) {

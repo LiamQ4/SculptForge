@@ -17,6 +17,7 @@ struct RenderSettings {
     bool wireframe = false;
     glm::vec3 baseColor{0.80f, 0.55f, 0.45f}; // clay
     bool showPolypaint = true;   // vertex colours replace baseColor when the mesh has them
+    bool showTexture = true;     // with showPolypaint: a SubTool's painted texture (core/Texture.h) multiplies in
     bool showMask = true;        // masked areas render darker (ZBrush style)
     bool showPolygroups = false; // colour each polygroup (see polygroupColor)
     int matcap = 0;              // built-in MatCap material (core/Matcap.h), 0 = Sculpt; -1 = studio clay lighting
@@ -71,6 +72,9 @@ public:
     bool beginCapture(int width, int height, std::string& error);
     void endCapture(std::vector<uint8_t>& rgba); // top-down RGBA rows
 
+    // GL texture of the painted texture of SubTool `id` as last synced (0 if none), for UI previews (rows bottom-up).
+    GLuint paintTexture(uint32_t id) const;
+
     // Texture of built-in matcap `index` (sRGB RGBA8, rows bottom-up) for UI previews; 0 if none.
     GLuint matcapTexture(int index) const;
 
@@ -83,7 +87,7 @@ public:
 private:
     void drawSplats(const glm::mat4& view, const glm::mat4& proj, int fbWidth, int fbHeight, float opacity);
 
-    GLuint meshProgram_ = 0, wireProgram_ = 0, bgProgram_ = 0, splatProgram_ = 0;
+    GLuint meshProgram_ = 0, meshTexProgram_ = 0, wireProgram_ = 0, bgProgram_ = 0, splatProgram_ = 0;
     // Splats: per-splat data in a texture buffer, drawn as instanced quads in back-to-front order.
     GLuint splatVao_ = 0, splatData_ = 0, splatTexture_ = 0, splatOrder_ = 0;
     GLsizei splatCount_ = 0;
@@ -102,7 +106,11 @@ private:
         GLuint posBuffer = 0, nrmBuffer = 0, curvBuffer = 0, indexBuffer = 0;
         GLuint colorBuffer = 0, maskBuffer = 0;
         GLuint groupData = 0, groupTexture = 0; // polygroup id per drawn triangle (texture buffer)
-        bool hasColors = false, hasMask = false, hasGroups = false;
+        GLuint uvData = 0, uvTexture = 0; // per drawn triangle corner UVs (texture buffer), meshes with a texture
+        GLuint paintTexture = 0;          // the painted texture (sRGB, mipmapped)
+        uint64_t textureSerial = 0, textureRevision = 0;
+        int textureW = 0, textureH = 0;
+        bool hasColors = false, hasMask = false, hasGroups = false, hasUvs = false;
         bool fresh = true; // nothing uploaded yet
         std::vector<float> curvature;
         GLsizei indexCount = 0;
@@ -114,6 +122,7 @@ private:
     void sync(MeshSlot& s, Mesh& mesh);
     static void updateCurvature(MeshSlot& s, const Mesh& mesh, uint32_t begin, uint32_t end);
     void uploadFaces(MeshSlot& s, const Mesh& mesh);
+    void syncTexture(MeshSlot& s, Mesh& mesh);
     void drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings);
     std::vector<MeshSlot> slots_;
     struct DrawItem {
@@ -123,6 +132,7 @@ private:
     std::vector<DrawItem> drawList_;      // visible meshes, in scene order
     std::vector<glm::uvec3> visibleTris_; // scratch for uploadFaces
     std::vector<uint32_t> visibleGroups_;
+    std::vector<glm::vec2> visibleUvs_; // scratch for uploadFaces
     std::vector<uint32_t> wireLines_; // scratch for uploadFaces: wireframe edges of meshes with quads
     std::vector<GLuint> matcapTextures_; // one per built-in matcap (core/Matcap.h)
 };

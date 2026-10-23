@@ -51,6 +51,11 @@
 //                            N may be $NAME or $NAME*K for a value kept by `remember`
 //                            paint_layers (paint layers above Base), active_paint_layer (-1 = Base),
 //                            paint_mean_r / paint_mean_g / paint_mean_b (mean displayed polypaint, sRGB 0-255)
+//                            uvs (1 when the SubTool has UVs), texture_size (0 = no texture), paint_texture (1 when
+//                            painting goes into the texture), texture_layers, active_texture_layer,
+//                            texture_painted (texels of the texture composite that aren't white),
+//                            texture_mean_r / texture_mean_g / texture_mean_b (mean composite, sRGB 0-255),
+//                            auto_uv_running
 //   (mesh values are the active SubTool's)
 //   snapshot                 remember the active mesh's vertices (for the moved* values)
 //   remember VALUE NAME      keep VALUE's current value as $NAME
@@ -211,6 +216,24 @@ double Demo::query(const std::string& name, bool& known) const {
         double sum = 0.0;
         for (const glm::vec3& c : m.colors) sum += double(linearToSrgb(c)[k]);
         return 255.0 * sum / double(m.colors.size());
+    }
+    if (name == "uvs") return m.hasUvs() ? 1.0 : 0.0;
+    if (name == "texture_size") return hasTexture(m) ? double(m.texture->width) : 0.0;
+    if (name == "paint_texture") return paintsTexture(m) ? 1.0 : 0.0;
+    if (name == "texture_layers") return hasTexture(m) ? double(m.texture->layers.size()) : 0.0;
+    if (name == "active_texture_layer") return hasTexture(m) && !m.texture->layers.empty() ? double(m.texture->activeLayer) : -1.0;
+    if (name == "auto_uv_running") return app_.autoUv_ ? 1.0 : 0.0;
+    if (name == "texture_painted" || name.rfind("texture_mean_", 0) == 0) {
+        if (!hasTexture(m)) return 0.0;
+        const std::vector<uint8_t>& px = m.texture->pixels;
+        double painted = 0.0, sum[3] = {0, 0, 0};
+        for (size_t i = 0; i < px.size(); i += 4) {
+            if (px[i] != 255 || px[i + 1] != 255 || px[i + 2] != 255) painted += 1.0;
+            for (int k = 0; k < 3; ++k) sum[k] += px[i + size_t(k)];
+        }
+        if (name == "texture_painted") return painted;
+        const int k = name.back() == 'r' ? 0 : name.back() == 'g' ? 1 : 2;
+        return sum[k] / double(px.size() / 4);
     }
     if (name == "can_undo") return app_.doc_.undo.canUndo() ? 1.0 : 0.0;
     if (name == "dirty") return app_.doc_.dirty() ? 1.0 : 0.0;
@@ -662,7 +685,7 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
         steps_.push_back([this, line, timeout](float t) {
             const bool idle = !busy(app_.pendingBrush_) && !busy(app_.pendingGenerator_) && !busy(app_.pendingModels_) &&
                               !busy(app_.pendingUnreal_) && !busy(app_.pendingComfyCheck_) && !app_.galleryBusy() &&
-                              !app_.thumbs_.busy() && !app_.libraryScanner_.busy();
+                              !app_.thumbs_.busy() && !app_.libraryScanner_.busy() && !app_.autoUv_;
             if (idle) return true;
             SDL_Delay(10); // real work runs in real time
             if (t > timeout) fail(line, "still busy after " + number(timeout) + " s");

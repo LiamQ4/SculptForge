@@ -3,6 +3,7 @@
 #include "render/Renderer.h"
 
 #include "core/Matcap.h"
+#include "core/Texture.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -40,12 +41,61 @@ void main() {
 
 // Studio "clay" shading: wrapped key light, cool fill, rim, soft spec, and curvature-based
 // cavity/ridge shading so sculpted detail reads at a glance.
-const char* kMeshFS = R"(#version 330 core
+// Texture painting (core/Texture.h): the same shading with the per-corner UVs of each drawn triangle
+// fetched from a texture buffer by primitive id (the vertices are shared, the UVs are not). Only meshes
+// with a texture use it, so sculpting plain meshes keeps the geometry-shader-free path.
+const char* kMeshGS = R"(#version 330 core
+layout(triangles) in;
+layout(triangle_strip, max_vertices = 3) out;
+in vec3 vNormal[];
+in vec3 vPos[];
+in float vCurvature[];
+in vec3 vColor[];
+in float vMask[];
+uniform samplerBuffer uUvs; // RG32F, 3 corners per drawn triangle
+out FragData {
+    vec3 vNormal;
+    vec3 vPos;
+    float vCurvature;
+    vec3 vColor;
+    float vMask;
+    vec2 vUv;
+} o;
+void main() {
+    for (int i = 0; i < 3; ++i) {
+        o.vNormal = vNormal[i];
+        o.vPos = vPos[i];
+        o.vCurvature = vCurvature[i];
+        o.vColor = vColor[i];
+        o.vMask = vMask[i];
+        o.vUv = texelFetch(uUvs, gl_PrimitiveIDIn * 3 + i).xy;
+        gl_PrimitiveID = gl_PrimitiveIDIn;
+        gl_Position = gl_in[i].gl_Position;
+        EmitVertex();
+    }
+    EndPrimitive();
+}
+)";
+
+// Compiled twice: as is, and with TEXTURED defined (after kMeshGS, multiplying the painted texture in).
+const char* kMeshFS = R"(
+#ifdef TEXTURED
+in FragData {
+    vec3 vNormal;
+    vec3 vPos;
+    float vCurvature;
+    vec3 vColor;
+    float vMask;
+    vec2 vUv;
+};
+uniform sampler2D uPaintTex; // sRGB texture: samples come back linear
+#else
 in vec3 vNormal;
 in vec3 vPos;
 in float vCurvature;
 in vec3 vColor;
 in float vMask;
+#endif
 uniform vec3 uBaseColor;
 uniform int uPaint;      // 1: vertex colours replace the base colour
 uniform int uShowMask;   // 1: darken masked areas
@@ -78,6 +128,9 @@ void main() {
     if (uGroups == 1) albedo = tint = groupColor(texelFetch(uGroupIds, gl_PrimitiveID).r);
     else if (uGroups == 2) albedo = tint = groupColor(0u);
     else if (uPaint == 1) albedo = tint = vColor;
+#ifdef TEXTURED
+    if (uGroups == 0) albedo = tint = (uPaint == 1 ? vColor : vec3(1.0)) * texture(uPaintTex, vUv).rgb;
+#endif
     vec3 n = normalize(vNormal);
     if (!gl_FrontFacing) n = -n;
     vec3 v = normalize(-vPos);
@@ -200,9 +253,11 @@ void main() {
 
 constexpr GLenum kTexture2 = 0x84C2; // GL_TEXTURE2 (matcap)
 
-GLuint compile(GLenum type, const char* src, std::string& error) {
+GLuint compile(GLenum type, const char* src, std::string& error, const char* prefix = nullptr) {
     GLuint s = gl::CreateShader(type);
-    gl::ShaderSource(s, 1, &src, nullptr);
+    const char* sources[2] = {prefix, src};
+    if (prefix) gl::ShaderSource(s, 2, sources, nullptr);
+    else gl::ShaderSource(s, 1, &src, nullptr);
     gl::CompileShader(s);
     GLint ok = 0;
     gl::GetShaderiv(s, GL_COMPILE_STATUS, &ok);
@@ -216,20 +271,29 @@ GLuint compile(GLenum type, const char* src, std::string& error) {
     return s;
 }
 
-GLuint link(const char* vs, const char* fs, std::string& error) {
+// `fsPrefix` goes before the fragment source (the #version line and defines); `gs` is an optional geometry shader.
+GLuint link(const char* vs, const char* fs, std::string& error, const char* fsPrefix = nullptr, const char* gs = nullptr) {
     GLuint v = compile(GL_VERTEX_SHADER, vs, error);
     if (!v) return 0;
-    GLuint f = compile(GL_FRAGMENT_SHADER, fs, error);
+    GLuint f = compile(GL_FRAGMENT_SHADER, fs, error, fsPrefix);
     if (!f) {
         gl::DeleteShader(v);
+        return 0;
+    }
+    GLuint g = gs ? compile(GL_GEOMETRY_SHADER, gs, error) : 0;
+    if (gs && !g) {
+        gl::DeleteShader(v);
+        gl::DeleteShader(f);
         return 0;
     }
     GLuint p = gl::CreateProgram();
     gl::AttachShader(p, v);
     gl::AttachShader(p, f);
+    if (g) gl::AttachShader(p, g);
     gl::LinkProgram(p);
     gl::DeleteShader(v);
     gl::DeleteShader(f);
+    if (g) gl::DeleteShader(g);
     GLint ok = 0;
     gl::GetProgramiv(p, GL_LINK_STATUS, &ok);
     if (!ok) {
@@ -258,8 +322,10 @@ glm::vec3 polygroupColor(uint32_t id) {
 }
 
 bool Renderer::init(std::string& error) {
-    meshProgram_ = link(kMeshVS, kMeshFS, error);
+    meshProgram_ = link(kMeshVS, kMeshFS, error, "#version 330 core\n");
     if (!meshProgram_) return false;
+    meshTexProgram_ = link(kMeshVS, kMeshFS, error, "#version 330 core\n#define TEXTURED\n", kMeshGS);
+    if (!meshTexProgram_) return false;
     wireProgram_ = link(kMeshVS, kWireFS, error);
     if (!wireProgram_) return false;
     bgProgram_ = link(kBgVS, kBgFS, error);
@@ -316,6 +382,8 @@ Renderer::MeshSlot& Renderer::slot(uint32_t id) {
     gl::GenBuffers(1, &s.maskBuffer);
     gl::GenBuffers(1, &s.groupData);
     gl::GenTextures(1, &s.groupTexture);
+    gl::GenBuffers(1, &s.uvData);
+    gl::GenTextures(1, &s.uvTexture);
     gl::BindVertexArray(s.vao);
     gl::BindBuffer(GL_ARRAY_BUFFER, s.posBuffer);
     gl::EnableVertexAttribArray(0);
@@ -346,6 +414,9 @@ void Renderer::freeSlot(MeshSlot& s) {
     gl::DeleteBuffers(1, &s.maskBuffer);
     gl::DeleteBuffers(1, &s.groupData);
     gl::DeleteTextures(1, &s.groupTexture);
+    gl::DeleteBuffers(1, &s.uvData);
+    gl::DeleteTextures(1, &s.uvTexture);
+    if (s.paintTexture) gl::DeleteTextures(1, &s.paintTexture);
     gl::DeleteVertexArrays(1, &s.vao);
     s = MeshSlot();
 }
@@ -358,6 +429,7 @@ void Renderer::shutdown() {
     matcapTextures_.clear();
     gl::DeleteVertexArrays(1, &emptyVao_);
     gl::DeleteProgram(meshProgram_);
+    gl::DeleteProgram(meshTexProgram_);
     gl::DeleteProgram(wireProgram_);
     gl::DeleteProgram(bgProgram_);
     gl::DeleteProgram(splatProgram_);
@@ -527,6 +599,29 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh) {
         gl::BindTexture(GL_TEXTURE_BUFFER, 0);
         gl::BindBuffer(GL_TEXTURE_BUFFER, 0);
     }
+    // Texture painting: the UVs of every drawn triangle's corners, looked up by gl_PrimitiveID.
+    const bool textured = hasTexture(mesh) && drawn * 3 <= size_t(std::max(maxTexels, 0));
+    if (textured) {
+        visibleUvs_.clear();
+        if (hidden) {
+            visibleUvs_.reserve(drawn * 3);
+            for (size_t t = 0; t < nt; ++t)
+                if (!mesh.hidden[t]) visibleUvs_.insert(visibleUvs_.end(), {mesh.uvs[t * 3], mesh.uvs[t * 3 + 1], mesh.uvs[t * 3 + 2]});
+        }
+        const std::vector<glm::vec2>& uvs = hidden ? visibleUvs_ : mesh.uvs;
+        gl::BindBuffer(GL_TEXTURE_BUFFER, s.uvData);
+        gl::BufferData(GL_TEXTURE_BUFFER, GLsizeiptr(uvs.size() * sizeof(glm::vec2)), uvs.data(), GL_STATIC_DRAW);
+        gl::BindTexture(GL_TEXTURE_BUFFER, s.uvTexture);
+        gl::TexBuffer(GL_TEXTURE_BUFFER, GL_RG32F, s.uvData);
+        gl::BindTexture(GL_TEXTURE_BUFFER, 0);
+        gl::BindBuffer(GL_TEXTURE_BUFFER, 0);
+    } else if (s.hasUvs) {
+        gl::BindBuffer(GL_TEXTURE_BUFFER, s.uvData);
+        gl::BufferData(GL_TEXTURE_BUFFER, 0, nullptr, GL_STATIC_DRAW);
+        gl::BindBuffer(GL_TEXTURE_BUFFER, 0);
+    }
+    s.hasUvs = textured;
+    if (visibleUvs_.capacity() > (size_t(1) << 16)) std::vector<glm::vec2>().swap(visibleUvs_);
     // Scratch only: don't keep a big mesh's copy around.
     if (visibleTris_.capacity() > (size_t(1) << 16)) std::vector<glm::uvec3>().swap(visibleTris_);
     if (visibleGroups_.capacity() > (size_t(1) << 16)) std::vector<uint32_t>().swap(visibleGroups_);
@@ -579,7 +674,8 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh) {
         gl::BindBuffer(GL_ARRAY_BUFFER, s.curvBuffer);
         gl::BufferSubData(GL_ARRAY_BUFFER, off1, size1, s.curvature.data() + mesh.dirtyBegin);
     }
-    if (!full && mesh.facesDirty) uploadFaces(s, mesh);
+    if (!full && (mesh.facesDirty || hasTexture(mesh) != s.hasUvs)) uploadFaces(s, mesh);
+    syncTexture(s, mesh);
 
     // Optional per-vertex attributes: a full upload when they appear (or the
     // mesh changed), the dirty range otherwise, and a disabled array when absent.
@@ -608,6 +704,52 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh) {
     gl::BindBuffer(GL_ARRAY_BUFFER, 0);
     s.fresh = false;
     mesh.clearDirty();
+}
+
+// The painted texture (core/Texture.h): a full upload when it is new or replaced, then only the rectangle
+// painted since this slot's last upload (PaintTexture::revision / dirtyFrom), with fresh mipmaps.
+void Renderer::syncTexture(MeshSlot& s, Mesh& mesh) {
+    PaintTexture* tex = s.hasUvs ? mesh.texture.get() : nullptr;
+    if (!tex) {
+        if (s.paintTexture) gl::DeleteTextures(1, &s.paintTexture);
+        s.paintTexture = 0;
+        s.textureSerial = 0;
+        return;
+    }
+    const bool fresh = !s.paintTexture || s.textureSerial != tex->serial || s.textureW != tex->width || s.textureH != tex->height;
+    if (!fresh && s.textureRevision == tex->revision) return;
+    gl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (fresh) {
+        if (!s.paintTexture) gl::GenTextures(1, &s.paintTexture);
+        gl::BindTexture(GL_TEXTURE_2D, s.paintTexture);
+        gl::TexImage2D(GL_TEXTURE_2D, 0, GLint(GL_SRGB8_ALPHA8), tex->width, tex->height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                       tex->pixels.data());
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(GL_LINEAR_MIPMAP_LINEAR));
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(GL_LINEAR));
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE));
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE));
+        s.textureSerial = tex->serial;
+        s.textureW = tex->width;
+        s.textureH = tex->height;
+    } else {
+        gl::BindTexture(GL_TEXTURE_2D, s.paintTexture);
+        const bool rect = s.textureRevision >= tex->dirtyFrom && tex->dirtyMin.x < tex->dirtyMax.x && tex->dirtyMin.y < tex->dirtyMax.y;
+        const glm::ivec2 lo = rect ? tex->dirtyMin : glm::ivec2(0), hi = rect ? tex->dirtyMax : glm::ivec2(tex->width, tex->height);
+        gl::PixelStorei(GL_UNPACK_ROW_LENGTH, tex->width);
+        gl::TexSubImage2D(GL_TEXTURE_2D, 0, lo.x, lo.y, hi.x - lo.x, hi.y - lo.y, GL_RGBA, GL_UNSIGNED_BYTE,
+                          tex->pixels.data() + (size_t(lo.y) * size_t(tex->width) + size_t(lo.x)) * 4);
+        gl::PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    }
+    gl::GenerateMipmap(GL_TEXTURE_2D);
+    gl::BindTexture(GL_TEXTURE_2D, 0);
+    s.textureRevision = tex->revision;
+    tex->clearDirty();
+}
+
+GLuint Renderer::paintTexture(uint32_t id) const {
+    for (const auto& s : slots_)
+        if (s.id == id) return s.paintTexture;
+    return 0;
 }
 
 bool Renderer::renderToImage(const Camera& camera, int width, int height, const RenderSettings& settings,
@@ -754,14 +896,18 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
         return nullptr;
     };
 
-    setMatrices(meshProgram_);
-    gl::Uniform3fv(gl::GetUniformLocation(meshProgram_, "uBaseColor"), 1, glm::value_ptr(settings.baseColor));
-    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uGroupIds"), 1);
     const GLuint matcap = matcapTexture(settings.matcap);
-    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uMatcap"), matcap ? 1 : 0);
-    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uMatcapTex"), 2);
     const MatcapCavity cavity = matcapCavity(settings.matcap);
-    gl::Uniform2f(gl::GetUniformLocation(meshProgram_, "uMatcapCavity"), cavity.crease, cavity.ridge);
+    for (GLuint prog : {meshTexProgram_, meshProgram_}) { // the plain program stays bound
+        setMatrices(prog);
+        gl::Uniform3fv(gl::GetUniformLocation(prog, "uBaseColor"), 1, glm::value_ptr(settings.baseColor));
+        gl::Uniform1i(gl::GetUniformLocation(prog, "uGroupIds"), 1);
+        gl::Uniform1i(gl::GetUniformLocation(prog, "uMatcap"), matcap ? 1 : 0);
+        gl::Uniform1i(gl::GetUniformLocation(prog, "uMatcapTex"), 2);
+        gl::Uniform2f(gl::GetUniformLocation(prog, "uMatcapCavity"), cavity.crease, cavity.ridge);
+        gl::Uniform1i(gl::GetUniformLocation(prog, "uUvs"), 3);
+        gl::Uniform1i(gl::GetUniformLocation(prog, "uPaintTex"), 4);
+    }
     gl::ActiveTexture(kTexture2);
     gl::BindTexture(GL_TEXTURE_2D, matcap);
     gl::ActiveTexture(GL_TEXTURE0);
@@ -770,6 +916,10 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
     for (const DrawItem& item : drawList_)
         if (const MeshSlot* s = findSlot(item.id); s && s->indexCount > 0) drawSlot(*s, item.active, settings);
     gl::Disable(GL_POLYGON_OFFSET_FILL);
+    gl::ActiveTexture(GL_TEXTURE3);
+    gl::BindTexture(GL_TEXTURE_BUFFER, 0);
+    gl::ActiveTexture(GL_TEXTURE4);
+    gl::BindTexture(GL_TEXTURE_2D, 0);
     gl::ActiveTexture(GL_TEXTURE1);
     gl::BindTexture(GL_TEXTURE_BUFFER, 0);
     gl::ActiveTexture(kTexture2);
@@ -804,11 +954,21 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
 // One mesh with the mesh program bound. Mask and polygroup colours are for the
 // SubTool being edited; polypaint shows on all of them.
 void Renderer::drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings) {
-    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uPaint"), settings.showPolypaint && s.hasColors ? 1 : 0);
-    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uShowMask"), active && settings.showMask && s.hasMask ? 1 : 0);
-    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uGroups"),
-                  active && settings.showPolygroups ? (s.hasGroups ? 1 : 2) : 0);
-    gl::Uniform1i(gl::GetUniformLocation(meshProgram_, "uDim"), !active && settings.dimInactive ? 1 : 0);
+    // A painted texture shows through the textured program (polypaint still multiplies it).
+    const bool textured = s.hasUvs && s.paintTexture && settings.showPolypaint && settings.showTexture;
+    const GLuint prog = textured ? meshTexProgram_ : meshProgram_;
+    gl::UseProgram(prog);
+    if (textured) {
+        gl::ActiveTexture(GL_TEXTURE3);
+        gl::BindTexture(GL_TEXTURE_BUFFER, s.uvTexture);
+        gl::ActiveTexture(GL_TEXTURE4);
+        gl::BindTexture(GL_TEXTURE_2D, s.paintTexture);
+        gl::ActiveTexture(GL_TEXTURE0);
+    }
+    gl::Uniform1i(gl::GetUniformLocation(prog, "uPaint"), settings.showPolypaint && s.hasColors ? 1 : 0);
+    gl::Uniform1i(gl::GetUniformLocation(prog, "uShowMask"), active && settings.showMask && s.hasMask ? 1 : 0);
+    gl::Uniform1i(gl::GetUniformLocation(prog, "uGroups"), active && settings.showPolygroups ? (s.hasGroups ? 1 : 2) : 0);
+    gl::Uniform1i(gl::GetUniformLocation(prog, "uDim"), !active && settings.dimInactive ? 1 : 0);
     gl::BindVertexArray(s.vao);
     // Constant values for the attribute arrays that are disabled.
     if (!s.hasColors) gl::VertexAttrib3f(3, 1.0f, 1.0f, 1.0f);

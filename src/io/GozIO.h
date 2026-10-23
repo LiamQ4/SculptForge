@@ -32,6 +32,7 @@ struct GozInfo {
 
 struct GozWriteOptions {
     bool quads = true; // write quad pairs (Mesh::quadPartners) back as quads
+    std::string diffuseMap; // texture path recorded in the file (saveGoz fills it for a textured mesh)
 };
 
 // Parses an in-memory .GoZ file. Positions are converted from ZBrush's
@@ -39,7 +40,8 @@ struct GozWriteOptions {
 bool parseGoz(std::span<const uint8_t> data, Mesh& out, std::string& error, GozInfo* info = nullptr);
 std::vector<uint8_t> writeGoz(const Mesh& mesh, const std::string& name, const GozWriteOptions& options = {});
 
-// Paths are UTF-8.
+// Paths are UTF-8. A mesh with a texture (core/Texture.h) also gets its PNG
+// beside the file ("<stem>_color.png"), named as the diffuse map in the file.
 bool loadGoz(const std::string& path, Mesh& out, std::string& error, GozInfo* info = nullptr);
 bool saveGoz(const std::string& path, const Mesh& mesh, const std::string& name, std::string& error,
              const GozWriteOptions& options = {});

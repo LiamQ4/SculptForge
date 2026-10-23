@@ -5,7 +5,9 @@
 // (no Autodesk SDK, so it can ship under the GPL). FBX is still what Unreal
 // Engine imports most completely:
 //  - the sculpt as a polygon mesh (quads where Mesh::quadPartners keeps them,
-//    else triangles) with per-corner normals, smoothing and a material slot
+//    else triangles) with per-corner normals and UVs, smoothing and a material slot
+//  - a SubTool's texture (core/Texture.h, taken from LOD0) as a PNG beside the
+//    file, read by the object's own material (Texture/Video on DiffuseColor)
 //  - sculpt layers as blend shapes (Unreal: morph targets on a skeletal mesh)
 //  - a LOD chain as an FBX LOD group (Unreal: LOD0..N of one static mesh)
 // Import uses ufbx (third_party/ufbx).
@@ -47,7 +49,8 @@ bool saveFbx(const std::string& path, const std::vector<FbxObject>& objects, con
 // Reads .fbx (binary or ASCII, any version) via ufbx: all visible meshes are
 // merged in world space (Y-up, 1 unit = 1 m, matching saveFbx with scale 100),
 // only LOD0 of LOD groups is taken, and blend shapes become sculpt layers.
-// Polygons are triangulated; quads stay paired as Mesh::quadPartners.
+// Polygons are triangulated; quads stay paired as Mesh::quadPartners. The
+// first UV set is read into Mesh::uvs.
 bool loadFbx(const std::string& path, Mesh& out, std::string& error);
 // The same, but each visible mesh node is its own object, named after the
 // node (or after its LOD group, for a LOD0 mesh).

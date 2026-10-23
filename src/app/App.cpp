@@ -339,6 +339,7 @@ int App::runUiTest(int w, int h, int fps) {
         pollBrushRequest();
         pollUnreal();
         pollGenerator();
+        pollAutoUv();
         updateCameraAspect();
 
         Demo::beginFrame();
@@ -490,6 +491,7 @@ int App::runRecording() {
         animateLayers(dt);
         pollBrushRequest();
         pollUnreal();
+        pollAutoUv();
         updateCameraAspect();
 
         Demo::beginFrame();
@@ -553,6 +555,7 @@ int App::run() {
         pollGenerator();
         pollUnreal();
         pollGoz();
+        pollAutoUv();
 
         int fbW = 0, fbH = 0, winW = 0, winH = 0;
         SDL_GetWindowSizeInPixels(window_, &fbW, &fbH);

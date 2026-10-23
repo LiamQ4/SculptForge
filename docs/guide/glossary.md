@@ -53,9 +53,10 @@ for what is planned.
 | Store Config | **Store Config**, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> (**Preferences > Config**) |
 | Stroke (Dots, DragRect, Spray) | **Stroke** types Dots, DragRect, Spray, LazyMouse |
 | SubTool | **SubTool**: same idea, <kbd>Alt</kbd>+click to select. See [SubTools](subtools.md) |
-| Texture palette | Not yet: there is no texture painting or texture slot |
+| Texture Map, New From Polypaint | **Tool > Texture Map**: **New Texture** (1K-8K) and paint straight into it, or **Polypaint > Texture**. See [Texture painting](texture-painting.md) |
+| Texture palette | Not yet as a palette of texture images. **Tool > Texture Map > Import Texture** loads an image onto the UVs |
 | Transpose, Gizmo 3D | Not yet. Use the **Move** brush, or move the camera with the right-shelf buttons |
-| UV Master | Not yet. UVs that come in with a GoZ model are kept (and saved in projects) |
+| UV Master (Unwrap) | **Tool > Texture Map > Auto UV** (`uv_auto`). UVs that come in with a model are kept. Seams and UV editing not yet. See [Texture painting](texture-painting.md) |
 | Zadd / Zsub | **Zadd** / **Zsub** on the top shelf; <kbd>Alt</kbd> flips for one stroke |
 | ZPlugin | No in-app plugin system yet. Automate with the Python module, `sculptforge-cli` and MCP ([Scripting](scripting.md)) |
 | ZRemesher | Not yet (quad retopology is on the roadmap) |
@@ -83,6 +84,10 @@ for what is planned.
 | Send to Unreal | Export and import a model into a running Unreal Editor in one step (<kbd>Ctrl</kbd>+<kbd>U</kbd>) |
 | Shelves, palettes, trays | The interface around the canvas: shelves hold the most-used controls, palettes hold everything, trays hold pinned palettes. See [The interface](interface.md) |
 | Studio brush folder | A shared, read-only brush folder for a team (`SCULPTFORGE_BRUSH_PATH`). See [For studios](studios.md) |
+| Paint target (Vertex / Texture) | Where painting goes on a SubTool that has a texture: its vertices (polypaint) or its texture. Top shelf, next to **Rgb**. See [Texture painting](texture-painting.md#vertex-or-texture) |
+| Padding (gutter) | The few texels around each UV island that texture painting also fills, so seams don't show. See [Texture painting](texture-painting.md) |
+| Texel | One pixel of a texture. Texture painting paints texels; their 3D position on the model decides the brush falloff |
+| UV island | A piece of the surface flattened into the texture square. Auto UV cuts the model into islands along seams |
 
 ## See also
 

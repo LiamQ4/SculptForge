@@ -229,6 +229,10 @@ Mesh loopSubdivide(const Mesh& src) {
                     if (src.triangles[u][k] == t[c]) out.pairQuad(ti * 4 + uint32_t(c), u * 4 + k);
         }
     }
+    if (uvs) { // split UVs keep the painted texture valid
+        out.texture = src.texture;
+        out.paintToTexture = src.paintToTexture;
+    }
     finalize(out);
     return out;
 }

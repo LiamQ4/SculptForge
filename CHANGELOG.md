@@ -6,6 +6,30 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### Texture painting on UV maps
+- Paint into a texture on the model's UVs instead of its vertices, so the colour detail comes from the texture
+  (1K, 2K, 4K or 8K), not from the mesh density (Tool > Texture Map > New Texture, `texture_create`). The Paint
+  brush, Rgb sculpting, fills, cavity paint, colour picking (C), mask, hidden faces, symmetry and pen pressure
+  work as for polypaint; texture strokes never paint through to the far side. A few texels of padding around
+  every UV island keep seams invisible.
+- Vertex / Texture toggle on the top shelf (and in the Color, Paint Layers and Texture Map palettes) chooses
+  where paint goes per SubTool (`paint_target`). The viewport multiplies the texture with the polypaint over
+  the material; Show texture hides it.
+- The Paint Layers palette works on the texture's own layer stack: blend modes, opacity, visibility, lock,
+  duplicate, merge down, flatten, clear and fill, composited only where something changed.
+- One undo step per stroke, storing just the 64x64 tiles it touched (counted in the undo memory budget).
+- Interactive at 4K on a 1.3M-triangle mesh: a dab visits only the triangles under the brush and uploads only
+  the changed rectangle of the texture.
+- Auto UV (Tool > Texture Map, `uv_auto`): automatic UV unwrapping with xatlas (MIT, vendored in
+  third_party/xatlas), running in the background with progress. Show UVs draws the texture with the UV layout.
+- Polypaint > Texture and Texture > Polypaint (`texture_from_polypaint`, `polypaint_from_texture`), Import and
+  Export Texture (PNG; `texture_import`, `texture_export`), Delete Texture (`texture_delete`).
+- Projects save textures and their layers (project format 3; version 1 and 2 projects still open, and older
+  SculptForge versions refuse format 3 files instead of dropping the paint).
+- Exports write the texture next to the model: OBJ with a `.mtl` (`map_Kd`), glTF/GLB with an embedded base
+  colour texture, USD with a preview material, FBX and GoZ with the PNG beside the file.
+- Subdivide, decimate, split and duplicate keep the texture with the UVs.
+
 ## [0.4.0] - 2026-10-22
 
 Shaped by feedback from a working ZBrush modeler and a survey of ZBrush and Mudbox forums.

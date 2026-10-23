@@ -6,6 +6,8 @@
 // paths.py); docs/goz.md describes the layout.
 #include "io/GozIO.h"
 
+#include "io/TextureExport.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -438,6 +440,10 @@ std::vector<uint8_t> writeGoz(const Mesh& mesh, const std::string& name, const G
         w.section(kTagPolygroups, faceGroups.size() * 2, faceGroups.size());
         for (uint16_t g : faceGroups) w.u16(g);
     }
+    if (!options.diffuseMap.empty()) { // as GoB writes texture paths: count 1, then the path
+        w.section(kTagDiffuseMap, options.diffuseMap.size(), 1);
+        w.raw(options.diffuseMap.data(), options.diffuseMap.size());
+    }
     // End: 16 zero bytes (a zero tag).
     for (int i = 0; i < 16; ++i) w.u8(0);
     return std::move(w.bytes);
@@ -465,7 +471,17 @@ bool saveGoz(const std::string& path, const Mesh& mesh, const std::string& name,
         error = "Nothing to export: the mesh is empty";
         return false;
     }
-    std::vector<uint8_t> bytes = writeGoz(mesh, name, options);
+    GozWriteOptions o = options;
+    if (o.diffuseMap.empty() && hasTexture(mesh)) {
+        // The texture as <stem>_color.png beside the file, recorded as the diffuse map.
+        std::string png;
+        const auto refs = std::vector<MeshObjectRef>{{name, &mesh}};
+        if (!writeTextureBeside(path, textureFileNames(path, refs)[0], mesh, png, error)) return false;
+        std::error_code ec;
+        const fs::path absolute = fs::absolute(utf8Path(png), ec);
+        o.diffuseMap = ec ? png : genericUtf8(absolute);
+    }
+    std::vector<uint8_t> bytes = writeGoz(mesh, name, o);
     std::ofstream f(utf8Path(path), std::ios::binary);
     if (!f || !f.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()))) {
         error = "Cannot write " + path;

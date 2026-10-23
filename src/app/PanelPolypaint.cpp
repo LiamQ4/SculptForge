@@ -44,12 +44,22 @@ const BrushRecipe* App::strokeRecipe() const {
 }
 
 void App::paintAt(const DabParams& p) {
-    paintDab(doc_.sculptor, doc_.mesh, doc_.bvh, p, doc_.paintColor, symmetry_);
+    if (texturePainter_.active()) texturePainter_.dab(doc_.mesh, doc_.bvh, p, doc_.paintColor, symmetry_);
+    else if (!paintsTexture(doc_.mesh)) paintDab(doc_.sculptor, doc_.mesh, doc_.bvh, p, doc_.paintColor, symmetry_);
 }
 
 void App::beginPaintStroke() {
     paintSnapshot_.reset();
     const Mesh& m = doc_.mesh;
+    if (strokePaint_ && paintsTexture(m)) { // texture painting: tiles go into the stroke's undo step
+        if (!texturePainter_.begin(doc_.mesh)) {
+            const PaintTexture& t = *m.texture;
+            if (t.activeLayer >= 0 && t.activeLayer < int(t.layers.size()))
+                status_ = "Texture layer '" + t.layers[size_t(t.activeLayer)].name + "' is " +
+                          (t.layers[size_t(t.activeLayer)].locked ? "locked" : "hidden");
+        }
+        return;
+    }
     if (strokePaint_ && !m.paintLayers.empty() && m.activePaintLayer >= 0 &&
         m.activePaintLayer < int(m.paintLayers.size()) && !paintLayerEditable(m, m.activePaintLayer)) {
         const PaintLayer& l = m.paintLayers[size_t(m.activePaintLayer)];
@@ -59,6 +69,7 @@ void App::beginPaintStroke() {
 }
 
 void App::finishPaintStroke(UndoRecord& record) {
+    if (texturePainter_.active()) texturePainter_.end(record);
     if (!paintSnapshot_) return;
     UndoRecord snapshot;
     snapshot.label = std::move(record.label);
@@ -70,6 +81,11 @@ void App::pickColorUnderCursor() {
     doc_.syncBvh();
     RayHit hit;
     if (!pick(mouseX_, mouseY_, hit)) return;
+    if (paintsTexture(doc_.mesh)) {
+        doc_.paintColor = sampleTextureAt(doc_.mesh, hit.triangle, hit.position);
+        status_ = "Paint colour " + colorToHex(doc_.paintColor) + " (from the texture)";
+        return;
+    }
     if (!doc_.mesh.hasColors()) {
         status_ = "The mesh has no polypaint to pick from";
         return;
@@ -114,6 +130,18 @@ void App::drawPalette_Color() {
     {
         const Mesh& m = doc_.mesh;
         const bool layered = !m.paintLayers.empty() && m.activePaintLayer >= 0 && m.activePaintLayer < int(m.paintLayers.size());
+        if (hasTexture(m)) {
+            // Where paint goes, when the SubTool has a texture (Tool > Texture Map).
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("Paint into");
+            ImGui::SameLine();
+            ui::Segmented(*this, {"draw.paint_vertex", "draw.paint_texture"});
+        }
+        if (paintsTexture(m)) {
+            const PaintTexture& t = *m.texture;
+            const bool texLayered = t.activeLayer >= 0 && t.activeLayer < int(t.layers.size());
+            ImGui::TextDisabled("Painting on: texture, %s", texLayered ? t.layers[size_t(t.activeLayer)].name.c_str() : "Base");
+        } else
         ImGui::TextDisabled("Painting on: %s", layered ? m.paintLayers[size_t(m.activePaintLayer)].name.c_str() : "Base");
         ui::HelpText("Paint layer", nullptr,
                      "The paint layer the Paint brush and fills write into. Add and arrange layers in Tool > Paint Layers.",
@@ -132,11 +160,16 @@ void App::drawPalette_Color() {
     if (ImGui::Button("Cavity", ImVec2(half, 0))) runCommand("paint_from_cavity");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Darken creases and cavities (respects the mask)");
     ImGui::SameLine();
-    ImGui::BeginDisabled(!doc_.mesh.hasColors());
+    ImGui::BeginDisabled(!doc_.mesh.hasColors() && !paintsTexture(doc_.mesh));
     if (ImGui::Button("Clear", ImVec2(half, 0))) runCommand("paint_clear");
     ImGui::EndDisabled();
     ui::HelpText("Clear", nullptr, "Remove all polypaint from the SubTool, paint layers included (undoable).", "Color");
     ImGui::Checkbox("Show polypaint", &renderSettings_.showPolypaint);
+    if (hasTexture(doc_.mesh)) {
+        ImGui::SameLine();
+        ImGui::Checkbox("Texture##show", &renderSettings_.showTexture);
+        ui::HelpAction(*this, "view.texture");
+    }
 }
 
 // Material palette: the material grid and the studio material's colour.

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "io/UsdIO.h"
 
+#include "io/TextureExport.h"
 #include "io/Zip.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -58,6 +59,13 @@ struct Writer {
         num(v.y);
         s += ", ";
         num(v.z);
+        s += ')';
+    }
+    void vec2(const glm::vec2& v) {
+        s += '(';
+        num(v.x);
+        s += ", ";
+        num(v.y);
         s += ')';
     }
     void quat(const glm::quat& q) { // USD text order is (real, i, j, k)
@@ -131,16 +139,21 @@ void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::
     w.line("{");
     ++w.depth;
     writeExtent(w, base.bounds());
-    // Quads where the mesh keeps them (Mesh::quadPartners), else triangles.
+    // Quads where the mesh keeps them (Mesh::quadPartners), else triangles; UVs per face corner in the same
+    // order (a quad split by a UV seam along its diagonal is written as two triangles).
+    const bool uvs = hasCornerUvs(mesh);
     std::vector<glm::uvec4> faces;
     std::vector<int> counts;
+    std::vector<glm::vec2> st;
     faces.reserve(mesh.triangleCount());
     for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
         glm::uvec4 f;
-        const int corners = mesh.exportFace(t, f);
+        glm::vec2 fuv[4];
+        const int corners = exportFaceUv(mesh, t, f, fuv);
         if (corners == 0) continue;
         faces.push_back(f);
         counts.push_back(corners);
+        if (uvs) st.insert(st.end(), fuv, fuv + corners);
     }
     w.array("int[] faceVertexCounts", counts, [&](int n) { w.s += std::to_string(n); });
     size_t face = 0;
@@ -155,6 +168,13 @@ void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::
     w.line("    interpolation = \"vertex\"");
     w.line(")");
     w.array("point3f[] points", base.positions, [&](const glm::vec3& p) { w.vec3(p); });
+    if (uvs) {
+        w.array("texCoord2f[] primvars:st", st, [&](const glm::vec2& uv) { w.vec2(uv); });
+        w.s.pop_back();
+        w.s += " (\n";
+        w.line("    interpolation = \"faceVarying\"");
+        w.line(")");
+    }
     if (mesh.hasColors() && mesh.colors.size() == mesh.vertexCount()) {
         // Polypaint (linear, as USD expects); the material reads it through a primvar reader.
         w.array("color3f[] primvars:displayColor", mesh.colors, [&](const glm::vec3& c) { w.vec3(c); });
@@ -260,12 +280,50 @@ void writeMaterial(Writer& w, const std::string& path, const std::string& name, 
     w.close();
 }
 
-std::string buildUsda(const std::vector<MeshObjectRef>& meshes, const SplatCloud* splats, const std::string& name) {
+// A UsdPreviewSurface whose colour is the texture `file` (an asset path) on the "st" primvar.
+void writeTextureMaterial(Writer& w, const std::string& path, const std::string& name, const std::string& file) {
+    w.open("def Material " + quoted(name));
+    w.line("token outputs:surface.connect = <" + path + "/PreviewSurface.outputs:surface>");
+    w.s += '\n';
+    w.open("def Shader \"PreviewSurface\"");
+    w.line("uniform token info:id = \"UsdPreviewSurface\"");
+    w.line("color3f inputs:diffuseColor.connect = <" + path + "/Texture.outputs:rgb>");
+    w.line("float inputs:metallic = 0");
+    w.line("float inputs:roughness = 0.65");
+    w.line("token outputs:surface");
+    w.close();
+    w.s += '\n';
+    w.open("def Shader \"Texture\"");
+    w.line("uniform token info:id = \"UsdUVTexture\"");
+    w.line("asset inputs:file = @" + file + "@");
+    w.line("token inputs:sourceColorSpace = \"sRGB\"");
+    w.line("float2 inputs:st.connect = <" + path + "/TexCoords.outputs:result>");
+    w.line("token inputs:wrapS = \"repeat\"");
+    w.line("token inputs:wrapT = \"repeat\"");
+    w.line("float3 outputs:rgb");
+    w.close();
+    w.s += '\n';
+    w.open("def Shader \"TexCoords\"");
+    w.line("uniform token info:id = \"UsdPrimvarReader_float2\"");
+    w.line("string inputs:varname = \"st\"");
+    w.line("float2 outputs:result");
+    w.close();
+    w.close();
+}
+
+// `textures`: per mesh, the PNG asset path its material reads ("" = no texture).
+std::string buildUsda(const std::vector<MeshObjectRef>& meshes, const std::vector<std::string>& textures,
+                      const SplatCloud* splats, const std::string& name) {
     const std::string root = usdIdentifier(name.empty() ? "Sculpt" : name);
-    // Polypainted meshes bind a material that reads their colours; with a mix, plain ones bind "Clay".
-    size_t painted = 0;
-    for (const auto& m : meshes) painted += m.mesh->hasColors();
-    const bool mixed = painted && painted < meshes.size();
+    // Textured meshes bind a material of their own. Of the others, polypainted ones bind a material that
+    // reads their colours; with a mix, plain ones bind "Clay".
+    size_t painted = 0, plain = 0;
+    for (size_t i = 0; i < meshes.size(); ++i) {
+        if (!textures[i].empty()) continue;
+        ++plain;
+        painted += meshes[i].mesh->hasColors();
+    }
+    const bool mixed = painted && painted < plain;
     const std::string clay = "/" + root + "/Materials/Clay", paintedClay = "/" + root + "/Materials/PaintedClay";
     Writer w;
     w.line("#usda 1.0");
@@ -284,7 +342,9 @@ std::string buildUsda(const std::vector<MeshObjectRef>& meshes, const SplatCloud
     if (!meshes.empty()) {
         // One prim per object: "Sculpt" for a single one, else valid unique names from the objects.
         std::set<std::string> used = {"Materials", "Splats"};
-        for (const auto& m : meshes) {
+        std::vector<std::pair<std::string, std::string>> textured; // material name, texture
+        for (size_t i = 0; i < meshes.size(); ++i) {
+            const MeshObjectRef& m = meshes[i];
             std::string prim = "Sculpt";
             if (meshes.size() > 1) {
                 const std::string base = usdIdentifier(m.name.empty() ? "Mesh" : m.name);
@@ -292,14 +352,23 @@ std::string buildUsda(const std::vector<MeshObjectRef>& meshes, const SplatCloud
                 for (int k = 2; used.count(prim); ++k) prim = base + "_" + std::to_string(k);
             }
             used.insert(prim);
-            writeMesh(w, *m.mesh, root, prim, mixed && m.mesh->hasColors() ? paintedClay : clay);
+            std::string material = mixed && m.mesh->hasColors() ? paintedClay : clay;
+            if (!textures[i].empty()) {
+                textured.push_back({prim + "_Material", textures[i]});
+                material = "/" + root + "/Materials/" + textured.back().first;
+            }
+            writeMesh(w, *m.mesh, root, prim, material);
             w.s += '\n';
         }
         w.open("def Scope \"Materials\"");
-        writeMaterial(w, clay, "Clay", painted && !mixed);
+        if (plain) writeMaterial(w, clay, "Clay", painted && !mixed);
         if (mixed) {
             w.s += '\n';
             writeMaterial(w, paintedClay, "PaintedClay", true);
+        }
+        for (size_t k = 0; k < textured.size(); ++k) {
+            if (plain || k) w.s += '\n';
+            writeTextureMaterial(w, "/" + root + "/Materials/" + textured[k].first, textured[k].first, textured[k].second);
         }
         w.close();
     }
@@ -401,6 +470,8 @@ private:
 struct Value {
     std::vector<double> nums;
     std::vector<std::string> strs;
+    std::string type;          // declared type without "[]" ("texCoord2f", "point3f"...)
+    std::string interpolation; // primvar metadata ("faceVarying", "vertex"...), if any
 };
 
 struct Prim {
@@ -574,6 +645,7 @@ private:
             }
             return fail("USD syntax error near '" + std::string(tok_.text) + "'");
         }
+        const std::string type(tok_.text);
         advance(); // type name or 'rel'
         if (isPunct("[")) {
             advance();
@@ -587,14 +659,35 @@ private:
             name.resize(name.size() - 12);
             timeSamples = true;
         }
+        Value* stored = nullptr;
         if (isPunct("=")) {
             advance();
             Value v;
             if (!parseValue(v)) return false;
+            v.type = type;
             auto& slot = prims[size_t(primIndex)].attrs[name];
-            if (timeSamples || (slot.nums.empty() && slot.strs.empty())) slot = std::move(v);
+            if (timeSamples || (slot.nums.empty() && slot.strs.empty())) {
+                slot = std::move(v);
+                stored = &slot;
+            }
         }
-        if (isPunct("(")) skipBalanced();
+        if (isPunct("(")) {
+            // Metadata: only a primvar's interpolation is used.
+            advance();
+            int level = 1;
+            while (tok_.kind != Token::End && level > 0) {
+                if (level == 1 && isIdent("interpolation")) {
+                    advance();
+                    if (isPunct("=")) advance();
+                    if (tok_.kind == Token::String && stored) stored->interpolation = std::string(tok_.text);
+                    if (tok_.kind != Token::End) advance();
+                    continue;
+                }
+                if (isPunct("(") || isPunct("[") || isPunct("{")) ++level;
+                else if (isPunct(")") || isPunct("]") || isPunct("}")) --level;
+                advance();
+            }
+        }
         return true;
     }
 };
@@ -708,6 +801,7 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
         std::string name;
         Mesh m;
         std::vector<SculptLayer> layers;
+        bool uvs = false; // some prim had UVs (Mesh::uvs holds one per corner either way until the end)
     };
     std::vector<Gathered> objects(split ? 0 : 1);
     bool splatsFound = false;
@@ -727,7 +821,7 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
                 // Named after the prim, or after its SkelRoot (SculptForge writes <Name>/Mesh for blend shapes).
                 const int parent = p.parent;
                 const Prim& named = parent >= 0 && prims[size_t(parent)].type == "SkelRoot" ? prims[size_t(parent)] : p;
-                objects.push_back({named.path.substr(named.path.rfind('/') + 1), {}, {}});
+                objects.push_back({named.path.substr(named.path.rfind('/') + 1), {}, {}, false});
             }
             Mesh& m = objects.back().m;
             std::vector<SculptLayer>& layers = objects.back().layers;
@@ -750,6 +844,35 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
             };
             const uint32_t baseIndex = uint32_t(m.positions.size());
             for (const auto& q : pts) m.positions.push_back(glm::vec3(world[i] * glm::vec4(q, 1.0f)));
+            // Texture coordinates: primvars:st, else the first texCoord2 primvar; face-varying (per face corner)
+            // or per point, optionally indexed (<name>:indices).
+            std::string stName = "primvars:st";
+            const Value* st = p.get(stName);
+            if (!st)
+                for (const auto& [n, v] : p.attrs)
+                    if (n.rfind("primvars:", 0) == 0 && v.type.rfind("texCoord2", 0) == 0 && !n.ends_with(":indices")) {
+                        st = &v;
+                        stName = n;
+                        break;
+                    }
+            const Value* stIndices = st ? p.get(stName + ":indices") : nullptr;
+            const size_t stCount = stIndices ? stIndices->nums.size() : st ? st->nums.size() / 2 : 0;
+            bool perCorner = false, perPoint = false;
+            if (st) {
+                if (st->interpolation == "faceVarying") perCorner = stCount >= indices->nums.size();
+                else if (st->interpolation == "vertex" || st->interpolation == "varying") perPoint = stCount >= pts.size();
+                else if (st->interpolation.empty()) {
+                    perCorner = stCount == indices->nums.size();
+                    perPoint = !perCorner && stCount == pts.size();
+                }
+            }
+            objects.back().uvs |= perCorner || perPoint;
+            auto uvAt = [&](size_t corner) {
+                if (!perCorner && !perPoint) return glm::vec2(0.0f);
+                size_t e = perCorner ? corner : indexValue(indices->nums[corner], pts.size());
+                if (stIndices) e = e < stIndices->nums.size() ? indexValue(stIndices->nums[e], st->nums.size() / 2) : st->nums.size();
+                return e < st->nums.size() / 2 ? glm::vec2(float(st->nums[e * 2]), float(st->nums[e * 2 + 1])) : glm::vec2(0.0f);
+            };
             size_t cursor = 0;
             for (double c : counts->nums) {
                 const size_t n = size_t(std::max(0.0, c));
@@ -766,8 +889,13 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
                         error = "Mesh " + p.path + " has a face index out of range";
                         return false;
                     }
-                    if (leftHanded) std::swap(t.y, t.z);
+                    glm::vec2 uv[3] = {uvAt(cursor), uvAt(cursor + k), uvAt(cursor + k + 1)};
+                    if (leftHanded) {
+                        std::swap(t.y, t.z);
+                        std::swap(uv[1], uv[2]);
+                    }
                     m.triangles.push_back(t + glm::uvec3(baseIndex));
+                    m.uvs.insert(m.uvs.end(), uv, uv + 3);
                 }
                 if (n == 4) m.pairQuad(firstTri, firstTri + 1); // a quad stays paired (Mesh::quadPartners)
                 cursor += n;
@@ -828,6 +956,7 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
     outMeshes.clear();
     for (auto& o : objects) {
         if (o.m.triangles.empty()) continue;
+        if (!o.uvs) o.m.uvs.clear();
         for (auto& l : o.layers) l.delta.resize(o.m.positions.size(), glm::vec3(0.0f));
         outMeshes.push_back({o.name, weldImported(o.m, o.layers)});
     }
@@ -871,15 +1000,30 @@ bool saveUsd(const std::string& path, const std::vector<MeshObjectRef>& meshesIn
             return false;
         }
     }
-    const std::string text = buildUsda(meshes, hasSplats ? splats : nullptr, name);
     const std::string ext = lowerExtension(path);
-    if (ext == ".usdz") {
-        std::string inner = usdIdentifier(name.empty() ? "Sculpt" : name) + ".usda";
-        return writeStoredZip(path, {{inner, std::vector<uint8_t>(text.begin(), text.end())}}, 64, error);
-    }
-    if (ext != ".usda" && ext != ".usd") {
+    if (ext != ".usdz" && ext != ".usda" && ext != ".usd") {
         error = "USD export needs a .usda, .usd or .usdz file name";
         return false;
+    }
+    // Textures: PNGs inside a .usdz package, else beside the layer; asset paths are relative to the layer.
+    const std::vector<std::string> pngs = textureFileNames(path, meshes);
+    const std::string text = buildUsda(meshes, pngs, hasSplats ? splats : nullptr, name);
+    if (ext == ".usdz") {
+        std::string inner = usdIdentifier(name.empty() ? "Sculpt" : name) + ".usda";
+        std::vector<ZipEntry> entries = {{inner, std::vector<uint8_t>(text.begin(), text.end())}};
+        for (size_t i = 0; i < meshes.size(); ++i) {
+            if (pngs[i].empty()) continue;
+            entries.push_back({pngs[i], {}});
+            if (!encodeTexturePng(*meshes[i].mesh, entries.back().data)) {
+                error = "Cannot encode the texture of " + meshes[i].name;
+                return false;
+            }
+        }
+        return writeStoredZip(path, entries, 64, error);
+    }
+    for (size_t i = 0; i < meshes.size(); ++i) {
+        std::string pngPath;
+        if (!pngs[i].empty() && !writeTextureBeside(path, pngs[i], *meshes[i].mesh, pngPath, error)) return false;
     }
     std::ofstream f(fsPath(path), std::ios::binary);
     if (!f || !f.write(text.data(), std::streamsize(text.size()))) {
