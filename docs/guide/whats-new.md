@@ -5,7 +5,9 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
-## Version 0.4.2: texture painting on UV maps
+## Version 0.4.2
+
+### Texture painting on UV maps
 
 Paint into a texture instead of the vertices, so the colour detail comes from the texture (1K to 8K), not from
 the mesh: sharp decals, pores and freckles on a light game mesh.
