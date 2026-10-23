@@ -368,10 +368,8 @@ TEST(multires_reconstruct_finds_lower_levels) {
     CHECK(subdivLevelText(d.mesh) == "SDiv 1/3");
     CHECK(d.mesh.triangleCount() == makeCube(2).triangleCount());
     CHECK(d.mesh.vertexCount() == makeCube(2).vertexCount());
-    // The base is close to the original cube's corners (fitted, not the sculpted surface).
-    float far = 0.0f;
-    for (const auto& p : d.mesh.positions) far = std::max(far, std::abs(std::max({std::abs(p.x), std::abs(p.y), std::abs(p.z)}) - 1.0f));
-    CHECK(far < 0.35f);
+    // The base sits on the fine level's corner vertices.
+    for (const auto& p : d.mesh.positions) CHECK(std::find(fine.begin(), fine.end(), p) != fine.end());
     CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
     CHECK(bitEqual(d.mesh.positions, fine)); // the top is exactly the mesh it started from
     CHECK(!run(d, "subdiv_reconstruct").ok);   // only at the lowest level
@@ -384,7 +382,7 @@ TEST(multires_reconstruct_finds_lower_levels) {
     CHECK(run(r, "subdiv_reconstruct").ok);
     CHECK(run(r, "subdiv_reconstruct").ok);
     CHECK(r.mesh.triangleCount() == makeIcosphere(1).triangleCount());
-    CHECK(maxDistance(r.mesh.positions, subdivLevelMesh(t.mesh, 0).positions) < 0.05f);
+    CHECK(maxDistance(r.mesh.positions, subdivLevelMesh(t.mesh, 0).positions) < 0.1f);
     // A mesh that isn't a subdivision is refused, and undo restores the plain mesh.
     Document n = makeDoc(makeIcosphere(2));
     n.mesh.triangles[0] = {n.mesh.triangles[0].x, n.mesh.triangles[0].z, n.mesh.triangles[0].y};

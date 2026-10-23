@@ -116,7 +116,9 @@ action registry, the same source as the Controls window.
 
 | Action | Keys | What it does |
 |---|---|---|
-| Subdivide | <kbd>Ctrl</kbd>+<kbd>D</kbd> | Smoothly subdivide the mesh (Loop subdivision). Each level multiplies the triangle count by 4. |
+| Divide | <kbd>Ctrl</kbd>+<kbd>D</kbd> | Add a subdivision level: four times the polygons, and the lower levels are kept, so you can step down to shape big forms and back up to the detail. Quads stay quads (Catmull-Clark). Smt off divides without smoothing. |
+| Higher Res | <kbd>D</kbd> | Step one subdivision level up (more polygons, for detail). Edits made below carry the detail along. |
+| Lower Res | <kbd>Shift</kbd>+<kbd>D</kbd> | Step one subdivision level down (fewer polygons, for big forms). The detail of the higher levels is kept. |
 
 ### Transform
 

@@ -87,9 +87,14 @@ struct SubdivLevel {
     bool stale = false;
 };
 
+// Working meshes (with topology and normals) and BVHs of the levels most recently left, so stepping back to
+// one is a move instead of a rebuild. Keyed by the level's data, so any change to the level misses.
+struct SubdivLevelCache;
+
 struct MultiresStack {
     std::vector<SubdivLevel> levels; // at least 2 while a mesh has a stack
     int current = 0;
+    std::shared_ptr<SubdivLevelCache> cache; // shared by copies of the stack
 };
 
 // --- Queries (0 levels = a plain mesh) ---
@@ -108,17 +113,20 @@ size_t subdivBytes(const Mesh& mesh);
 // --- Operations on the mesh (no undo; see the commands / Document helpers below) ---
 // Each returns false with `error` set when it can't run. All of them reconcile pending edits first.
 //
+// Operations that change the working mesh take an optional BVH: when given it is made valid for the new
+// mesh (rebuilt, or taken from the level cache); otherwise the caller rebuilds it.
+//
 // Adds a level on top (stepping to the highest level first) and makes it current. `smooth` = Smt.
-bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, size_t maxTriangles = 50'000'000);
-// Makes `level` current. Rebuilds topology and normals (the caller rebuilds the BVH).
-bool subdivSetLevel(Mesh& mesh, int level, std::string& error);
+bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, BVH* bvh = nullptr, size_t maxTriangles = 50'000'000);
+// Makes `level` current, with topology and normals.
+bool subdivSetLevel(Mesh& mesh, int level, std::string& error, BVH* bvh = nullptr);
 // Deletes the levels below / above the current one (the current level becomes the base / the top).
 bool subdivDeleteLower(Mesh& mesh, std::string& error);
 bool subdivDeleteHigher(Mesh& mesh, std::string& error);
 // At the lowest level: finds the mesh this one was subdivided from (a regular Catmull-Clark subdivision of
 // an all-quad mesh, or a Loop subdivision of a triangle mesh), adds it as a new lowest level and steps down
 // to it. The current level keeps its exact shape and vertex order.
-bool subdivReconstruct(Mesh& mesh, std::string& error);
+bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh = nullptr);
 // Folds edits of the current level into the stack (see the file comment). Cheap when nothing changed.
 // Returns false (and drops the stack) if the mesh no longer has the current level's topology.
 bool subdivCommit(Mesh& mesh);

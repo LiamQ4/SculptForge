@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <numbers>
+#include <optional>
 #include <thread>
 #include <unordered_map>
 
@@ -44,10 +45,9 @@ bool sameArray(const std::vector<T>& a, const std::vector<T>& b) {
 
 // The level's data without topology, normals, texture or stack: what a level stores. (Add new Mesh attributes
 // here too, so they follow the levels.)
-Mesh leanCopy(const Mesh& m) {
-    Mesh out;
+// Copies the level arrays of `m` (all but the triangles) over `out`.
+void assignLevelArrays(Mesh& out, const Mesh& m) {
     out.positions = m.positions;
-    out.triangles = m.triangles;
     out.mask = m.mask;
     out.colors = m.colors;
     out.polygroups = m.polygroups;
@@ -59,6 +59,11 @@ Mesh leanCopy(const Mesh& m) {
     out.paintBase = m.paintBase;
     out.paintLayers = m.paintLayers;
     out.activePaintLayer = m.activePaintLayer;
+}
+Mesh leanCopy(const Mesh& m) {
+    Mesh out;
+    out.triangles = m.triangles;
+    assignLevelArrays(out, m);
     return out;
 }
 std::shared_ptr<Mesh> leanShared(const Mesh& m) { return std::make_shared<Mesh>(leanCopy(m)); }
@@ -698,20 +703,82 @@ void evaluateLevel(MultiresStack& s, int k) {
     L.stale = false;
 }
 
-// Makes the working mesh level `level` of its stack (levels up to it must be evaluated).
-void loadLevel(Mesh& mesh, int level) {
+} // namespace
+
+struct SubdivLevelCache {
+    struct Entry {
+        std::shared_ptr<Mesh> key; // the level data the mesh was made from (held, so it can't change in place)
+        Mesh mesh;
+        BVH bvh;
+    };
+    std::vector<Entry> entries; // most recently left last
+    static constexpr size_t kMaxEntries = 2;
+};
+
+namespace {
+
+// Makes the working mesh level `level` of its stack (levels up to it must be evaluated). `leaving` is the level
+// data the working mesh was (null: don't keep it); with a BVH, that mesh and its BVH go to the level cache and
+// a cached copy of the new level is used when there is one.
+void enterLevel(Mesh& mesh, int level, BVH* bvh, std::shared_ptr<Mesh> leaving = nullptr) {
     std::shared_ptr<MultiresStack> stack = mesh.multires;
+    if (leaving && leaving == stack->levels[size_t(level)].data) return; // already that level (e.g. Del Lower)
+    if (!stack->cache) stack->cache = std::make_shared<SubdivLevelCache>();
+    SubdivLevelCache& cache = *stack->cache;
     std::shared_ptr<PaintTexture> texture = mesh.texture;
     const bool toTexture = mesh.paintToTexture;
-    mesh = leanCopy(*stack->levels[size_t(level)].data);
+    const std::shared_ptr<Mesh> want = stack->levels[size_t(level)].data;
+    // A cached copy of this level: exact (same data), or with the same triangles (only the shape or attributes
+    // changed, so its topology and BVH are kept and refitted).
+    std::optional<SubdivLevelCache::Entry> taken;
+    bool exact = false;
+    if (bvh) {
+        auto hit = std::find_if(cache.entries.begin(), cache.entries.end(), [&](const auto& e) { return e.key == want; });
+        exact = hit != cache.entries.end();
+        if (!exact)
+            hit = std::find_if(cache.entries.begin(), cache.entries.end(),
+                               [&](const auto& e) { return sameArray(e.mesh.triangles, want->triangles); });
+        if (hit != cache.entries.end()) {
+            taken = std::move(*hit);
+            cache.entries.erase(hit);
+        }
+        if (leaving) {
+            // Keep the mesh being left (it has its topology and BVH already) for stepping back.
+            SubdivLevelCache::Entry e{std::move(leaving), std::move(mesh), std::move(*bvh)};
+            e.mesh.multires.reset();
+            e.mesh.texture.reset();
+            cache.entries.push_back(std::move(e));
+            while (cache.entries.size() > SubdivLevelCache::kMaxEntries) cache.entries.erase(cache.entries.begin());
+        }
+    }
+    if (taken) {
+        mesh = std::move(taken->mesh);
+        *bvh = std::move(taken->bvh);
+        if (!exact) {
+            std::vector<uint32_t> moved;
+            for (uint32_t v = 0; v < want->positions.size(); ++v)
+                if (want->positions[v] != mesh.positions[v]) moved.push_back(v);
+            assignLevelArrays(mesh, *want);
+            mesh.sanitizeAttributes();
+            mesh.recomputeAllNormals();
+            if (hasPaintLayers(mesh)) compositePaintAll(mesh);
+            bvh->refit(mesh, moved);
+        }
+    } else {
+        mesh = leanCopy(*want);
+    }
     mesh.multires = std::move(stack);
     mesh.texture = std::move(texture);
     mesh.paintToTexture = toTexture;
-    mesh.rebuildTopology();
-    mesh.recomputeAllNormals();
-    if (hasPaintLayers(mesh)) compositePaintAll(mesh);
+    if (!taken) {
+        mesh.rebuildTopology();
+        mesh.recomputeAllNormals();
+        if (hasPaintLayers(mesh)) compositePaintAll(mesh);
+        if (bvh) bvh->build(mesh);
+    }
     mesh.topologyDirty = true;
     mesh.facesDirty = true;
+    mesh.markAllDirty();
 }
 
 bool sameLayerSet(const Mesh& a, const Mesh& b) {
@@ -1156,7 +1223,7 @@ bool subdivCommit(Mesh& w) {
     return true;
 }
 
-bool subdivSetLevel(Mesh& mesh, int level, std::string& error) {
+bool subdivSetLevel(Mesh& mesh, int level, std::string& error, BVH* bvh) {
     if (!mesh.multires) {
         error = "This SubTool has no subdivision levels (Divide adds them)";
         return false;
@@ -1174,12 +1241,13 @@ bool subdivSetLevel(Mesh& mesh, int level, std::string& error) {
     MultiresStack& s = mutableStack(mesh);
     for (int k = s.current + 1; k <= level; ++k)
         if (s.levels[size_t(k)].stale) evaluateLevel(s, k);
+    std::shared_ptr<Mesh> leaving = s.levels[size_t(s.current)].data;
     s.current = level;
-    loadLevel(mesh, level);
+    enterLevel(mesh, level, bvh, std::move(leaving));
     return true;
 }
 
-bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, size_t maxTriangles) {
+bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, BVH* bvh, size_t maxTriangles) {
     if (mesh.triangleCount() == 0) {
         error = "Nothing to divide";
         return false;
@@ -1188,7 +1256,7 @@ bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, size_t maxTriangl
         if (!subdivCommit(mesh)) {
             // fall through: the stale stack was dropped, start a new one from this mesh
         } else if (mesh.multires->current != int(mesh.multires->levels.size()) - 1 &&
-                   !subdivSetLevel(mesh, int(mesh.multires->levels.size()) - 1, error)) {
+                   !subdivSetLevel(mesh, int(mesh.multires->levels.size()) - 1, error, bvh)) {
             return false;
         }
     }
@@ -1203,7 +1271,8 @@ bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, size_t maxTriangl
         return false;
     }
     MultiresStack& s = ensureStack(mesh);
-    const Mesh& coarse = *s.levels.back().data;
+    std::shared_ptr<Mesh> leaving = s.levels.back().data;
+    const Mesh& coarse = *leaving;
     std::vector<uint32_t> pairing;
     if (cc) {
         pairing.resize(coarse.triangleCount());
@@ -1216,7 +1285,7 @@ bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, size_t maxTriangl
     level.layerDetail.resize(coarse.layers.size());
     s.levels.push_back(std::move(level));
     s.current = int(s.levels.size()) - 1;
-    loadLevel(mesh, s.current);
+    enterLevel(mesh, s.current, bvh, std::move(leaving));
     return true;
 }
 
@@ -1637,7 +1706,7 @@ bool reconstructLoop(const Mesh& m, Reconstruction& out, std::string& error) {
 
 } // namespace
 
-bool subdivReconstruct(Mesh& mesh, std::string& error) {
+bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh) {
     if (mesh.multires) {
         if (!subdivCommit(mesh)) {
             // dropped: reconstruct from this mesh alone
@@ -1686,13 +1755,11 @@ bool subdivReconstruct(Mesh& mesh, std::string& error) {
         return false;
     }
 
-    // Coarse shape: start at the fine corners, then nudge so that subdividing passes close to them again.
+    // Coarse shape: the fine level's corner vertices, as ZBrush does (fitting the cage so its subdivision passes
+    // through them overshoots badly on sharp shapes, and compounds over several levels); the detail of the fine
+    // level keeps it exactly as it was.
     const std::vector<glm::vec3>& fineBase = baseChannel(mesh);
     for (uint32_t v = 0; v < nc; ++v) coarse.positions[v] = fineBase[rec.vertexChild[v]];
-    for (int it = 0; it < 6; ++it) {
-        const std::vector<glm::vec3> s = subdivideField(*tp, true, coarse.positions);
-        for (uint32_t v = 0; v < nc; ++v) coarse.positions[v] += fineBase[rec.vertexChild[v]] - s[rec.vertexChild[v]];
-    }
     // Attributes: everything copied down from the fine level.
     std::vector<uint8_t> f;
     if (mesh.hasMask()) restrictVertices(*tp, mesh.mask, coarse.mask, 0.0f, nullptr, f);
@@ -1740,7 +1807,7 @@ bool subdivReconstruct(Mesh& mesh, std::string& error) {
     s.levels[0] = std::move(fineLevel);
     s.levels.insert(s.levels.begin(), SubdivLevel{std::make_shared<Mesh>(std::move(coarse)), nullptr, nullptr, {}, false});
     s.current = 0;
-    loadLevel(mesh, 0);
+    enterLevel(mesh, 0, bvh, s.levels[1].data);
     return true;
 }
 
@@ -1759,9 +1826,13 @@ size_t SubdivUndo::bytes() const {
 
 void applySubdivUndo(SubdivUndo& r, Mesh& mesh, BVH& bvh) {
     subdivCommit(mesh);
+    std::shared_ptr<Mesh> leaving = mesh.multires ? mesh.multires->levels[size_t(mesh.multires->current)].data : nullptr;
+    std::shared_ptr<SubdivLevelCache> cache = mesh.multires ? mesh.multires->cache : nullptr;
     std::swap(mesh.multires, r.stack);
     if (mesh.multires) {
-        loadLevel(mesh, mesh.multires->current);
+        if (!mesh.multires->cache) mesh.multires->cache = std::move(cache);
+        enterLevel(mesh, mesh.multires->current, &bvh, std::move(leaving));
+        return;
     } else if (r.plain) {
         std::shared_ptr<PaintTexture> texture = mesh.texture;
         const bool toTexture = mesh.paintToTexture;
@@ -1790,10 +1861,9 @@ bool runUndoable(Document& doc, const std::string& label, Op op, std::string& me
     const bool hadStack = bool(rec->stack);
     const int fromLevel = subdivCurrentLevel(mesh);
     if (!hadStack && plainLevel < 0) return false;
-    if (!op(mesh, message)) return false;
+    if (!op(mesh, message, &doc.bvh)) return false;
     if (!hadStack) rec->plain = mesh.multires->levels[size_t(plainLevel)].data;
     else if (!mesh.multires) rec->plain = rec->stack->levels[size_t(fromLevel)].data; // the level that remained
-    doc.bvh.build(mesh);
     doc.bvhDirty = false;
     UndoRecord r;
     r.label = label;
@@ -1811,8 +1881,8 @@ std::string levelSummary(const Mesh& m) {
 } // namespace
 
 bool divideUndoable(Document& doc, bool smooth, std::string& message) {
-    return runUndoable(doc, "Divide", [&](Mesh& m, std::string& msg) {
-        if (!subdivDivide(m, smooth, msg)) return false;
+    return runUndoable(doc, "Divide", [&](Mesh& m, std::string& msg, BVH* bvh) {
+        if (!subdivDivide(m, smooth, msg, bvh)) return false;
         msg = "Divided: " + levelSummary(m);
         return true;
     }, message, doc.mesh.multires ? -1 : 0);
@@ -1827,15 +1897,15 @@ bool setSubdivLevelUndoable(Document& doc, int level, std::string& message) {
         message = levelSummary(doc.mesh);
         return true;
     }
-    return runUndoable(doc, "SDiv " + std::to_string(level + 1), [&](Mesh& m, std::string& msg) {
-        if (!subdivSetLevel(m, level, msg)) return false;
+    return runUndoable(doc, "SDiv " + std::to_string(level + 1), [&](Mesh& m, std::string& msg, BVH* bvh) {
+        if (!subdivSetLevel(m, level, msg, bvh)) return false;
         msg = levelSummary(m);
         return true;
     }, message);
 }
 
 bool deleteLowerUndoable(Document& doc, std::string& message) {
-    return runUndoable(doc, "Del Lower", [&](Mesh& m, std::string& msg) {
+    return runUndoable(doc, "Del Lower", [&](Mesh& m, std::string& msg, BVH*) {
         if (!subdivDeleteLower(m, msg)) return false;
         msg = "Deleted the lower levels: " + levelSummary(m);
         return true;
@@ -1843,7 +1913,7 @@ bool deleteLowerUndoable(Document& doc, std::string& message) {
 }
 
 bool deleteHigherUndoable(Document& doc, std::string& message) {
-    return runUndoable(doc, "Del Higher", [&](Mesh& m, std::string& msg) {
+    return runUndoable(doc, "Del Higher", [&](Mesh& m, std::string& msg, BVH*) {
         if (!subdivDeleteHigher(m, msg)) return false;
         msg = "Deleted the higher levels: " + levelSummary(m);
         return true;
@@ -1851,8 +1921,8 @@ bool deleteHigherUndoable(Document& doc, std::string& message) {
 }
 
 bool reconstructUndoable(Document& doc, std::string& message) {
-    return runUndoable(doc, "Reconstruct Subdiv", [&](Mesh& m, std::string& msg) {
-        if (!subdivReconstruct(m, msg)) return false;
+    return runUndoable(doc, "Reconstruct Subdiv", [&](Mesh& m, std::string& msg, BVH* bvh) {
+        if (!subdivReconstruct(m, msg, bvh)) return false;
         msg = "Reconstructed a lower level: " + levelSummary(m);
         return true;
     }, message, doc.mesh.multires ? -1 : 1);

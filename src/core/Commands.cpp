@@ -286,7 +286,8 @@ CommandRegistry::CommandRegistry() {
          }});
 
     add({"subdivide",
-         "Smoothly subdivide the mesh (Loop subdivision). Each level multiplies the triangle count by 4.",
+         "Smoothly subdivide the mesh (Loop subdivision). Each level multiplies the triangle count by 4. Unlike "
+         "Divide (subdiv_divide), it keeps no lower levels to step back to.",
          {{"levels", T::Number, "Number of subdivision levels to apply (1-4). Default 1.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
              int levels = std::clamp(int(argNumber(a, "levels", 1)), 1, 4);

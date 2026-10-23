@@ -9,6 +9,7 @@
 
 #include "app/App.h"
 #include "app/Ui.h"
+#include "core/Multires.h"
 #include "core/Script.h"
 
 #include <IconsLucide.h>
@@ -193,7 +194,29 @@ void App::initActions() {
         [this] { return doc_.undo.canUndo(); });
     add("edit.redo", "Redo", "Edit", "Ctrl+Shift+Z / Ctrl+Y", [this] { runCommand("redo"); }, ICON_LC_REDO_2, "redo", nullptr,
         [this] { return doc_.undo.canRedo(); });
-    add("geometry.subdivide", "Subdivide", "Tool > Geometry", "Ctrl+D", [this] { runCommand("subdivide"); }, nullptr, "subdivide");
+    add("geometry.subdivide", "Subdivide", "Tool > Geometry", nullptr, [this] { runCommand("subdivide"); }, nullptr, "subdivide");
+    // Subdivision levels (ZBrush Tool > Geometry; core/Multires.h).
+    add("geometry.divide", "Divide", "Tool > Geometry", "Ctrl+D", [this] { runCommand("subdiv_divide", {{"smooth", smt_}}); },
+        ICON_LC_GRID_2X2, "subdiv_divide", nullptr, nullptr,
+        "Add a subdivision level: four times the polygons, and the lower levels are kept, so you can step down to "
+        "shape big forms and back up to the detail. Quads stay quads (Catmull-Clark). Smt off divides without smoothing.");
+    add("geometry.smt", "Smt", "Tool > Geometry", nullptr, [this] { smt_ = !smt_; }, nullptr, nullptr,
+        [this] { return smt_; }, nullptr,
+        "Smooth the next Divide (on by default). Off: the new level keeps the hard edges and flat faces of the one below.");
+    add("geometry.lower_res", "Lower Res", "Tool > Geometry", "Shift+D", [this] { runCommand("subdiv_lower"); },
+        ICON_LC_CHEVRON_DOWN, "subdiv_lower", nullptr, [this] { return subdivCurrentLevel(doc_.mesh) > 0; },
+        "Step one subdivision level down (fewer polygons, for big forms). The detail of the higher levels is kept.");
+    add("geometry.higher_res", "Higher Res", "Tool > Geometry", "D", [this] { runCommand("subdiv_higher"); },
+        ICON_LC_CHEVRON_UP, "subdiv_higher", nullptr,
+        [this] { return subdivCurrentLevel(doc_.mesh) + 1 < subdivLevelCount(doc_.mesh); },
+        "Step one subdivision level up (more polygons, for detail). Edits made below carry the detail along.");
+    add("geometry.del_lower", "Del Lower", "Tool > Geometry", nullptr, [this] { runCommand("subdiv_delete_lower"); }, nullptr,
+        "subdiv_delete_lower", nullptr, [this] { return subdivCurrentLevel(doc_.mesh) > 0; });
+    add("geometry.del_higher", "Del Higher", "Tool > Geometry", nullptr, [this] { runCommand("subdiv_delete_higher"); }, nullptr,
+        "subdiv_delete_higher", nullptr,
+        [this] { return subdivCurrentLevel(doc_.mesh) + 1 < subdivLevelCount(doc_.mesh); });
+    add("geometry.reconstruct", "Reconstruct Subdiv", "Tool > Geometry", nullptr, [this] { runCommand("subdiv_reconstruct"); },
+        nullptr, "subdiv_reconstruct", nullptr, [this] { return subdivCurrentLevel(doc_.mesh) == 0; });
     add("file.new_sphere", "New Sphere", "File", "Ctrl+N", [this] { confirmDiscard([this] { runCommand("new_sphere"); }); },
         ICON_LC_FILE_PLUS, "new_sphere");
     add("file.new_plane", "New Plane", "File", nullptr, [this] { confirmDiscard([this] { runCommand("new_plane"); }); }, nullptr,

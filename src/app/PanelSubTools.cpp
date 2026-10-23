@@ -6,6 +6,7 @@
 // the ZBrush viewport gesture Alt+click to select a SubTool. Every action goes
 // through the subtool_* commands (core/SubTools.cpp).
 #include "app/App.h"
+#include "core/Multires.h"
 
 #include <algorithm>
 #include <cmath>
@@ -120,10 +121,14 @@ void App::drawSubToolsContents() {
     const float rowH = ImGui::GetTextLineHeight() + 2.0f * cellPad.y;
     const float listH = rowH * float(std::min(count, kListRows)) + 2.0f;
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, cellPad);
-    if (ImGui::BeginTable("##subtools", 3, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter,
+    if (ImGui::BeginTable("##subtools", 4, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter,
                           ImVec2(-1, listH))) {
         const float eyeW = ImGui::GetTextLineHeight() * 1.2f;
         ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch);
+        // Subdivision levels, as ZBrush lists them ("SDiv 3/5"); empty for meshes without levels.
+        bool anyLevels = false;
+        for (int i = 0; i < count && !anyLevels; ++i) anyLevels = subdivLevelCount(doc_.subtoolMesh(i)) > 0;
+        ImGui::TableSetupColumn("sdiv", ImGuiTableColumnFlags_WidthFixed, anyLevels ? ImGui::CalcTextSize("SDiv 8/8").x : 0.0f);
         ImGui::TableSetupColumn("tris", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("0.00M").x);
         ImGui::TableSetupColumn("eye", ImGuiTableColumnFlags_WidthFixed, eyeW);
         for (int i = 0; i < count; ++i) {
@@ -163,8 +168,10 @@ void App::drawSubToolsContents() {
                     std::snprintf(renameBuffer_, sizeof renameBuffer_, "%s", s.name.c_str());
                 }
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-                    ImGui::SetTooltip("%s\n%zu vertices, %zu triangles\nClick to select, double-click to rename",
-                                      s.name.c_str(), doc_.subtoolMesh(i).vertexCount(), doc_.subtoolMesh(i).triangleCount());
+                    ImGui::SetTooltip("%s\n%zu vertices, %zu triangles%s%s\nClick to select, double-click to rename",
+                                      s.name.c_str(), doc_.subtoolMesh(i).vertexCount(), doc_.subtoolMesh(i).triangleCount(),
+                                      subdivLevelCount(doc_.subtoolMesh(i)) ? ", " : "",
+                                      subdivLevelText(doc_.subtoolMesh(i)).c_str());
                 if (ImGui::BeginPopupContextItem("##row")) {
                     ImGui::TextDisabled("%s", s.name.c_str());
                     if (ImGui::MenuItem("Rename")) {
@@ -182,12 +189,18 @@ void App::drawSubToolsContents() {
                 }
             }
             ImGui::TableSetColumnIndex(1);
+            if (const std::string sdiv = subdivLevelText(doc_.subtoolMesh(i)); !sdiv.empty()) {
+                ImVec4 col = style.Colors[isActive ? ImGuiCol_Text : ImGuiCol_TextDisabled];
+                if (isActive) col.w *= 0.75f;
+                ImGui::TextColored(col, "%s", sdiv.c_str());
+            }
+            ImGui::TableSetColumnIndex(2);
             const std::string tris = shortCount(doc_.subtoolMesh(i).triangleCount());
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(tris.c_str()).x);
             ImVec4 trisCol = style.Colors[isActive ? ImGuiCol_Text : ImGuiCol_TextDisabled];
             if (isActive) trisCol.w *= 0.75f; // readable on the highlight
             ImGui::TextColored(trisCol, "%s", tris.c_str());
-            ImGui::TableSetColumnIndex(2);
+            ImGui::TableSetColumnIndex(3);
             const ImVec2 eyePos = ImGui::GetCursorScreenPos();
             const ImVec2 eyeSize(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeight());
             if (ImGui::InvisibleButton(("##eye " + s.name).c_str(), eyeSize)) toggleIndex = i;
