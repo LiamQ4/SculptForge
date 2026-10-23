@@ -1177,7 +1177,7 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
     const double faces = std::max(4.0, double(target) / 4.0 / (axis >= 0 ? 2.0 : 1.0));
     float spacing = float(std::sqrt(area / faces));
     const bool adaptive = opt.adaptive > 0.01f || !work.color.empty();
-    const float wantEdge = spacing / (adaptive ? 6.0f : 4.0f);
+    const float wantEdge = spacing / 4.0f; // about four graph vertices per lattice edge
 
     // Surface the quads snap to (before any subdivision for density: same surface).
     mark("prepare");
