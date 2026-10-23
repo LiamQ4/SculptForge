@@ -6,6 +6,8 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-23
+
 ### Texture painting on UV maps
 - Paint into a texture on the model's UVs instead of its vertices, so the colour detail comes from the texture
   (1K, 2K, 4K or 8K), not from the mesh density (Tool > Texture Map > New Texture, `texture_create`). The Paint
@@ -31,8 +33,6 @@ All notable changes to SculptForge are listed here. The format follows
 - Exports write the texture next to the model: OBJ with a `.mtl` (`map_Kd`), glTF/GLB with an embedded base
   colour texture, USD with a preview material, FBX and GoZ with the PNG beside the file.
 - Subdivide, decimate, split and duplicate keep the texture with the UVs.
-
-## [0.4.1] - 2026-10-23
 
 ### Fixed
 - Graphics tablets: the brush ring no longer flickers between two places, which looked like a second brush
