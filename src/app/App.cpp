@@ -26,6 +26,7 @@
 #include <imgui_impl_sdl3.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cfloat>
 #include <cmath>
 #include <filesystem>
@@ -88,20 +89,16 @@ bool App::init(const AppOptions& options) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
-    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
+    // No multisampling in the window: the 3D view antialiases in its own target (Renderer::drawView), so it can
+    // draw with fewer samples while a huge scene moves (Preferences > Performance).
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
 
     const SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
                                   (headless ? SDL_WINDOW_HIDDEN : 0) |
                                   (options.fullscreen && !headless ? SDL_WINDOW_FULLSCREEN : 0);
     const int winW = recording ? options.width : 1600, winH = recording ? options.height : 960;
     window_ = SDL_CreateWindow("SculptForge", winW, winH, flags);
-    if (!window_) {
-        // Retry without multisampling for drivers that refuse it.
-        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
-        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
-        window_ = SDL_CreateWindow("SculptForge", winW, winH, flags);
-    }
     if (!window_) {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
         return false;
@@ -358,7 +355,10 @@ int App::runUiTest(int w, int h, int fps) {
         ImGui::LogFinish();
         ImGui::Render();
 
+        const auto syncStart = std::chrono::steady_clock::now();
         syncScene();
+        notePerformanceFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - syncStart).count());
+        viewSamples(); // keeps Fast Navigation's view of the camera current (UI tests read view_samples)
         ++frames;
         const std::string shot = demo_->takeShotRequest();
         if (shot.empty()) continue;
@@ -578,8 +578,10 @@ int App::run() {
         drawUi();
         ImGui::Render();
 
+        const auto syncStart = std::chrono::steady_clock::now();
         syncScene();
-        renderer_.draw(camera_, fbW, fbH, renderSettings_, canvasViewport(fbW, fbH));
+        notePerformanceFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - syncStart).count());
+        perf_.samplesUsed = renderer_.drawView(camera_, fbW, fbH, renderSettings_, canvasViewport(fbW, fbH), viewSamples());
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(window_);
         tickProject(dt);
@@ -939,6 +941,15 @@ void App::dabAt(float x, float y, float pressure) {
 void App::endStroke() {
     strokeMask_ = false;
     firstDabPending_ = false;
+    // Preferences > Performance shows what the stroke cost.
+    if (doc_.sculptor.timings.dabs > 0) {
+        perf_.lastStroke = doc_.sculptor.timings;
+        perf_.lastStrokeSyncMs = perf_.strokeSyncMs;
+        perf_.lastStrokeFrames = perf_.strokeFrames;
+    }
+    doc_.sculptor.timings = {};
+    perf_.strokeSyncMs = 0.0;
+    perf_.strokeFrames = 0;
     UndoRecord r = doc_.sculptor.endStroke();
     finishPaintStroke(r);
     if (!r.empty()) {

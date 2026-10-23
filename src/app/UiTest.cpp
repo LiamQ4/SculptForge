@@ -64,6 +64,9 @@
 //                            auto_uv_running, qremesh_running (QRemesh working in the background),
 //                            quads (quad pairs in the active SubTool), quad_percent (quads among its polygons)
 //                            sdiv (the current subdivision level, 1 = base; 0 without levels), sdiv_levels (0 = none)
+//                            antialiasing (Preferences > Performance: 1, 2, 4, 8), view_samples (what the interactive
+//                            view draws with now: 1 while Fast Navigation moves a big scene), multithreading (1 on),
+//                            last_stroke_dabs (dabs of the last finished stroke)
 //                            gizmo_mode (0 Draw, 1 Move, 2 Scale, 3 Rotate), gizmo_hover (handle under the cursor,
 //                            0 = none, in gizmo_drag's order from 1), gizmo_falloff, pivot_x / pivot_y / pivot_z,
 //                            center_x / center_y / center_z and size_x / size_y / size_z (active mesh bounds)
@@ -101,6 +104,7 @@
 #include "core/BrushLibrary.h"
 #include "core/Multires.h"
 #include "core/Script.h"
+#include "core/ThreadPool.h"
 
 #include <imgui_internal.h>
 
@@ -234,6 +238,10 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "uvs") return m.hasUvs() ? 1.0 : 0.0;
     if (name == "sdiv") return subdivLevelCount(m) ? double(subdivCurrentLevel(m) + 1) : 0.0;
     if (name == "sdiv_levels") return double(subdivLevelCount(m));
+    if (name == "antialiasing") return double(app_.uiPrefs_.antialiasing);
+    if (name == "view_samples") return double(app_.perf_.samplesWanted);
+    if (name == "multithreading") return ThreadPool::shared().serial() ? 0.0 : 1.0;
+    if (name == "last_stroke_dabs") return double(app_.perf_.lastStroke.dabs);
     if (name == "texture_size") return hasTexture(m) ? double(m.texture->width) : 0.0;
     if (name == "paint_texture") return paintsTexture(m) ? 1.0 : 0.0;
     if (name == "texture_layers") return hasTexture(m) ? double(m.texture->layers.size()) : 0.0;

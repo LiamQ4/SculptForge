@@ -4,6 +4,8 @@
 
 #include "core/Matcap.h"
 #include "core/Texture.h"
+#include "core/ThreadPool.h"
+#include "core/UploadOrder.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -216,7 +218,7 @@ void main() {
     float spec = pow(max(dot(n, h), 0.0), 40.0) * 0.18;
     float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.3;
     float facing = smoothstep(-0.2, 0.6, dot(n, v));
-    // vCurvature > 0 in creases, < 0 on ridges (see Renderer::updateCurvature).
+    // vCurvature > 0 in creases, < 0 on ridges (see curvatureAt in Renderer.cpp).
     float crease = smoothstep(0.0, 0.16, vCurvature);
     float ridge = smoothstep(0.0, 0.2, -vCurvature);
     float cavity = 1.0 - 0.62 * crease;
@@ -506,6 +508,11 @@ void Renderer::shutdown() {
     gl::DeleteBuffers(1, &splatOrder_);
     gl::DeleteTextures(1, &splatTexture_);
     gl::DeleteVertexArrays(1, &splatVao_);
+    if (viewFbo_) {
+        gl::DeleteFramebuffers(1, &viewFbo_);
+        gl::DeleteRenderbuffers(2, viewRb_);
+        viewFbo_ = 0;
+    }
 }
 
 void Renderer::syncSplats(const SplatCloud& c, uint64_t version) {
@@ -586,28 +593,57 @@ void Renderer::drawSplats(const glm::mat4& view, const glm::mat4& proj, int fbWi
     gl::BindTexture(GL_TEXTURE_BUFFER, 0);
 }
 
-// Signed curvature per vertex: how far the neighbour average sits above (crease, > 0) or below
-// (ridge, < 0) the surface, relative to the local edge length.
-void Renderer::updateCurvature(MeshSlot& s, const Mesh& mesh, uint32_t begin, uint32_t end) {
-    s.curvature.resize(mesh.vertexCount(), 0.0f);
-    for (uint32_t v = begin; v < end && v < mesh.vertexCount(); ++v) {
-        const auto ring = mesh.neighbors(v);
-        if (ring.empty()) {
-            s.curvature[v] = 0.0f;
-            continue;
-        }
-        glm::vec3 avg(0.0f);
-        float edge = 0.0f;
-        const glm::vec3 p = mesh.positions[v];
-        for (uint32_t n : ring) {
-            avg += mesh.positions[n];
-            edge += glm::distance(mesh.positions[n], p);
-        }
-        avg /= float(ring.size());
-        edge /= float(ring.size());
-        s.curvature[v] = edge > 0.0f ? glm::dot(mesh.normals[v], avg - p) / edge : 0.0f;
+namespace {
+
+// Signed curvature at vertex `v`: how far the neighbour average sits above (crease, > 0) or below (ridge, < 0)
+// the surface, relative to the local edge length.
+float curvatureAt(const Mesh& mesh, uint32_t v) {
+    const auto ring = mesh.neighbors(v);
+    if (ring.empty()) return 0.0f;
+    glm::vec3 avg(0.0f);
+    float edge = 0.0f;
+    const glm::vec3 p = mesh.positions[v];
+    for (uint32_t n : ring) {
+        avg += mesh.positions[n];
+        edge += glm::distance(mesh.positions[n], p);
     }
+    avg /= float(ring.size());
+    edge /= float(ring.size());
+    return edge > 0.0f ? glm::dot(mesh.normals[v], avg - p) / edge : 0.0f;
 }
+
+using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
+
+// Uploads the GPU index ranges `runs` of one vertex array (bound to GL_ARRAY_BUFFER first; `allocate` sizes it
+// to `count` elements): fill(begin, end, dst) writes those elements, in GPU order, to dst. Big ranges go in
+// chunks through `staging`, so a full upload never copies the whole array.
+template <class Fill>
+void uploadGathered(std::vector<uint8_t>& staging, GLuint buffer, size_t elementSize, size_t count, bool allocate,
+                    const Runs& runs, const Fill& fill) {
+    constexpr uint32_t kChunk = 1u << 18;
+    gl::BindBuffer(GL_ARRAY_BUFFER, buffer);
+    if (allocate) gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(count * elementSize), nullptr, GL_DYNAMIC_DRAW);
+    for (const auto& [b, e] : runs)
+        for (uint32_t c = b; c < e; c += kChunk) {
+            const uint32_t ce = std::min(e, c + kChunk);
+            staging.resize(size_t(ce - c) * elementSize);
+            fill(c, ce, staging.data());
+            gl::BufferSubData(GL_ARRAY_BUFFER, GLintptr(size_t(c) * elementSize), GLsizeiptr(staging.size()), staging.data());
+        }
+}
+
+// fill() for uploadGathered: copies src[order[i]] in parallel.
+template <class T>
+auto gatherFrom(const T* src, std::span<const uint32_t> order) {
+    return [src, order](uint32_t b, uint32_t e, void* dst) {
+        T* out = static_cast<T*>(dst);
+        poolFor(e - b, [&](size_t i0, size_t i1) {
+            for (size_t i = i0; i < i1; ++i) out[i] = src[order[b + i]];
+        }, 1 << 14);
+    };
+}
+
+} // namespace
 
 // Index buffer without hidden triangles, plus the polygroup id of every drawn
 // triangle in draw order (looked up by gl_PrimitiveID). Meshes with quads
@@ -617,18 +653,17 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs) {
     const size_t nt = mesh.triangleCount();
     const bool hidden = mesh.hidden.size() == nt && nt > 0;
     const bool groups = mesh.polygroups.size() == nt && nt > 0;
-    const glm::uvec3* tris = mesh.triangles.data();
+    // Indices are remapped to the slot's vertex order (core/UploadOrder.h) and uploaded in chunks.
+    auto gpu = [&](const glm::uvec3& t) { return glm::uvec3(s.order.toGpu(t.x), s.order.toGpu(t.y), s.order.toGpu(t.z)); };
     size_t drawn = nt;
     visibleGroups_.clear();
     if (hidden) {
-        visibleTris_.clear();
+        drawn = 0;
         for (size_t t = 0; t < nt; ++t) {
             if (mesh.hidden[t]) continue;
-            visibleTris_.push_back(mesh.triangles[t]);
+            ++drawn;
             if (groups) visibleGroups_.push_back(mesh.polygroups[t]);
         }
-        tris = visibleTris_.data();
-        drawn = visibleTris_.size();
     } else if (groups) {
         visibleGroups_ = mesh.polygroups;
     }
@@ -639,19 +674,35 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs) {
             // The diagonal stays visible where the other half of the quad is hidden (it is the visible edge).
             const uint32_t u = mesh.quadPartnerAt(t);
             const int diagonal = u != Mesh::kNoQuad && !mesh.triangleHidden(u) ? mesh.quadDiagonal(t, u) : -1;
-            const glm::uvec3& tri = mesh.triangles[t];
+            const glm::uvec3 tri = gpu(mesh.triangles[t]);
             for (int e = 0; e < 3; ++e)
                 if (e != diagonal) wireLines_.insert(wireLines_.end(), {tri[e], tri[(e + 1) % 3]});
         }
     }
     const GLsizeiptr triBytes = GLsizeiptr(drawn * sizeof(glm::uvec3));
     gl::BindVertexArray(s.vao);
-    gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, triBytes + GLsizeiptr(wireLines_.size() * sizeof(uint32_t)),
-                   wireLines_.empty() ? tris : nullptr, GL_STATIC_DRAW);
-    if (!wireLines_.empty()) {
-        gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, triBytes, tris);
-        gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, triBytes, GLsizeiptr(wireLines_.size() * sizeof(uint32_t)), wireLines_.data());
+    gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, triBytes + GLsizeiptr(wireLines_.size() * sizeof(uint32_t)), nullptr, GL_STATIC_DRAW);
+    constexpr size_t kChunk = size_t(1) << 18;
+    size_t written = 0;
+    for (size_t t0 = 0; t0 < nt; t0 += kChunk) {
+        const size_t t1 = std::min(nt, t0 + kChunk);
+        visibleTris_.clear();
+        if (hidden) {
+            for (size_t t = t0; t < t1; ++t)
+                if (!mesh.hidden[t]) visibleTris_.push_back(gpu(mesh.triangles[t]));
+        } else {
+            visibleTris_.resize(t1 - t0);
+            poolFor(t1 - t0, [&](size_t b, size_t e) {
+                for (size_t i = b; i < e; ++i) visibleTris_[i] = gpu(mesh.triangles[t0 + i]);
+            }, 1 << 14);
+        }
+        if (visibleTris_.empty()) continue;
+        gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(written * sizeof(glm::uvec3)),
+                          GLsizeiptr(visibleTris_.size() * sizeof(glm::uvec3)), visibleTris_.data());
+        written += visibleTris_.size();
     }
+    if (!wireLines_.empty())
+        gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, triBytes, GLsizeiptr(wireLines_.size() * sizeof(uint32_t)), wireLines_.data());
     gl::BindVertexArray(0);
     s.indexCount = GLsizei(drawn * 3);
     s.lineCount = GLsizei(wireLines_.size());
@@ -699,6 +750,12 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs) {
     if (wireLines_.capacity() > (size_t(1) << 16)) std::vector<uint32_t>().swap(wireLines_);
 }
 
+bool Renderer::outOfMemory(uint32_t id) const {
+    for (const MeshSlot& s : slots_)
+        if (s.id == id) return s.outOfMemory;
+    return false;
+}
+
 void Renderer::syncScene(const std::vector<SceneMesh>& scene) {
     // Free the slots of SubTools that are gone (deleted, merged, a new scene).
     for (size_t i = 0; i < slots_.size();) {
@@ -725,43 +782,62 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap) {
         normalMap = nullptr; // made for another mesh
     const bool wantUvs = hasTexture(mesh) || normalMap;
     const bool full = s.fresh || mesh.topologyDirty || nv != s.vertexCapacity;
-    const bool ranged = !full && mesh.dirtyBegin < mesh.dirtyEnd && mesh.dirtyEnd <= nv;
-    const GLintptr off3 = ranged ? GLintptr(mesh.dirtyBegin * sizeof(glm::vec3)) : 0;
-    const GLsizeiptr size3 = ranged ? GLsizeiptr((mesh.dirtyEnd - mesh.dirtyBegin) * sizeof(glm::vec3)) : 0;
-    const GLintptr off1 = ranged ? GLintptr(mesh.dirtyBegin * sizeof(float)) : 0;
-    const GLsizeiptr size1 = ranged ? GLsizeiptr((mesh.dirtyEnd - mesh.dirtyBegin) * sizeof(float)) : 0;
+    // The GPU keeps the vertices in the slot's upload order (core/UploadOrder.h), so a dab re-sends a few short
+    // ranges holding what it changed, gathered from the mesh arrays.
     if (full) {
-        updateCurvature(s, mesh, 0, uint32_t(nv));
-        gl::BindBuffer(GL_ARRAY_BUFFER, s.posBuffer);
-        gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(glm::vec3)), mesh.positions.data(), GL_DYNAMIC_DRAW);
-        gl::BindBuffer(GL_ARRAY_BUFFER, s.nrmBuffer);
-        gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(glm::vec3)), mesh.normals.data(), GL_DYNAMIC_DRAW);
-        gl::BindBuffer(GL_ARRAY_BUFFER, s.curvBuffer);
-        gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * sizeof(float)), s.curvature.data(), GL_DYNAMIC_DRAW);
+        s.order.build(mesh);
+        dirtyRuns_.assign(1, {0u, uint32_t(nv)});
+    } else {
+        s.order.dirtyRuns(mesh, dirtyRuns_);
+    }
+    const bool ranged = !full && !dirtyRuns_.empty();
+    const std::span<const uint32_t> order = s.order.fromGpu();
+    if (full || ranged) {
+        uploadGathered(staging_, s.posBuffer, sizeof(glm::vec3), nv, full, dirtyRuns_, gatherFrom(mesh.positions.data(), order));
+        uploadGathered(staging_, s.nrmBuffer, sizeof(glm::vec3), nv, full, dirtyRuns_, gatherFrom(mesh.normals.data(), order));
+        uploadGathered(staging_, s.curvBuffer, sizeof(float), nv, full, dirtyRuns_, [&](uint32_t b, uint32_t e, void* dst) {
+            float* out = static_cast<float*>(dst);
+            poolFor(e - b, [&](size_t i0, size_t i1) {
+                for (size_t i = i0; i < i1; ++i) out[i] = curvatureAt(mesh, order[b + i]);
+            }, 1 << 12);
+        });
+    }
+    if (full) {
         uploadFaces(s, mesh, wantUvs);
         s.vertexCapacity = nv;
-    } else if (ranged) {
-        gl::BindBuffer(GL_ARRAY_BUFFER, s.posBuffer);
-        gl::BufferSubData(GL_ARRAY_BUFFER, off3, size3, mesh.positions.data() + mesh.dirtyBegin);
-        gl::BindBuffer(GL_ARRAY_BUFFER, s.nrmBuffer);
-        gl::BufferSubData(GL_ARRAY_BUFFER, off3, size3, mesh.normals.data() + mesh.dirtyBegin);
-        updateCurvature(s, mesh, mesh.dirtyBegin, mesh.dirtyEnd);
-        gl::BindBuffer(GL_ARRAY_BUFFER, s.curvBuffer);
-        gl::BufferSubData(GL_ARRAY_BUFFER, off1, size1, s.curvature.data() + mesh.dirtyBegin);
+        // A mesh too big for the GPU's memory isn't drawn (rather than taking the driver down); the next full
+        // upload (e.g. after Lower Res or a decimation) tries again.
+        s.outOfMemory = false;
+        for (int i = 0; i < 16; ++i) {
+            const GLenum e = gl::GetError();
+            if (e == GL_NO_ERROR) break;
+            s.outOfMemory = s.outOfMemory || e == GL_OUT_OF_MEMORY;
+        }
+        if (s.outOfMemory) {
+            for (GLuint b : {s.posBuffer, s.nrmBuffer, s.curvBuffer}) {
+                gl::BindBuffer(GL_ARRAY_BUFFER, b);
+                gl::BufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+            }
+            gl::BindVertexArray(s.vao);
+            gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, 0, nullptr, GL_STATIC_DRAW);
+            gl::BindVertexArray(0);
+            s.indexCount = 0;
+            s.lineCount = 0;
+        }
     }
     if (!full && (mesh.facesDirty || wantUvs != s.hasUvs)) uploadFaces(s, mesh, wantUvs);
     syncTexture(s, mesh);
     syncNormalMap(s, mesh, normalMap);
 
     // Optional per-vertex attributes: a full upload when they appear (or the
-    // mesh changed), the dirty range otherwise, and a disabled array when absent.
-    auto syncAttribute = [&](GLuint buffer, GLuint location, bool& uploaded, const void* data, size_t elementSize,
-                             bool present, GLintptr offset, GLsizeiptr size) {
+    // mesh changed), the dirty runs otherwise, and a disabled array when absent.
+    const Runs everything{{0u, uint32_t(nv)}};
+    auto syncAttribute = [&](GLuint buffer, GLuint location, bool& uploaded, auto gather, size_t elementSize, bool present) {
         gl::BindBuffer(GL_ARRAY_BUFFER, buffer);
         if (present && (full || !uploaded)) {
-            gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(nv * elementSize), data, GL_DYNAMIC_DRAW);
+            uploadGathered(staging_, buffer, elementSize, nv, true, everything, gather);
         } else if (present && ranged) {
-            gl::BufferSubData(GL_ARRAY_BUFFER, offset, size, static_cast<const uint8_t*>(data) + size_t(offset));
+            uploadGathered(staging_, buffer, elementSize, nv, false, dirtyRuns_, gather);
         } else if (!present && uploaded) {
             gl::BufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
         }
@@ -773,10 +849,11 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap) {
         }
         uploaded = present;
     };
-    syncAttribute(s.colorBuffer, 3, s.hasColors, mesh.colors.data(), sizeof(glm::vec3), nv > 0 && mesh.colors.size() == nv,
-                  off3, size3);
-    syncAttribute(s.maskBuffer, 4, s.hasMask, mesh.mask.data(), sizeof(float), nv > 0 && mesh.mask.size() == nv, off1,
-                  size1);
+    syncAttribute(s.colorBuffer, 3, s.hasColors, gatherFrom(mesh.colors.data(), order), sizeof(glm::vec3),
+                  nv > 0 && mesh.colors.size() == nv);
+    syncAttribute(s.maskBuffer, 4, s.hasMask, gatherFrom(mesh.mask.data(), order), sizeof(float), nv > 0 && mesh.mask.size() == nv);
+    // Scratch only: don't keep a big upload's staging copy around.
+    if (staging_.capacity() > (size_t(1) << 22)) std::vector<uint8_t>().swap(staging_);
     gl::BindBuffer(GL_ARRAY_BUFFER, 0);
     s.fresh = false;
     mesh.clearDirty();
@@ -915,6 +992,62 @@ bool Renderer::renderToImage(const Camera& camera, int width, int height, const 
     gl::DeleteFramebuffers(2, fbo);
     gl::DeleteRenderbuffers(3, rb);
     return ok;
+}
+
+bool Renderer::viewTarget(int width, int height, int samples) {
+    if (viewFbo_ && width == viewW_ && height == viewH_ && samples == viewSamples_) return true;
+    if (width == viewW_ && height == viewH_ && samples == viewFailed_) return false; // don't retry every frame
+    if (viewFbo_) {
+        gl::DeleteFramebuffers(1, &viewFbo_);
+        gl::DeleteRenderbuffers(2, viewRb_);
+        viewFbo_ = 0;
+    }
+    for (int i = 0; i < 16 && gl::GetError() != GL_NO_ERROR; ++i) {
+    }
+    gl::GenFramebuffers(1, &viewFbo_);
+    gl::GenRenderbuffers(2, viewRb_);
+    gl::BindRenderbuffer(GL_RENDERBUFFER, viewRb_[0]);
+    gl::RenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_RGBA8, width, height);
+    gl::BindRenderbuffer(GL_RENDERBUFFER, viewRb_[1]);
+    gl::RenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH_COMPONENT24, width, height);
+    gl::BindFramebuffer(GL_FRAMEBUFFER, viewFbo_);
+    gl::FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, viewRb_[0]);
+    gl::FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, viewRb_[1]);
+    const bool ok = gl::CheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE && gl::GetError() == GL_NO_ERROR;
+    gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+    viewW_ = width;
+    viewH_ = height;
+    if (!ok) {
+        gl::DeleteFramebuffers(1, &viewFbo_);
+        gl::DeleteRenderbuffers(2, viewRb_);
+        viewFbo_ = 0;
+        viewSamples_ = 0;
+        viewFailed_ = samples;
+        return false;
+    }
+    viewSamples_ = samples;
+    viewFailed_ = 0;
+    return true;
+}
+
+int Renderer::drawView(const Camera& camera, int width, int height, const RenderSettings& settings, const Viewport& viewport,
+                       int samples) {
+    GLint maxSamples = 1;
+    gl::GetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+    samples = std::clamp(samples, 1, std::max(1, int(maxSamples)));
+    while (samples > 1 && !viewTarget(width, height, samples)) samples /= 2;
+    if (samples <= 1) {
+        gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+        draw(camera, width, height, settings, viewport);
+        return 1;
+    }
+    gl::BindFramebuffer(GL_FRAMEBUFFER, viewFbo_);
+    draw(camera, width, height, settings, viewport);
+    gl::BindFramebuffer(GL_READ_FRAMEBUFFER, viewFbo_);
+    gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    gl::BlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+    return samples;
 }
 
 bool Renderer::beginCapture(int width, int height, std::string& error) {

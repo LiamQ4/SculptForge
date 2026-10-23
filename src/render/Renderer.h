@@ -4,6 +4,7 @@
 
 #include "core/Mesh.h"
 #include "core/Splats.h"
+#include "core/UploadOrder.h"
 #include "render/Camera.h"
 #include "render/GL.h"
 
@@ -71,10 +72,17 @@ public:
     // mesh marked dirty and clears its dirty state (a new slot uploads
     // everything), and frees the slots of ids no longer listed.
     void syncScene(const std::vector<SceneMesh>& scene);
+    // True when SubTool `id` didn't fit in GPU memory at its last full upload (it isn't drawn until it does).
+    bool outOfMemory(uint32_t id) const;
     // Re-uploads the splats when `version` differs from the last upload.
     void syncSplats(const SplatCloud& splats, uint64_t version);
     using Viewport = RenderViewport;
     void draw(const Camera& camera, int fbWidth, int fbHeight, const RenderSettings& settings, const Viewport& viewport = {});
+    // draw() for the app's window (whose framebuffer has no multisampling): through an offscreen target with
+    // `samples` samples, resolved to the screen, or straight to the screen for 1. When the GPU can't make the
+    // target (e.g. out of memory) it uses fewer samples. Returns the samples used.
+    int drawView(const Camera& camera, int fbWidth, int fbHeight, const RenderSettings& settings, const Viewport& viewport,
+                 int samples);
     // Offscreen render (4x MSAA) into top-down RGBA8 pixels.
     bool renderToImage(const Camera& camera, int width, int height, const RenderSettings& settings,
                        std::vector<uint8_t>& rgba, std::string& error);
@@ -107,6 +115,10 @@ private:
     std::vector<uint32_t> splatSorted_;
     glm::mat4 lastSortView_{0.0f};
     GLuint captureFbo_[2] = {}, captureRb_[3] = {};
+    // drawView's multisampled target; viewFailed_ = the sample count that couldn't be made at this size.
+    bool viewTarget(int width, int height, int samples);
+    GLuint viewFbo_ = 0, viewRb_[2] = {};
+    int viewW_ = 0, viewH_ = 0, viewSamples_ = 0, viewFailed_ = 0;
     int captureW_ = 0, captureH_ = 0;
     GLuint emptyVao_ = 0;
     bool thumbnailPass_ = false; // draw(): transparent background, no gradient (renderMeshThumbnail)
@@ -127,7 +139,8 @@ private:
         bool hasTangents = false, tangentsStale = true, normalFlipGreen = false;
         bool hasColors = false, hasMask = false, hasGroups = false, hasUvs = false;
         bool fresh = true; // nothing uploaded yet
-        std::vector<float> curvature;
+        bool outOfMemory = false; // the last full upload ran out of GPU memory: not drawn
+        UploadOrder order; // the vertices' order in the GPU buffers
         GLsizei indexCount = 0;
         GLsizei lineCount = 0; // wireframe edge indices after the triangles (meshes with quads; 0 = draw triangles)
         size_t vertexCapacity = 0;
@@ -136,8 +149,9 @@ private:
     static void freeSlot(MeshSlot& s);
     void sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap = nullptr);
     void syncNormalMap(MeshSlot& s, const Mesh& mesh, const NormalMapView* normalMap);
-    static void updateCurvature(MeshSlot& s, const Mesh& mesh, uint32_t begin, uint32_t end);
     void uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs);
+    std::vector<std::pair<uint32_t, uint32_t>> dirtyRuns_; // scratch for sync: UploadOrder::dirtyRuns
+    std::vector<uint8_t> staging_;                         // scratch for sync: gathered vertex data
     void syncTexture(MeshSlot& s, Mesh& mesh);
     void drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings);
     std::vector<MeshSlot> slots_;

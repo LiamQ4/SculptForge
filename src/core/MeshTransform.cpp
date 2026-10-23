@@ -266,8 +266,7 @@ void TransformSession::apply(Mesh& mesh, const MeshTransform& t) {
     if (layered_) mesh.evaluate(verts_);
     // Rigidly moved normals just turn (above); recompute them only where neighbours move differently.
     if (!boundary_.empty()) mesh.updateNormals(boundary_);
-    mesh.markDirty(verts_.front());
-    mesh.markDirty(verts_.back());
+    mesh.markDirtyRange(verts_.front(), verts_.back() + 1);
     moved_ = !t.identity();
 }
 

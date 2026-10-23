@@ -27,6 +27,9 @@ include(cmake/Dependencies.cmake)
 add_library(sculptforge_core STATIC
   src/core/Mesh.cpp
   src/core/BVH.cpp
+  src/core/ThreadPool.cpp
+  src/core/UploadOrder.cpp
+  src/core/Benchmark.cpp
   src/core/Sculpt.cpp
   src/core/Undo.cpp
   src/core/Primitives.cpp
@@ -92,7 +95,8 @@ if(MSVC)
 else()
   set_source_files_properties(third_party/ufbx/ufbx.c third_party/xatlas/xatlas.cpp third_party/mikktspace/mikktspace.c PROPERTIES COMPILE_OPTIONS "-w")
 endif()
-target_link_libraries(sculptforge_core PUBLIC glm::glm)
+find_package(Threads REQUIRED)
+target_link_libraries(sculptforge_core PUBLIC glm::glm Threads::Threads)
 target_compile_definitions(sculptforge_core PUBLIC GLM_FORCE_XYZW_ONLY)
 target_compile_definitions(sculptforge_core PRIVATE SCULPTFORGE_VERSION="${PROJECT_VERSION}") # written into projects
 if(MSVC)
@@ -146,6 +150,7 @@ if(SCULPTFORGE_BUILD_APP)
     ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedFonts.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedGuide.cpp
     src/app/main.cpp
+    src/app/Bench.cpp
     src/app/App.cpp
     src/app/Demo.cpp
     src/app/UiTest.cpp
@@ -177,6 +182,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/Gizmo.cpp
     src/app/PanelBake.cpp
     src/app/PanelRetopo.cpp
+    src/app/PanelPerformance.cpp
     src/app/PanelGoz.cpp
     src/app/PanelProject.cpp
     src/app/PanelSubTools.cpp

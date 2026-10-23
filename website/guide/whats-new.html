@@ -18,7 +18,7 @@
   <meta property="og:url" content="https://islandmed.github.io/SculptForge/guide/whats-new.html">
   <link rel="stylesheet" href="../style.css?v=8">
   <script src="../motion.js?v=1" defer></script>
-  <script src="search-index.js?v=27" defer></script>
+  <script src="search-index.js?v=28" defer></script>
 </head>
 <body class="guide-page" data-prev="welcome.html" data-next="installing.html">
   <div class="scroll-progress" aria-hidden="true"></div>
@@ -44,7 +44,7 @@
           <input type="search" id="guide-q" placeholder="Search the guide" aria-label="Search the guide" autocomplete="off">
           <div class="search-results" id="guide-results" hidden></div>
         </div>
-        <nav class="toc" aria-label="User guide"><a class="toc-home" href="index.html">Contents</a><p class="toc-group">Getting started</p><ul><li><a href="welcome.html">Welcome to SculptForge</a></li><li><a href="whats-new.html" class="current" aria-current="page">What&#x27;s new</a><ul class="toc-sections"><li><a href="#next-version-in-development">Next version (in development)</a></li><li><a href="#version-042">Version 0.4.2</a></li><li><a href="#version-041">Version 0.4.1</a></li><li><a href="#version-04">Version 0.4</a></li><li><a href="#version-03">Version 0.3</a></li><li><a href="#version-02">Version 0.2</a></li><li><a href="#version-01">Version 0.1</a></li></ul></li><li><a href="installing.html">Installing SculptForge</a></li><li><a href="interface.html">The interface</a></li><li><a href="navigation.html">Navigating the view</a></li></ul><p class="toc-group">Sculpting</p><ul><li><a href="sculpting.html">Sculpting and brushes</a></li><li><a href="brush-lab.html">Brush Lab and sharing brushes</a></li><li><a href="masking.html">Masking</a></li><li><a href="polygroups.html">Polygroups and visibility</a></li><li><a href="subtools.html">SubTools</a></li><li><a href="polypaint.html">Polypaint and materials</a></li><li><a href="texture-painting.html">Texture painting</a></li><li><a href="layers.html">Sculpt layers and blend shapes</a></li><li><a href="subdivision-levels.html">Subdivision levels</a></li><li><a href="gizmo.html">Moving, rotating and posing (Gizmo 3D)</a></li><li><a href="geometry.html">Subdivide, remesh, decimate and LODs</a></li><li><a href="retopology.html">Quad retopology and detail projection</a></li></ul><p class="toc-group">AI and capture</p><ul><li><a href="generate-3d.html">Image and text to 3D</a></li><li><a href="splats.html">Gaussian splats</a></li></ul><p class="toc-group">Files and pipelines</p><ul><li><a href="baking.html">Baking normal and displacement maps</a></li><li><a href="exporting.html">Exporting, Unreal and ZBrush</a></li><li><a href="projects.html">Projects, autosave and QuickSave</a></li><li><a href="scripting.html">Scripting and automation</a></li><li><a href="studios.html">SculptForge for studios</a></li></ul><p class="toc-group">Reference</p><ul><li><a href="shortcuts.html">Keyboard and mouse</a></li><li><a href="troubleshooting.html">Troubleshooting and FAQ</a></li><li><a href="glossary.html">Glossary</a></li></ul></nav>
+        <nav class="toc" aria-label="User guide"><a class="toc-home" href="index.html">Contents</a><p class="toc-group">Getting started</p><ul><li><a href="welcome.html">Welcome to SculptForge</a></li><li><a href="whats-new.html" class="current" aria-current="page">What&#x27;s new</a><ul class="toc-sections"><li><a href="#next-version-in-development">Next version (in development)</a></li><li><a href="#version-042">Version 0.4.2</a></li><li><a href="#version-041">Version 0.4.1</a></li><li><a href="#version-04">Version 0.4</a></li><li><a href="#version-03">Version 0.3</a></li><li><a href="#version-02">Version 0.2</a></li><li><a href="#version-01">Version 0.1</a></li></ul></li><li><a href="installing.html">Installing SculptForge</a></li><li><a href="interface.html">The interface</a></li><li><a href="navigation.html">Navigating the view</a></li></ul><p class="toc-group">Sculpting</p><ul><li><a href="sculpting.html">Sculpting and brushes</a></li><li><a href="brush-lab.html">Brush Lab and sharing brushes</a></li><li><a href="masking.html">Masking</a></li><li><a href="polygroups.html">Polygroups and visibility</a></li><li><a href="subtools.html">SubTools</a></li><li><a href="polypaint.html">Polypaint and materials</a></li><li><a href="texture-painting.html">Texture painting</a></li><li><a href="layers.html">Sculpt layers and blend shapes</a></li><li><a href="subdivision-levels.html">Subdivision levels</a></li><li><a href="gizmo.html">Moving, rotating and posing (Gizmo 3D)</a></li><li><a href="geometry.html">Subdivide, remesh, decimate and LODs</a></li><li><a href="retopology.html">Quad retopology and detail projection</a></li></ul><p class="toc-group">AI and capture</p><ul><li><a href="generate-3d.html">Image and text to 3D</a></li><li><a href="splats.html">Gaussian splats</a></li></ul><p class="toc-group">Files and pipelines</p><ul><li><a href="baking.html">Baking normal and displacement maps</a></li><li><a href="exporting.html">Exporting, Unreal and ZBrush</a></li><li><a href="projects.html">Projects, autosave and QuickSave</a></li><li><a href="scripting.html">Scripting and automation</a></li><li><a href="studios.html">SculptForge for studios</a></li></ul><p class="toc-group">Reference</p><ul><li><a href="shortcuts.html">Keyboard and mouse</a></li><li><a href="performance.html">Performance and big meshes</a></li><li><a href="troubleshooting.html">Troubleshooting and FAQ</a></li><li><a href="glossary.html">Glossary</a></li></ul></nav>
       </div>
     </div>
     <main class="guide-main" id="top">
@@ -122,6 +122,32 @@ Fast on big models: a drag frame on 1.3 million triangles takes about 10 ms.
 </li>
 </ul>
 <p>See <a href="retopology.html">Quad retopology and detail projection</a>.</p>
+<h3 id="performance-at-tens-of-millions-of-polygons">Performance at tens of millions of polygons<a class="anchor" href="#performance-at-tens-of-millions-of-polygons" aria-label="Link to this section">#</a></h3>
+<p>Sculpting a 33 million triangle model on a laptop now keeps up with the display: a medium brush costs about 10 ms per dab instead of 400, and turning the view runs at 50-70 frames a second instead of 32.</p>
+<ul>
+<li>
+<strong>Brushes use every core</strong>: every brush, mask and paint stroke, the normal updates and the picking structure. Results are exactly the same as on one core.
+</li>
+<li>
+<strong>Strokes send the graphics card only what they changed.</strong> Before, a dab with symmetry on a subdivided model re-sent most of the mesh.
+</li>
+<li>
+<strong>Fast undo</strong>: undo keeps only the vertices a stroke changed, and the first polypaint stroke on a model no longer copies the whole mesh for undo.
+</li>
+<li>
+<strong>Less memory</strong>: about 30% less per triangle for a sculpting mesh.
+</li>
+<li>
+<strong>Faster projects</strong>: saving and opening big projects is faster, and projects over 4 GB save (ZIP64).
+</li>
+<li>
+<strong>Preferences &gt; Performance</strong>: Antialiasing (Off to 8x), <strong>Fast Navigation</strong> (big scenes drop antialiasing while the view moves), Multithreading, what your last stroke cost per dab, and the memory the scene holds. A SubTool too big for the graphics card is left out of the view with a message, instead of failing.
+</li>
+<li>
+<code>sculptforge --bench</code> measures your machine.
+</li>
+</ul>
+<p>See <a href="performance.html">Performance and big meshes</a>.</p>
 <h3 id="polish">Polish<a class="anchor" href="#polish" aria-label="Link to this section">#</a></h3>
 <ul>
 <li>

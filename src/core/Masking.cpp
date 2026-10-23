@@ -5,6 +5,7 @@
 #include "core/Commands.h"
 #include "core/ScreenSelect.h"
 #include "core/Sculpt.h"
+#include "core/ThreadPool.h"
 
 #include <algorithm>
 #include <cmath>
@@ -174,21 +175,35 @@ void Sculptor::dabMask(Mesh& mesh, const BVH& bvh, const DabParams& p, Symmetry 
     if (!active_) return;
     const float s = std::clamp(p.strength, 0.0f, 1.0f) * std::clamp(p.pressure, 0.0f, 1.0f);
     if (s <= 0.0f) return;
+    auto clock = std::chrono::steady_clock::now();
     std::vector<float>& mask = mesh.ensureMask();
     for (const glm::vec3& mirror : mirrors(sym)) {
         const glm::vec3 center = p.center * mirror, viewDir = p.viewDir * mirror;
         brushVertices(mesh, bvh, center, p.radius, verts_);
-        for (uint32_t v : verts_) {
-            if (p.frontFacesOnly && glm::dot(mesh.normals[v], viewDir) > 0.0f) continue;
-            const float a = s * brushFalloff(glm::distance(mesh.positions[v], center), p.radius);
-            if (a <= 0.0f) continue;
-            const float m = p.invert ? mask[v] * (1.0f - a) : mask[v] + (1.0f - mask[v]) * a;
-            if (m == mask[v]) continue;
+        // New values in parallel; recording and writing them in order.
+        weights_.resize(verts_.size());
+        poolFor(verts_.size(), [&](size_t b, size_t e) {
+            for (size_t i = b; i < e; ++i) {
+                const uint32_t v = verts_[i];
+                weights_[i] = -1.0f; // unchanged
+                if (p.frontFacesOnly && glm::dot(mesh.normals[v], viewDir) > 0.0f) continue;
+                const float a = s * brushFalloff(glm::distance(mesh.positions[v], center), p.radius);
+                if (a <= 0.0f) continue;
+                const float m = p.invert ? mask[v] * (1.0f - a) : mask[v] + (1.0f - mask[v]) * a;
+                if (m != mask[v]) weights_[i] = m;
+            }
+        });
+        for (size_t i = 0; i < verts_.size(); ++i) {
+            if (weights_[i] < 0.0f) continue;
+            const uint32_t v = verts_[i];
             recordMask(mesh, v);
-            mask[v] = m;
+            mask[v] = weights_[i];
             mesh.markDirty(v);
         }
+        timings.vertices += verts_.size();
     }
+    timings.kernelMs += lapMs(clock);
+    ++timings.dabs;
 }
 
 void registerMaskingCommands(CommandRegistry& registry) {

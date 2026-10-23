@@ -1,0 +1,187 @@
+// SculptForge - open source digital sculpting
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Preferences > Performance (ZBrush: Preferences > Performance and Mem): how the 3D view draws (Antialiasing,
+// Fast Navigation), Multithreading, what the last stroke cost per dab, and the memory the scene holds. The
+// numbers come from the same instruments as the benchmark (core/Benchmark.h, docs/performance.md).
+#include "app/App.h"
+#include "app/Ui.h"
+
+#include "core/Benchmark.h"
+#include "core/ThreadPool.h"
+
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+
+namespace sf {
+
+namespace {
+
+constexpr const char* kPath = "Preferences > Performance";
+// Scenes this big draw without antialiasing while the view moves (with Fast Navigation on). UI tests lower it
+// with the environment variable SF_FAST_NAVIGATION_TRIANGLES, so they needn't build a huge mesh.
+size_t fastNavigationTriangles() {
+    const char* v = std::getenv("SF_FAST_NAVIGATION_TRIANGLES");
+    return v && *v ? size_t(std::strtoull(v, nullptr, 10)) : size_t(10'000'000);
+}
+
+std::string megabytes(size_t bytes) {
+    char buf[32];
+    if (bytes >= size_t(1) << 30) std::snprintf(buf, sizeof buf, "%.2f GB", double(bytes) / double(size_t(1) << 30));
+    else std::snprintf(buf, sizeof buf, "%.0f MB", double(bytes) / double(size_t(1) << 20));
+    return buf;
+}
+
+void dimText(const std::string& text) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", text.c_str());
+    ImGui::PopStyleColor();
+}
+
+} // namespace
+
+void App::registerPerformanceUiActions() {
+    auto add = [this](std::string id, std::string label, std::function<void()> run, std::function<bool()> checked,
+                      std::string description) {
+        Action a;
+        a.id = std::move(id);
+        a.label = std::move(label);
+        a.palette = kPath;
+        a.run = std::move(run);
+        a.checked = std::move(checked);
+        a.description = std::move(description);
+        actions_.add(std::move(a));
+    };
+    for (int samples : {1, 2, 4, 8}) {
+        const std::string name = samples == 1 ? "Off" : std::to_string(samples) + "x";
+        add("perf.aa_" + std::to_string(samples), "AA " + name,
+            [this, samples, name] {
+                uiPrefs_.antialiasing = samples;
+                status_ = "Antialiasing " + name + (samples > 1 && uiPrefs_.fastNavigation ? " (off while big scenes move)" : "");
+            },
+            [this, samples] { return uiPrefs_.antialiasing == samples; },
+            samples == 1 ? "Draw the 3D view without antialiasing: fastest, with jagged edges."
+                         : "Smooth the 3D view's edges with " + std::to_string(samples) +
+                               " samples per pixel (multisampling). More samples look smoother and cost more on huge "
+                               "meshes. If the GPU can't make room for them, the view uses fewer.");
+    }
+    add("perf.fast_navigation", "Fast Navigation",
+        [this] {
+            uiPrefs_.fastNavigation = !uiPrefs_.fastNavigation;
+            status_ = uiPrefs_.fastNavigation ? "Fast Navigation on" : "Fast Navigation off";
+        },
+        [this] { return uiPrefs_.fastNavigation; },
+        "While you rotate, pan or zoom a scene of 10 million triangles or more, draw it without antialiasing, so the "
+        "view keeps up; it is smooth again as soon as the view stops.");
+    add("perf.multithreading", "Multithreading",
+        [this] {
+            uiPrefs_.multithreading = ThreadPool::shared().serial();
+            applyPerformancePrefs();
+            status_ = uiPrefs_.multithreading ? "Multithreading on (" + std::to_string(ThreadPool::shared().threads()) + " threads)"
+                                              : "Multithreading off (one thread)";
+        },
+        [] { return !ThreadPool::shared().serial(); },
+        "Run brushes, normal and BVH updates and project saving on every core. Turn it off only to compare speeds "
+        "or rule it out when troubleshooting: the results are the same either way.");
+}
+
+void App::applyPerformancePrefs() { ThreadPool::shared().setSerial(!uiPrefs_.multithreading); }
+
+int App::viewSamples() {
+    const int aa = uiPrefs_.antialiasing;
+    // The view moved in the last few frames (orbit, pan, zoom, snapping, framing), or is being dragged.
+    const glm::mat4 view = camera_.view();
+    if (view != perf_.lastView) {
+        perf_.lastView = view;
+        perf_.framesStill = 0;
+    } else if (perf_.framesStill < 1000) {
+        ++perf_.framesStill;
+    }
+    const bool moving = drag_ == Drag::Orbit || drag_ == Drag::Pan || drag_ == Drag::Zoom || perf_.framesStill < 8;
+    size_t triangles = 0;
+    for (int i = 0; i < doc_.subtoolCount(); ++i)
+        if (doc_.subtools[size_t(i)].visible) triangles += doc_.subtoolMesh(i).triangleCount();
+    perf_.fastNow = aa > 1 && uiPrefs_.fastNavigation && moving && triangles >= fastNavigationTriangles();
+    perf_.samplesWanted = perf_.fastNow ? 1 : aa;
+    return perf_.samplesWanted;
+}
+
+void App::notePerformanceFrame(double syncMs) {
+    if (doc_.sculptor.strokeActive()) {
+        perf_.strokeSyncMs += syncMs;
+        ++perf_.strokeFrames;
+    }
+    // A SubTool too big for the GPU's memory isn't drawn: say so once.
+    bool oom = false;
+    for (const SubTool& s : doc_.subtools) oom = oom || (s.visible && renderer_.outOfMemory(s.id));
+    if (oom && !perf_.gpuOutOfMemory)
+        status_ = "Not enough GPU memory to show every SubTool: hide some, or step down a subdivision level "
+                  "(Preferences > Performance)";
+    perf_.gpuOutOfMemory = oom;
+}
+
+void App::drawPerformanceSection() {
+    // --- The 3D view ---
+    ImGui::TextUnformatted("Antialiasing");
+    ui::HelpText("Antialiasing", nullptr,
+                 "Samples per pixel in the 3D view: more smooths edges, fewer is faster on huge meshes.", kPath);
+    ui::Segmented(*this, {"perf.aa_1", "perf.aa_2", "perf.aa_4", "perf.aa_8"});
+    bool fast = uiPrefs_.fastNavigation;
+    if (ImGui::Checkbox("Fast Navigation", &fast)) actions_.find("perf.fast_navigation")->run();
+    ui::HelpAction(*this, "perf.fast_navigation");
+    if (perf_.samplesUsed > 0 && perf_.samplesUsed < uiPrefs_.antialiasing && !perf_.fastNow)
+        dimText("The GPU had no room for " + std::to_string(uiPrefs_.antialiasing) + "x: using " +
+                (perf_.samplesUsed == 1 ? std::string("none") : std::to_string(perf_.samplesUsed) + "x") + ".");
+
+    // --- Threads ---
+    bool threads = !ThreadPool::shared().serial();
+    if (ImGui::Checkbox("Multithreading##perf.mt", &threads)) actions_.find("perf.multithreading")->run();
+    ui::HelpAction(*this, "perf.multithreading");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%d threads", threads ? ThreadPool::shared().threads() : 1);
+
+    // --- The last stroke ---
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Last stroke");
+    ui::HelpText("Last stroke", nullptr,
+                 "What the last brush stroke cost, per dab (one step of the brush, all symmetry sides): finding and "
+                 "moving the vertices, updating their normals and the BVH (the picking structure), and sending the "
+                 "change to the GPU (per frame). Under 16 ms keeps up with a 60 Hz display.",
+                 kPath);
+    const SculptTimings& t = perf_.lastStroke;
+    if (t.dabs == 0) {
+        dimText("Sculpt a stroke to see what it costs.");
+    } else {
+        const double d = double(t.dabs);
+        const double upload = perf_.lastStrokeFrames ? perf_.lastStrokeSyncMs / perf_.lastStrokeFrames : 0.0;
+        char buf[256];
+        std::snprintf(buf, sizeof buf, "%llu dabs, %.0fk vertices each\nBrush %.2f ms  Normals %.2f ms  BVH %.2f ms\nGPU upload %.2f ms per frame",
+                      static_cast<unsigned long long>(t.dabs), double(t.vertices) / d / 1000.0, t.kernelMs / d,
+                      t.normalsMs / d, t.bvhMs / d, upload);
+        ImGui::TextUnformatted(buf);
+        ImGui::LogText("%s", buf);
+    }
+
+    // --- Memory ---
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Memory");
+    ui::HelpText("Memory", nullptr,
+                 "What the scene holds: the meshes with their topology, the BVHs, the subdivision levels kept for "
+                 "stepping between them, the undo history (Edit keeps up to 1 GB, dropping the oldest steps) and the "
+                 "GPU buffers of the visible SubTools.",
+                 kPath);
+    const MemoryUse m = documentMemory(doc_);
+    const std::string mem = "Meshes " + megabytes(m.mesh) + "  BVH " + megabytes(m.bvh) + "\nSubdivision levels " +
+                            megabytes(m.levels) + "\nUndo " + megabytes(m.undo) + " of " + megabytes(doc_.undo.byteBudget) +
+                            "\nGPU buffers about " + megabytes(m.gpu);
+    ImGui::TextUnformatted(mem.c_str());
+    ImGui::LogText("%s", mem.c_str());
+    if (perf_.gpuOutOfMemory) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(ui::color::danger));
+        ImGui::TextWrapped("Not enough GPU memory to show every SubTool: hide some or step down a subdivision level.");
+        ImGui::PopStyleColor();
+    }
+}
+
+} // namespace sf

@@ -48,6 +48,11 @@ documentation** opens links to it).
   **Show** in the **Splats** palette while you sculpt.
 - On laptops with two GPUs, make sure SculptForge runs on the dedicated one (in the GPU maker's control panel
   or the operating system's graphics settings).
+- **Preferences > Performance**: lower **Antialiasing** (or turn it off), keep **Fast Navigation** on, and look
+  at **Last stroke** to see whether brushes or the graphics card take the time. Step down a
+  [subdivision level](subdivision-levels.md) for big changes. See [Performance and big meshes](performance.md).
+- A SubTool missing from the view with "Not enough GPU memory" in the status bar didn't fit on the graphics
+  card: hide other SubTools or step down a level.
 
 ## Pen tablets
 

@@ -114,7 +114,8 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
   symmetry) plus ProjectAll detail transfer (v0.5); 📋 curve guides
 - ✅ Automatic UV unwrapping (Auto UV, xatlas) and texture painting on UV maps (v0.5)
 - ✅ Normal / displacement / AO / cavity / colour map baking with MikkTSpace tangents and a viewport preview (v0.5)
-- 📋 Performance at 20-100M polygons, multithreaded brushes, fast undo
+- ✅ Performance at 20-100M polygons, multithreaded brushes, fast undo (benchmark, partial GPU uploads, Fast
+  Navigation; v0.5)
 - ✅ Gizmo 3D for moving, scaling, rotating and posing parts (W / E / R, masked falloff, Transpose All) (v0.5)
 
 ## Phase 3 — AI assistant, beyond brushes

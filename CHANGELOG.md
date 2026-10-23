@@ -89,6 +89,30 @@ All notable changes to SculptForge are listed here. The format follows
 - New guide chapter "Quad retopology and detail projection", glossary entries; UI test `tests/ui/retopo.sfui`,
   unit tests `tests/test_retopo.cpp` (manifold, quad %, target count, Hausdorff distance, projection error).
 
+### Performance at tens of millions of polygons
+- Benchmark: `sculptforge --bench` (with GPU upload and orbit timings) and `sculptforge-cli --bench` build a
+  sphere divided to 4M / 16M / 32M triangles and measure every brush per dab (kernel, normals, BVH refit, upload),
+  undo, level stepping, project save / open and orbit. Numbers before and after in docs/performance.md.
+- A persistent thread pool (core/ThreadPool) runs every brush kernel (all brush types, recipes, mask and paint),
+  normal updates, BVH queries, refits and builds, and project CRCs. Work is split into fixed blocks with partial
+  sums added in order, so results are identical to one thread (`set_multithreading`).
+- Partial GPU updates: meshes track dirty vertices (a bit each, plus 2048-vertex blocks), and the renderer keeps
+  vertices in first-use order of the triangle list (core/UploadOrder), so a dab uploads a few short ranges of
+  what it changed instead of most of a subdivided mesh. A medium dab at 33M triangles: 398 ms -> 10 ms.
+- Memory: the per-triangle face normal cache and its stamps are gone (normals are summed per vertex, same
+  result), the adjacency list has no spare capacity, the renderer keeps no CPU copy of the curvature: 90 -> 62
+  bytes per triangle for a sculpting mesh.
+- The first polypaint stroke on an unpainted mesh keeps the (empty) paint stack for undo instead of a copy of
+  the whole mesh.
+- Projects: archives stream to disk (no in-memory copy), entries are read in place, CRCs are computed in
+  parallel, arrays are copied rather than converted byte by byte; ZIP64 past 4 GB (smaller archives are
+  byte-identical to before).
+- The window has no multisampling; the 3D view antialiases in its own target (Renderer::drawView), so it can
+  use fewer samples when the GPU has no room, and Fast Navigation draws scenes of 10M+ triangles without
+  antialiasing while the view moves. A SubTool that runs the GPU out of memory is not drawn (status message).
+- Preferences > Performance: Antialiasing (Off / 2x / 4x / 8x), Fast Navigation, Multithreading, the last
+  stroke's cost per dab and memory; `perf_info` and `set_multithreading` commands.
+
 ### Polish of the v0.5 features (known issues fixed)
 - Auto UV on a SubTool with a painted texture now moves the paint and every texture layer onto the new UVs
   instead of scrambling it (each texel of a new UV triangle samples the old texture at the same point of the same

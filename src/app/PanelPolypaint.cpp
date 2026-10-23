@@ -65,16 +65,17 @@ void App::beginPaintStroke() {
         const PaintLayer& l = m.paintLayers[size_t(m.activePaintLayer)];
         status_ = "Paint layer '" + l.name + "' is " + (l.locked ? "locked" : "hidden");
     }
-    if (strokePaint_ && !doc_.mesh.hasColors()) paintSnapshot_ = std::make_unique<Mesh>(doc_.mesh);
+    // (Only the paint stack: a copy of the whole mesh would be gigabytes at tens of millions of polygons.)
+    if (strokePaint_ && !doc_.mesh.hasColors()) paintSnapshot_ = std::make_unique<PaintStackUndo>(PaintStackUndo::capture(doc_.mesh));
 }
 
 void App::finishPaintStroke(UndoRecord& record) {
     if (texturePainter_.active()) texturePainter_.end(record);
     if (!paintSnapshot_) return;
-    UndoRecord snapshot;
-    snapshot.label = std::move(record.label);
-    snapshot.mesh = std::move(paintSnapshot_);
-    record = std::move(snapshot);
+    // The colours the stroke recorded are the white it started from; restoring "no polypaint" replaces them.
+    record.colors = {};
+    record.paintAlpha = {};
+    record.paint = std::move(paintSnapshot_);
 }
 
 void App::pickColorUnderCursor() {

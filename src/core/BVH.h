@@ -35,6 +35,7 @@ public:
     void refitAll(const Mesh& mesh);
 
     size_t nodeCount() const { return nodes_.size(); }
+    size_t memoryBytes() const;
 
 private:
     struct Node {
@@ -51,11 +52,14 @@ private:
     std::vector<uint32_t> triIndices_;
     std::vector<uint32_t> triLeaf_;
 
-    mutable std::vector<uint32_t> vertStamp_;
-    mutable uint32_t vertStampValue_ = 0;
+    mutable std::vector<uint32_t> vertStamp_; // queryVertices: (epoch << 16) | per-query code
+    mutable uint32_t queryEpoch_ = 0;
+    mutable std::vector<uint32_t> queryTasks_;
+    mutable std::vector<std::vector<uint32_t>> queryParts_;
     std::vector<uint32_t> leafStamp_;
     uint32_t leafStampValue_ = 0;
     std::vector<uint32_t> scratchLeaves_;
+    std::vector<std::vector<uint32_t>> scratchParts_;
     mutable std::vector<uint32_t> stack_;
 };
 

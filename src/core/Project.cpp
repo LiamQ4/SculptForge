@@ -51,10 +51,36 @@ enum class Scalar { F32, U32, U8 };
 const char* scalarName(Scalar s) { return s == Scalar::F32 ? "f32" : s == Scalar::U32 ? "u32" : "u8"; }
 size_t scalarSize(Scalar s) { return s == Scalar::U8 ? 1 : 4; }
 
-void put32(std::vector<uint8_t>& out, uint32_t v) {
+[[maybe_unused]] void put32(std::vector<uint8_t>& out, uint32_t v) {
     for (int i = 0; i < 4; ++i) out.push_back(uint8_t(v >> (8 * i)));
 }
 uint32_t get32(const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; }
+
+// `n` 32-bit values as little-endian bytes (a plain copy on little-endian machines).
+template <class T>
+std::vector<uint8_t> littleEndian(const T* v, size_t n) {
+    static_assert(sizeof(T) == 4);
+    std::vector<uint8_t> data;
+    if constexpr (std::endian::native == std::endian::little) {
+        data.resize(n * 4);
+        if (n) std::memcpy(data.data(), v, n * 4);
+    } else {
+        data.reserve(n * 4);
+        for (size_t i = 0; i < n; ++i) put32(data, std::bit_cast<uint32_t>(v[i]));
+    }
+    return data;
+}
+
+// Reads `n` little-endian 32-bit values (a plain copy on little-endian machines).
+template <class T>
+void fromLittleEndian(const uint8_t* p, size_t n, T* out) {
+    static_assert(sizeof(T) == 4);
+    if constexpr (std::endian::native == std::endian::little) {
+        if (n) std::memcpy(out, p, n * 4);
+    } else {
+        for (size_t i = 0; i < n; ++i) out[i] = std::bit_cast<T>(get32(p + 4 * i));
+    }
+}
 
 class Writer {
 public:
@@ -69,19 +95,13 @@ public:
         return d;
     }
     Json floats(const std::string& file, const float* v, size_t count, int components) {
-        std::vector<uint8_t> data;
-        data.reserve(count * size_t(components) * 4);
-        for (size_t i = 0; i < count * size_t(components); ++i) put32(data, std::bit_cast<uint32_t>(v[i]));
-        return add(file, Scalar::F32, components, count, std::move(data));
+        return add(file, Scalar::F32, components, count, littleEndian(v, count * size_t(components)));
     }
     Json vec3s(const std::string& file, const std::vector<glm::vec3>& v) {
         return floats(file, v.empty() ? nullptr : &v[0].x, v.size(), 3);
     }
     Json uints(const std::string& file, const uint32_t* v, size_t count, int components) {
-        std::vector<uint8_t> data;
-        data.reserve(count * size_t(components) * 4);
-        for (size_t i = 0; i < count * size_t(components); ++i) put32(data, v[i]);
-        return add(file, Scalar::U32, components, count, std::move(data));
+        return add(file, Scalar::U32, components, count, littleEndian(v, count * size_t(components)));
     }
     Json bytes(const std::string& file, const std::vector<uint8_t>& v) { return add(file, Scalar::U8, 1, v.size(), v); }
 
@@ -108,7 +128,7 @@ public:
     bool floats(const Json& desc, const char* what, size_t count, int components, float* out) {
         const uint8_t* p = blob(desc, what, Scalar::F32, components, count);
         if (!p) return false;
-        for (size_t i = 0; i < count * size_t(components); ++i) out[i] = std::bit_cast<float>(get32(p + 4 * i));
+        fromLittleEndian(p, count * size_t(components), out);
         return true;
     }
     bool vec3s(const Json& desc, const char* what, size_t count, std::vector<glm::vec3>& out) {
@@ -118,7 +138,7 @@ public:
     bool uints(const Json& desc, const char* what, size_t count, int components, uint32_t* out) {
         const uint8_t* p = blob(desc, what, Scalar::U32, components, count);
         if (!p) return false;
-        for (size_t i = 0; i < count * size_t(components); ++i) out[i] = get32(p + 4 * i);
+        fromLittleEndian(p, count * size_t(components), out);
         return true;
     }
 

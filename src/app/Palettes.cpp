@@ -283,6 +283,7 @@ void App::drawPalette_Preferences() {
     if (subpalette("preferences.hotkeys", "Hotkeys")) config::drawHotkeysSection(*this);
     if (subpalette("preferences.lightbox", "LightBox")) config::drawLightBoxSection(*this);
     if (subpalette("preferences.tablet", "Tablet")) drawTabletSection();
+    if (subpalette("preferences.performance", "Performance")) drawPerformanceSection();
     if (subpalette("preferences.autosave", "Autosave")) {
         ImGui::SetNextItemWidth(-1);
         ImGui::SliderInt("##autosave", &autosaveMinutes_, 0, 60, autosaveMinutes_ ? "Every %d min" : "Autosave off");

@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Mesh.h"
 #include "core/Multires.h"
+#include "core/ThreadPool.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <unordered_map>
 
@@ -135,86 +137,183 @@ void Mesh::rebuildTopology() {
             for (int c = 0; c < 3; ++c) vtList_[cursor[triangles[ti][c]]++] = ti;
     }
 
+    // Rings (sorted, unique) per vertex: sized in one parallel pass, written in a second.
     adjOffsets_.assign(nv + 1, 0);
-    adjList_.clear();
-    adjList_.reserve(vtList_.size() * 2);
-    std::vector<uint32_t> ring;
-    for (uint32_t v = 0; v < nv; ++v) {
-        ring.clear();
+    auto ring = [&](uint32_t v, std::vector<uint32_t>& out) {
+        out.clear();
         for (uint32_t ti : vertexTriangles(v))
             for (int c = 0; c < 3; ++c)
-                if (triangles[ti][c] != v) ring.push_back(triangles[ti][c]);
-        std::sort(ring.begin(), ring.end());
-        ring.erase(std::unique(ring.begin(), ring.end()), ring.end());
-        adjList_.insert(adjList_.end(), ring.begin(), ring.end());
-        adjOffsets_[v + 1] = static_cast<uint32_t>(adjList_.size());
-    }
+                if (triangles[ti][c] != v) out.push_back(triangles[ti][c]);
+        std::sort(out.begin(), out.end());
+        out.erase(std::unique(out.begin(), out.end()), out.end());
+    };
+    poolFor(nv, [&](size_t b, size_t e) {
+        std::vector<uint32_t> r;
+        for (size_t v = b; v < e; ++v) {
+            ring(uint32_t(v), r);
+            adjOffsets_[v + 1] = uint32_t(r.size());
+        }
+    });
+    for (size_t i = 0; i < nv; ++i) adjOffsets_[i + 1] += adjOffsets_[i];
+    std::vector<uint32_t>().swap(adjList_); // exact size, no spare capacity
+    adjList_.resize(adjOffsets_[nv]);
+    poolFor(nv, [&](size_t b, size_t e) {
+        std::vector<uint32_t> r;
+        for (size_t v = b; v < e; ++v) {
+            ring(uint32_t(v), r);
+            std::copy(r.begin(), r.end(), adjList_.begin() + adjOffsets_[v]);
+        }
+    });
 
-    faceNormals_.resize(triangles.size());
-    triStamp_.assign(triangles.size(), 0);
     vertStamp_.assign(nv, 0);
     stamp_ = 0;
     normals.resize(nv);
+    dirtyBlocks.assign((nv + kDirtyBlock - 1) / kDirtyBlock, 0);
+    dirtyBits.assign(dirtyBlocks.size() * (kDirtyBlock / 64), 0);
+    if (dirtyBegin < dirtyEnd) markDirtyRange(dirtyBegin, std::min(dirtyEnd, uint32_t(nv)));
     topologyDirty = true;
     facesDirty = true;
 }
 
 uint32_t Mesh::nextStamp() {
     if (++stamp_ == 0) {
-        std::fill(triStamp_.begin(), triStamp_.end(), 0);
         std::fill(vertStamp_.begin(), vertStamp_.end(), 0);
         stamp_ = 1;
     }
     return stamp_;
 }
 
+void Mesh::growDirtyBlocks(size_t blocks) {
+    if (dirtyBlocks.size() < blocks) dirtyBlocks.resize(blocks, 0);
+    if (dirtyBits.size() < blocks * (kDirtyBlock / 64)) dirtyBits.resize(blocks * (kDirtyBlock / 64), 0);
+}
+
+void Mesh::markDirtyRange(uint32_t begin, uint32_t end) {
+    if (begin >= end) return;
+    dirtyBegin = std::min(dirtyBegin, begin);
+    dirtyEnd = std::max(dirtyEnd, end);
+    const size_t last = (end - 1) >> kDirtyBlockShift;
+    growDirtyBlocks(last + 1);
+    std::fill(dirtyBlocks.begin() + (begin >> kDirtyBlockShift), dirtyBlocks.begin() + last + 1, uint8_t(1));
+    // Bits: the partial words at both ends, whole words between.
+    const size_t w0 = begin >> 6, w1 = (end - 1) >> 6;
+    const uint64_t head = ~uint64_t(0) << (begin & 63), tail = ~uint64_t(0) >> (63 - ((end - 1) & 63));
+    if (w0 == w1) {
+        dirtyBits[w0] |= head & tail;
+        return;
+    }
+    dirtyBits[w0] |= head;
+    std::fill(dirtyBits.begin() + w0 + 1, dirtyBits.begin() + w1, ~uint64_t(0));
+    dirtyBits[w1] |= tail;
+}
+
+void Mesh::clearDirty() {
+    if (dirtyBegin < dirtyEnd) {
+        constexpr size_t kWords = kDirtyBlock / 64;
+        const size_t b = dirtyBegin >> kDirtyBlockShift, e = std::min(dirtyBlocks.size(), size_t((dirtyEnd - 1) >> kDirtyBlockShift) + 1);
+        for (size_t i = b; i < e; ++i) {
+            if (!dirtyBlocks[i]) continue;
+            dirtyBlocks[i] = 0;
+            std::fill(dirtyBits.begin() + std::ptrdiff_t(i * kWords), dirtyBits.begin() + std::ptrdiff_t((i + 1) * kWords), 0);
+        }
+    }
+    dirtyBegin = std::numeric_limits<uint32_t>::max();
+    dirtyEnd = 0;
+    topologyDirty = false;
+    facesDirty = false;
+}
+
 void Mesh::recomputeAllNormals() {
-    faceNormals_.resize(triangles.size());
-    for (size_t i = 0; i < triangles.size(); ++i) faceNormals_[i] = faceNormal(positions, triangles[i]);
+    // Area-weighted face normals summed in triangle order (each vertex's sum in the same order as
+    // updateNormals adds them); the faces and the normalising run in parallel.
+    std::vector<glm::vec3> faces(triangles.size());
+    poolFor(triangles.size(), [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i) faces[i] = faceNormal(positions, triangles[i]);
+    }, 1 << 16);
     normals.assign(positions.size(), glm::vec3(0.0f));
     for (size_t i = 0; i < triangles.size(); ++i)
-        for (int c = 0; c < 3; ++c) normals[triangles[i][c]] += faceNormals_[i];
-    for (auto& n : normals) {
-        float len = glm::length(n);
-        n = len > 1e-20f ? n / len : glm::vec3(0, 1, 0);
-    }
-    if (!positions.empty()) {
-        dirtyBegin = 0;
-        dirtyEnd = static_cast<uint32_t>(positions.size());
-    }
+        for (int c = 0; c < 3; ++c) normals[triangles[i][c]] += faces[i];
+    poolFor(normals.size(), [&](size_t b, size_t e) {
+        for (size_t v = b; v < e; ++v) {
+            glm::vec3& n = normals[v];
+            float len = glm::length(n);
+            n = len > 1e-20f ? n / len : glm::vec3(0, 1, 0);
+        }
+    }, 1 << 16);
+    markAllDirty();
 }
 
 void Mesh::updateNormals(std::span<const uint32_t> verts) {
-    const uint32_t s = nextStamp();
-
-    scratchTris_.clear();
-    for (uint32_t v : verts) {
-        markDirty(v);
-        for (uint32_t ti : vertexTriangles(v)) {
-            if (triStamp_[ti] != s) {
-                triStamp_[ti] = s;
-                scratchTris_.push_back(ti);
-            }
-        }
-    }
-    for (uint32_t ti : scratchTris_) faceNormals_[ti] = faceNormal(positions, triangles[ti]);
-
+    // The vertices whose normal changes: the moved ones and every neighbour (each once), then each one's
+    // normal from its faces, in its triangle order (as recomputeAllNormals sums them).
+    const size_t nv = positions.size();
+    if (vertStamp_.size() != nv) return; // no topology
+    growDirtyBlocks((nv + kDirtyBlock - 1) / kDirtyBlock);
+    constexpr size_t kBlock = 4096;
     scratchVerts_.clear();
-    for (uint32_t ti : scratchTris_) {
-        for (int c = 0; c < 3; ++c) {
-            uint32_t v = triangles[ti][c];
-            if (vertStamp_[v] != s) {
-                vertStamp_[v] = s;
-                scratchVerts_.push_back(v);
-            }
+    if (verts.size() <= 4 * kBlock || ThreadPool::shared().serial()) {
+        const uint32_t s = nextStamp();
+        auto claim = [&](uint32_t u) {
+            if (vertStamp_[u] == s) return;
+            vertStamp_[u] = s;
+            scratchVerts_.push_back(u);
+        };
+        for (uint32_t v : verts) {
+            claim(v);
+            for (uint32_t u : neighbors(v)) claim(u);
         }
+    } else {
+        // In parallel: first the moved vertices themselves (stamp `own`), then the ring around them that isn't
+        // one of them (stamp `ring`, claimed with an atomic exchange: only the ring is shared between blocks).
+        // Which block lists a ring vertex varies, but the set, and every normal computed from it, doesn't.
+        if (stamp_ >= 0xFFFFFFF0u) { // two stamps in a row: start over first, so they can't wrap in between
+            std::fill(vertStamp_.begin(), vertStamp_.end(), 0);
+            stamp_ = 0;
+        }
+        const uint32_t own = nextStamp(), ring = nextStamp();
+        const size_t parts = (verts.size() + kBlock - 1) / kBlock;
+        if (scratchParts_.size() < 2 * parts) scratchParts_.resize(2 * parts);
+        poolFor(verts.size(), [&](size_t b, size_t e) {
+            std::vector<uint32_t>& out = scratchParts_[b / kBlock];
+            out.clear();
+            for (size_t i = b; i < e; ++i)
+                if (std::atomic_ref<uint32_t>(vertStamp_[verts[i]]).exchange(own, std::memory_order_relaxed) != own)
+                    out.push_back(verts[i]);
+        }, kBlock);
+        poolFor(verts.size(), [&](size_t b, size_t e) {
+            std::vector<uint32_t>& out = scratchParts_[parts + b / kBlock];
+            out.clear();
+            for (size_t i = b; i < e; ++i)
+                for (uint32_t u : neighbors(verts[i])) {
+                    std::atomic_ref<uint32_t> stamp(vertStamp_[u]);
+                    const uint32_t seen = stamp.load(std::memory_order_relaxed);
+                    if (seen == own || seen == ring) continue;
+                    if (stamp.exchange(ring, std::memory_order_relaxed) != ring) out.push_back(u);
+                }
+        }, kBlock);
+        for (size_t p = 0; p < 2 * parts; ++p) scratchVerts_.insert(scratchVerts_.end(), scratchParts_[p].begin(), scratchParts_[p].end());
     }
-    for (uint32_t v : scratchVerts_) {
-        glm::vec3 n(0.0f);
-        for (uint32_t ti : vertexTriangles(v)) n += faceNormals_[ti];
-        float len = glm::length(n);
-        if (len > 1e-20f) normals[v] = n / len;
-        markDirty(v);
+
+    const size_t n = scratchVerts_.size();
+    std::vector<std::pair<uint32_t, uint32_t>> bounds((n + kBlock - 1) / kBlock);
+    poolFor(n, [&](size_t b, size_t e) {
+        uint32_t lo = std::numeric_limits<uint32_t>::max(), hi = 0;
+        for (size_t i = b; i < e; ++i) {
+            const uint32_t v = scratchVerts_[i];
+            glm::vec3 sum(0.0f);
+            for (uint32_t ti : vertexTriangles(v)) sum += faceNormal(positions, triangles[ti]);
+            const float len = glm::length(sum);
+            if (len > 1e-20f) normals[v] = sum / len;
+            lo = std::min(lo, v);
+            hi = std::max(hi, v);
+            std::atomic_ref<uint8_t>(dirtyBlocks[v >> kDirtyBlockShift]).store(1, std::memory_order_relaxed);
+            std::atomic_ref<uint64_t>(dirtyBits[v >> 6]).fetch_or(uint64_t(1) << (v & 63), std::memory_order_relaxed);
+        }
+        bounds[b / kBlock] = {lo, hi + 1};
+    }, kBlock);
+    for (const auto& [lo, hi] : bounds) {
+        dirtyBegin = std::min(dirtyBegin, lo);
+        dirtyEnd = std::max(dirtyEnd, hi);
     }
 }
 
@@ -276,6 +375,16 @@ AABB Mesh::bounds() const {
     AABB b;
     for (const auto& p : positions) b.expand(p);
     return b;
+}
+
+size_t Mesh::memoryBytes() const {
+    auto bytes = [](const auto& v) { return v.capacity() * sizeof(v[0]); };
+    size_t n = bytes(positions) + bytes(normals) + bytes(triangles) + bytes(mask) + bytes(colors) + bytes(polygroups) +
+               bytes(hidden) + bytes(uvs) + bytes(quadPartners) + bytes(base) + bytes(paintBase) + bytes(adjOffsets_) +
+               bytes(adjList_) + bytes(vtOffsets_) + bytes(vtList_) + bytes(vertStamp_) + bytes(scratchVerts_) + bytes(dirtyBlocks) + bytes(dirtyBits);
+    for (const auto& l : layers) n += bytes(l.delta);
+    for (const auto& l : paintLayers) n += bytes(l.color) + bytes(l.alpha);
+    return n;
 }
 
 static void laplacianStep(Mesh& m, float lambda, std::vector<glm::vec3>& next) {

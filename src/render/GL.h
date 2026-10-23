@@ -69,6 +69,9 @@ constexpr GLenum GL_DEPTH_COMPONENT24 = 0x81A6;
 constexpr GLenum GL_CLAMP_TO_EDGE = 0x812F;
 constexpr GLenum GL_READ_FRAMEBUFFER = 0x8CA8;
 constexpr GLenum GL_DRAW_FRAMEBUFFER = 0x8CA9;
+constexpr GLenum GL_MAX_SAMPLES = 0x8D57;
+constexpr GLenum GL_NO_ERROR = 0;
+constexpr GLenum GL_OUT_OF_MEMORY = 0x0505;
 constexpr GLenum GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
 constexpr GLenum GL_COLOR_ATTACHMENT0 = 0x8CE0;
 constexpr GLenum GL_DEPTH_ATTACHMENT = 0x8D00;
@@ -106,6 +109,8 @@ constexpr GLbitfield GL_COLOR_BUFFER_BIT = 0x4000;
     X(void, PolygonMode, GLenum, GLenum)                                                     \
     X(void, PolygonOffset, GLfloat, GLfloat)                                                 \
     X(const GLubyte*, GetString, GLenum)                                                     \
+    X(void, Finish, void)                                                                    \
+    X(GLenum, GetError, void)                                                                \
     X(void, GenBuffers, GLsizei, GLuint*)                                                    \
     X(void, DeleteBuffers, GLsizei, const GLuint*)                                           \
     X(void, BindBuffer, GLenum, GLuint)                                                      \
