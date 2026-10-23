@@ -982,8 +982,10 @@ void spreadShape(MultiresStack& s, int c, const Mesh& w, const Mesh& r) {
         const std::vector<glm::vec3>& ra = ch == 0 ? baseChannel(r) : r.layers[ch - 1].delta;
         if (sameArray(wa, ra)) continue;
         anyChange = true;
-        // Restrict: each coarse vertex moves by half its own change plus half the mean change of the edge
-        // points around it, so a sharp stroke shows up softened instead of aliased.
+        // Restrict with full weighting (the transpose of linear interpolation): each coarse vertex moves by a
+        // blend of the change at its own fine vertex (weight 1), the edge points around it (1/2) and, for
+        // Catmull-Clark, the face points (1/4). Broad changes come through unchanged; narrow strokes show up
+        // softened instead of as spikes.
         std::vector<glm::vec3> delta(wa.size());
         parallelRange(wa.size(), [&](size_t b, size_t e) {
             for (size_t v = b; v < e; ++v) delta[v] = wa[v] - ra[v];
@@ -994,14 +996,21 @@ void spreadShape(MultiresStack& s, int c, const Mesh& w, const Mesh& r) {
             parallelRange(tp.coarseVertices, [&](size_t b, size_t e) {
                 for (size_t v = b; v < e; ++v) {
                     const uint32_t e0 = tp.vertEdgeOffsets[v], e1 = tp.vertEdgeOffsets[v + 1];
-                    const glm::vec3 own = delta[tp.vertexChild[v]];
-                    if (e0 == e1) {
-                        cd[v] = own;
-                        continue;
+                    glm::vec3 sum = delta[tp.vertexChild[v]];
+                    float weight = 1.0f;
+                    for (uint32_t k = e0; k < e1; ++k) {
+                        const uint32_t ei = tp.vertEdges[k];
+                        sum += 0.5f * delta[tp.edgeChild[ei]];
+                        weight += 0.5f;
+                        if (!tp.catmullClark) continue;
+                        // Each polygon around v borders two of its edges: a quarter weight, half from each.
+                        for (uint32_t f : {tp.edgeFaces[ei].x, tp.edgeFaces[ei].y})
+                            if (f != kNone) {
+                                sum += 0.125f * delta[tp.faceChild[f]];
+                                weight += 0.125f;
+                            }
                     }
-                    glm::vec3 sum(0.0f);
-                    for (uint32_t k = e0; k < e1; ++k) sum += delta[tp.edgeChild[tp.vertEdges[k]]];
-                    cd[v] = 0.5f * own + 0.5f * sum / float(e1 - e0);
+                    cd[v] = sum / weight;
                 }
             });
             Mesh& cm = mutableData(s.levels[size_t(j) - 1]);

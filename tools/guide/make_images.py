@@ -127,13 +127,26 @@ def remesh(shots: pathlib.Path):
     return save(img, "remesh", 900)
 
 
+def subdivision(shots: pathlib.Path):
+    box = (250, 125, 1070, 890)
+    names = [("sdiv-1", "SDiv 1: 108 triangles"), ("sdiv-3", "SDiv 3: 1,728"), ("sdiv-6", "SDiv 6: 110,592")]
+    panels = [Image.open(shots / f"{n}.png").convert("RGB").crop(box) for n, _ in names]
+    w, h = panels[0].size
+    img = Image.new("RGB", (w * 3 + 24, h), (20, 20, 22))
+    d = ImageDraw.Draw(img)
+    for i, (p, (_, text)) in enumerate(zip(panels, names)):
+        img.paste(p, (i * (w + 12), 0))
+        label(d, (i * (w + 12) + w // 2, 24), text, 22, "mt")
+    return save(img, "subdivision-levels", 1200)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("shots", type=pathlib.Path, help="folder with the screenshots (--ui-out of shots.sfui)")
     ap.add_argument("--preview", type=pathlib.Path, help="also write a contact sheet of every image here")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
-    made = [overview(args.shots), remesh(args.shots)]
+    made = [overview(args.shots), remesh(args.shots), subdivision(args.shots)]
     for name, (shot, box, width) in CROPS.items():
         src = args.shots / f"{shot}.png"
         if not src.exists():

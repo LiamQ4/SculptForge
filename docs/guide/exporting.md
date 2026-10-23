@@ -51,6 +51,9 @@ in GLB and USDZ files. **Tool > Texture Map > Auto UV** gives any sculpt UVs bef
 2. Choose the export in the **File** palette and pick a file name.
 3. The status line confirms the export ("Exported ...").
 
+A SubTool with [subdivision levels](subdivision-levels.md) is exported at the level you are on. To write the base
+cage (or any other level) without stepping to it, use `subdiv_export path=base.obj level=1`.
+
 From a script, each format is one command:
 
 ```sh

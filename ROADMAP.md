@@ -83,7 +83,7 @@ retopology, a full ZBrush feature list, rendering/animation (use Blender).
   Alt+click to select. Saved in projects (format 2) and exported as separate objects to OBJ, glTF, FBX (an LOD
   group per SubTool), USD and GoZ; multi-object files open as SubTools
 - ✅ UI tests: `.sfui` scripts drive the real app (clicks, typing, strokes) with screenshots, in CI
-- 📋 Multiresolution: subdivision levels you can step up/down while keeping detail
+- ✅ Multiresolution: subdivision levels you can step up/down while keeping detail (v0.5)
 - 📋 Dynamic topology (local remeshing under the brush)
 - ✅ Alphas (round, square, noise or any grayscale image) and stroke types (dots, drag-rect, spray, lazy mouse)
 - ✅ MaskLasso / MaskRect and SelectLasso (v0.4); 📋 stencils, MaskCurve
@@ -109,7 +109,7 @@ always-latest downloads.
 
 Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox forums:
 
-- 📋 Multiresolution subdivision levels (step up and down, keep detail, reconstruct)
+- ✅ Multiresolution subdivision levels (step up and down, keep detail, reconstruct)
 - 📋 ZRemesher-class quad retopology with guides and density, plus Project / Project All detail transfer
 - ✅ Automatic UV unwrapping (Auto UV, xatlas) and texture painting on UV maps (v0.5)
 - 📋 Normal / displacement map baking

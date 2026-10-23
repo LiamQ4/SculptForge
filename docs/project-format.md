@@ -4,8 +4,8 @@ A `.sfproj` is an uncompressed ("stored") ZIP (src/io/Zip.cpp) written by `saveP
 read by `loadProject` (src/core/Project.cpp). Commands: `save_project path=...`,
 `open_project path=...`; `open` also recognises `.sfproj`.
 
-## Layout (version 3)
-- `manifest.json`: always first. `format` = `"SculptForge project"`, `version` (integer, currently 3),
+## Layout (version 4)
+- `manifest.json`: always first. `format` = `"SculptForge project"`, `version` (integer, currently 4),
   `app_version`, then `subtools` (one entry per SubTool, in list order), `active_subtool` (index),
   `brushes` (recipe JSON), `active_brush` (name), optional `splats`, and app-owned keys (`camera`,
   `render`, `brush`, `symmetry`).
@@ -55,6 +55,17 @@ wrong size refuses the whole file. The composite is not stored: it is rebuilt fr
 Version 3 was introduced for this key (SculptForge 0.5): earlier versions refuse the file instead of
 silently dropping the paint. Version 1 and 2 files load unchanged.
 
+### Subdivision levels (version 4)
+`subtools[i].subdiv` (only for SubTools with levels; src/core/Multires.h) holds `current` (the level the
+SubTool's own `mesh` is) and `levels` (base first). Each level has `mesh` / `layers` / `paint_layers` as above
+under `subtools/i/subdiv/<k>/` (or `same_as_mesh: true` for the current level when it equals the SubTool's
+mesh), `stale` (positions to be re-evaluated from the level below), `detail` (f32 x3 per vertex: displacement
+in the local frame of the subdivided level below), `layer_detail` (one per sculpt layer, world space) and, from
+level 1 up, `topology`: `catmull_clark`, `smooth`, `pairing` (u32 per coarse triangle: the quad pairs the level
+was divided with) and `vertex_child` / `edge_child` / `face_child` (u32: the fine vertex of each coarse vertex,
+edge, in edge order, and polygon). Edges and polygons are rebuilt from the coarse level, so the maps must match;
+levels that don't fit refuse the file. Readers that don't know `subdiv` load the current level.
+
 Loading replaces the scene: every SubTool comes back with its name, visibility, attributes, layers,
 active layer and GoZ name, the saved active SubTool is selected, every SubTool starts with an empty
 undo history and the document is clean. A file is refused (and the open scene left alone) when the
@@ -64,7 +75,7 @@ selects the first one.
 ## Version 1
 Version 1 files (SculptForge 0.2 and earlier) have one mesh at the top level instead of `subtools`:
 `mesh` and `layers` as above (blobs under `mesh/` and `layers/`) and `active_layer`. They still load,
-as a single SubTool called "Sculpt". Saving always writes the current version (3).
+as a single SubTool called "Sculpt". Saving always writes the current version (4).
 
 ## Compatibility rules
 - Unknown keys and files are ignored. Unknown **top-level** keys are kept in

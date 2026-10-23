@@ -11,7 +11,8 @@ All of them work on the **active SubTool** and, except the LOD preview, are undo
 
 | Tool | Where | Triangles | Quads | Keeps sculpt layers | Keeps mask and polypaint | Keeps polygroups, hidden faces, UVs |
 |---|---|---|---|---|---|---|
-| Subdivide | **Tool > Geometry > Subdivide**, <kbd>Ctrl</kbd>+<kbd>D</kbd> | x4 per level | Each quad becomes four | Yes | Yes (interpolated) | Yes |
+| Divide (levels) | **Tool > Geometry > Divide**, <kbd>Ctrl</kbd>+<kbd>D</kbd> | x4 per level, lower levels kept | Each quad becomes four (Catmull-Clark) | Yes | Yes (interpolated) | Yes |
+| Subdivide | **Tool > Geometry > Subdivide** | x4 per level | Each quad becomes four | Yes | Yes (interpolated) | Yes |
 | Voxel Remesh | **Tool > Remesh > Voxel Remesh** | Set by resolution | All quads (new ones) | Baked in | Yes (transferred) | No (reset) |
 | Decimate | **Tool > Geometry > Decimate** | Reduced | No, all triangles | Yes | Yes | Yes |
 | LOD chain | **Tool > Export** | One level per ratio step | LOD0 keeps them; lower levels are triangles | Yes, on every level | Yes | Yes |
@@ -38,7 +39,10 @@ glTF (`.glb`) and STL only hold triangles, so those exports always write triangl
 
 ## Subdivide
 
-**Tool > Geometry > Subdivide** (<kbd>Ctrl</kbd>+<kbd>D</kbd>) smooths the mesh with Loop subdivision. Each level
+For sculpting at several resolutions use **Divide** (<kbd>Ctrl</kbd>+<kbd>D</kbd>), which keeps the lower levels to
+step back to: see [Subdivision levels](subdivision-levels.md). **Subdivide** is the one-way version.
+
+**Tool > Geometry > Subdivide** smooths the mesh with Loop subdivision. Each level
 multiplies the triangle count by four and rounds off the shape slightly, like ZBrush's Divide with Smt on.
 
 - Sculpt layers are subdivided with the mesh, so blend shapes keep working.
@@ -46,10 +50,8 @@ multiplies the triangle count by four and rounds off the shape slightly, like ZB
 - Each quad becomes four quads; triangles become four triangles.
 - SculptForge refuses to subdivide past 50 million triangles.
 
-> **Not yet:** multiresolution sculpting. Subdivide replaces the mesh with a denser one; there are no subdivision
-> levels to step down to (ZBrush's SDiv, <kbd>D</kbd> / <kbd>Shift</kbd>+<kbd>D</kbd>) and no reconstruct. Use
-> [undo](#undo-and-safety) or a duplicate SubTool to keep the lighter version. Multiresolution and dynamic topology
-> are on the roadmap.
+> **Note:** Subdivide replaces the mesh with a denser one and drops any [subdivision levels](subdivision-levels.md)
+> (undo brings them back). Dynamic topology is on the roadmap.
 
 > **Tip:** The title strip shows the vertex and triangle counts of the whole scene. A few million triangles sculpt
 > smoothly on a recent GPU; go up a level only when you need finer detail.
