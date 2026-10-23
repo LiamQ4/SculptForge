@@ -355,7 +355,9 @@ int App::runUiTest(int w, int h, int fps) {
         ImGui::LogFinish();
         ImGui::Render();
 
+        const auto syncStart = std::chrono::steady_clock::now();
         syncScene();
+        notePerformanceFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - syncStart).count());
         viewSamples(); // keeps Fast Navigation's view of the camera current (UI tests read view_samples)
         ++frames;
         const std::string shot = demo_->takeShotRequest();
