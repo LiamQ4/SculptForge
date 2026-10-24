@@ -28,7 +28,7 @@
 //   run COMMANDS             sculptforge-cli commands, e.g. run new_sphere subdivisions=4
 //   drop FILE                as if FILE were dropped onto the window (relative to the script's folder)
 //   env NAME VALUE           set an environment variable; $SCRIPT_DIR is the script's folder
-//   wait SECONDS / wait_idle [TIMEOUT] (AI requests, thumbnails and other background jobs) / wait_for LABEL [TIMEOUT]
+//   wait SECONDS / wait_idle [TIMEOUT] (AI requests, thumbnails, update checks and other background jobs) / wait_for LABEL [TIMEOUT]
 //   expect LABEL / expect_not LABEL
 //   expect_text TEXT / expect_no_text TEXT   any text drawn this frame contains TEXT
 //   expect_status TEXT       the status bar message contains TEXT
@@ -778,7 +778,7 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             const bool idle = !busy(app_.pendingBrush_) && !busy(app_.pendingGenerator_) && !busy(app_.pendingModels_) &&
                               !busy(app_.pendingUnreal_) && !busy(app_.pendingComfyCheck_) && !app_.galleryBusy() &&
                               !app_.thumbs_.busy() && !app_.libraryScanner_.busy() && !app_.autoUv_ &&
-                              !app_.bakeBusy() && !app_.qremesh_ && !app_.voxelRemesh_;
+                              !app_.bakeBusy() && !app_.qremesh_ && !app_.voxelRemesh_ && !app_.updateJob_;
             *idleFrames = idle ? *idleFrames + 1 : 0;
             if (*idleFrames >= 4) return true;
             if (idle) return false;
