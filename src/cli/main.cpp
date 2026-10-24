@@ -34,6 +34,7 @@ void usage() {
         "      --bench                Run the performance benchmark (CPU side; the app's --bench adds the GPU)\n"
         "      --bench-sizes 4,16,32  Benchmark sizes in millions of triangles\n"
         "      --bench-dabs N         Dabs per benchmark stroke (default 40)\n"
+        "      --bench-brushes TEXT   Only the benchmark brushes whose name contains TEXT (e.g. large)\n"
         "      --bench-no-project     Skip the project save / open (it needs twice the memory)\n"
         "      --bench-out FILE       Write the benchmark report (Markdown) to FILE\n"
         "  -h, --help                 Show this help\n"

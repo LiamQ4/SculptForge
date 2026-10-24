@@ -35,13 +35,14 @@ struct BenchOptions {
     int dabsPerStroke = 40;
     std::string projectDir; // where the project round trip writes (default: the system temp folder)
     bool projectRoundTrip = true;
+    std::string brushFilter; // only the brushes whose row name contains this (empty = all)
     std::function<void(const std::string&)> log; // progress lines (optional)
     std::function<void(const std::string&)> partial; // the report so far, after each size (optional)
 };
 
 // Command-line options shared by sculptforge-cli and the app: --bench, --bench-sizes 4,16,32 (millions of
 // triangles), --bench-dabs N, --bench-no-project (skip saving / opening, which needs twice the memory),
-// --bench-out FILE. parseBenchArg returns true when argv[i] was one of them
+// --bench-brushes TEXT (only the rows whose name contains TEXT), --bench-out FILE. parseBenchArg returns true when argv[i] was one of them
 // (advancing i past its value).
 struct BenchCommandLine {
     bool run = false;

@@ -3,6 +3,7 @@
 #include "core/Mesh.h"
 #include "core/Multires.h"
 #include "core/AtomicRef.h"
+#include "core/Prefetch.h"
 #include "core/ThreadPool.h"
 
 #include <algorithm>
@@ -174,7 +175,7 @@ void Mesh::sanitizeAttributes() {
 void Mesh::rebuildTopology() {
     sanitizeAttributes();
     const size_t nv = positions.size();
-    finishTopology(); // (the stamps, normals and dirty bits first: they don't depend on the adjacency)
+    finishTopology(); // (the normal set, normals and dirty bits first: they don't depend on the adjacency)
 
     // A level made by Divide: its adjacency follows from the level's topology.
     std::shared_ptr<const ImplicitAdjacency> before = std::move(implicit_); // reused if it is for the same level
@@ -233,8 +234,7 @@ void Mesh::rebuildTopology() {
 
 void Mesh::finishTopology() {
     const size_t nv = positions.size();
-    vertStamp_.assign(nv, 0);
-    stamp_ = 0;
+    normalBits_.resize(nv);
     normals.resize(nv);
     dirtyBlocks.assign((nv + kDirtyBlock - 1) / kDirtyBlock, 0);
     dirtyBits.assign(dirtyBlocks.size() * (kDirtyBlock / 64), 0);
@@ -454,14 +454,6 @@ IndexRing Mesh::implicitNeighbors(uint32_t v) const {
     return r;
 }
 
-uint32_t Mesh::nextStamp() {
-    if (++stamp_ == 0) {
-        std::fill(vertStamp_.begin(), vertStamp_.end(), 0);
-        stamp_ = 1;
-    }
-    return stamp_;
-}
-
 void Mesh::growDirtyBlocks(size_t blocks) {
     if (dirtyBlocks.size() < blocks) dirtyBlocks.resize(blocks, 0);
     if (dirtyBits.size() < blocks * (kDirtyBlock / 64)) dirtyBits.resize(blocks * (kDirtyBlock / 64), 0);
@@ -523,77 +515,51 @@ void Mesh::recomputeAllNormals() {
 }
 
 void Mesh::updateNormals(std::span<const uint32_t> verts) {
-    // The vertices whose normal changes: the moved ones and every neighbour (each once), then each one's
-    // normal from its faces, in its triangle order (as recomputeAllNormals sums them).
+    // The vertices whose normal changes: the moved ones and every neighbour, gathered as a set and listed in
+    // index order; then each one's normal from its faces, in its triangle order (as recomputeAllNormals sums
+    // them). The set, and every normal computed from it, doesn't depend on the thread count.
     const size_t nv = positions.size();
-    if (vertStamp_.size() != nv) return; // no topology
+    if (!implicit_ && adjOffsets_.size() != nv + 1) return; // no topology
     growDirtyBlocks((nv + kDirtyBlock - 1) / kDirtyBlock);
-    constexpr size_t kBlock = 4096;
-    scratchVerts_.clear();
-    if (verts.size() <= 4 * kBlock || ThreadPool::shared().serial()) {
-        const uint32_t s = nextStamp();
-        auto claim = [&](uint32_t u) {
-            if (vertStamp_[u] == s) return;
-            vertStamp_[u] = s;
-            scratchVerts_.push_back(u);
-        };
-        for (uint32_t v : verts) {
-            claim(v);
-            for (uint32_t u : neighbors(v)) claim(u);
-        }
-    } else {
-        // In parallel: first the moved vertices themselves (stamp `own`), then the ring around them that isn't
-        // one of them (stamp `ring`, claimed with an atomic exchange: only the ring is shared between blocks).
-        // Which block lists a ring vertex varies, but the set, and every normal computed from it, doesn't.
-        if (stamp_ >= 0xFFFFFFF0u) { // two stamps in a row: start over first, so they can't wrap in between
-            std::fill(vertStamp_.begin(), vertStamp_.end(), 0);
-            stamp_ = 0;
-        }
-        const uint32_t own = nextStamp(), ring = nextStamp();
-        const size_t parts = (verts.size() + kBlock - 1) / kBlock;
-        if (scratchParts_.size() < 2 * parts) scratchParts_.resize(2 * parts);
-        poolFor(verts.size(), [&](size_t b, size_t e) {
-            std::vector<uint32_t>& out = scratchParts_[b / kBlock];
-            out.clear();
-            for (size_t i = b; i < e; ++i)
-                if (AtomicRef<uint32_t>(vertStamp_[verts[i]]).exchange(own, std::memory_order_relaxed) != own)
-                    out.push_back(verts[i]);
-        }, kBlock);
-        poolFor(verts.size(), [&](size_t b, size_t e) {
-            std::vector<uint32_t>& out = scratchParts_[parts + b / kBlock];
-            out.clear();
-            for (size_t i = b; i < e; ++i)
-                for (uint32_t u : neighbors(verts[i])) {
-                    AtomicRef<uint32_t> stamp(vertStamp_[u]);
-                    const uint32_t seen = stamp.load(std::memory_order_relaxed);
-                    if (seen == own || seen == ring) continue;
-                    if (stamp.exchange(ring, std::memory_order_relaxed) != ring) out.push_back(u);
-                }
-        }, kBlock);
-        for (size_t p = 0; p < 2 * parts; ++p) scratchVerts_.insert(scratchVerts_.end(), scratchParts_[p].begin(), scratchParts_[p].end());
-    }
-
-    const size_t n = scratchVerts_.size();
-    std::vector<std::pair<uint32_t, uint32_t>> bounds((n + kBlock - 1) / kBlock);
-    poolFor(n, [&](size_t b, size_t e) {
-        uint32_t lo = std::numeric_limits<uint32_t>::max(), hi = 0;
+    if (normalBits_.capacity() < nv) normalBits_.resize(nv);
+    normalBits_.insertParallel(verts.size(), 4096, [&](size_t b, size_t e, IndexBits& set) {
         for (size_t i = b; i < e; ++i) {
+            const uint32_t v = verts[i];
+            set.insertLocal(v);
+            for (uint32_t u : neighbors(v)) set.insertLocal(u);
+        }
+    });
+    // Listing the set also marks it dirty: its words are laid out like dirtyBits, and each 2048-vertex dirty
+    // block lies in one of its chunks (so no two threads write the same word).
+    static_assert(IndexBits::kChunk % kDirtyBlock == 0);
+    scratchVerts_.clear();
+    normalBits_.take(scratchVerts_, [&](size_t word, uint64_t bits) {
+        dirtyBits[word] |= bits;
+        dirtyBlocks[(word * 64) >> kDirtyBlockShift] = 1;
+    });
+    if (scratchVerts_.empty()) return;
+    dirtyBegin = std::min(dirtyBegin, scratchVerts_.front());
+    dirtyEnd = std::max(dirtyEnd, scratchVerts_.back() + 1);
+    poolFor(scratchVerts_.size(), [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i) {
+            // The faces around later vertices are scattered over memory: ask for them ahead (their triangles
+            // 16 vertices ahead, by 8 ahead those triangles' corners).
+            if (i + 16 < e)
+                for (uint32_t ti : vertexTriangles(scratchVerts_[i + 16])) prefetch(&triangles[ti]);
+            if (i + 8 < e)
+                for (uint32_t ti : vertexTriangles(scratchVerts_[i + 8])) {
+                    const glm::uvec3& t = triangles[ti];
+                    prefetch(&positions[t.x]);
+                    prefetch(&positions[t.y]);
+                    prefetch(&positions[t.z]);
+                }
             const uint32_t v = scratchVerts_[i];
             glm::vec3 sum(0.0f);
             for (uint32_t ti : vertexTriangles(v)) sum += faceNormal(positions, triangles[ti]);
             const float len = glm::length(sum);
             if (len > 1e-20f) normals[v] = sum / len;
-            lo = std::min(lo, v);
-            hi = std::max(hi, v);
-            AtomicRef<uint8_t>(dirtyBlocks[v >> kDirtyBlockShift]).store(1, std::memory_order_relaxed);
-            AtomicRef<uint64_t>(dirtyBits[v >> 6]).fetch_or(uint64_t(1) << (v & 63), std::memory_order_relaxed);
         }
-        bounds[b / kBlock] = {lo, hi + 1};
-    }, kBlock);
-    for (const auto& [lo, hi] : bounds) {
-        dirtyBegin = std::min(dirtyBegin, lo);
-        dirtyEnd = std::max(dirtyEnd, hi);
-    }
+    }, 4096);
 }
 
 int Mesh::addLayer(std::string name) {
@@ -660,7 +626,7 @@ size_t Mesh::memoryBytes() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(v[0]); };
     size_t n = bytes(positions) + bytes(normals) + bytes(triangles) + bytes(mask) + bytes(colors) + bytes(polygroups) +
                bytes(hidden) + bytes(uvs) + bytes(quadPartners) + bytes(base) + bytes(paintBase) + bytes(adjOffsets_) +
-               bytes(adjList_) + bytes(vtOffsets_) + bytes(vtList_) + bytes(vertStamp_) + bytes(scratchVerts_) + bytes(dirtyBlocks) + bytes(dirtyBits);
+               bytes(adjList_) + bytes(vtOffsets_) + bytes(vtList_) + normalBits_.memoryBytes() + bytes(scratchVerts_) + bytes(dirtyBlocks) + bytes(dirtyBits);
     for (const auto& l : layers) n += bytes(l.delta);
     for (const auto& l : paintLayers) n += bytes(l.color) + bytes(l.alpha);
     if (implicit_) n += implicit_->bytes(); // (the level topology itself is counted with the subdivision levels)

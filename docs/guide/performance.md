@@ -15,13 +15,14 @@ On a 2021 laptop (Apple M1 Pro, 10 cores, integrated GPU), with X symmetry on an
 | Mesh | One dab of a medium brush | Turning the view |
 |---|---|---|
 | 4 million triangles | about 1.5 ms | about 200 frames a second |
-| 16 million triangles | about 6 ms | about 85 frames a second |
-| 33 million triangles | about 10 ms | about 50 (4x antialiasing), 70 with Fast Navigation |
+| 16 million triangles | about 4 ms | about 85 frames a second |
+| 33 million triangles | about 6.5 ms | about 50 (4x antialiasing), 70 with Fast Navigation |
 
 A dab is one step of the brush along the stroke; the app draws several per frame when you move fast. Under
 16 ms per dab a stroke keeps up with a 60 Hz display. Very large brushes cost more, since they move more
-vertices: a brush covering a tenth of a 33 million triangle sphere (over a million vertices per dab) takes about
-90 ms per dab.
+vertices: a brush covering a tenth of a 33 million triangle sphere (about a million vertices per dab with
+symmetry) takes about 40 ms per dab with Standard, 20 ms with Smooth and 12 ms with Move, of which sending the
+change to the graphics card is about a third.
 
 [Performance figures](https://github.com/islandmed/SculptForge/blob/main/docs/performance.md) has the full
 measurements, and how to run the same benchmark on your own machine.
@@ -49,7 +50,7 @@ setting is also in the <kbd>F3</kbd> command palette (type "antialiasing", "fast
   lighter.
 - **Hide what you're not working on.** Hidden SubTools aren't drawn and hidden parts of a SubTool aren't
   sculpted (**Tool > Visibility**). A hidden SubTool costs no drawing time at all.
-- **Memory.** A divided model takes about 90 bytes per triangle: about 40 for the sculpting mesh, 20 for its
+- **Memory.** A divided model takes about 90 bytes per triangle: about 40 for the sculpting mesh, 17 for its
   BVH and 30 for its subdivision levels. A 33 million triangle sculpt with levels needs about 3 GB of memory, a 100
   million one about 9 GB (and a little more while dividing). Opening a project needs only a little more than the
   model itself. A mesh without levels (an import, a remesh) takes about 60 bytes per triangle for the mesh. Project
@@ -71,6 +72,7 @@ stepping subdivision levels, saving and opening a project, and turning the view,
 |---|---|
 | `--bench-sizes 4,16,32` | The sizes, in millions of triangles |
 | `--bench-dabs 40` | Dabs per test stroke |
+| `--bench-brushes large` | Only the brushes whose name contains the text (here the large-radius ones) |
 | `--bench-no-project` | Skip saving and opening the project (which needs twice the memory) |
 | `--bench-out report.md` | Write the report to a file |
 

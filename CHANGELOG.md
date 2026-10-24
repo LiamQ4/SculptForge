@@ -29,6 +29,23 @@ All notable changes to SculptForge are listed here. The format follows
 - New Cube at some resolutions (13, 26 and others) left a few vertices along the cube's edges unwelded, so the
   mesh had small cracks there (the 33 million triangle benchmark sphere among them).
 
+### Performance
+- Brushes on huge meshes are 2 to 3 times faster on the CPU: a radius 0.4 dab (a million vertices with X
+  symmetry) on a 33M triangle sphere takes about 21 ms instead of 49 (39 instead of 63 with the GPU upload),
+  Smooth and Move at that size 10 and 5 ms; a medium dab about 3.6 ms instead of 9 (6.5 instead of 11 with the
+  upload), and undo of a big stroke about twice as fast. Results are still exactly the same
+  with multithreading on or off; compared with 0.5 they differ only by rounding (a brush's area normal is summed
+  over its vertices in index order) and where the two halves of a symmetric dab overlap (both now see the
+  normals from before the dab).
+- How: the BVH vertex query, the normal update and the refit keep their vertex and leaf sets as bitmaps listed
+  in index order (the mesh's arrays are then read front to back), each thread marks a bitmap of its own, a dab
+  refits the BVH leaves its query already found, normal updates prefetch the faces ahead, the undo record of a
+  stroke is written in parallel, the Move brush runs each mirror in parallel, symmetric dabs update normals once
+  where the mirrors overlap, and undo swaps positions in parallel. Small dabs stay on one thread.
+- Less memory while sculpting: the per-vertex stamps of the BVH, the normal update and the stroke recorder
+  (20 bytes per vertex, about 330 MB at 33M triangles) are bits now.
+- `--bench-brushes TEXT` runs only some benchmark rows; the benchmark measures Smooth and Move at a large radius.
+
 ### Changed
 - STL export is now in millimetres with Z up, as slicers expect: models used to arrive 1000 times too small
   (0.44 mm instead of 44 cm) and lying on their back. `export_stl` takes `height_mm=` to scale to a print height,

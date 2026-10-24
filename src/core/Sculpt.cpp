@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Sculpt.h"
 
+#include "core/AtomicRef.h"
 #include "core/BrushAlpha.h"
 #include "core/ThreadPool.h"
 
@@ -155,44 +156,62 @@ std::vector<glm::vec3> Sculptor::mirrors(Symmetry sym) {
     return out;
 }
 
+namespace {
+
+// Sets bit `v` (atomically: neighbouring blocks of a parallel pass may share a word); true if it was clear.
+bool markBit(std::vector<uint64_t>& bits, uint32_t v) {
+    const uint64_t bit = uint64_t(1) << (v & 63);
+    AtomicRef<uint64_t> w(bits[v >> 6]);
+    if (w.load(std::memory_order_relaxed) & bit) return false;
+    return !(w.fetch_or(bit, std::memory_order_relaxed) & bit);
+}
+
+// Clears the bits of `indices` (what a stroke recorded), so the next stroke starts with an empty set.
+void clearBits(std::vector<uint64_t>& bits, const std::vector<uint32_t>& indices) {
+    poolFor(indices.size(), [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i)
+            if (indices[i] < bits.size() * 64) AtomicRef<uint64_t>(bits[indices[i] >> 6]).store(0, std::memory_order_relaxed);
+    }, 1 << 14);
+}
+
+} // namespace
+
+void Sculptor::clearRecorded() {
+    clearBits(touched_, record_.positions.indices);
+    clearBits(masked_, record_.mask.indices);
+    clearBits(colored_, record_.colors.indices);
+}
+
 bool Sculptor::beginStroke(const Mesh& mesh, std::string label, int layer) {
     if (layer >= static_cast<int>(mesh.layers.size())) layer = -1;
     if (std::abs(mesh.layerTargetWeight(layer)) < 1e-3f) return false;
+    clearRecorded(); // a stroke that never ended
     layer_ = layer;
     record_ = UndoRecord{};
     record_.label = std::move(label);
     record_.layer = layer;
-    if (touchStamp_.size() != mesh.vertexCount()) {
-        touchStamp_.assign(mesh.vertexCount(), 0);
-        maskStamp_.assign(mesh.vertexCount(), 0);
-        colorStamp_.assign(mesh.vertexCount(), 0);
-        stamp_ = 0;
+    const size_t words = (mesh.vertexCount() + 63) / 64;
+    if (touched_.size() != words) {
+        touched_.assign(words, 0);
+        masked_.assign(words, 0);
+        colored_.assign(words, 0);
     }
-    if (++stamp_ == 0) {
-        std::fill(touchStamp_.begin(), touchStamp_.end(), 0);
-        std::fill(maskStamp_.begin(), maskStamp_.end(), 0);
-        std::fill(colorStamp_.begin(), colorStamp_.end(), 0);
-        stamp_ = 1;
-    }
+    ++strokeId_;
     active_ = true;
     return true;
 }
 
 void Sculptor::touch(Mesh& mesh, uint32_t v) {
-    if (touchStamp_[v] == stamp_) return;
-    touchStamp_[v] = stamp_;
-    record_.positions.add(v, mesh.layerTarget(layer_)[v]);
+    if (markBit(touched_, v)) record_.positions.add(v, mesh.layerTarget(layer_)[v]);
 }
 
 void Sculptor::recordMask(const Mesh& mesh, uint32_t v) {
-    if (!active_ || maskStamp_[v] == stamp_) return;
-    maskStamp_[v] = stamp_;
+    if (!active_ || !markBit(masked_, v)) return;
     record_.mask.add(v, mesh.maskAt(v));
 }
 
 void Sculptor::recordColor(const Mesh& mesh, uint32_t v) {
-    if (!active_ || colorStamp_[v] == stamp_) return;
-    colorStamp_[v] = stamp_;
+    if (!active_ || !markBit(colored_, v)) return;
     // With paint layers the stroke paints the active layer (colour and coverage).
     const int layer = mesh.paintLayers.empty() ? -1 : mesh.activePaintLayer;
     record_.paintLayer = layer;
@@ -217,38 +236,60 @@ void Sculptor::displace(Mesh& mesh, uint32_t v, const glm::vec3& d) {
     if (!mesh.layers.empty()) mesh.layerTarget(layer_)[v] += dk / mesh.layerTargetWeight(layer_);
 }
 
-// displace() for many vertices (each listed once): influences in parallel, the undo record in order, then the
-// moves in parallel.
+// displace() for many vertices (each listed once), in parallel: the influences and which vertices the stroke
+// moves for the first time, then their undo entries (in list order, at offsets counted per block) and the moves.
 void Sculptor::displaceAll(Mesh& mesh, std::span<const uint32_t> verts, std::span<const glm::vec3> d) {
     const size_t n = verts.size();
+    constexpr size_t kBlock = 4096;
     influence_.resize(n);
+    firstTouch_.resize(n);
+    blockFirst_.assign((n + kBlock - 1) / kBlock + 1, 0);
     poolFor(n, [&](size_t b, size_t e) {
-        for (size_t i = b; i < e; ++i) influence_[i] = vertexInfluence(mesh, verts[i]);
-    });
-    for (size_t i = 0; i < n; ++i)
-        if (influence_[i] > 0.0f) touch(mesh, verts[i]);
-    const bool layered = !mesh.layers.empty();
+        uint32_t count = 0;
+        for (size_t i = b; i < e; ++i) {
+            const float k = vertexInfluence(mesh, verts[i]);
+            influence_[i] = k;
+            firstTouch_[i] = k > 0.0f && markBit(touched_, verts[i]);
+            count += firstTouch_[i];
+        }
+        blockFirst_[b / kBlock + 1] = count;
+    }, kBlock);
+    for (size_t i = 1; i < blockFirst_.size(); ++i) blockFirst_[i] += blockFirst_[i - 1];
     std::vector<glm::vec3>& target = mesh.layerTarget(layer_);
+    UndoChannel<glm::vec3>& rec = record_.positions;
+    const size_t base = rec.indices.size();
+    rec.indices.resize(base + blockFirst_.back());
+    rec.values.resize(base + blockFirst_.back());
+    const bool layered = !mesh.layers.empty();
     const float weight = mesh.layerTargetWeight(layer_);
     poolFor(n, [&](size_t b, size_t e) {
+        size_t r = base + blockFirst_[b / kBlock];
         for (size_t i = b; i < e; ++i) {
             const float k = influence_[i];
             if (k <= 0.0f) continue;
+            const uint32_t v = verts[i];
+            if (firstTouch_[i]) {
+                rec.indices[r] = v;
+                rec.values[r++] = target[v];
+            }
             const glm::vec3 dk = d[i] * k;
-            mesh.positions[verts[i]] += dk;
-            if (layered) target[verts[i]] += dk / weight;
+            mesh.positions[v] += dk;
+            if (layered) target[v] += dk / weight;
         }
-    });
+    }, kBlock);
 }
 
 UndoRecord Sculptor::endStroke() {
+    clearRecorded();
     active_ = false;
-    grab_.clear();
+    grabVerts_.clear();
+    grabAll_.clear();
     return std::move(record_);
 }
 
 void Sculptor::dab(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p, Symmetry sym) {
     if (!active_) return;
+    dabVerts_.clear();
     for (const glm::vec3& m : mirrors(sym)) {
         DabParams mp = p;
         mp.center *= m;
@@ -257,6 +298,7 @@ void Sculptor::dab(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p, Sym
         mp.alphaUp *= m;
         dabSingle(mesh, bvh, type, mp);
     }
+    updateDabNormals(mesh);
 }
 
 void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p) {
@@ -421,18 +463,25 @@ void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& 
     });
 
     displaceAll(mesh, verts_, scratch_);
-    finishDab(mesh, bvh, verts_, clock);
+    finishDab(mesh, bvh, clock);
 }
 
-// Normals and BVH after a dab moved `verts`, with the time each takes (the kernel ran since `clock`).
-void Sculptor::finishDab(Mesh& mesh, BVH& bvh, std::span<const uint32_t> verts, std::chrono::steady_clock::time_point clock) {
+// The BVH after a mirror's dab moved (some of) the vertices its query returned, verts_ (the kernel ran since
+// `clock`). The next mirror's query needs the new boxes; normals wait until every mirror moved its vertices
+// (updateDabNormals), so where mirrors overlap they are updated once.
+void Sculptor::finishDab(Mesh& mesh, BVH& bvh, std::chrono::steady_clock::time_point clock) {
     timings.kernelMs += lapMs(clock);
-    mesh.updateNormals(verts);
-    timings.normalsMs += lapMs(clock);
-    bvh.refit(mesh, verts);
+    bvh.refitQueried(mesh);
     timings.bvhMs += lapMs(clock);
     ++timings.dabs;
-    timings.vertices += verts.size();
+    timings.vertices += verts_.size();
+    dabVerts_.insert(dabVerts_.end(), verts_.begin(), verts_.end()); // a vertex twice is fine: updateNormals dedups
+}
+
+void Sculptor::updateDabNormals(Mesh& mesh) {
+    auto clock = std::chrono::steady_clock::now();
+    mesh.updateNormals(dabVerts_);
+    timings.normalsMs += lapMs(clock);
 }
 
 void Sculptor::dabRecipe(Mesh& mesh, BVH& bvh, const BrushRecipe& recipe, const DabParams& p, Symmetry sym) {
@@ -440,6 +489,7 @@ void Sculptor::dabRecipe(Mesh& mesh, BVH& bvh, const BrushRecipe& recipe, const 
     DabParams base = p;
     base.pressure = std::pow(std::clamp(p.pressure, 0.0f, 1.0f), recipe.pressureCurve);
     base.frontFacesOnly = p.frontFacesOnly || recipe.frontFacesOnly;
+    dabVerts_.clear();
     for (const glm::vec3& m : mirrors(sym)) {
         DabParams mp = base;
         mp.center *= m;
@@ -448,6 +498,7 @@ void Sculptor::dabRecipe(Mesh& mesh, BVH& bvh, const BrushRecipe& recipe, const 
         mp.alphaUp *= m;
         dabRecipeSingle(mesh, bvh, recipe, mp);
     }
+    updateDabNormals(mesh);
 }
 
 void Sculptor::dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const DabParams& p) {
@@ -574,12 +625,15 @@ void Sculptor::dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const
         });
         displaceAll(mesh, verts_, scratch_);
     }
-    finishDab(mesh, bvh, verts_, clock);
+    finishDab(mesh, bvh, clock);
 }
 
 void Sculptor::beginGrab(Mesh& mesh, BVH& bvh, const DabParams& p, Symmetry sym) {
-    grab_.clear();
     grabVerts_.clear();
+    grabWeights_.clear();
+    grabMirrors_.clear();
+    grabAll_.clear();
+    grabLeaves_.clear();
     if (!active_) return;
     for (const glm::vec3& m : mirrors(sym)) {
         glm::vec3 c = p.center * m;
@@ -588,19 +642,46 @@ void Sculptor::beginGrab(Mesh& mesh, BVH& bvh, const DabParams& p, Symmetry sym)
             float w = brushFalloff(glm::distance(mesh.positions[v], c), p.radius) *
                       std::clamp(p.strength * 2.0f, 0.0f, 1.0f);
             if (w <= 0.0f) continue;
-            grab_.push_back({v, w, m});
             grabVerts_.push_back(v);
+            grabWeights_.push_back(w);
         }
+        grabMirrors_.push_back({grabVerts_.size(), m});
+        const std::span<const uint32_t> leaves = bvh.queriedLeaves();
+        grabLeaves_.insert(grabLeaves_.end(), leaves.begin(), leaves.end());
     }
-    std::sort(grabVerts_.begin(), grabVerts_.end());
-    grabVerts_.erase(std::unique(grabVerts_.begin(), grabVerts_.end()), grabVerts_.end());
+    // Every vertex and leaf the mirrors move, once each (each mirror's list is sorted already).
+    grabAll_ = grabVerts_;
+    for (size_t i = 1; i < grabMirrors_.size(); ++i)
+        std::inplace_merge(grabAll_.begin(), grabAll_.begin() + std::ptrdiff_t(grabMirrors_[i - 1].first),
+                           grabAll_.begin() + std::ptrdiff_t(grabMirrors_[i].first));
+    grabAll_.erase(std::unique(grabAll_.begin(), grabAll_.end()), grabAll_.end());
+    if (grabMirrors_.size() > 1) {
+        std::sort(grabLeaves_.begin(), grabLeaves_.end());
+        grabLeaves_.erase(std::unique(grabLeaves_.begin(), grabLeaves_.end()), grabLeaves_.end());
+    }
 }
 
 void Sculptor::grab(Mesh& mesh, BVH& bvh, const glm::vec3& delta) {
-    if (grab_.empty()) return;
+    if (grabVerts_.empty()) return;
     auto clock = std::chrono::steady_clock::now();
-    for (const auto& g : grab_) displace(mesh, g.vertex, delta * g.mirror * g.weight);
-    finishDab(mesh, bvh, grabVerts_, clock);
+    // One mirror after another (a vertex may be in two), each in parallel.
+    size_t begin = 0;
+    for (const auto& [end, m] : grabMirrors_) {
+        const glm::vec3 dm = delta * m;
+        scratch_.resize(end - begin);
+        poolFor(end - begin, [&](size_t b, size_t e) {
+            for (size_t i = b; i < e; ++i) scratch_[i] = dm * grabWeights_[begin + i];
+        });
+        displaceAll(mesh, std::span(grabVerts_).subspan(begin, end - begin), scratch_);
+        begin = end;
+    }
+    timings.kernelMs += lapMs(clock);
+    mesh.updateNormals(grabAll_);
+    timings.normalsMs += lapMs(clock);
+    bvh.refitLeaves(mesh, grabLeaves_);
+    timings.bvhMs += lapMs(clock);
+    ++timings.dabs;
+    timings.vertices += grabAll_.size();
 }
 
 // Puts every vertex the current stroke moved back to its stroke-start position.
@@ -640,8 +721,8 @@ void Sculptor::prepareLayer(const Mesh& mesh, float height) {
         layerDir_.assign(mesh.vertexCount(), glm::vec3(0.0f));
         layerEpoch_ = 0;
     }
-    if (layerEpoch_ != 0 && layerSeenStamp_ == stamp_) return;
-    layerSeenStamp_ = stamp_;
+    if (layerEpoch_ != 0 && layerSeenStroke_ == strokeId_) return;
+    layerSeenStroke_ = strokeId_;
     layerHeight_ = height;
     if (++layerEpoch_ == 0) {
         std::fill(layerStamp_.begin(), layerStamp_.end(), 0);
