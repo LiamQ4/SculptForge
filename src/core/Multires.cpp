@@ -205,15 +205,15 @@ std::shared_ptr<SubdivTopology> buildCoarse(const std::vector<glm::uvec3>& trian
             if (u < t) continue;
             const int e = quadDiagonalOf(triangles, t, u);
             const glm::uvec3& b = triangles[u];
-            uint32_t far = 0;
+            uint32_t opposite = 0; // (not "far": a macro in windows.h)
             for (uint32_t k = 0; k < 3; ++k)
-                if (b[k] != a[0] && b[k] != a[1] && b[k] != a[2]) far = k;
+                if (b[k] != a[0] && b[k] != a[1] && b[k] != a[2]) opposite = k;
             for (int c : {(e + 1) % 3, (e + 2) % 3, e}) {
                 tp->polyVerts.push_back(a[c]);
             }
-            tp->polyVerts.push_back(b[far]);
+            tp->polyVerts.push_back(b[opposite]);
             tp->polyTris.push_back({t, u});
-            tp->polyDiag.push_back(uint8_t(e | far << 2));
+            tp->polyDiag.push_back(uint8_t(e | opposite << 2));
         }
         tp->polyOffsets.push_back(uint32_t(tp->polyVerts.size()));
     }
