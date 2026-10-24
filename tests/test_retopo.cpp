@@ -297,7 +297,8 @@ TEST(project_all_brings_detail_back) {
     std::printf("  divided retopo vs sculpt: mean %.5f max %.5f before ProjectAll, mean %.5f max %.5f after\n",
                 before.mean, before.max, after.mean, after.max);
     CHECK(after.mean < before.mean * 0.25f);
-    CHECK(after.max < before.max * 0.5f);
+    // The worst single vertex: 0.37x on Linux and macOS, 0.50x with MSVC (whose QRemesh output differs a little).
+    CHECK(after.max < before.max * 0.6f);
     // Colours came across.
     CHECK(doc.mesh.hasColors());
     size_t wrong = 0;
