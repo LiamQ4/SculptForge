@@ -42,8 +42,8 @@
     <section class="hero">
       <div class="wrap hero-grid">
         <div class="hero-copy">
-          <a class="new-badge" href="#whats-new"><span>New in 0.5</span>
-            Subdivision levels, QRemesh, map baking →</a>
+          <a class="new-badge" href="#whats-new"><span>New in 0.6</span>
+            Half the memory, twice the frame rate →</a>
           <p class="eyebrow">The free, open-source alternative to ZBrush</p>
           <h1><span class="nowrap">Sculpt it.</span> <span class="nowrap">Forge it.</span><br><span class="accent">Ship it.</span></h1>
           <p class="lede">Digital sculpting for <strong>VFX, animation and game studios</strong> on Linux, macOS and
@@ -92,11 +92,37 @@
 
     <section id="whats-new" class="section alt">
       <div class="wrap">
-        <h2>What's new in 0.5</h2>
-        <p class="section-lede">The ZBrush workflow core: sculpt at several resolutions, retopologise, bake maps for
-          games, pose with a gizmo, and stay fast at tens of millions of polygons. <a href="guide/whats-new.html">Everything that changed</a> ·
+        <h2>What's new in 0.6</h2>
+        <p class="section-lede">Performance: about half the memory, a view that turns twice as fast and quicker
+          brushes on huge meshes, measured with the benchmark anyone can run. <a href="https://github.com/islandmed/SculptForge/blob/main/docs/performance.md">Figures</a> ·
+          <a href="guide/whats-new.html">Everything that changed</a> ·
           <a href="https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md">changelog</a></p>
         <div class="grid">
+          <article class="card">
+            <h3>Half the memory <small>new in 0.6</small></h3>
+            <p>A 33 million triangle sculpt with all its subdivision levels fits in 3.4 GB instead of 5.6, and
+              Divide is limited only by your memory: past 100 million triangles on a 32 GB laptop.</p>
+          </article>
+          <article class="card">
+            <h3>A view twice as fast <small>new in 0.6</small></h3>
+            <p>Only what you can see is drawn. A 33 million triangle model turns at 109 fps with 4x antialiasing
+              and 270 fps with Fast Navigation, on a laptop's integrated graphics.</p>
+          </article>
+          <article class="card">
+            <h3>Quicker brushes on huge meshes <small>new in 0.6</small></h3>
+            <p>A medium dab on 33 million triangles takes about 7.5 ms, big brushes about 45 ms, and masking and
+              painting are about twice as fast. Opening a big project is twice as fast too.</p>
+          </article>
+          <article class="card">
+            <h3>Prints at the right size <small>new in 0.6</small></h3>
+            <p>STL export is in millimetres with Z up, as slicers expect, with a print height option. Downloaded
+              print models open upright and at their real size.</p>
+          </article>
+          <article class="card">
+            <h3>Update notifications <small>new in 0.6</small></h3>
+            <p>A small banner tells you when a new version is out, with what's in it. One small file once a day,
+              nothing about you is sent, and one switch turns it off.</p>
+          </article>
           <article class="card">
             <h3>Subdivision levels <small>new in 0.5</small></h3>
             <p>Divide, then step down for big forms and back up for detail, like ZBrush's SDiv. Changes at a low
@@ -116,11 +142,6 @@
             <h3>Gizmo 3D <small>new in 0.5</small></h3>
             <p>W, E and R move, scale and rotate a SubTool or just its unmasked part, with soft falloff for posing
               limbs. Transpose All moves every SubTool at once.</p>
-          </article>
-          <article class="card">
-            <h3>Fast at tens of millions of polygons <small>new in 0.5</small></h3>
-            <p>Brushes use every core and send the graphics card only what changed: a medium dab on a 33 million
-              triangle model went from 400 ms to about 10 ms, with about 30% less memory.</p>
           </article>
           <article class="card">
             <h3>Texture painting on UVs <small>new in 0.4.2</small></h3>
@@ -388,7 +409,7 @@ rez-env sculptforge -- sculptforge troll.usda \
     <section id="download" class="section alt">
       <div class="wrap">
         <h2>Download</h2>
-        <p class="section-lede">Version 0.5.0. All builds come from the
+        <p class="section-lede">Version 0.6.0. All builds come from the
           <a href="https://github.com/islandmed/SculptForge/releases/latest">latest GitHub release</a>, with
           SHA-256 checksums.</p>
         <div class="downloads">
