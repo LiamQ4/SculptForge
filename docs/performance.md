@@ -636,7 +636,7 @@ large Move 34.9 -> **14.7 ms**, undo of the large stroke 138 -> **98 ms**.
 The v0.5 summary's 93 ms for the large dab includes the GPU upload; CPU only, the v0.5 "after" table above
 has 53 ms and 77 ms for its undo, in line with today's "before" runs of the same code (49 and 70 ms).
 
-With the GPU (`sculptforge --bench`, the same runs order, best of two, upload of what each dab changed
+With the GPU (`sculptforge --bench`, before and after run in turn, best of two, the upload of what each dab changed
 included; the upload itself is the view branch's work and unchanged here), at 33M: medium dab 11.4 -> **6.5 ms**,
 large 62.8 -> **38.7 ms** (15 ms of it the upload), large Move 22.1 -> **11.9 ms**. The CPU-side target (large
 dab under 25 ms) is met; with the upload the large dab is still above it.
