@@ -212,3 +212,42 @@ TEST(cubes_are_closed_at_every_resolution) {
         CHECK(m.vertexCount() == size_t(6 * n * n + 2));
     }
 }
+
+// Format 5 projects (tests/data/levels_v5_*.sfproj, saved by 0.5: an icosphere (Loop) and a plane (Catmull-Clark)
+// divided three times, a stroke and a cavity mask at the top, then an Inflate stroke at SDiv 2, saved there with
+// SDiv 3 and 4 waiting to be re-evaluated; and the same saved at SDiv 4): they open, their levels become
+// generated ones, and they evaluate as 0.5 did, before and after saving them again in the current format.
+TEST(format5_projects_open_as_generated_levels) {
+    for (const char* name : {"sphere", "plane"}) {
+        Document ref, d;
+        std::string err;
+        const std::string dir = SF_TEST_DATA_DIR;
+        CHECK(loadProject(dir + "/levels_v5_" + name + "_top.sfproj", ref, err));
+        CHECK(loadProject(dir + "/levels_v5_" + name + ".sfproj", d, err));
+        CHECK(subdivLevelText(ref.mesh) == "SDiv 4/4" && subdivLevelText(d.mesh) == "SDiv 2/4");
+        CHECK(d.mesh.implicitAdjacency() && ref.mesh.implicitAdjacency());
+        for (int i = 1; i < subdivLevelCount(d.mesh); ++i) {
+            CHECK(subdivLevel(d.mesh, i).topo->generated);
+            CHECK(subdivLevelData(d.mesh, i).triangles.empty());
+        }
+        CHECK(run(d, "subdiv_level", {{"level", 4.0}}).ok);
+        float diff = 0.0f;
+        for (size_t v = 0; v < d.mesh.vertexCount() && v < ref.mesh.vertexCount(); ++v)
+            diff = std::max(diff, glm::length(d.mesh.positions[v] - ref.mesh.positions[v]));
+        std::printf("  %s: %zu triangles, %zu quads, top level %.2g from 0.5's\n", name, d.mesh.triangleCount(), d.mesh.quadCount(), diff);
+        CHECK(d.mesh.vertexCount() == ref.mesh.vertexCount() && d.mesh.triangles == ref.mesh.triangles);
+        CHECK(d.mesh.quadPartners == ref.mesh.quadPartners);
+        CHECK(diff < 1e-5f);
+        CHECK(d.mesh.mask == ref.mesh.mask && d.mesh.hasMask());
+        // Saved again (format 6) and opened: the same.
+        const std::string path = (std::filesystem::temp_directory_path() / (std::string("sf_v6_") + name + ".sfproj")).string();
+        CHECK(saveProject(path, d, err));
+        Document e;
+        CHECK(loadProject(path, e, err));
+        CHECK(e.mesh.positions == d.mesh.positions && e.mesh.mask == d.mesh.mask);
+        CHECK(run(e, "subdiv_level", {{"level", 1.0}}).ok);
+        CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+        CHECK(e.mesh.positions == d.mesh.positions);
+        std::filesystem::remove(path);
+    }
+}
