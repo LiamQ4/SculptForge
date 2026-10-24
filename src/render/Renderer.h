@@ -180,7 +180,8 @@ private:
     static void freeSlot(MeshSlot& s);
     void sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap = nullptr, bool wireframe = false);
     void uploadVertices(MeshSlot& s, const Mesh& mesh, bool full);
-    void updateBounds(MeshSlot& s, const Mesh& mesh, bool all);
+    // `computed`: the bounds are already current (only the totals are left).
+    void updateBounds(MeshSlot& s, const Mesh& mesh, bool all, bool computed = false);
     void buildLines(MeshSlot& s, const Mesh& mesh);
     void buildProxies(MeshSlot& s, const Mesh& mesh);
     bool proxyUsed_ = false; // the last draw() drew motion proxies: sync keeps them current

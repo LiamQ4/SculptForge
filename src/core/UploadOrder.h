@@ -49,8 +49,8 @@ public:
     // a renderer a second pass to make them.
     using ClusterCallback = std::function<void(uint32_t cluster, const uint16_t* localTriangles)>;
     void build(const Mesh& mesh, const ClusterCallback& onCluster = {});
-    // Every directed edge a->b of the mesh has as many b->a (found while building, from 64-bit hash sums of each
-    // vertex's neighbours, so a false yes is a 2^-64 chance): the mesh is closed and consistently wound.
+    // Every directed edge a->b of the mesh has as many b->a (found while building, from a 64-bit hash sum, so a
+    // false yes is a 2^-64 chance): the mesh is closed and consistently wound.
     bool closed() const { return closed_; }
     // The number of clusters build() makes for `triangles` triangles.
     static size_t clusterCount(size_t triangles) {

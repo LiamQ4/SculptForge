@@ -915,9 +915,10 @@ void Renderer::uploadVertices(MeshSlot& s, const Mesh& mesh, bool full) {
         uint64_t hp = 0, hn = 0;
         for (uint32_t i = b; i < e; ++i) {
             const uint32_t v = order[i];
-            PackedVertex& pv = out[i - b];
+            PackedVertex pv; // packed here and stored once: `out` may be mapped GPU memory, slow to read back
             inside &= packVertex(s.grid, mesh.positions[v], normals ? mesh.normals[v] : glm::vec3(0.0f, 0.0f, 1.0f),
                                  curvatureAt(mesh, v), pv);
+            out[i - b] = pv;
             hp = (hp ^ (uint64_t(pv.pos[0]) | uint64_t(pv.pos[1]) << 32)) * 0x100000001B3ull + i;
             hn = (hn ^ pv.normal) * 0x100000001B3ull + i;
             if ((i + 1) % UploadOrder::kBlock == 0 || i + 1 == e) {
@@ -953,7 +954,7 @@ void Renderer::uploadVertices(MeshSlot& s, const Mesh& mesh, bool full) {
 
 // Culling bounds of the clusters movedRuns_ touches (every copy of a moved vertex is in a run, so every cluster
 // with a moved triangle is), or of all.
-void Renderer::updateBounds(MeshSlot& s, const Mesh& mesh, bool all) {
+void Renderer::updateBounds(MeshSlot& s, const Mesh& mesh, bool all, bool computed) {
     const auto clusters = s.order.clusters();
     s.bounds.resize(clusters.size());
     cullScratch_.clear();
@@ -969,6 +970,7 @@ void Renderer::updateBounds(MeshSlot& s, const Mesh& mesh, bool all) {
     }
     s.proxyStale.resize(clusters.size(), 1);
     for (uint32_t c : cullScratch_) s.proxyStale[c] = 1;
+    if (computed) cullScratch_.clear();
     poolFor(cullScratch_.size(), [&](size_t i0, size_t i1) {
         for (size_t i = i0; i < i1; ++i) {
             const uint32_t c = cullScratch_[i];
@@ -1251,21 +1253,23 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
         auto* indices = nt ? static_cast<uint16_t*>(gl::MapBufferRange(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(nt * 3 * sizeof(uint16_t)),
                                                                         GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT))
                            : nullptr;
-        UploadOrder::ClusterCallback write;
-        if (indices)
-            write = [&](uint32_t c, const uint16_t* local) {
-                const uint32_t count = s.order.clusterTriangles(c);
-                uint16_t* out = indices + size_t(s.order.firstTriangle(c)) * 3;
-                size_t drawn = count;
-                if (!hidden) {
-                    std::copy_n(local, size_t(count) * 3, out);
-                } else {
-                    drawn = 0;
-                    for (uint32_t t = 0; t < count; ++t)
-                        if (!mesh.hidden[s.order.triangle(c, t)]) std::copy_n(local + size_t(t) * 3, 3, out + 3 * drawn++);
-                }
-                s.drawCount[c] = GLsizei(drawn * 3);
-            };
+        // The culling bounds too, while each cluster's triangles are at hand.
+        s.bounds.assign(UploadOrder::clusterCount(nt), ClusterBounds());
+        UploadOrder::ClusterCallback write = [&](uint32_t c, const uint16_t* local) {
+            s.bounds[c] = clusterBounds(mesh, s.order, c);
+            if (!indices) return;
+            const uint32_t count = s.order.clusterTriangles(c);
+            uint16_t* out = indices + size_t(s.order.firstTriangle(c)) * 3;
+            size_t drawn = count;
+            if (!hidden) {
+                std::copy_n(local, size_t(count) * 3, out);
+            } else {
+                drawn = 0;
+                for (uint32_t t = 0; t < count; ++t)
+                    if (!mesh.hidden[s.order.triangle(c, t)]) std::copy_n(local + size_t(t) * 3, 3, out + 3 * drawn++);
+            }
+            s.drawCount[c] = GLsizei(drawn * 3);
+        };
         s.order.build(mesh, write);
         indicesDone = indices && gl::UnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
         gl::BindVertexArray(0);
@@ -1279,7 +1283,7 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
     const std::span<const uint32_t> order = s.order.fromGpu();
     if (full || ranged) {
         uploadVertices(s, mesh, full);
-        updateBounds(s, mesh, full);
+        updateBounds(s, mesh, full, full); // (a full upload computed them while building)
     }
     if (full) {
         s.proxyAllocated = false; // sized for the old mesh

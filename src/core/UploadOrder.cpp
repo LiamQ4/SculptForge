@@ -72,12 +72,16 @@ void walkCluster(const Mesh& mesh, const UploadOrder& order, uint32_t c, F&& fn)
     }
 }
 
-// A 64-bit mix (splitmix64's finaliser) for comparing neighbour multisets as sums.
-uint64_t mix64(uint64_t x) {
-    x += 0x9E3779B97F4A7C15ull;
-    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
-    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
-    return x ^ (x >> 31);
+// Two 64-bit mixes for the closed check (murmur3's finaliser with different constants).
+uint64_t mixA(uint64_t x) {
+    x ^= x >> 33;
+    x *= 0xFF51AFD7ED558CCDull;
+    return x ^ (x >> 33);
+}
+uint64_t mixB(uint64_t x) {
+    x ^= x >> 31;
+    x *= 0xC4CEB9FE1A85EC53ull;
+    return (x ^ (x >> 29)) | 1; // odd: w * b == 0 (mod 2^64) only when b == 0
 }
 
 // Sorts (key, value) pairs by key, keeping equal keys in order (LSD radix, 11 bits per pass).
@@ -180,29 +184,29 @@ void UploadOrder::build(const Mesh& mesh, const ClusterCallback& onCluster) {
     toGpu_.resize(vertices_);
     poolFor(vertices_, [&](size_t b, size_t e) { std::fill(toGpu_.begin() + std::ptrdiff_t(b), toGpu_.begin() + std::ptrdiff_t(e), kNone); },
             1 << 16);
-    std::vector<std::vector<std::pair<uint32_t, uint64_t>>> unbalanced(nc);
+    // Closed: every vertex's outgoing and incoming neighbours are the same multiset, i.e. the sum over its
+    // corners of mixA(next) - mixA(previous) is 0. Weighted by mixB of the vertex and summed over the mesh, that
+    // is 0 for a closed mesh and, for any other, anything (0 by a 2^-64 chance).
+    std::vector<uint64_t> balances(nc, 0);
     // Each cluster's vertices in first-use order; a vertex's first slot is the lowest (an atomic min, so the
     // result doesn't depend on which thread gets there first).
     poolFor(nc, [&](size_t c0, size_t c1) {
         for (size_t c = c0; c < c1; ++c) {
             const Cluster& cl = clusters_[c];
             thread_local std::vector<uint16_t> locals;
-            thread_local std::vector<uint64_t> balance; // per local vertex: sum of hash(next) - hash(previous)
             locals.clear();
-            balance.assign(cl.vertexCount, 0);
-            uint32_t corner[3], cornerLocal[3];
+            uint64_t balance = 0; // sum over corners a of mixB(a) * (mixA(next) - mixA(previous))
+            uint32_t corner[3];
             int k = 0;
             walkCluster(mesh, *this, uint32_t(c), [&](int local, uint32_t v, bool isNew) {
                 if (onCluster) locals.push_back(uint16_t(std::max(local, 0)));
-                if (local >= 0) {
-                    corner[k] = v;
-                    cornerLocal[k] = uint32_t(local);
-                }
+                corner[k] = v;
                 if (++k == 3) {
                     k = 0;
-                    if (local >= 0)
-                        for (int j = 0; j < 3; ++j)
-                            balance[cornerLocal[j]] += mix64(corner[(j + 1) % 3]) - mix64(corner[(j + 2) % 3]);
+                    if (local >= 0) {
+                        const uint64_t h0 = mixA(corner[0]), h1 = mixA(corner[1]), h2 = mixA(corner[2]);
+                        balance += mixB(corner[0]) * (h1 - h2) + mixB(corner[1]) * (h2 - h0) + mixB(corner[2]) * (h0 - h1);
+                    }
                 }
                 if (!isNew) return;
                 const uint32_t slot = cl.firstVertex + uint32_t(local);
@@ -213,9 +217,7 @@ void UploadOrder::build(const Mesh& mesh, const ClusterCallback& onCluster) {
                 }
             });
             if (onCluster) onCluster(uint32_t(c), locals.data());
-            // Vertices whose edges don't balance within this cluster: settled once every cluster has added in.
-            for (uint32_t l = 0; l < cl.vertexCount; ++l)
-                if (balance[l] != 0) unbalanced[c].emplace_back(fromGpu_[cl.firstVertex + l], balance[l]);
+            balances[c] = balance;
             const uint32_t padEnd = c + 1 < nc ? clusters_[c + 1].firstVertex : uint32_t(slots);
             const uint32_t fill = cl.vertexCount ? fromGpu_[cl.firstVertex + cl.vertexCount - 1] : 0u;
             std::fill(fromGpu_.begin() + cl.firstVertex + cl.vertexCount, fromGpu_.begin() + padEnd, fill);
@@ -241,24 +243,10 @@ void UploadOrder::build(const Mesh& mesh, const ClusterCallback& onCluster) {
         std::vector<std::pair<uint32_t, uint32_t>>().swap(p);
     }
     radixSortByKey(bySlot, uint32_t(vertices_));
-    // Closed: the unbalanced vertices (on seams, or open) sum to zero over all clusters.
-    {
-        std::vector<std::pair<uint32_t, uint64_t>> all;
-        for (auto& u : unbalanced) {
-            all.insert(all.end(), u.begin(), u.end());
-            std::vector<std::pair<uint32_t, uint64_t>>().swap(u);
-        }
-        radixSortByKey(all, uint32_t(vertices_));
-        closed_ = triangles_ > 0;
-        for (size_t i = 0; i < all.size() && closed_;) {
-            uint64_t sum = 0;
-            size_t j = i;
-            for (; j < all.size() && all[j].first == all[i].first; ++j) sum += all[j].second;
-            closed_ = sum == 0;
-            i = j;
-        }
-    }
     for (const auto& e : bySlot) hasCopy_[e.first >> 6] |= uint64_t(1) << (e.first & 63);
+    uint64_t total = 0;
+    for (uint64_t b : balances) total += b;
+    closed_ = triangles_ > 0 && total == 0;
     copies_ = std::move(bySlot);
     marked_.assign((slots + kBlock - 1) / kBlock, 0);
     blocks_.clear();
