@@ -421,15 +421,18 @@ void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& 
     });
 
     displaceAll(mesh, verts_, scratch_);
-    finishDab(mesh, bvh, verts_, clock);
+    finishDab(mesh, bvh, verts_, clock, true);
 }
 
 // Normals and BVH after a dab moved `verts`, with the time each takes (the kernel ran since `clock`).
-void Sculptor::finishDab(Mesh& mesh, BVH& bvh, std::span<const uint32_t> verts, std::chrono::steady_clock::time_point clock) {
+// `queried`: verts are (some of) what the BVH's last vertex query returned.
+void Sculptor::finishDab(Mesh& mesh, BVH& bvh, std::span<const uint32_t> verts, std::chrono::steady_clock::time_point clock,
+                         bool queried) {
     timings.kernelMs += lapMs(clock);
     mesh.updateNormals(verts);
     timings.normalsMs += lapMs(clock);
-    bvh.refit(mesh, verts);
+    if (queried) bvh.refitQueried(mesh);
+    else bvh.refit(mesh, verts);
     timings.bvhMs += lapMs(clock);
     ++timings.dabs;
     timings.vertices += verts.size();
@@ -574,7 +577,7 @@ void Sculptor::dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const
         });
         displaceAll(mesh, verts_, scratch_);
     }
-    finishDab(mesh, bvh, verts_, clock);
+    finishDab(mesh, bvh, verts_, clock, true);
 }
 
 void Sculptor::beginGrab(Mesh& mesh, BVH& bvh, const DabParams& p, Symmetry sym) {

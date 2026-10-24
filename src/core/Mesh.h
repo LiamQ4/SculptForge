@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "core/IndexBits.h"
 #include "core/PaintLayer.h"
 
 #include <glm/glm.hpp>
@@ -209,16 +210,12 @@ public:
     bool vertexDirty(uint32_t v) const { return (v >> 6) < dirtyBits.size() && (dirtyBits[v >> 6] >> (v & 63)) & 1; }
 
 private:
-    uint32_t nextStamp();
-
     std::vector<uint32_t> adjOffsets_, adjList_;
     std::vector<uint32_t> vtOffsets_, vtList_;
 
-    // updateNormals: vertices already gathered this call (== stamp_), the gathered ones, per-block parts.
-    std::vector<uint32_t> vertStamp_;
-    uint32_t stamp_ = 0;
+    // updateNormals: the vertices to update, as a set and as a list.
+    IndexBits normalBits_;
     std::vector<uint32_t> scratchVerts_;
-    std::vector<std::vector<uint32_t>> scratchParts_;
 };
 
 // Shape-preserving Taubin (lambda/mu) smoothing of positions; needs topology.

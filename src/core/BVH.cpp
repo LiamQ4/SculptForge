@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/BVH.h"
 
-#include "core/AtomicRef.h"
 #include "core/ThreadPool.h"
 
 #include <algorithm>
@@ -54,8 +53,8 @@ void BVH::build(const Mesh& mesh) {
     nodes_.clear();
     triIndices_.resize(nt);
     triLeaf_.assign(nt, 0);
-    vertStamp_.assign(mesh.vertexCount(), 0);
-    queryEpoch_ = 0;
+    vertBits_.resize(mesh.vertexCount());
+    queryLeaves_.clear();
     if (nt == 0) return;
 
     std::vector<glm::vec3> centroids(nt);
@@ -153,27 +152,23 @@ void BVH::build(const Mesh& mesh) {
             n.box.expand(nodes_[n.first + 1].box);
         }
     }
-    leafStamp_.assign(nodes_.size(), 0);
-    leafStampValue_ = 0;
+    leafBits_.resize(nodes_.size());
+}
+
+AABB BVH::leafBox(const Mesh& mesh, const Node& n) const {
+    AABB box;
+    for (uint32_t i = n.first; i < n.first + n.count; ++i) {
+        const auto& t = mesh.triangles[triIndices_[i]];
+        box.expand(mesh.positions[t.x]);
+        box.expand(mesh.positions[t.y]);
+        box.expand(mesh.positions[t.z]);
+    }
+    return box;
 }
 
 void BVH::recomputeLeaf(const Mesh& mesh, Node& n) {
-    n.box = AABB{};
-    for (uint32_t i = n.first; i < n.first + n.count; ++i) {
-        const auto& t = mesh.triangles[triIndices_[i]];
-        n.box.expand(mesh.positions[t.x]);
-        n.box.expand(mesh.positions[t.y]);
-        n.box.expand(mesh.positions[t.z]);
-        triLeaf_[triIndices_[i]] = static_cast<uint32_t>(&n - nodes_.data());
-    }
-}
-
-uint32_t BVH::nextStamp(std::vector<uint32_t>& stamps, uint32_t& stamp) const {
-    if (++stamp == 0) {
-        std::fill(stamps.begin(), stamps.end(), 0);
-        stamp = 1;
-    }
-    return stamp;
+    n.box = leafBox(mesh, n);
+    for (uint32_t i = n.first; i < n.first + n.count; ++i) triLeaf_[triIndices_[i]] = static_cast<uint32_t>(&n - nodes_.data());
 }
 
 bool BVH::raycast(const Mesh& mesh, const glm::vec3& origin, const glm::vec3& dir, RayHit& hit) const {
@@ -251,22 +246,12 @@ void BVH::queryTriangles(const Mesh& mesh, const glm::vec3& center, float radius
 
 void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const {
     out.clear();
+    queryLeaves_.clear();
     if (nodes_.empty()) return;
+    if (vertBits_.capacity() < mesh.vertexCount()) vertBits_.resize(mesh.vertexCount());
     const float r2 = radius * radius;
-    // vertStamp_ holds (epoch << 16) | code: kDone once a vertex is output in this query; while splitting
-    // over threads, the code of the earliest subtree (in traversal order) holding it, kTaskCode - task.
-    constexpr uint32_t kDone = 0xFFFF, kTaskCode = 0xFFFE;
-    if (++queryEpoch_ == 0x10000) {
-        std::fill(vertStamp_.begin(), vertStamp_.end(), 0);
-        queryEpoch_ = 1;
-    }
-    const uint32_t epoch = queryEpoch_ << 16, done = epoch | kDone;
-    auto inside = [&](uint32_t v) {
-        const glm::vec3 d = mesh.positions[v] - center;
-        return glm::dot(d, d) <= r2;
-    };
 
-    // The subtrees the sphere touches at a fixed depth, in the order a depth-first traversal reaches them.
+    // The subtrees the sphere touches at a fixed depth (in depth-first order), the units of parallel work.
     constexpr int kTaskDepth = 9;
     std::vector<uint32_t>& tasks = queryTasks_;
     tasks.clear();
@@ -283,11 +268,13 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
         stack.push_back({n.first, depth + 1});
         stack.push_back({n.first + 1, depth + 1});
     }
-    // Visits the vertices of the triangles under node `root` that the sphere's boxes touch, depth first.
-    auto walk = [&](uint32_t root, std::vector<uint32_t>& nodeStack, auto&& visit) {
+    // Adds the vertices inside the sphere of the triangles under node `root` that the sphere's boxes touch, and
+    // lists (depth first) the leaves holding any of them.
+    auto walk = [&](uint32_t root, std::vector<uint32_t>& nodeStack, std::vector<uint32_t>& leaves) {
         nodeStack.assign(1, root);
         while (!nodeStack.empty()) {
-            const Node& n = nodes_[nodeStack.back()];
+            const uint32_t ni = nodeStack.back();
+            const Node& n = nodes_[ni];
             nodeStack.pop_back();
             if (!sphereBox(n.box, center, r2)) continue;
             if (n.count == 0) {
@@ -295,98 +282,63 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
                 nodeStack.push_back(n.first + 1);
                 continue;
             }
+            bool any = false;
             for (uint32_t i = n.first; i < n.first + n.count; ++i) {
                 const auto& t = mesh.triangles[triIndices_[i]];
-                visit(t.x);
-                visit(t.y);
-                visit(t.z);
+                for (int c = 0; c < 3; ++c) {
+                    const uint32_t v = t[c];
+                    if (vertBits_.contains(v)) { // only vertices inside are ever added
+                        any = true;
+                        continue;
+                    }
+                    const glm::vec3 d = mesh.positions[v] - center;
+                    if (glm::dot(d, d) <= r2) {
+                        vertBits_.insert(v);
+                        any = true;
+                    }
+                }
             }
+            if (any) leaves.push_back(ni);
         }
     };
-
-    if (tasks.size() < 8 || tasks.size() > kTaskCode || ThreadPool::shared().serial()) {
-        for (uint32_t root : tasks)
-            walk(root, stack_, [&](uint32_t v) {
-                if (vertStamp_[v] == done) return;
-                vertStamp_[v] = done;
-                if (inside(v)) out.push_back(v);
-            });
-        return;
-    }
-    // In parallel, with the serial order: each subtree lists the vertices inside the sphere and claims them
-    // (the earliest subtree's code wins: an atomic max); then each lists the ones it owns, in the order it
-    // first met them, and the lists are joined in subtree order.
-    if (queryParts_.size() < tasks.size()) queryParts_.resize(tasks.size());
-    poolFor(tasks.size(), [&](size_t b, size_t e) {
-        std::vector<uint32_t> nodeStack;
-        for (size_t k = b; k < e; ++k) {
-            const uint32_t mine = epoch | (kTaskCode - uint32_t(k));
-            std::vector<uint32_t>& found = queryParts_[k];
-            found.clear();
-            walk(tasks[k], nodeStack, [&](uint32_t v) {
-                AtomicRef<uint32_t> owner(vertStamp_[v]);
-                if (owner.load(std::memory_order_relaxed) == mine || !inside(v)) return;
-                found.push_back(v);
-                for (uint32_t cur = owner.load(std::memory_order_relaxed);
-                     cur < mine && !owner.compare_exchange_weak(cur, mine, std::memory_order_relaxed);) {
-                }
-            });
-        }
-    }, 1, 2);
-    poolFor(tasks.size(), [&](size_t b, size_t e) {
-        for (size_t k = b; k < e; ++k) {
-            const uint32_t mine = epoch | (kTaskCode - uint32_t(k));
-            std::vector<uint32_t>& found = queryParts_[k];
-            size_t kept = 0;
-            for (uint32_t v : found) {
-                AtomicRef<uint32_t> owner(vertStamp_[v]);
-                if (owner.load(std::memory_order_relaxed) != mine) continue;
-                owner.store(done, std::memory_order_relaxed);
-                found[kept++] = v;
+    // The set doesn't depend on which thread found what, take() lists it in index order, and the leaves are
+    // joined in task order (the serial order).
+    if (tasks.size() < 8 || ThreadPool::shared().serial()) {
+        for (uint32_t root : tasks) walk(root, stack_, queryLeaves_);
+    } else {
+        if (queryParts_.size() < tasks.size()) queryParts_.resize(tasks.size());
+        poolFor(tasks.size(), [&](size_t b, size_t e) {
+            std::vector<uint32_t> nodeStack;
+            for (size_t k = b; k < e; ++k) {
+                queryParts_[k].clear();
+                walk(tasks[k], nodeStack, queryParts_[k]);
             }
-            found.resize(kept);
-        }
-    }, 1, 2);
-    for (size_t k = 0; k < tasks.size(); ++k) out.insert(out.end(), queryParts_[k].begin(), queryParts_[k].end());
+        }, 1, 2);
+        for (size_t k = 0; k < tasks.size(); ++k) queryLeaves_.insert(queryLeaves_.end(), queryParts_[k].begin(), queryParts_[k].end());
+    }
+    vertBits_.take(out);
 }
 
 void BVH::refit(const Mesh& mesh, std::span<const uint32_t> movedVerts) {
     if (nodes_.empty()) return;
-    const uint32_t s = nextStamp(leafStamp_, leafStampValue_);
+    if (leafBits_.capacity() < nodes_.size()) leafBits_.resize(nodes_.size());
+    poolFor(movedVerts.size(), [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i)
+            for (uint32_t ti : mesh.vertexTriangles(movedVerts[i])) leafBits_.insert(triLeaf_[ti]);
+    }, 4096);
     scratchLeaves_.clear();
-    constexpr size_t kBlock = 4096;
-    if (movedVerts.size() <= kBlock) {
-        for (uint32_t v : movedVerts) {
-            for (uint32_t ti : mesh.vertexTriangles(v)) {
-                uint32_t leaf = triLeaf_[ti];
-                if (leafStamp_[leaf] != s) {
-                    leafStamp_[leaf] = s;
-                    scratchLeaves_.push_back(leaf);
-                }
-            }
-        }
-    } else {
-        // Threads claim leaves with an atomic exchange of the stamp (the set, and so the result, is the same).
-        const size_t parts = (movedVerts.size() + kBlock - 1) / kBlock;
-        if (scratchParts_.size() < parts) scratchParts_.resize(parts);
-        poolFor(movedVerts.size(), [&](size_t b, size_t e) {
-            std::vector<uint32_t>& out = scratchParts_[b / kBlock];
-            out.clear();
-            for (size_t i = b; i < e; ++i)
-                for (uint32_t ti : mesh.vertexTriangles(movedVerts[i])) {
-                    const uint32_t leaf = triLeaf_[ti];
-                    if (AtomicRef<uint32_t>(leafStamp_[leaf]).exchange(s, std::memory_order_relaxed) != s)
-                        out.push_back(leaf);
-                }
-        }, kBlock);
-        for (size_t p = 0; p < parts; ++p)
-            scratchLeaves_.insert(scratchLeaves_.end(), scratchParts_[p].begin(), scratchParts_[p].end());
-    }
-    poolFor(scratchLeaves_.size(), [&](size_t b, size_t e) {
-        for (size_t i = b; i < e; ++i) recomputeLeaf(mesh, nodes_[scratchLeaves_[i]]);
+    leafBits_.take(scratchLeaves_);
+    refitLeaves(mesh, scratchLeaves_);
+}
+
+void BVH::refitQueried(const Mesh& mesh) { refitLeaves(mesh, queryLeaves_); }
+
+void BVH::refitLeaves(const Mesh& mesh, std::span<const uint32_t> leaves) {
+    poolFor(leaves.size(), [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i) nodes_[leaves[i]].box = leafBox(mesh, nodes_[leaves[i]]);
     }, 512);
     // Grow ancestors until one already contains the new bounds (a union, so the order doesn't matter).
-    for (uint32_t li : scratchLeaves_) {
+    for (uint32_t li : leaves) {
         AABB box = nodes_[li].box;
         uint32_t ni = li;
         while (ni != 0) {
@@ -402,8 +354,8 @@ void BVH::refit(const Mesh& mesh, std::span<const uint32_t> movedVerts) {
 
 size_t BVH::memoryBytes() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(v[0]); };
-    return bytes(nodes_) + bytes(triIndices_) + bytes(triLeaf_) + bytes(vertStamp_) + bytes(leafStamp_) +
-           bytes(scratchLeaves_) + bytes(stack_);
+    return bytes(nodes_) + bytes(triIndices_) + bytes(triLeaf_) + vertBits_.memoryBytes() + leafBits_.memoryBytes() +
+           bytes(queryLeaves_) + bytes(scratchLeaves_) + bytes(stack_);
 }
 
 void BVH::refitAll(const Mesh& mesh) {
