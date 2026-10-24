@@ -64,13 +64,14 @@ struct SubdivTopology {
     bool generated = false;
     uint32_t coarseVertices = 0, fineVertices = 0;
     size_t fineTriangles = 0;
-    // The quad pairing of the coarse level's triangles this level was built with (Mesh::kNoQuad = triangle).
-    std::vector<uint32_t> pairing;
+    bool quads = false; // some coarse triangles were paired into quads
     // Coarse polygons (triangles and quads), corners in winding order (CSR).
     std::vector<uint32_t> polyOffsets, polyVerts;
     std::vector<uint32_t> polyEdges;  // per polygon side i (corner i -> i + 1): its edge
-    std::vector<uint32_t> polyCorner; // per polygon corner: the coarse triangle corner (tri * 3 + slot) for UVs
     std::vector<glm::uvec2> polyTris; // per polygon: its coarse triangles (y = kNone for a triangle)
+    // Per quad: which edge e of its first triangle t is the diagonal, and the slot of the second triangle's far
+    // corner (e | far << 2); the quad's corners are t[e+1], t[e+2], t[e], far.
+    std::vector<uint8_t> polyDiag;
     // Coarse edges (a < b) and the polygons on each side; y = kNone on boundaries and non-manifold edges.
     std::vector<glm::uvec2> edges, edgeFaces;
     std::vector<uint32_t> vertEdgeOffsets, vertEdges; // coarse vertex -> incident edges (CSR)
@@ -85,6 +86,16 @@ struct SubdivTopology {
     static constexpr uint32_t kNone = ~0u;
 
     size_t polygonCount() const { return polyOffsets.empty() ? 0 : polyOffsets.size() - 1; }
+    // The coarse triangle corner (tri * 3 + slot) of polygon p's corner i, for UVs.
+    uint32_t polyCorner(size_t p, uint32_t i) const {
+        const glm::uvec2 t = polyTris[p];
+        if (t.y == kNone) return t.x * 3 + i;
+        const uint32_t e = polyDiag[p] & 3u;
+        return i == 3 ? t.y * 3 + (polyDiag[p] >> 2) : t.x * 3 + (e + 1 + i) % 3;
+    }
+    // The quad pairing of the coarse level's triangles this level was built with (Mesh::kNoQuad = triangle;
+    // empty without quads).
+    std::vector<uint32_t> pairing() const;
     uint32_t vertexChildOf(uint32_t v) const { return generated ? v : vertexChild[v]; }
     uint32_t edgeChildOf(uint32_t e) const { return generated ? coarseVertices + e : edgeChild[e]; }
     uint32_t faceChildOf(uint32_t p) const { return generated ? coarseVertices + uint32_t(edges.size()) + p : faceChild[p]; }

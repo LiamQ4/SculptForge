@@ -447,7 +447,8 @@ Json writeSubdiv(Writer& w, const std::string& prefix, const Mesh& m) {
             Json t = Json::object();
             t.set("catmull_clark", tp.catmullClark);
             t.set("smooth", tp.smooth);
-            if (!tp.pairing.empty()) t.set("pairing", w.uints(p + "pairing.bin", tp.pairing.data(), tp.pairing.size(), 1));
+            if (const std::vector<uint32_t> pairing = tp.pairing(); !pairing.empty())
+                t.set("pairing", w.uints(p + "pairing.bin", pairing.data(), pairing.size(), 1));
             if (generated) {
                 t.set("generated", true);
             } else {

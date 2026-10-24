@@ -177,7 +177,7 @@ std::shared_ptr<SubdivTopology> buildCoarse(const std::vector<glm::uvec3>& trian
     tp->polyOffsets.reserve(nt + 1);
     tp->polyOffsets.push_back(0);
     tp->polyVerts.reserve(nt * 3);
-    tp->polyCorner.reserve(nt * 3);
+    tp->polyDiag.reserve(nt);
     tp->polyTris.reserve(nt);
     for (uint32_t t = 0; t < nt; ++t) {
         const uint32_t u = pairing.empty() ? kNone : pairing[t];
@@ -185,9 +185,9 @@ std::shared_ptr<SubdivTopology> buildCoarse(const std::vector<glm::uvec3>& trian
         if (u == kNone) {
             for (uint32_t c = 0; c < 3; ++c) {
                 tp->polyVerts.push_back(a[c]);
-                tp->polyCorner.push_back(t * 3 + c);
             }
             tp->polyTris.push_back({t, kNone});
+            tp->polyDiag.push_back(0);
         } else {
             if (u < t) continue;
             const int e = quadDiagonalOf(triangles, t, u);
@@ -197,15 +197,19 @@ std::shared_ptr<SubdivTopology> buildCoarse(const std::vector<glm::uvec3>& trian
                 if (b[k] != a[0] && b[k] != a[1] && b[k] != a[2]) far = k;
             for (int c : {(e + 1) % 3, (e + 2) % 3, e}) {
                 tp->polyVerts.push_back(a[c]);
-                tp->polyCorner.push_back(t * 3 + uint32_t(c));
             }
             tp->polyVerts.push_back(b[far]);
-            tp->polyCorner.push_back(u * 3 + far);
             tp->polyTris.push_back({t, u});
+            tp->polyDiag.push_back(uint8_t(e | far << 2));
         }
         tp->polyOffsets.push_back(uint32_t(tp->polyVerts.size()));
     }
-    tp->pairing = std::move(pairing);
+    tp->quads = anyPair;
+    // Exact sizes: the polygon lists were reserved for all triangles.
+    tp->polyOffsets.shrink_to_fit();
+    tp->polyVerts.shrink_to_fit();
+    tp->polyTris.shrink_to_fit();
+    tp->polyDiag.shrink_to_fit();
 
     // Edges: half-edges bucketed by their lower vertex, then matched within each (small) bucket.
     const size_t np = tp->polygonCount();
@@ -819,7 +823,7 @@ void prolongUvs(const SubdivTopology& tp, const std::vector<glm::vec2>& coarse, 
     forEachFineFace(tp, [&](size_t f, uint32_t p, uint32_t, const uint8_t* code) {
         if (flags && !(*flags)[tp.polyTris[p].x] && (tp.polyTris[p].y == kNone || !(*flags)[tp.polyTris[p].y])) return;
         const uint32_t o = tp.polyOffsets[p], n = polySize(tp, p);
-        auto cu = [&](uint32_t i) { return coarse[tp.polyCorner[o + i % n]]; };
+        auto cu = [&](uint32_t i) { return coarse[tp.polyCorner(p, i % n)]; };
         for (int c = 0; c < 3; ++c) {
             glm::vec2 uv;
             if (code[c] < 4) uv = cu(code[c]);
@@ -1320,9 +1324,20 @@ std::shared_ptr<Mesh> divideData(const SubdivTopology& tp, const Mesh& coarse) {
 
 } // namespace
 
+std::vector<uint32_t> SubdivTopology::pairing() const {
+    if (!quads) return {};
+    std::vector<uint32_t> out(polygonCount() + std::count_if(polyTris.begin(), polyTris.end(), [](const glm::uvec2& t) { return t.y != kNone; }), kNone);
+    for (const glm::uvec2& t : polyTris)
+        if (t.y != kNone) {
+            out[t.x] = t.y;
+            out[t.y] = t.x;
+        }
+    return out;
+}
+
 size_t SubdivTopology::bytes() const {
     auto b = [](const auto& v) { return v.capacity() * sizeof(v[0]); };
-    return b(pairing) + b(polyOffsets) + b(polyVerts) + b(polyEdges) + b(polyCorner) + b(polyTris) + b(edges) +
+    return b(polyOffsets) + b(polyVerts) + b(polyEdges) + b(polyDiag) + b(polyTris) + b(edges) +
            b(edgeFaces) + b(vertEdgeOffsets) + b(vertEdges) + b(vertexChild) + b(edgeChild) + b(faceChild) +
            b(fineParentPoly) + b(fineParentTri) + b(fineCode);
 }
