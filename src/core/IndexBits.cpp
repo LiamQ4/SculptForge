@@ -78,7 +78,7 @@ void IndexBits::absorb(std::span<IndexBits> parts) {
                 }
             }
         }
-    }, 8);
+    }, 32);
     for (IndexBits& p : parts) std::fill(p.summary_.begin(), p.summary_.end(), 0);
 }
 
@@ -87,7 +87,7 @@ void IndexBits::take(std::vector<uint32_t>& out, const std::function<void(size_t
     const size_t nc = chunks_.size();
     if (nc == 0) return;
     // Count each chunk's members, then write them at their offsets (blocks of chunks, so small sets run inline).
-    constexpr size_t kBlock = 8;
+    constexpr size_t kBlock = 32; // chunks per job: small sets run inline
     counts_.resize(nc + 1);
     poolFor(nc, [&](size_t b, size_t e) {
         for (size_t k = b; k < e; ++k) {

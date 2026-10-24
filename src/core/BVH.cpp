@@ -259,11 +259,12 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
 
     // The units of parallel work: the subtrees the sphere touches, split breadth first until there are enough
     // of them (the same ones for any thread count).
-    constexpr size_t kTasks = 128;
+    constexpr size_t kTasks = 128, kSerialTriangles = 16384;
     std::vector<uint32_t>& tasks = queryTasks_;
     tasks.clear();
     if (sphereBox(nodes_[0].box, center, r2)) tasks.push_back(0);
-    for (bool split = true; split && tasks.size() < kTasks;) {
+    int depth = 0; // of every inner node in `tasks` (median splits: each holds about nt >> depth triangles)
+    for (bool split = true; split && tasks.size() < kTasks; ++depth) {
         split = false;
         queryNext_.clear();
         for (uint32_t ni : tasks) {
@@ -323,6 +324,13 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
     };
     // The set doesn't depend on which thread found what, take() lists it in index order, and the leaves are
     // joined in task order.
+    size_t work = 0; // triangles under the tasks, roughly
+    for (uint32_t ni : tasks) work += nodes_[ni].count > 0 ? nodes_[ni].count : mesh.triangleCount() >> depth;
+    if (work < kSerialTriangles) { // waking threads would cost more
+        for (uint32_t root : tasks) walk(root, stack_, queryLeaves_, vertBits_);
+        vertBits_.take(out);
+        return;
+    }
     if (queryParts_.size() < tasks.size()) queryParts_.resize(tasks.size());
     vertBits_.insertParallel(tasks.size(), 1, [&](size_t b, size_t e, IndexBits& found) {
         std::vector<uint32_t> nodeStack;
