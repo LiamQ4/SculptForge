@@ -94,6 +94,8 @@ constexpr GLenum GL_UNPACK_ROW_LENGTH = 0x0CF2;
 constexpr GLenum GL_TEXTURE3 = 0x84C3;
 constexpr GLenum GL_TEXTURE4 = 0x84C4;
 constexpr GLenum GL_POINTS = 0x0000;
+constexpr GLbitfield GL_MAP_WRITE_BIT = 0x0002;
+constexpr GLbitfield GL_MAP_INVALIDATE_BUFFER_BIT = 0x0008;
 constexpr GLenum GL_UNSIGNED_SHORT = 0x1403;
 constexpr GLenum GL_CULL_FACE = 0x0B44;
 constexpr GLenum GL_R16UI = 0x8234;
@@ -179,6 +181,8 @@ constexpr GLbitfield GL_COLOR_BUFFER_BIT = 0x4000;
     X(void, VertexAttrib3f, GLuint, GLfloat, GLfloat, GLfloat)                               \
     X(void, VertexAttrib4f, GLuint, GLfloat, GLfloat, GLfloat, GLfloat)                      \
     X(void, DrawElementsBaseVertex, GLenum, GLsizei, GLenum, const void*, GLint)             \
+    X(void*, MapBufferRange, GLenum, GLintptr, GLsizeiptr, GLbitfield)                       \
+    X(GLboolean, UnmapBuffer, GLenum)                                                        \
     X(void, MultiDrawElementsBaseVertex, GLenum, const GLsizei*, GLenum, const void* const*, GLsizei, const GLint*)
 
 namespace gl {

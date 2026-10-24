@@ -183,7 +183,10 @@ private:
     void buildProxies(MeshSlot& s, const Mesh& mesh);
     bool proxyUsed_ = false; // the last draw() drew motion proxies: sync keeps them current
     void syncNormalMap(MeshSlot& s, const Mesh& mesh, const NormalMapView* normalMap);
-    void uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs);
+    // `indicesDone`: the index buffer and drawCount are already written (a full upload writes them while
+    // building the layout).
+    void uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs, bool indicesDone = false);
+    void uploadIndices(MeshSlot& s, const Mesh& mesh);
     std::vector<std::pair<uint32_t, uint32_t>> dirtyRuns_; // scratch for sync: UploadOrder::dirtyRuns
     std::vector<uint8_t> staging_;                         // scratch for sync: gathered vertex data
     void syncTexture(MeshSlot& s, Mesh& mesh);

@@ -23,6 +23,7 @@
 #include "core/Mesh.h"
 
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -43,8 +44,19 @@ public:
         uint32_t triangleCount = 0;
     };
 
-    // Lays out `mesh` (its triangles and vertex count, and positions for the chunk order).
-    void build(const Mesh& mesh);
+    // Lays out `mesh` (its triangles and vertex count, and positions for the chunk order). `onCluster`, when
+    // given, gets each cluster's localTriangles as they are made (in parallel, from any thread), which saves
+    // a renderer a second pass to make them.
+    using ClusterCallback = std::function<void(uint32_t cluster, const uint16_t* localTriangles)>;
+    void build(const Mesh& mesh, const ClusterCallback& onCluster = {});
+    // Every directed edge a->b of the mesh has as many b->a (found while building, from 64-bit hash sums of each
+    // vertex's neighbours, so a false yes is a 2^-64 chance): the mesh is closed and consistently wound.
+    bool closed() const { return closed_; }
+    // The number of clusters build() makes for `triangles` triangles.
+    static size_t clusterCount(size_t triangles) {
+        const size_t chunks = (triangles + kChunkTriangles - 1) >> kChunkShift;
+        return (chunks + kClusterChunks - 1) / kClusterChunks;
+    }
     // GPU vertex slots, including the padding that block-aligns each cluster.
     size_t size() const { return fromGpu_.size(); }
     // fromGpu()[i] = the mesh vertex GPU slot i holds (padding repeats a vertex of its cluster).
@@ -80,6 +92,7 @@ public:
 
 private:
     size_t triangles_ = 0, vertices_ = 0;
+    bool closed_ = false;
     std::vector<Cluster> clusters_;
     std::vector<uint32_t> chunks_; // chunk ids in cluster order (the mesh's partial last chunk, if any, last)
     std::vector<uint32_t> toGpu_, fromGpu_;

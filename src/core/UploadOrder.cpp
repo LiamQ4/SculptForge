@@ -72,10 +72,19 @@ void walkCluster(const Mesh& mesh, const UploadOrder& order, uint32_t c, F&& fn)
     }
 }
 
+// A 64-bit mix (splitmix64's finaliser) for comparing neighbour multisets as sums.
+uint64_t mix64(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ull;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+    return x ^ (x >> 31);
+}
+
 // Sorts (key, value) pairs by key, keeping equal keys in order (LSD radix, 11 bits per pass).
-void radixSortByKey(std::vector<std::pair<uint32_t, uint32_t>>& items, uint32_t maxKey) {
+template <class V>
+void radixSortByKey(std::vector<std::pair<uint32_t, V>>& items, uint32_t maxKey) {
     if (items.size() < 2) return;
-    std::vector<std::pair<uint32_t, uint32_t>> tmp(items.size());
+    std::vector<std::pair<uint32_t, V>> tmp(items.size());
     constexpr uint32_t kDigit = 11, kBuckets = 1u << kDigit;
     const int bits = std::max(1, int(std::bit_width(maxKey)));
     std::vector<uint32_t> count(kBuckets);
@@ -107,7 +116,7 @@ uint32_t UploadOrder::clusterOfSlot(uint32_t i) const {
     return it == clusters_.begin() ? 0u : uint32_t(it - clusters_.begin() - 1);
 }
 
-void UploadOrder::build(const Mesh& mesh) {
+void UploadOrder::build(const Mesh& mesh, const ClusterCallback& onCluster) {
     triangles_ = mesh.triangleCount();
     vertices_ = mesh.vertexCount();
     // Chunks along a Morton curve of their centres (10 bits per axis over the mesh's bounds); a partial last
@@ -166,14 +175,35 @@ void UploadOrder::build(const Mesh& mesh) {
         c.firstVertex = uint32_t(slots);
         slots += (size_t(c.vertexCount) + kBlock - 1) & ~size_t(kBlock - 1);
     }
-    fromGpu_.assign(slots, 0);
-    toGpu_.assign(vertices_, kNone);
+    // (Filled in parallel: these are tens of millions of entries.)
+    fromGpu_.resize(slots);
+    toGpu_.resize(vertices_);
+    poolFor(vertices_, [&](size_t b, size_t e) { std::fill(toGpu_.begin() + std::ptrdiff_t(b), toGpu_.begin() + std::ptrdiff_t(e), kNone); },
+            1 << 16);
+    std::vector<std::vector<std::pair<uint32_t, uint64_t>>> unbalanced(nc);
     // Each cluster's vertices in first-use order; a vertex's first slot is the lowest (an atomic min, so the
     // result doesn't depend on which thread gets there first).
     poolFor(nc, [&](size_t c0, size_t c1) {
         for (size_t c = c0; c < c1; ++c) {
             const Cluster& cl = clusters_[c];
+            thread_local std::vector<uint16_t> locals;
+            thread_local std::vector<uint64_t> balance; // per local vertex: sum of hash(next) - hash(previous)
+            locals.clear();
+            balance.assign(cl.vertexCount, 0);
+            uint32_t corner[3], cornerLocal[3];
+            int k = 0;
             walkCluster(mesh, *this, uint32_t(c), [&](int local, uint32_t v, bool isNew) {
+                if (onCluster) locals.push_back(uint16_t(std::max(local, 0)));
+                if (local >= 0) {
+                    corner[k] = v;
+                    cornerLocal[k] = uint32_t(local);
+                }
+                if (++k == 3) {
+                    k = 0;
+                    if (local >= 0)
+                        for (int j = 0; j < 3; ++j)
+                            balance[cornerLocal[j]] += mix64(corner[(j + 1) % 3]) - mix64(corner[(j + 2) % 3]);
+                }
                 if (!isNew) return;
                 const uint32_t slot = cl.firstVertex + uint32_t(local);
                 fromGpu_[slot] = v;
@@ -182,6 +212,10 @@ void UploadOrder::build(const Mesh& mesh) {
                 while (slot < cur && !first.compare_exchange_weak(cur, slot, std::memory_order_relaxed)) {
                 }
             });
+            if (onCluster) onCluster(uint32_t(c), locals.data());
+            // Vertices whose edges don't balance within this cluster: settled once every cluster has added in.
+            for (uint32_t l = 0; l < cl.vertexCount; ++l)
+                if (balance[l] != 0) unbalanced[c].emplace_back(fromGpu_[cl.firstVertex + l], balance[l]);
             const uint32_t padEnd = c + 1 < nc ? clusters_[c + 1].firstVertex : uint32_t(slots);
             const uint32_t fill = cl.vertexCount ? fromGpu_[cl.firstVertex + cl.vertexCount - 1] : 0u;
             std::fill(fromGpu_.begin() + cl.firstVertex + cl.vertexCount, fromGpu_.begin() + padEnd, fill);
@@ -190,13 +224,40 @@ void UploadOrder::build(const Mesh& mesh) {
     // The other copies, by vertex (a stable sort of the slot-ordered list, so slots stay increasing).
     copies_.clear();
     hasCopy_.assign((vertices_ + 63) / 64, 0);
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> perCluster(nc);
+    poolFor(nc, [&](size_t c0, size_t c1) {
+        for (size_t c = c0; c < c1; ++c) {
+            const Cluster& cl = clusters_[c];
+            for (uint32_t i = cl.firstVertex; i < cl.firstVertex + cl.vertexCount; ++i)
+                if (toGpu_[fromGpu_[i]] != i) perCluster[c].emplace_back(fromGpu_[i], i);
+        }
+    }, 16);
+    size_t copyCount = 0;
+    for (const auto& p : perCluster) copyCount += p.size();
     std::vector<std::pair<uint32_t, uint32_t>> bySlot;
-    for (size_t c = 0; c < nc; ++c) {
-        const Cluster& cl = clusters_[c];
-        for (uint32_t i = cl.firstVertex; i < cl.firstVertex + cl.vertexCount; ++i)
-            if (toGpu_[fromGpu_[i]] != i) bySlot.emplace_back(fromGpu_[i], i);
+    bySlot.reserve(copyCount);
+    for (auto& p : perCluster) {
+        bySlot.insert(bySlot.end(), p.begin(), p.end());
+        std::vector<std::pair<uint32_t, uint32_t>>().swap(p);
     }
     radixSortByKey(bySlot, uint32_t(vertices_));
+    // Closed: the unbalanced vertices (on seams, or open) sum to zero over all clusters.
+    {
+        std::vector<std::pair<uint32_t, uint64_t>> all;
+        for (auto& u : unbalanced) {
+            all.insert(all.end(), u.begin(), u.end());
+            std::vector<std::pair<uint32_t, uint64_t>>().swap(u);
+        }
+        radixSortByKey(all, uint32_t(vertices_));
+        closed_ = triangles_ > 0;
+        for (size_t i = 0; i < all.size() && closed_;) {
+            uint64_t sum = 0;
+            size_t j = i;
+            for (; j < all.size() && all[j].first == all[i].first; ++j) sum += all[j].second;
+            closed_ = sum == 0;
+            i = j;
+        }
+    }
     for (const auto& e : bySlot) hasCopy_[e.first >> 6] |= uint64_t(1) << (e.first & 63);
     copies_ = std::move(bySlot);
     marked_.assign((slots + kBlock - 1) / kBlock, 0);

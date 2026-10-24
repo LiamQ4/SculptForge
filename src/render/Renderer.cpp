@@ -787,6 +787,15 @@ void uploadGathered(std::vector<uint8_t>& staging, GLuint buffer, size_t element
         }
         pieces.clear();
     };
+    // A whole array: written straight into the mapped buffer, in parallel (no staging copy).
+    if (allocate && runs.size() == 1 && runs[0].first == 0 && runs[0].second == count && count > 0) {
+        if (auto* dst = static_cast<uint8_t*>(gl::MapBufferRange(GL_ARRAY_BUFFER, 0, GLsizeiptr(count * elementSize),
+                                                                 GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT))) {
+            poolFor(count, [&](size_t b, size_t e) { fill(uint32_t(b), uint32_t(e), dst + b * elementSize); }, kPiece);
+            if (gl::UnmapBuffer(GL_ARRAY_BUFFER)) return;
+            // (The data was lost, which drivers may do on a mode switch: sent the usual way below.)
+        }
+    }
     size_t used = 0;
     staging.resize(size_t(std::min<size_t>(kBatch, count)) * elementSize);
     for (const auto& [b, e] : runs)
@@ -927,20 +936,14 @@ void Renderer::updateBounds(MeshSlot& s, const Mesh& mesh, bool all) {
         }
 }
 
-// Index buffer without hidden triangles (each cluster's drawn triangles first in its part of the buffer), the
-// first drawn triangle of each cluster, and the polygroup id and UVs of every drawn triangle in draw order
-// (looked up by that plus gl_PrimitiveID). The wireframe's edges are rebuilt on next need.
-void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs) {
+// The index buffer: each cluster's drawn triangles (hidden ones left out) first in its part of the buffer.
+void Renderer::uploadIndices(MeshSlot& s, const Mesh& mesh) {
     const size_t nt = mesh.triangleCount();
     const bool hidden = mesh.hidden.size() == nt && nt > 0;
-    const bool groups = mesh.polygroups.size() == nt && nt > 0;
-    const auto clusters = s.order.clusters();
-    const size_t nc = clusters.size();
+    const size_t nc = s.order.clusters().size();
     s.drawCount.assign(nc, 0);
-    s.primBase.assign(nc, 0);
     gl::BindVertexArray(s.vao);
     gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(nt * 3 * sizeof(uint16_t)), nullptr, GL_STATIC_DRAW);
-    s.bytes[1] = nt * 3 * sizeof(uint16_t);
     constexpr size_t kChunk = 64; // clusters per upload
     std::vector<uint16_t> staging;
     for (size_t c0 = 0; c0 < nc; c0 += kChunk) {
@@ -975,6 +978,20 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs) {
                           staging.data());
     }
     gl::BindVertexArray(0);
+}
+
+// The index buffer (unless `indicesDone`), the first drawn triangle of each cluster, and the polygroup id and
+// UVs of every drawn triangle in draw order (looked up by that plus gl_PrimitiveID). The wireframe's edges and
+// motion proxies are rebuilt on next need.
+void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs, bool indicesDone) {
+    const size_t nt = mesh.triangleCount();
+    const bool hidden = mesh.hidden.size() == nt && nt > 0;
+    const bool groups = mesh.polygroups.size() == nt && nt > 0;
+    const auto clusters = s.order.clusters();
+    const size_t nc = clusters.size();
+    s.primBase.assign(nc, 0);
+    s.bytes[1] = nt * 3 * sizeof(uint16_t);
+    if (!indicesDone) uploadIndices(s, mesh);
     size_t drawn = 0;
     for (size_t c = 0; c < nc; ++c) {
         s.primBase[c] = uint32_t(drawn);
@@ -1173,8 +1190,36 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
     const bool full = s.fresh || mesh.topologyDirty || nv != s.vertexCapacity;
     // The GPU keeps the vertices in the slot's cluster layout (core/UploadOrder.h), so a dab re-sends a few
     // short ranges holding what it changed, gathered from the mesh arrays.
+    bool indicesDone = false;
     if (full) {
-        s.order.build(mesh);
+        // The index buffer is written while the layout is made (mapped: the build's threads write each
+        // cluster's drawn triangles straight into it).
+        const size_t nt = mesh.triangleCount();
+        const bool hidden = mesh.hidden.size() == nt && nt > 0;
+        s.drawCount.assign(UploadOrder::clusterCount(nt), 0);
+        gl::BindVertexArray(s.vao);
+        gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(nt * 3 * sizeof(uint16_t)), nullptr, GL_STATIC_DRAW);
+        auto* indices = nt ? static_cast<uint16_t*>(gl::MapBufferRange(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(nt * 3 * sizeof(uint16_t)),
+                                                                        GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT))
+                           : nullptr;
+        UploadOrder::ClusterCallback write;
+        if (indices)
+            write = [&](uint32_t c, const uint16_t* local) {
+                const uint32_t count = s.order.clusterTriangles(c);
+                uint16_t* out = indices + size_t(s.order.firstTriangle(c)) * 3;
+                size_t drawn = count;
+                if (!hidden) {
+                    std::copy_n(local, size_t(count) * 3, out);
+                } else {
+                    drawn = 0;
+                    for (uint32_t t = 0; t < count; ++t)
+                        if (!mesh.hidden[s.order.triangle(c, t)]) std::copy_n(local + size_t(t) * 3, 3, out + 3 * drawn++);
+                }
+                s.drawCount[c] = GLsizei(drawn * 3);
+            };
+        s.order.build(mesh, write);
+        indicesDone = indices && gl::UnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
+        gl::BindVertexArray(0);
         s.grid = PositionGrid::around(meshBounds(mesh));
         dirtyRuns_.assign(1, {0u, uint32_t(s.order.size())});
     } else {
@@ -1190,8 +1235,9 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
     if (full) {
         s.proxyAllocated = false; // sized for the old mesh
         s.proxyCount.clear();
-        s.closed = closedOriented(mesh);
-        uploadFaces(s, mesh, wantUvs);
+        // (closedOriented also accepts unwelded seams, the same point twice, which the layout's check doesn't.)
+        s.closed = s.order.closed() || closedOriented(mesh);
+        uploadFaces(s, mesh, wantUvs, indicesDone);
         s.vertexCapacity = nv;
         // A mesh too big for the GPU's memory isn't drawn (rather than taking the driver down); the next full
         // upload (e.g. after Lower Res or a decimation) tries again.

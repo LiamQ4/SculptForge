@@ -191,6 +191,16 @@ TEST(closed_oriented_meshes) {
     holed.rebuildTopology();
     CHECK(!closedOriented(holed));
     CHECK(!closedOriented(Mesh()));
+    // The layout's own check (made while building) agrees, unwelded seams aside.
+    UploadOrder order;
+    for (const Mesh& m : {makeIcosphere(3), makeCube(5), makeBenchSphere(200000)}) {
+        order.build(m);
+        CHECK(order.closed());
+    }
+    for (const Mesh& m : {makePlane(4), flipped, holed}) {
+        order.build(m);
+        CHECK(!order.closed());
+    }
     // An unwelded seam (two vertices at one point, each with half the triangles) is still closed; a real
     // crack is not.
     Mesh seam = makeIcosphere(2);

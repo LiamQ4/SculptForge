@@ -10,7 +10,6 @@
 #include <cmath>
 #include <cstring>
 #include <map>
-#include <unordered_map>
 #include <tuple>
 #include <vector>
 
@@ -160,6 +159,39 @@ ClusterBounds clusterBounds(const Mesh& mesh, const UploadOrder& order, uint32_t
     return b;
 }
 
+namespace {
+
+// Cell -> its representative: an open-addressing table cleared by a stamp (a cluster has at most 3 vertices
+// per triangle, so 2^15 slots stay under half full).
+struct CellTable {
+    static constexpr uint32_t kBits = 15, kSize = 1u << kBits;
+    std::vector<uint64_t> keys = std::vector<uint64_t>(kSize);
+    std::vector<uint32_t> stamps = std::vector<uint32_t>(kSize, 0);
+    std::vector<uint16_t> reps = std::vector<uint16_t>(kSize);
+    std::vector<float> dists = std::vector<float>(kSize);
+    uint32_t stamp = 0;
+    void clear() {
+        if (++stamp == 0) {
+            std::fill(stamps.begin(), stamps.end(), 0);
+            stamp = 1;
+        }
+    }
+    uint32_t slot(uint64_t key, bool& found) {
+        for (uint32_t h = uint32_t((key * 0x9E3779B97F4A7C15ull) >> (64 - kBits));; h = (h + 1) & (kSize - 1)) {
+            if (stamps[h] != stamp) {
+                found = false;
+                return h;
+            }
+            if (keys[h] == key) {
+                found = true;
+                return h;
+            }
+        }
+    }
+};
+
+} // namespace
+
 bool clusterProxy(const Mesh& mesh, const UploadOrder& order, uint32_t c, size_t maxTriangles, std::vector<uint16_t>& out,
                   ClusterBounds& bounds) {
     out.clear();
@@ -190,28 +222,34 @@ bool clusterProxy(const Mesh& mesh, const UploadOrder& order, uint32_t c, size_t
     if (!counted || !box.valid()) return false;
     float cell = float(edges / double(counted)) * 2.5f;
     if (!(cell > 0.0f)) return false;
-    std::unordered_map<uint64_t, std::pair<uint16_t, float>> cells; // cell -> (representative, its distance to the centre)
+    thread_local CellTable cells;
+    thread_local std::vector<uint32_t> cellOfVertex;
+    cellOfVertex.resize(nl);
     rep.resize(nl);
     for (int attempt = 0; attempt < 4; ++attempt, cell *= 1.6f) {
         cells.clear();
-        auto cellOf = [&](const glm::vec3& p, glm::vec3& centre) {
-            const glm::vec3 q = glm::floor((p - box.min) / cell);
-            centre = box.min + (q + 0.5f) * cell;
-            return uint64_t(uint32_t(q.x)) | (uint64_t(uint32_t(q.y)) << 21) | (uint64_t(uint32_t(q.z)) << 42);
-        };
+        const float inv = 1.0f / cell;
         for (uint32_t l = 0; l < nl; ++l) {
             if (pinned[l]) continue;
-            glm::vec3 centre;
             const glm::vec3 p = pos(l);
-            const uint64_t key = cellOf(p, centre);
+            const glm::vec3 q = glm::floor((p - box.min) * inv);
+            const glm::vec3 centre = box.min + (q + 0.5f) * cell;
+            const uint64_t key = uint64_t(uint32_t(q.x)) | (uint64_t(uint32_t(q.y)) << 21) | (uint64_t(uint32_t(q.z)) << 42);
             const float d = glm::distance(p, centre);
-            auto [it, added] = cells.emplace(key, std::make_pair(uint16_t(l), d));
-            if (!added && d < it->second.second) it->second = {uint16_t(l), d};
+            bool found = false;
+            const uint32_t h = cells.slot(key, found);
+            if (!found) {
+                cells.stamps[h] = cells.stamp;
+                cells.keys[h] = key;
+                cells.reps[h] = uint16_t(l);
+                cells.dists[h] = d;
+            } else if (d < cells.dists[h]) {
+                cells.reps[h] = uint16_t(l);
+                cells.dists[h] = d;
+            }
+            cellOfVertex[l] = h;
         }
-        for (uint32_t l = 0; l < nl; ++l) {
-            glm::vec3 centre;
-            rep[l] = pinned[l] ? uint16_t(l) : cells.at(cellOf(pos(l), centre)).first;
-        }
+        for (uint32_t l = 0; l < nl; ++l) rep[l] = pinned[l] ? uint16_t(l) : cells.reps[cellOfVertex[l]];
         out.clear();
         for (uint32_t i = 0; i < n; ++i) {
             if (hidden && mesh.hidden[order.triangle(c, i)]) continue;
@@ -269,21 +307,29 @@ bool closedOriented(const Mesh& mesh) {
                 }
         }
     };
-    // The vertices whose edges don't pair up.
+    // The vertices whose edges don't pair up: compared as sums of a 64-bit hash of the neighbour (no sorting;
+    // equal multisets give equal sums, and unequal ones colliding is a 2^-64 chance).
+    auto hash = [](uint64_t x) {
+        x += 0x9E3779B97F4A7C15ull;
+        x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+        x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+        return x ^ (x >> 31);
+    };
     constexpr size_t kBlock = 1 << 14;
     std::vector<std::vector<uint32_t>> open((nv + kBlock - 1) / kBlock);
     std::atomic<size_t> openCount{0};
     const size_t limit = std::max<size_t>(64, nv / 100);
     poolFor(nv, [&](size_t v0, size_t v1) {
-        thread_local std::vector<uint32_t> outs, ins;
         std::vector<uint32_t>& list = open[v0 / kBlock];
         for (size_t a = v0; a < v1 && openCount.load(std::memory_order_relaxed) <= limit; ++a) {
-            outs.clear();
-            ins.clear();
-            fan(uint32_t(a), outs, ins);
-            std::sort(outs.begin(), outs.end());
-            std::sort(ins.begin(), ins.end());
-            if (outs != ins) {
+            uint64_t sum = 0;
+            for (uint32_t t : mesh.vertexTriangles(uint32_t(a))) {
+                if (t >= nt) continue;
+                const glm::uvec3& tri = mesh.triangles[t];
+                for (int c = 0; c < 3; ++c)
+                    if (tri[c] == a) sum += hash(tri[(c + 1) % 3]) - hash(tri[(c + 2) % 3]);
+            }
+            if (sum != 0) {
                 list.push_back(uint32_t(a));
                 openCount.fetch_add(1, std::memory_order_relaxed);
             }
