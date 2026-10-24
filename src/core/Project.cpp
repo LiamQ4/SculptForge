@@ -170,14 +170,19 @@ size_t countOf(const Json& j) {
 }
 
 
-// Writes a mesh's blobs under `prefix` ("subtools/0/") and sets `mesh` and `layers` in `out`.
-void writeMesh(Writer& w, const std::string& prefix, const Mesh& m, Json& out) {
+// Writes a mesh's blobs under `prefix` ("subtools/0/") and sets `mesh` and `layers` in `out`. `generatedTriangles`:
+// a generated subdivision level's triangle count; its triangles aren't written (format 6).
+void writeMesh(Writer& w, const std::string& prefix, const Mesh& m, Json& out, size_t generatedTriangles = 0) {
     Json mesh = Json::object();
     mesh.set("vertex_count", double(m.vertexCount()));
-    mesh.set("triangle_count", double(m.triangleCount()));
     mesh.set("positions", w.vec3s(prefix + "mesh/positions.bin", m.positions));
-    mesh.set("triangles", w.uints(prefix + "mesh/triangles.bin", m.triangles.empty() ? nullptr : &m.triangles[0].x,
-                                  m.triangleCount(), 3));
+    if (generatedTriangles) {
+        mesh.set("triangle_count", double(generatedTriangles));
+    } else {
+        mesh.set("triangle_count", double(m.triangleCount()));
+        mesh.set("triangles", w.uints(prefix + "mesh/triangles.bin", m.triangles.empty() ? nullptr : &m.triangles[0].x,
+                                      m.triangleCount(), 3));
+    }
     if (!m.layers.empty()) mesh.set("base", w.vec3s(prefix + "mesh/base.bin", m.base));
     if (m.hasMask()) mesh.set("mask", w.floats(prefix + "mesh/mask.bin", m.mask.data(), m.mask.size(), 1));
     if (m.hasColors()) mesh.set("colors", w.vec3s(prefix + "mesh/colors.bin", m.colors));
@@ -201,16 +206,18 @@ void writeMesh(Writer& w, const std::string& prefix, const Mesh& m, Json& out) {
     out.set("layers", std::move(layers));
 }
 
-// Reads a mesh from its `mesh` and `layers` manifest entries (size-checked against the blobs).
-bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& error) {
+// Reads a mesh from its `mesh` and `layers` manifest entries (size-checked against the blobs). `levelData`: a
+// subdivision level's arrays, kept without topology or normals; a generated level's have no triangles.
+bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& error, bool levelData = false) {
     const size_t nv = countOf(mj["vertex_count"]), nt = countOf(mj["triangle_count"]);
     if (nv == size_t(-1) || nt == size_t(-1)) {
         error = "Project mesh has no valid vertex/triangle count";
         return false;
     }
-    m.triangles.resize(nt);
+    const bool withTriangles = !levelData || mj.has("triangles");
+    if (withTriangles) m.triangles.resize(nt);
     if (!r.vec3s(mj["positions"], "positions", nv, m.positions) ||
-        !r.uints(mj["triangles"], "triangles", nt, 3, nt ? &m.triangles[0].x : nullptr)) {
+        (withTriangles && !r.uints(mj["triangles"], "triangles", nt, 3, nt ? &m.triangles[0].x : nullptr))) {
         error = r.error;
         return false;
     }
@@ -252,6 +259,10 @@ bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& e
     if (!r.error.empty()) {
         error = r.error;
         return false;
+    }
+    if (levelData) {
+        if (!m.layers.empty()) m.evaluateAll();
+        return true;
     }
     m.rebuildTopology();
     if (!m.layers.empty()) m.evaluateAll();
@@ -408,21 +419,26 @@ bool readTexture(Reader& r, const Json& tj, Mesh& m, std::string& error) {
 
 // Subdivision levels (core/Multires.h) are the SubTool key "subdiv" (format 4; sculpt-layer details in local
 // frames from format 5): the current level and every level's mesh (as "mesh" / "layers" / "paint_layers"),
-// details and topology (scheme, Smt, quad pairing and child maps). The SubTool's own "mesh" is the current level, so readers that don't know levels load what was shown.
-// A current level identical to that mesh is not written twice ("same_as_mesh").
+// details and topology (scheme, Smt, quad pairing and child maps). The SubTool's own "mesh" is the current level,
+// so readers that don't know levels load what was shown. A current level identical to that mesh is not written
+// twice ("same_as_mesh"). Format 6: a generated level (made by Divide, SubdivTopology::generated) has no
+// triangles and no child maps ("generated"), and a level without "detail" that isn't stale takes the detail that
+// fits its positions (SubdivLevel::detail).
 Json writeSubdiv(Writer& w, const std::string& prefix, const Mesh& m) {
     Json out = Json::object();
     out.set("current", subdivCurrentLevel(m));
     Json levels = Json::array();
+    const bool inSync = subdivInSync(m);
     for (int i = 0; i < subdivLevelCount(m); ++i) {
         const std::string p = prefix + "subdiv/" + std::to_string(i) + "/";
-        const SubdivLevel& l = m.multires->levels[size_t(i)];
+        const SubdivLevel& l = subdivLevel(m, i);
         const Mesh& data = *l.data;
+        const bool generated = l.topo && l.topo->generated;
         Json lj = Json::object();
-        if (i == subdivCurrentLevel(m) && subdivInSync(m)) {
+        if (i == subdivCurrentLevel(m) && inSync) {
             lj.set("same_as_mesh", true);
         } else {
-            writeMesh(w, p, data, lj);
+            writeMesh(w, p, data, lj, generated ? l.triangleCount() : 0);
             if (hasPaintLayers(data)) lj.set("paint_layers", writePaintLayers(w, p, data));
         }
         if (l.stale) lj.set("stale", true);
@@ -432,9 +448,13 @@ Json writeSubdiv(Writer& w, const std::string& prefix, const Mesh& m) {
             t.set("catmull_clark", tp.catmullClark);
             t.set("smooth", tp.smooth);
             if (!tp.pairing.empty()) t.set("pairing", w.uints(p + "pairing.bin", tp.pairing.data(), tp.pairing.size(), 1));
-            t.set("vertex_child", w.uints(p + "vertex_child.bin", tp.vertexChild.data(), tp.vertexChild.size(), 1));
-            t.set("edge_child", w.uints(p + "edge_child.bin", tp.edgeChild.data(), tp.edgeChild.size(), 1));
-            if (!tp.faceChild.empty()) t.set("face_child", w.uints(p + "face_child.bin", tp.faceChild.data(), tp.faceChild.size(), 1));
+            if (generated) {
+                t.set("generated", true);
+            } else {
+                t.set("vertex_child", w.uints(p + "vertex_child.bin", tp.vertexChild.data(), tp.vertexChild.size(), 1));
+                t.set("edge_child", w.uints(p + "edge_child.bin", tp.edgeChild.data(), tp.edgeChild.size(), 1));
+                if (!tp.faceChild.empty()) t.set("face_child", w.uints(p + "face_child.bin", tp.faceChild.data(), tp.faceChild.size(), 1));
+            }
             lj.set("topology", std::move(t));
         }
         if (l.detail) lj.set("detail", w.vec3s(p + "detail.bin", *l.detail));
@@ -474,32 +494,38 @@ bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error, bool wor
         return false;
     }
     stack.current = int(current);
+    // The triangles of the level below (its own, or generated into one of the two buffers), to build each level's
+    // topology from.
+    const std::vector<glm::uvec3>* below = nullptr;
+    std::vector<glm::uvec3> generatedBelow[2];
     for (size_t i = 0; i < list.size(); ++i) {
         const Json& lj = list[i];
+        const bool generated = i > 0 && lj["topology"]["generated"].asBool(false);
         SubdivLevel level;
         auto data = std::make_shared<Mesh>();
         if (lj["same_as_mesh"].asBool(false) && i == size_t(stack.current)) {
-            *data = m;
+            // Just the level's arrays (no topology, normals or texture), as the stack stores levels.
+            if (!generated) data->triangles = m.triangles;
+            data->positions = m.positions;
+            data->mask = m.mask;
+            data->colors = m.colors;
+            data->polygroups = m.polygroups;
+            data->hidden = m.hidden;
+            data->uvs = m.uvs;
+            data->quadPartners = m.quadPartners;
+            data->base = m.base;
+            data->layers = m.layers;
+            data->paintBase = m.paintBase;
+            data->paintLayers = m.paintLayers;
+            data->activePaintLayer = m.activePaintLayer;
         } else {
-            if (!readMesh(r, lj["mesh"], lj["layers"], *data, error)) return false;
+            if (!readMesh(r, lj["mesh"], lj["layers"], *data, error, true)) return false;
             if (!readPaintLayers(r, lj["paint_layers"], *data, error)) return false;
+            if (data->triangles.empty() && !generated && countOf(lj["mesh"]["triangle_count"]) != 0) {
+                error = "Project subdivision level " + std::to_string(i + 1) + " has no triangles";
+                return false;
+            }
         }
-        // Keep just the level's arrays (no topology, normals or texture), as the stack stores levels.
-        Mesh lean;
-        lean.positions = std::move(data->positions);
-        lean.triangles = std::move(data->triangles);
-        lean.mask = std::move(data->mask);
-        lean.colors = std::move(data->colors);
-        lean.polygroups = std::move(data->polygroups);
-        lean.hidden = std::move(data->hidden);
-        lean.uvs = std::move(data->uvs);
-        lean.quadPartners = std::move(data->quadPartners);
-        lean.base = std::move(data->base);
-        lean.layers = std::move(data->layers);
-        lean.paintBase = std::move(data->paintBase);
-        lean.paintLayers = std::move(data->paintLayers);
-        lean.activePaintLayer = data->activePaintLayer;
-        *data = std::move(lean);
         level.data = std::move(data);
         level.stale = lj["stale"].asBool(false);
         const size_t nv = level.data->vertexCount();
@@ -526,18 +552,31 @@ bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error, bool wor
             const Json& t = lj["topology"];
             std::vector<uint32_t> pairing, vc, ec, fc;
             if ((t.has("pairing") && !readUintList(r, t["pairing"], "subdivision quad pairing", pairing)) ||
-                !readUintList(r, t["vertex_child"], "subdivision vertex map", vc) ||
-                !readUintList(r, t["edge_child"], "subdivision edge map", ec) ||
-                (t.has("face_child") && !readUintList(r, t["face_child"], "subdivision face map", fc))) {
+                (!generated && (!readUintList(r, t["vertex_child"], "subdivision vertex map", vc) ||
+                                !readUintList(r, t["edge_child"], "subdivision edge map", ec) ||
+                                (t.has("face_child") && !readUintList(r, t["face_child"], "subdivision face map", fc))))) {
                 error = r.error;
                 return false;
             }
-            level.topo = rebuildSubdivTopology(*stack.levels[i - 1].data, *level.data, std::move(pairing),
+            level.topo = rebuildSubdivTopology(*below, uint32_t(stack.levels[i - 1].data->vertexCount()), uint32_t(nv),
+                                               generated ? nullptr : &level.data->triangles, std::move(pairing),
                                                t["catmull_clark"].asBool(false), t["smooth"].asBool(true),
                                                std::move(vc), std::move(ec), std::move(fc), error);
             if (!level.topo) {
                 error = "Project " + error;
                 return false;
+            }
+            if (generated && level.topo->fineTriangles != countOf(lj["mesh"]["triangle_count"]) && !lj["same_as_mesh"].asBool(false)) {
+                error = "Project subdivision level " + std::to_string(i + 1) + " doesn't fit the level below";
+                return false;
+            }
+        }
+        if (i + 1 < list.size()) { // the next level is built on this one's triangles
+            if (level.topo && level.topo->generated && level.data->triangles.empty()) {
+                generateFaces(*level.topo, generatedBelow[i % 2], nullptr);
+                below = &generatedBelow[i % 2];
+            } else {
+                below = &level.data->triangles;
             }
         }
         stack.levels.push_back(std::move(level));

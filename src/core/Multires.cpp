@@ -68,6 +68,44 @@ Mesh leanCopy(const Mesh& m) {
 }
 std::shared_ptr<Mesh> leanShared(const Mesh& m) { return std::make_shared<Mesh>(leanCopy(m)); }
 
+bool generatedLevel(const SubdivLevel& l) { return l.topo && l.topo->generated; }
+
+// True when `tris` are exactly the triangles generateFaces makes for `tp` (compared polygon by polygon, in parallel).
+bool matchesGenerated(const SubdivTopology& tp, const std::vector<glm::uvec3>& tris);
+
+// What level `l` stores of the working mesh `w` (its current level): every level array, and the triangles and
+// quad pairs only when they don't follow from the topology.
+std::shared_ptr<Mesh> levelData(const Mesh& w, const SubdivLevel& l) {
+    auto out = std::make_shared<Mesh>();
+    assignLevelArrays(*out, w);
+    if (!generatedLevel(l)) {
+        out->triangles = w.triangles;
+        return out;
+    }
+    if (!w.quadPartners.empty()) { // kept only if they differ from the generated pairs
+        bool same = w.quadPartners.size() == w.triangles.size() && l.topo->catmullClark;
+        for (size_t t = 0; t < w.quadPartners.size() && same; ++t) same = w.quadPartners[t] == uint32_t(t ^ 1);
+        if (same) std::vector<uint32_t>().swap(out->quadPartners);
+    } else if (l.topo->catmullClark) {
+        out->quadPartners.assign(w.triangles.size(), Mesh::kNoQuad); // all pairs removed: keep that
+    }
+    return out;
+}
+
+// The triangles of level `l`: its own, or generated into `scratch`.
+const std::vector<glm::uvec3>& levelTriangles(const SubdivLevel& l, std::vector<glm::uvec3>& scratch) {
+    if (!generatedLevel(l)) return l.data->triangles;
+    generateFaces(*l.topo, scratch, nullptr);
+    return scratch;
+}
+
+// A working copy of level `l` (no topology yet): its arrays with its triangles and quad pairs.
+Mesh levelWorkingCopy(const SubdivLevel& l) {
+    Mesh out = leanCopy(*l.data);
+    if (generatedLevel(l)) generateFaces(*l.topo, out.triangles, out.quadPartners.empty() ? &out.quadPartners : nullptr);
+    return out;
+}
+
 // The shape channel subdivision and details work on: the positions, or the layer base while sculpt layers exist.
 std::vector<glm::vec3>& baseChannel(Mesh& m) { return m.layers.empty() ? m.positions : m.base; }
 const std::vector<glm::vec3>& baseChannel(const Mesh& m) { return m.layers.empty() ? m.positions : m.base; }
@@ -105,18 +143,31 @@ uint32_t polySize(const SubdivTopology& tp, size_t p) { return tp.polyOffsets[p 
 
 // Polygons, edges and vertex -> edge lists of `coarse` with the given quad pairing (empty = all triangles).
 // Pairs that aren't valid quads are treated as triangles (and dropped from tp.pairing).
-std::shared_ptr<SubdivTopology> buildCoarse(const Mesh& coarse, std::vector<uint32_t> pairing, bool cc, bool smooth) {
+// Which edge of triangle t is the diagonal it shares with u (as Mesh::quadDiagonal), on a bare triangle list.
+int quadDiagonalOf(const std::vector<glm::uvec3>& tris, uint32_t t, uint32_t u) {
+    if (t == u || t >= tris.size() || u >= tris.size()) return -1;
+    const glm::uvec3& a = tris[t];
+    const glm::uvec3& b = tris[u];
+    if (a.x == a.y || a.y == a.z || a.x == a.z || b.x == b.y || b.y == b.z || b.x == b.z) return -1;
+    for (int e = 0; e < 3; ++e)
+        for (int k = 0; k < 3; ++k)
+            if (b[k] == a[(e + 1) % 3] && b[(k + 1) % 3] == a[e]) return b[(k + 2) % 3] == a[(e + 2) % 3] ? -1 : e;
+    return -1;
+}
+
+std::shared_ptr<SubdivTopology> buildCoarse(const std::vector<glm::uvec3>& triangles, uint32_t nv,
+                                            std::vector<uint32_t> pairing, bool cc, bool smooth) {
     auto tp = std::make_shared<SubdivTopology>();
     tp->catmullClark = cc;
     tp->smooth = smooth;
-    const uint32_t nv = uint32_t(coarse.vertexCount()), nt = uint32_t(coarse.triangleCount());
+    const uint32_t nt = uint32_t(triangles.size());
     tp->coarseVertices = nv;
     if (pairing.size() != nt) pairing.clear();
     bool anyPair = false;
     for (uint32_t t = 0; t < pairing.size(); ++t) {
         const uint32_t u = pairing[t];
         if (u == kNone) continue;
-        if (u >= nt || pairing[u] != t || coarse.quadDiagonal(t, u) < 0) pairing[t] = kNone;
+        if (u >= nt || pairing[u] != t || quadDiagonalOf(triangles, t, u) < 0) pairing[t] = kNone;
         else anyPair = true;
     }
     for (uint32_t t = 0; t < pairing.size(); ++t)
@@ -130,7 +181,7 @@ std::shared_ptr<SubdivTopology> buildCoarse(const Mesh& coarse, std::vector<uint
     tp->polyTris.reserve(nt);
     for (uint32_t t = 0; t < nt; ++t) {
         const uint32_t u = pairing.empty() ? kNone : pairing[t];
-        const glm::uvec3& a = coarse.triangles[t];
+        const glm::uvec3& a = triangles[t];
         if (u == kNone) {
             for (uint32_t c = 0; c < 3; ++c) {
                 tp->polyVerts.push_back(a[c]);
@@ -139,8 +190,8 @@ std::shared_ptr<SubdivTopology> buildCoarse(const Mesh& coarse, std::vector<uint
             tp->polyTris.push_back({t, kNone});
         } else {
             if (u < t) continue;
-            const int e = coarse.quadDiagonal(t, u);
-            const glm::uvec3& b = coarse.triangles[u];
+            const int e = quadDiagonalOf(triangles, t, u);
+            const glm::uvec3& b = triangles[u];
             uint32_t far = 0;
             for (uint32_t k = 0; k < 3; ++k)
                 if (b[k] != a[0] && b[k] != a[1] && b[k] != a[2]) far = k;
@@ -209,14 +260,20 @@ std::shared_ptr<SubdivTopology> buildCoarse(const Mesh& coarse, std::vector<uint
         }
     }
     for (size_t e = 0; e < faceCount.size(); ++e)
-        if (faceCount[e] > 2) tp->edgeFaces[e].y = kNone;
+        if (faceCount[e] > 2) {
+            tp->edgeFaces[e].y = kNone;
+            tp->nonManifold = true;
+        }
 
     tp->vertEdgeOffsets.assign(size_t(nv) + 1, 0);
     for (const auto& e : tp->edges) {
         ++tp->vertEdgeOffsets[e.x + 1];
         ++tp->vertEdgeOffsets[e.y + 1];
     }
-    for (size_t v = 0; v < nv; ++v) tp->vertEdgeOffsets[v + 1] += tp->vertEdgeOffsets[v];
+    for (size_t v = 0; v < nv; ++v) {
+        tp->maxValence = std::max(tp->maxValence, tp->vertEdgeOffsets[v + 1]);
+        tp->vertEdgeOffsets[v + 1] += tp->vertEdgeOffsets[v];
+    }
     tp->vertEdges.resize(tp->vertEdgeOffsets[nv]);
     {
         std::vector<uint32_t> cursor(tp->vertEdgeOffsets.begin(), tp->vertEdgeOffsets.end() - 1);
@@ -226,80 +283,146 @@ std::shared_ptr<SubdivTopology> buildCoarse(const Mesh& coarse, std::vector<uint
         }
     }
     tp->fineVertices = nv + uint32_t(tp->edges.size()) + (cc ? uint32_t(np) : 0u);
+    tp->fineTriangles = cc ? size_t(tp->polyVerts.size()) * 2 : np * 4;
     return tp;
 }
 
-// The coarse triangle of polygon `p` that holds side `side`.
-uint32_t sideTriangle(const SubdivTopology& tp, const Mesh& coarse, uint32_t p, uint32_t side) {
+// The coarse triangle of polygon `p` that holds side `side`: a quad (t[e+1], t[e+2], t[e], far) from buildCoarse
+// has sides 0 and 1 on its first triangle and 2 and 3 on the one across the diagonal.
+uint32_t sideTriangle(const SubdivTopology& tp, uint32_t p, uint32_t side) {
     const glm::uvec2 tris = tp.polyTris[p];
-    if (tris.y == kNone) return tris.x;
-    const uint32_t o = tp.polyOffsets[p], n = polySize(tp, p);
-    const uint32_t a = tp.polyVerts[o + side], b = tp.polyVerts[o + (side + 1) % n];
-    const glm::uvec3& t = coarse.triangles[tris.x];
-    auto has = [&](uint32_t v) { return t.x == v || t.y == v || t.z == v; };
-    return has(a) && has(b) ? tris.x : tris.y;
+    return tris.y == kNone || side < 2 ? tris.x : tris.y;
 }
 
-void buildFrameRefs(SubdivTopology& tp, const std::vector<glm::uvec3>& fine) {
-    tp.frameRef.assign(tp.fineVertices, kNone);
+// Per fine vertex: the neighbour that fixes its tangent direction (the next corner in the first triangle that
+// has it). Built when details are fitted or applied rather than stored.
+std::vector<uint32_t> frameRefs(uint32_t vertices, const std::vector<glm::uvec3>& fine) {
+    std::vector<uint32_t> ref(vertices, kNone);
     for (const auto& t : fine)
         for (int c = 0; c < 3; ++c)
-            if (tp.frameRef[t[c]] == kNone) tp.frameRef[t[c]] = t[(c + 1) % 3];
+            if (ref[t[c]] == kNone) ref[t[c]] = t[(c + 1) % 3];
+    return ref;
 }
 
-// Fine triangles (with quad pairs) of a freshly divided level, and their parents / corner codes.
-void buildDividedFaces(SubdivTopology& tp, const Mesh& coarse, Mesh& fine) {
-    const uint32_t nv = tp.coarseVertices, ne = uint32_t(tp.edges.size());
-    const size_t np = tp.polygonCount();
-    tp.vertexChild.resize(nv);
-    for (uint32_t v = 0; v < nv; ++v) tp.vertexChild[v] = v;
-    tp.edgeChild.resize(ne);
-    for (uint32_t e = 0; e < ne; ++e) tp.edgeChild[e] = nv + e;
-    if (tp.catmullClark) {
-        tp.faceChild.resize(np);
-        for (uint32_t p = 0; p < np; ++p) tp.faceChild[p] = nv + ne + p;
+// Calls fn(f, polygon, coarse triangle, codes) for every fine triangle f in order (codes: 3 corner codes, see
+// SubdivTopology), from the stored parents or, on a generated level, as generateFaces lays the triangles out.
+template <class Fn>
+void forEachFineFace(const SubdivTopology& tp, Fn fn) {
+    if (!tp.generated) {
+        for (size_t f = 0; f < tp.fineParentTri.size(); ++f) fn(f, tp.fineParentPoly[f], tp.fineParentTri[f], &tp.fineCode[f * 3]);
+        return;
     }
-    size_t fineCount = 0;
-    for (size_t p = 0; p < np; ++p) fineCount += tp.catmullClark ? 2 * polySize(tp, p) : 4;
-    fine.triangles.clear();
-    fine.triangles.reserve(fineCount);
-    tp.fineParentPoly.reserve(fineCount);
-    tp.fineParentTri.reserve(fineCount);
-    tp.fineCode.reserve(fineCount * 3);
-    if (tp.catmullClark) fine.quadPartners.assign(fineCount, Mesh::kNoQuad);
-    auto emit = [&](uint32_t p, uint32_t tri, glm::uvec3 v, uint8_t c0, uint8_t c1, uint8_t c2) {
-        fine.triangles.push_back(v);
-        tp.fineParentPoly.push_back(p);
-        tp.fineParentTri.push_back(tri);
-        tp.fineCode.insert(tp.fineCode.end(), {c0, c1, c2});
-    };
+    size_t f = 0;
+    const size_t np = tp.polygonCount();
     for (uint32_t p = 0; p < np; ++p) {
-        const uint32_t o = tp.polyOffsets[p], n = polySize(tp, p);
-        auto corner = [&](uint32_t i) { return tp.polyVerts[o + i % n]; };
-        auto edgePt = [&](uint32_t i) { return nv + tp.polyEdges[o + i % n]; };
+        const uint32_t n = polySize(tp, p);
         if (tp.catmullClark) {
-            const uint32_t f = tp.faceChild[p];
             for (uint32_t i = 0; i < n; ++i) {
-                const uint32_t tri = sideTriangle(tp, coarse, p, i), prev = (i + n - 1) % n;
-                const uint32_t a = uint32_t(fine.triangles.size());
-                emit(p, tri, {corner(i), edgePt(i), f}, uint8_t(i), uint8_t(4 + i), 8);
-                emit(p, tri, {corner(i), f, edgePt(prev)}, uint8_t(i), 8, uint8_t(4 + prev));
-                fine.quadPartners[a] = a + 1;
-                fine.quadPartners[a + 1] = a;
+                const uint32_t tri = sideTriangle(tp, p, i), prev = (i + n - 1) % n;
+                const uint8_t a[3] = {uint8_t(i), uint8_t(4 + i), 8}, b[3] = {uint8_t(i), 8, uint8_t(4 + prev)};
+                fn(f++, p, tri, a);
+                fn(f++, p, tri, b);
             }
         } else {
+            static constexpr uint8_t codes[4][3] = {{0, 4, 6}, {1, 5, 4}, {2, 6, 5}, {4, 5, 6}};
             const uint32_t tri = tp.polyTris[p].x;
-            emit(p, tri, {corner(0), edgePt(0), edgePt(2)}, 0, 4, 6);
-            emit(p, tri, {corner(1), edgePt(1), edgePt(0)}, 1, 5, 4);
-            emit(p, tri, {corner(2), edgePt(2), edgePt(1)}, 2, 6, 5);
-            emit(p, tri, {edgePt(0), edgePt(1), edgePt(2)}, 4, 5, 6);
+            for (const auto& c : codes) fn(f++, p, tri, c);
         }
     }
-    buildFrameRefs(tp, fine.triangles);
+}
+
+} // namespace
+
+void generateFaces(const SubdivTopology& tp, std::vector<glm::uvec3>& triangles, std::vector<uint32_t>* quadPartners) {
+    const uint32_t nv = tp.coarseVertices, ne = uint32_t(tp.edges.size());
+    const size_t np = tp.polygonCount();
+    std::vector<glm::uvec3>().swap(triangles);
+    triangles.resize(tp.fineTriangles);
+    if (quadPartners) {
+        std::vector<uint32_t>().swap(*quadPartners);
+        if (tp.catmullClark) quadPartners->resize(tp.fineTriangles);
+    }
+    parallelRange(np, [&](size_t b, size_t e) {
+        for (size_t p = b; p < e; ++p) {
+            const uint32_t o = tp.polyOffsets[p], n = polySize(tp, p);
+            auto corner = [&](uint32_t i) { return tp.polyVerts[o + i % n]; };
+            auto edgePt = [&](uint32_t i) { return nv + tp.polyEdges[o + i % n]; };
+            size_t f = tp.firstFineTriangle(p);
+            if (tp.catmullClark) {
+                const uint32_t c = nv + ne + uint32_t(p);
+                for (uint32_t i = 0; i < n; ++i, f += 2) {
+                    triangles[f] = {corner(i), edgePt(i), c};
+                    triangles[f + 1] = {corner(i), c, edgePt(i + n - 1)};
+                    if (quadPartners) {
+                        (*quadPartners)[f] = uint32_t(f + 1);
+                        (*quadPartners)[f + 1] = uint32_t(f);
+                    }
+                }
+            } else {
+                triangles[f] = {corner(0), edgePt(0), edgePt(2)};
+                triangles[f + 1] = {corner(1), edgePt(1), edgePt(0)};
+                triangles[f + 2] = {corner(2), edgePt(2), edgePt(1)};
+                triangles[f + 3] = {edgePt(0), edgePt(1), edgePt(2)};
+            }
+        }
+    });
+}
+
+namespace {
+
+bool matchesGenerated(const SubdivTopology& tp, const std::vector<glm::uvec3>& tris) {
+    if (tris.size() != tp.fineTriangles) return false;
+    const uint32_t nv = tp.coarseVertices, ne = uint32_t(tp.edges.size());
+    std::atomic<bool> same = true;
+    parallelRange(tp.polygonCount(), [&](size_t b, size_t e) {
+        for (size_t p = b; p < e && same.load(std::memory_order_relaxed); ++p) {
+            const uint32_t o = tp.polyOffsets[p], n = polySize(tp, p);
+            auto corner = [&](uint32_t i) { return tp.polyVerts[o + i % n]; };
+            auto edgePt = [&](uint32_t i) { return nv + tp.polyEdges[o + i % n]; };
+            const size_t f = tp.firstFineTriangle(p);
+            bool ok = true;
+            if (tp.catmullClark) {
+                const uint32_t c = nv + ne + uint32_t(p);
+                for (uint32_t i = 0; i < n && ok; ++i)
+                    ok = tris[f + 2 * i] == glm::uvec3(corner(i), edgePt(i), c) &&
+                         tris[f + 2 * i + 1] == glm::uvec3(corner(i), c, edgePt(i + n - 1));
+            } else {
+                ok = tris[f] == glm::uvec3(corner(0), edgePt(0), edgePt(2)) && tris[f + 1] == glm::uvec3(corner(1), edgePt(1), edgePt(0)) &&
+                     tris[f + 2] == glm::uvec3(corner(2), edgePt(2), edgePt(1)) && tris[f + 3] == glm::uvec3(edgePt(0), edgePt(1), edgePt(2));
+            }
+            if (!ok) same = false;
+        }
+    });
+    return same;
+}
+
+// True when the child maps number the fine vertices as a generated level does.
+bool canonicalChildren(const SubdivTopology& tp) {
+    const uint32_t nv = tp.coarseVertices, ne = uint32_t(tp.edges.size());
+    if (tp.vertexChild.size() != nv || tp.edgeChild.size() != ne || tp.faceChild.size() != (tp.catmullClark ? tp.polygonCount() : 0))
+        return false;
+    for (uint32_t v = 0; v < nv; ++v)
+        if (tp.vertexChild[v] != v) return false;
+    for (uint32_t e = 0; e < ne; ++e)
+        if (tp.edgeChild[e] != nv + e) return false;
+    for (uint32_t p = 0; p < tp.faceChild.size(); ++p)
+        if (tp.faceChild[p] != nv + ne + p) return false;
+    return true;
+}
+
+// Makes `tp` a generated level (dropping its child maps and fine parents).
+void markGenerated(SubdivTopology& tp) {
+    tp.generated = true;
+    std::vector<uint32_t>().swap(tp.vertexChild);
+    std::vector<uint32_t>().swap(tp.edgeChild);
+    std::vector<uint32_t>().swap(tp.faceChild);
+    std::vector<uint32_t>().swap(tp.fineParentPoly);
+    std::vector<uint32_t>().swap(tp.fineParentTri);
+    std::vector<uint8_t>().swap(tp.fineCode);
 }
 
 // Parents and corner codes of arbitrary fine triangles from the child maps (reconstructed or loaded levels).
-bool buildFineMetadata(SubdivTopology& tp, const Mesh& coarse, const std::vector<glm::uvec3>& fine, std::string& error) {
+bool buildFineMetadata(SubdivTopology& tp, const std::vector<glm::uvec3>& fine, std::string& error) {
     const uint32_t nf = tp.fineVertices;
     std::vector<uint8_t> kind(nf, 255);
     std::vector<uint32_t> id(nf, kNone);
@@ -323,6 +446,7 @@ bool buildFineMetadata(SubdivTopology& tp, const Mesh& coarse, const std::vector
             return false;
         }
     const size_t nt = fine.size();
+    tp.fineTriangles = nt;
     tp.fineParentPoly.assign(nt, kNone);
     tp.fineParentTri.assign(nt, kNone);
     tp.fineCode.assign(nt * 3, 0);
@@ -368,7 +492,7 @@ bool buildFineMetadata(SubdivTopology& tp, const Mesh& coarse, const std::vector
                 }
                 if (side < 0 && e1 >= 0) side = e2 >= 0 && (uint32_t(e1) + 1) % n == uint32_t(e2) ? e2 : e1;
                 tp.fineParentPoly[f] = p;
-                tp.fineParentTri[f] = sideTriangle(tp, coarse, p, uint32_t(std::max(side, 0)));
+                tp.fineParentTri[f] = sideTriangle(tp, p, uint32_t(std::max(side, 0)));
                 for (int c = 0; c < 3; ++c) tp.fineCode[f * 3 + size_t(c)] = codes[c];
                 found = true;
                 break;
@@ -380,7 +504,6 @@ bool buildFineMetadata(SubdivTopology& tp, const Mesh& coarse, const std::vector
         error = "the mesh is not a regular subdivision of the level below";
         return false;
     }
-    buildFrameRefs(tp, fine);
     return true;
 }
 
@@ -401,7 +524,7 @@ std::vector<T> subdivideField(const SubdivTopology& tp, bool smooth, const std::
                 const uint32_t o = tp.polyOffsets[p], n = polySize(tp, p);
                 for (uint32_t i = 0; i < n; ++i) sum += P[tp.polyVerts[o + i]];
                 fp[p] = sum / float(n);
-                out[tp.faceChild[p]] = fp[p];
+                out[tp.faceChildOf(uint32_t(p))] = fp[p];
             }
         });
     }
@@ -419,13 +542,13 @@ std::vector<T> subdivideField(const SubdivTopology& tp, bool smooth, const std::
             if (!smooth || f.y == kNone) v = (P[va] + P[vb]) * 0.5f;
             else if (tp.catmullClark) v = (P[va] + P[vb] + fp[f.x] + fp[f.y]) * 0.25f;
             else v = (P[va] + P[vb]) * 0.375f + (P[opposite(f.x, va, vb)] + P[opposite(f.y, va, vb)]) * 0.125f;
-            out[tp.edgeChild[i]] = v;
+            out[tp.edgeChildOf(uint32_t(i))] = v;
         }
     });
     parallelRange(tp.coarseVertices, [&](size_t b, size_t e) {
         for (size_t v = b; v < e; ++v) {
             const T& pv = P[v];
-            T& o = out[tp.vertexChild[v]];
+            T& o = out[tp.vertexChildOf(uint32_t(v))];
             const uint32_t e0 = tp.vertEdgeOffsets[v], e1 = tp.vertEdgeOffsets[v + 1], n = e1 - e0;
             if (!smooth || n == 0) {
                 o = pv;
@@ -507,25 +630,25 @@ inline void frameAt(glm::vec3 n, const glm::vec3& q, const glm::vec3& qref, glm:
 
 // P[k] = Q + Frame(Q) * D, or D = Frame(Q)^-1 (P[k] - Q), with Q = the subdivided coarse shape and n its
 // normals (fineNormals).
-void applyDetail(const SubdivTopology& tp, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
+void applyDetail(const std::vector<uint32_t>& refs, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
                  const std::vector<glm::vec3>& D, std::vector<glm::vec3>& out) {
     out.resize(Q.size());
     parallelRange(Q.size(), [&](size_t b0, size_t e0) {
         for (size_t v = b0; v < e0; ++v) {
             glm::vec3 t, b, nn;
-            const uint32_t r = tp.frameRef[v];
+            const uint32_t r = refs[v];
             frameAt(n[v], Q[v], r == kNone ? Q[v] : Q[r], t, b, nn);
             out[v] = Q[v] + t * D[v].x + b * D[v].y + nn * D[v].z;
         }
     });
 }
-void fitDetail(const SubdivTopology& tp, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
+void fitDetail(const std::vector<uint32_t>& refs, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
                const std::vector<glm::vec3>& P, std::vector<glm::vec3>& D) {
     D.resize(Q.size());
     parallelRange(Q.size(), [&](size_t b0, size_t e0) {
         for (size_t v = b0; v < e0; ++v) {
             glm::vec3 t, b, nn;
-            const uint32_t r = tp.frameRef[v];
+            const uint32_t r = refs[v];
             frameAt(n[v], Q[v], r == kNone ? Q[v] : Q[r], t, b, nn);
             const glm::vec3 d = P[v] - Q[v];
             D[v] = {glm::dot(d, t), glm::dot(d, b), glm::dot(d, nn)};
@@ -535,25 +658,25 @@ void fitDetail(const SubdivTopology& tp, const std::vector<glm::vec3>& n, const 
 
 // Sculpt-layer details live in the same local frames as the shape's (the frames of Q, the subdivided coarse
 // base, with normals n = fineNormals(tris, Q)), so they turn with the surface. `out` += Frame(Q) * local.
-void addLayerDetail(const SubdivTopology& tp, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
+void addLayerDetail(const std::vector<uint32_t>& refs, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
                     const std::vector<glm::vec3>& local, std::vector<glm::vec3>& out) {
     parallelRange(Q.size(), [&](size_t b0, size_t e0) {
         for (size_t v = b0; v < e0; ++v) {
             glm::vec3 t, b, nn;
-            const uint32_t r = tp.frameRef[v];
+            const uint32_t r = refs[v];
             frameAt(n[v], Q[v], r == kNone ? Q[v] : Q[r], t, b, nn);
             out[v] += t * local[v].x + b * local[v].y + nn * local[v].z;
         }
     });
 }
 // local = Frame(Q)^-1 * world.
-void layerDetailToLocal(const SubdivTopology& tp, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
+void layerDetailToLocal(const std::vector<uint32_t>& refs, const std::vector<glm::vec3>& n, const std::vector<glm::vec3>& Q,
                         const std::vector<glm::vec3>& world, std::vector<glm::vec3>& local) {
     local.resize(Q.size());
     parallelRange(Q.size(), [&](size_t b0, size_t e0) {
         for (size_t v = b0; v < e0; ++v) {
             glm::vec3 t, b, nn;
-            const uint32_t r = tp.frameRef[v];
+            const uint32_t r = refs[v];
             frameAt(n[v], Q[v], r == kNone ? Q[v] : Q[r], t, b, nn);
             const glm::vec3 d = world[v];
             local[v] = {glm::dot(d, t), glm::dot(d, b), glm::dot(d, nn)};
@@ -570,7 +693,7 @@ void restrictVertices(const SubdivTopology& tp, const std::vector<T>& fine, std:
     if (coarse.size() != tp.coarseVertices) coarse.assign(tp.coarseVertices, fill);
     outFlags.assign(tp.coarseVertices, 0);
     for (uint32_t v = 0; v < tp.coarseVertices; ++v) {
-        const uint32_t f = tp.vertexChild[v];
+        const uint32_t f = tp.vertexChildOf(v);
         if (flags && !(*flags)[f]) continue;
         coarse[v] = fine[f];
         outFlags[v] = 1;
@@ -588,16 +711,16 @@ void prolongVertices(const SubdivTopology& tp, const std::vector<T>& coarse, std
     auto on = [&](uint32_t v) { return !flags || (*flags)[v]; };
     for (uint32_t v = 0; v < tp.coarseVertices; ++v)
         if (on(v)) {
-            fine[tp.vertexChild[v]] = coarse[v];
-            outFlags[tp.vertexChild[v]] = 1;
+            fine[tp.vertexChildOf(v)] = coarse[v];
+            outFlags[tp.vertexChildOf(v)] = 1;
         }
     for (size_t e = 0; e < tp.edges.size(); ++e) {
         const uint32_t a = tp.edges[e].x, b = tp.edges[e].y;
         if (!on(a) && !on(b)) continue;
-        fine[tp.edgeChild[e]] = (coarse[a] + coarse[b]) * 0.5f;
-        outFlags[tp.edgeChild[e]] = 1;
+        fine[tp.edgeChildOf(uint32_t(e))] = (coarse[a] + coarse[b]) * 0.5f;
+        outFlags[tp.edgeChildOf(uint32_t(e))] = 1;
     }
-    for (size_t p = 0; p < tp.faceChild.size(); ++p) {
+    for (uint32_t p = 0; p < (tp.catmullClark ? tp.polygonCount() : 0); ++p) {
         const uint32_t o = tp.polyOffsets[p], n = polySize(tp, p);
         bool any = false;
         T sum = T(0);
@@ -606,8 +729,8 @@ void prolongVertices(const SubdivTopology& tp, const std::vector<T>& coarse, std
             sum += coarse[tp.polyVerts[o + i]];
         }
         if (!any) continue;
-        fine[tp.faceChild[p]] = sum / float(n);
-        outFlags[tp.faceChild[p]] = 1;
+        fine[tp.faceChildOf(p)] = sum / float(n);
+        outFlags[tp.faceChildOf(p)] = 1;
     }
 }
 
@@ -626,7 +749,7 @@ void prolongPaintLayer(const SubdivTopology& tp, const PaintLayer& coarse, Paint
     for (uint32_t v = 0; v < tp.fineVertices; ++v)
         if (outFlags[v]) fine.color[v] = fine.alpha[v] > 0.0f ? fineColor[v] / fine.alpha[v] : glm::vec3(1.0f);
     for (uint32_t v = 0; v < tp.coarseVertices; ++v)
-        if (!flags || (*flags)[v]) fine.color[tp.vertexChild[v]] = coarse.color[v]; // corners keep the exact colour
+        if (!flags || (*flags)[v]) fine.color[tp.vertexChildOf(v)] = coarse.color[v]; // corners keep the exact colour
 }
 
 template <class T>
@@ -634,78 +757,73 @@ void restrictFaces(const SubdivTopology& tp, const std::vector<T>& fine, std::ve
                    T fill, const std::vector<uint8_t>* flags, std::vector<uint8_t>& outFlags) {
     if (coarse.size() != coarseCount) coarse.assign(coarseCount, fill);
     outFlags.assign(coarseCount, 0);
-    for (size_t f = 0; f < fine.size(); ++f) {
-        if (flags && !(*flags)[f]) continue;
+    forEachFineFace(tp, [&](size_t f, uint32_t, uint32_t t, const uint8_t* code) {
+        if (flags && !(*flags)[f]) return;
         // The child at a coarse corner speaks for its parent (centre children only when no corner child did).
-        const uint32_t t = tp.fineParentTri[f];
-        const bool cornerChild = tp.fineCode[f * 3] < 4 || tp.fineCode[f * 3 + 1] < 4 || tp.fineCode[f * 3 + 2] < 4;
-        if (outFlags[t] == 2 && !cornerChild) continue;
+        const bool cornerChild = code[0] < 4 || code[1] < 4 || code[2] < 4;
+        if (outFlags[t] == 2 && !cornerChild) return;
         coarse[t] = fine[f];
         outFlags[t] = cornerChild ? 2 : 1;
-    }
+    });
     for (auto& f : outFlags) f = f ? 1 : 0;
 }
 
 template <class T>
 void prolongFaces(const SubdivTopology& tp, const std::vector<T>& coarse, std::vector<T>& fine, T fill,
                   const std::vector<uint8_t>* flags, std::vector<uint8_t>& outFlags) {
-    const size_t nf = tp.fineParentTri.size();
+    const size_t nf = tp.fineTriangles;
     if (fine.size() != nf) {
         fine.assign(nf, fill);
         flags = nullptr;
     }
     outFlags.assign(nf, 0);
-    for (size_t f = 0; f < nf; ++f) {
-        const uint32_t t = tp.fineParentTri[f];
-        if (flags && !(*flags)[t]) continue;
+    forEachFineFace(tp, [&](size_t f, uint32_t, uint32_t t, const uint8_t*) {
+        if (flags && !(*flags)[t]) return;
         fine[f] = coarse[t];
         outFlags[f] = 1;
-    }
+    });
 }
 
-// UVs per triangle corner; `flags` are per triangle.
-void restrictUvs(const SubdivTopology& tp, const Mesh& coarseMesh, const std::vector<glm::vec2>& fine,
+// UVs per triangle corner; `flags` are per triangle. `coarseTris`: the coarse level's triangles.
+void restrictUvs(const SubdivTopology& tp, const std::vector<glm::uvec3>& coarseTris, const std::vector<glm::vec2>& fine,
                  std::vector<glm::vec2>& coarse, const std::vector<uint8_t>* flags, std::vector<uint8_t>& outFlags) {
-    const size_t nt = coarseMesh.triangleCount();
+    const size_t nt = coarseTris.size();
     if (coarse.size() != nt * 3) coarse.assign(nt * 3, glm::vec2(0.0f));
     outFlags.assign(nt, 0);
-    for (size_t f = 0; f < tp.fineParentPoly.size(); ++f) {
-        if (flags && !(*flags)[f]) continue;
-        const uint32_t p = tp.fineParentPoly[f], o = tp.polyOffsets[p];
+    forEachFineFace(tp, [&](size_t f, uint32_t p, uint32_t, const uint8_t* code) {
+        if (flags && !(*flags)[f]) return;
+        const uint32_t o = tp.polyOffsets[p];
         for (int c = 0; c < 3; ++c) {
-            const uint8_t code = tp.fineCode[f * 3 + size_t(c)];
-            if (code >= 4) continue;
-            const uint32_t cv = tp.polyVerts[o + code];
+            if (code[c] >= 4) continue;
+            const uint32_t cv = tp.polyVerts[o + code[c]];
             for (uint32_t t : {tp.polyTris[p].x, tp.polyTris[p].y}) {
                 if (t == kNone) continue;
                 for (uint32_t s = 0; s < 3; ++s)
-                    if (coarseMesh.triangles[t][s] == cv) {
+                    if (coarseTris[t][s] == cv) {
                         coarse[t * 3 + s] = fine[f * 3 + size_t(c)];
                         outFlags[t] = 1;
                     }
             }
         }
-    }
+    });
 }
 
 void prolongUvs(const SubdivTopology& tp, const std::vector<glm::vec2>& coarse, std::vector<glm::vec2>& fine,
                 const std::vector<uint8_t>* flags, std::vector<uint8_t>& outFlags) {
-    const size_t nf = tp.fineParentPoly.size();
+    const size_t nf = tp.fineTriangles;
     if (fine.size() != nf * 3) {
         fine.assign(nf * 3, glm::vec2(0.0f));
         flags = nullptr;
     }
     outFlags.assign(nf, 0);
-    for (size_t f = 0; f < nf; ++f) {
-        const uint32_t p = tp.fineParentPoly[f];
-        if (flags && !(*flags)[tp.polyTris[p].x] && (tp.polyTris[p].y == kNone || !(*flags)[tp.polyTris[p].y])) continue;
+    forEachFineFace(tp, [&](size_t f, uint32_t p, uint32_t, const uint8_t* code) {
+        if (flags && !(*flags)[tp.polyTris[p].x] && (tp.polyTris[p].y == kNone || !(*flags)[tp.polyTris[p].y])) return;
         const uint32_t o = tp.polyOffsets[p], n = polySize(tp, p);
         auto cu = [&](uint32_t i) { return coarse[tp.polyCorner[o + i % n]]; };
         for (int c = 0; c < 3; ++c) {
-            const uint8_t code = tp.fineCode[f * 3 + size_t(c)];
             glm::vec2 uv;
-            if (code < 4) uv = cu(code);
-            else if (code < 8) uv = (cu(code - 4u) + cu(code - 3u)) * 0.5f;
+            if (code[c] < 4) uv = cu(code[c]);
+            else if (code[c] < 8) uv = (cu(code[c] - 4u) + cu(code[c] - 3u)) * 0.5f;
             else {
                 uv = glm::vec2(0.0f);
                 for (uint32_t i = 0; i < n; ++i) uv += cu(i);
@@ -714,12 +832,21 @@ void prolongUvs(const SubdivTopology& tp, const std::vector<glm::vec2>& coarse, 
             fine[f * 3 + size_t(c)] = uv;
         }
         outFlags[f] = 1;
-    }
+    });
 }
 
 // --- Levels ---
 
-// Shape and sculpt layers of level k from level k-1 and its details.
+// Fine normals and frame references of level `l` on the subdivided shape Q, for its details' frames.
+void levelFrames(const SubdivLevel& l, const std::vector<glm::vec3>& Q, std::vector<glm::vec3>& n, std::vector<uint32_t>& refs) {
+    std::vector<glm::uvec3> scratch;
+    const std::vector<glm::uvec3>& tris = levelTriangles(l, scratch);
+    n = fineNormals(tris, Q);
+    refs = frameRefs(l.topo->fineVertices, tris);
+}
+
+// Shape and sculpt layers of level k from level k-1 and its details. Its positions then stand for its detail,
+// which is dropped (SubdivLevel::detail).
 void evaluateLevel(MultiresStack& s, int k) {
     SubdivLevel& L = s.levels[size_t(k)];
     const Mesh& coarse = *s.levels[size_t(k) - 1].data;
@@ -728,22 +855,37 @@ void evaluateLevel(MultiresStack& s, int k) {
     const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, baseChannel(coarse));
     std::vector<glm::vec3>& target = baseChannel(fine);
     std::vector<glm::vec3> n; // normals of Q, for the frames of the details
+    std::vector<uint32_t> refs;
     if (L.detail) {
-        n = fineNormals(fine.triangles, Q);
-        applyDetail(tp, n, Q, *L.detail, target);
+        levelFrames(L, Q, n, refs);
+        applyDetail(refs, n, Q, *L.detail, target);
     } else {
         target = Q;
     }
     for (size_t i = 0; i < fine.layers.size() && i < coarse.layers.size(); ++i) {
         std::vector<glm::vec3> d = subdivideField(tp, tp.smooth, coarse.layers[i].delta);
         if (i < L.layerDetail.size() && L.layerDetail[i]) {
-            if (n.empty()) n = fineNormals(fine.triangles, Q);
-            addLayerDetail(tp, n, Q, *L.layerDetail[i], d);
+            if (n.empty()) levelFrames(L, Q, n, refs);
+            addLayerDetail(refs, n, Q, *L.layerDetail[i], d);
         }
         fine.layers[i].delta = std::move(d);
     }
     evaluateLayers(fine);
     L.stale = false;
+    L.detail.reset();
+}
+
+// Fits the detail of level `L` (not stale, no detail) to its positions on the level below, whose shape channel
+// is `coarseBase`: done before that level changes, so this one can follow it.
+void fitLevelDetail(SubdivLevel& L, const std::vector<glm::vec3>& coarseBase) {
+    const SubdivTopology& tp = *L.topo;
+    const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, coarseBase);
+    std::vector<glm::vec3> n;
+    std::vector<uint32_t> refs;
+    levelFrames(L, Q, n, refs);
+    auto d = std::make_shared<std::vector<glm::vec3>>();
+    fitDetail(refs, n, Q, baseChannel(*L.data), *d);
+    L.detail = std::move(d);
 }
 
 } // namespace
@@ -751,6 +893,7 @@ void evaluateLevel(MultiresStack& s, int k) {
 struct SubdivLevelCache {
     struct Entry {
         std::shared_ptr<Mesh> key; // the level data the mesh was made from (held, so it can't change in place)
+        std::shared_ptr<const SubdivTopology> topo; // that level's topology, when generated (its triangles follow)
         Mesh mesh;
         BVH bvh;
     };
@@ -761,16 +904,19 @@ struct SubdivLevelCache {
 namespace {
 
 // Makes the working mesh level `level` of its stack (levels up to it must be evaluated). `leaving` is the level
-// data the working mesh was (null: don't keep it); with a BVH, that mesh and its BVH go to the level cache and
+// the working mesh was (null data: don't keep it); with a BVH, that mesh and its BVH go to the level cache and
 // a cached copy of the new level is used when there is one.
-void enterLevel(Mesh& mesh, int level, BVH* bvh, std::shared_ptr<Mesh> leaving = nullptr) {
+void enterLevel(Mesh& mesh, int level, BVH* bvh, const SubdivLevel* leavingLevel = nullptr) {
+    std::shared_ptr<Mesh> leaving = leavingLevel ? leavingLevel->data : nullptr;
+    std::shared_ptr<const SubdivTopology> leavingTopo = leavingLevel && generatedLevel(*leavingLevel) ? leavingLevel->topo : nullptr;
     std::shared_ptr<MultiresStack> stack = mesh.multires;
     if (leaving && leaving == stack->levels[size_t(level)].data) return; // already that level (e.g. Del Lower)
     if (!stack->cache) stack->cache = std::make_shared<SubdivLevelCache>();
     SubdivLevelCache& cache = *stack->cache;
     std::shared_ptr<PaintTexture> texture = mesh.texture;
     const bool toTexture = mesh.paintToTexture;
-    const std::shared_ptr<Mesh> want = stack->levels[size_t(level)].data;
+    const SubdivLevel& wantLevel = stack->levels[size_t(level)];
+    const std::shared_ptr<Mesh> want = wantLevel.data;
     // A cached copy of this level: exact (same data), or with the same triangles (only the shape or attributes
     // changed, so its topology and BVH are kept and refitted).
     std::optional<SubdivLevelCache::Entry> taken;
@@ -779,15 +925,16 @@ void enterLevel(Mesh& mesh, int level, BVH* bvh, std::shared_ptr<Mesh> leaving =
         auto hit = std::find_if(cache.entries.begin(), cache.entries.end(), [&](const auto& e) { return e.key == want; });
         exact = hit != cache.entries.end();
         if (!exact)
-            hit = std::find_if(cache.entries.begin(), cache.entries.end(),
-                               [&](const auto& e) { return sameArray(e.mesh.triangles, want->triangles); });
+            hit = std::find_if(cache.entries.begin(), cache.entries.end(), [&](const auto& e) {
+                return generatedLevel(wantLevel) ? e.topo == wantLevel.topo : sameArray(e.mesh.triangles, want->triangles);
+            });
         if (hit != cache.entries.end()) {
             taken = std::move(*hit);
             cache.entries.erase(hit);
         }
         if (leaving) {
             // Keep the mesh being left (it has its topology and BVH already) for stepping back.
-            SubdivLevelCache::Entry e{std::move(leaving), std::move(mesh), std::move(*bvh)};
+            SubdivLevelCache::Entry e{std::move(leaving), std::move(leavingTopo), std::move(mesh), std::move(*bvh)};
             e.mesh.multires.reset();
             e.mesh.texture.reset();
             cache.entries.push_back(std::move(e));
@@ -802,13 +949,17 @@ void enterLevel(Mesh& mesh, int level, BVH* bvh, std::shared_ptr<Mesh> leaving =
             for (uint32_t v = 0; v < want->positions.size(); ++v)
                 if (want->positions[v] != mesh.positions[v]) moved.push_back(v);
             assignLevelArrays(mesh, *want);
+            if (generatedLevel(wantLevel) && wantLevel.topo->catmullClark && mesh.quadPartners.empty()) {
+                mesh.quadPartners.resize(mesh.triangles.size()); // the generated pairs (2i, 2i + 1)
+                for (size_t t = 0; t < mesh.quadPartners.size(); ++t) mesh.quadPartners[t] = uint32_t(t ^ 1);
+            }
             mesh.sanitizeAttributes();
             mesh.recomputeAllNormals();
             if (hasPaintLayers(mesh)) compositePaintAll(mesh);
             bvh->refit(mesh, moved);
         }
     } else {
-        mesh = leanCopy(*want);
+        mesh = levelWorkingCopy(wantLevel);
     }
     mesh.multires = std::move(stack);
     mesh.texture = std::move(texture);
@@ -963,10 +1114,10 @@ void spreadFaceArray(MultiresStack& s, int c, const std::vector<T>& w, const std
     std::vector<uint8_t> flags = changed, next;
     const std::vector<T>* fine = &w;
     for (int j = c; j >= 1; --j) {
-        Mesh& cm = mutableData(s.levels[size_t(j) - 1]);
-        std::vector<T>& coarse = get(cm);
+        const size_t coarseCount = s.levels[size_t(j) - 1].triangleCount();
+        std::vector<T>& coarse = get(mutableData(s.levels[size_t(j) - 1]));
         const bool fresh = coarse.empty();
-        restrictFaces(*s.levels[size_t(j)].topo, *fine, coarse, cm.triangleCount(), fill, fresh ? nullptr : &flags, next);
+        restrictFaces(*s.levels[size_t(j)].topo, *fine, coarse, coarseCount, fill, fresh ? nullptr : &flags, next);
         flags.swap(next);
         fine = &coarse;
     }
@@ -998,10 +1149,12 @@ void spreadUvs(MultiresStack& s, int c, const Mesh& w, const Mesh& r) {
     if (!any) return;
     std::vector<uint8_t> flags = changed, next;
     const std::vector<glm::vec2>* fine = &w.uvs;
+    std::vector<glm::uvec3> scratch;
     for (int j = c; j >= 1; --j) {
+        const std::vector<glm::uvec3>& coarseTris = levelTriangles(s.levels[size_t(j) - 1], scratch);
         Mesh& cm = mutableData(s.levels[size_t(j) - 1]);
         const bool fresh = cm.uvs.empty();
-        restrictUvs(*s.levels[size_t(j)].topo, cm, *fine, cm.uvs, fresh ? nullptr : &flags, next);
+        restrictUvs(*s.levels[size_t(j)].topo, coarseTris, *fine, cm.uvs, fresh ? nullptr : &flags, next);
         flags.swap(next);
         fine = &cm.uvs;
     }
@@ -1023,6 +1176,7 @@ void spreadShape(MultiresStack& s, int c, const Mesh& w, const Mesh& r) {
     // Per level: the subdivided coarse base and its normals (the layer details' frames), once the base channel
     // (channel 0, done first) is final.
     std::vector<std::vector<glm::vec3>> frameQ(size_t(c) + 1), frameN(size_t(c) + 1);
+    std::vector<std::vector<uint32_t>> frameRef(size_t(c) + 1);
     bool baseChanged = false;
     for (size_t ch = 0; ch < channels; ++ch) {
         const std::vector<glm::vec3>& wa = ch == 0 ? baseChannel(w) : w.layers[ch - 1].delta;
@@ -1046,17 +1200,17 @@ void spreadShape(MultiresStack& s, int c, const Mesh& w, const Mesh& r) {
             parallelRange(tp.coarseVertices, [&](size_t b, size_t e) {
                 for (size_t v = b; v < e; ++v) {
                     const uint32_t e0 = tp.vertEdgeOffsets[v], e1 = tp.vertEdgeOffsets[v + 1];
-                    glm::vec3 sum = delta[tp.vertexChild[v]];
+                    glm::vec3 sum = delta[tp.vertexChildOf(uint32_t(v))];
                     float weight = 1.0f;
                     for (uint32_t k = e0; k < e1; ++k) {
                         const uint32_t ei = tp.vertEdges[k];
-                        sum += 0.5f * delta[tp.edgeChild[ei]];
+                        sum += 0.5f * delta[tp.edgeChildOf(ei)];
                         weight += 0.5f;
                         if (!tp.catmullClark) continue;
                         // Each polygon around v borders two of its edges: a quarter weight, half from each.
                         for (uint32_t f : {tp.edgeFaces[ei].x, tp.edgeFaces[ei].y})
                             if (f != kNone) {
-                                sum += 0.125f * delta[tp.faceChild[f]];
+                                sum += 0.125f * delta[tp.faceChildOf(f)];
                                 weight += 0.125f;
                             }
                     }
@@ -1068,36 +1222,39 @@ void spreadShape(MultiresStack& s, int c, const Mesh& w, const Mesh& r) {
             for (size_t v = 0; v < cd.size(); ++v) target[v] += cd[v];
             delta = std::move(cd);
         }
-        // Re-fit the details bottom-up so each level is exactly what it was (the current one exactly as sculpted).
+        // The levels up to the current one keep their new positions, which stand for their details (dropped; see
+        // SubdivLevel::detail). Sculpt-layer details are kept in the frames of the subdivided base, re-fitted
+        // bottom-up so each level is exactly what it was (the current one exactly as sculpted).
         for (int j = 1; j <= c; ++j) {
             SubdivLevel& L = s.levels[size_t(j)];
+            if (ch == 0) {
+                L.detail.reset();
+                continue;
+            }
             const SubdivTopology& tp = *L.topo;
             const Mesh& cm = *s.levels[size_t(j) - 1].data;
             const Mesh& fm = j == c ? w : *L.data;
-            const std::vector<glm::vec3>& fineVals = ch == 0 ? baseChannel(fm) : fm.layers[ch - 1].delta;
-            std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, ch == 0 ? baseChannel(cm) : cm.layers[ch - 1].delta);
-            if (ch == 0) {
-                std::vector<glm::vec3> n = fineNormals(fm.triangles, Q);
-                fitDetail(tp, n, Q, fineVals, mutableArray(L.detail, Q.size()));
-                if (channels > 1) { // the layer channels' frames
-                    frameN[size_t(j)] = std::move(n);
-                    frameQ[size_t(j)] = std::move(Q);
-                }
-            } else {
-                if (L.layerDetail.size() < w.layers.size()) L.layerDetail.resize(w.layers.size());
-                std::vector<glm::vec3>& fq = frameQ[size_t(j)];
-                if (fq.empty()) {
-                    fq = subdivideField(tp, tp.smooth, baseChannel(cm));
-                    frameN[size_t(j)] = fineNormals(fm.triangles, fq);
-                }
-                std::vector<glm::vec3> world(Q.size());
-                for (size_t v = 0; v < Q.size(); ++v) world[v] = fineVals[v] - Q[v];
-                layerDetailToLocal(tp, frameN[size_t(j)], fq, world, mutableArray(L.layerDetail[ch - 1], Q.size()));
+            const std::vector<glm::vec3>& fineVals = fm.layers[ch - 1].delta;
+            std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, cm.layers[ch - 1].delta);
+            if (L.layerDetail.size() < w.layers.size()) L.layerDetail.resize(w.layers.size());
+            std::vector<glm::vec3>& fq = frameQ[size_t(j)];
+            if (fq.empty()) {
+                fq = subdivideField(tp, tp.smooth, baseChannel(cm));
+                levelFrames(L, fq, frameN[size_t(j)], frameRef[size_t(j)]);
             }
+            std::vector<glm::vec3> world(Q.size());
+            for (size_t v = 0; v < Q.size(); ++v) world[v] = fineVals[v] - Q[v];
+            layerDetailToLocal(frameRef[size_t(j)], frameN[size_t(j)], fq, world, mutableArray(L.layerDetail[ch - 1], Q.size()));
         }
     }
     if (!anyChange) return;
     for (int j = 0; j < c; ++j) evaluateLayers(mutableData(s.levels[size_t(j)]));
+    // The levels above follow: each gets the detail that fits its positions on the level below as it was (the
+    // current level's old shape is `r`; the ones above haven't changed yet), then waits to be evaluated.
+    for (size_t j = size_t(c) + 1; j < s.levels.size(); ++j) {
+        SubdivLevel& L = s.levels[j];
+        if (!L.stale && !L.detail) fitLevelDetail(L, baseChannel(j == size_t(c) + 1 ? r : *s.levels[j - 1].data));
+    }
     for (size_t j = size_t(c) + 1; j < s.levels.size(); ++j) s.levels[j].stale = true;
 }
 
@@ -1130,10 +1287,9 @@ void dropStackIfSingle(Mesh& mesh) {
     if (mesh.multires && mesh.multires->levels.size() < 2) mesh.multires.reset();
 }
 
-// The fine level of a divide: triangles, quads and every attribute from the coarse level.
-std::shared_ptr<Mesh> divideData(SubdivTopology& tp, const Mesh& coarse) {
+// The fine level of a divide (generated: no triangles stored): every attribute from the coarse level.
+std::shared_ptr<Mesh> divideData(const SubdivTopology& tp, const Mesh& coarse) {
     auto fine = std::make_shared<Mesh>();
-    buildDividedFaces(tp, coarse, *fine);
     std::vector<uint8_t> f;
     if (coarse.layers.empty()) {
         fine->positions = subdivideField(tp, tp.smooth, coarse.positions);
@@ -1165,10 +1321,10 @@ std::shared_ptr<Mesh> divideData(SubdivTopology& tp, const Mesh& coarse) {
 } // namespace
 
 size_t SubdivTopology::bytes() const {
-    auto b = [](const auto& v) { return v.size() * sizeof(v[0]); };
+    auto b = [](const auto& v) { return v.capacity() * sizeof(v[0]); };
     return b(pairing) + b(polyOffsets) + b(polyVerts) + b(polyEdges) + b(polyCorner) + b(polyTris) + b(edges) +
            b(edgeFaces) + b(vertEdgeOffsets) + b(vertEdges) + b(vertexChild) + b(edgeChild) + b(faceChild) +
-           b(fineParentPoly) + b(fineParentTri) + b(fineCode) + b(frameRef);
+           b(fineParentPoly) + b(fineParentTri) + b(fineCode);
 }
 
 // --- Queries ---
@@ -1184,15 +1340,15 @@ std::string subdivLevelText(const Mesh& mesh) {
 size_t subdivLevelTriangles(const Mesh& mesh, int level) {
     if (!mesh.multires) return level == 0 ? mesh.triangleCount() : 0;
     if (level < 0 || level >= int(mesh.multires->levels.size())) return 0;
-    return mesh.multires->levels[size_t(level)].data->triangleCount();
+    return mesh.multires->levels[size_t(level)].triangleCount();
 }
 
 bool subdivMatches(const Mesh& mesh) {
     if (!mesh.multires) return true;
     const MultiresStack& s = *mesh.multires;
     if (s.current < 0 || s.current >= int(s.levels.size()) || !s.levels[size_t(s.current)].data) return false;
-    const Mesh& r = *s.levels[size_t(s.current)].data;
-    return r.vertexCount() == mesh.vertexCount() && r.triangleCount() == mesh.triangleCount();
+    const SubdivLevel& l = s.levels[size_t(s.current)];
+    return l.data->vertexCount() == mesh.vertexCount() && l.triangleCount() == mesh.triangleCount();
 }
 
 size_t subdivBytes(const Mesh& mesh) {
@@ -1253,7 +1409,9 @@ bool subdivCommit(Mesh& w) {
     const int c = w.multires->current;
     const std::shared_ptr<Mesh> rp = w.multires->levels[size_t(c)].data;
     const Mesh& r0 = *rp;
-    if (w.vertexCount() != r0.vertexCount() || !sameArray(w.triangles, r0.triangles)) {
+    const SubdivLevel& cl = w.multires->levels[size_t(c)];
+    if (w.vertexCount() != r0.vertexCount() ||
+        !(generatedLevel(cl) ? matchesGenerated(*cl.topo, w.triangles) : sameArray(w.triangles, r0.triangles))) {
         w.multires.reset(); // the topology changed under the stack: the levels no longer apply
         return false;
     }
@@ -1322,7 +1480,7 @@ bool subdivCommit(Mesh& w) {
     spreadFaceArray(s, c, w.hidden, r->hidden, uint8_t(0), [](Mesh& m) -> std::vector<uint8_t>& { return m.hidden; });
     spreadUvs(s, c, w, *r);
 
-    s.levels[size_t(c)].data = leanShared(w);
+    s.levels[size_t(c)].data = levelData(w, s.levels[size_t(c)]);
     return true;
 }
 
@@ -1344,9 +1502,9 @@ bool subdivSetLevel(Mesh& mesh, int level, std::string& error, BVH* bvh) {
     MultiresStack& s = mutableStack(mesh);
     for (int k = s.current + 1; k <= level; ++k)
         if (s.levels[size_t(k)].stale) evaluateLevel(s, k);
-    std::shared_ptr<Mesh> leaving = s.levels[size_t(s.current)].data;
+    const SubdivLevel leaving = s.levels[size_t(s.current)];
     s.current = level;
-    enterLevel(mesh, level, bvh, std::move(leaving));
+    enterLevel(mesh, level, bvh, &leaving);
     return true;
 }
 
@@ -1374,21 +1532,23 @@ bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, BVH* bvh, size_t 
         return false;
     }
     MultiresStack& s = ensureStack(mesh);
-    std::shared_ptr<Mesh> leaving = s.levels.back().data;
-    const Mesh& coarse = *leaving;
+    const SubdivLevel leaving = s.levels.back();
+    // The coarse level is the top one, which the working mesh is (with its edits folded in above).
+    const Mesh& coarse = mesh;
     std::vector<uint32_t> pairing;
     if (cc) {
         pairing.resize(coarse.triangleCount());
         for (uint32_t t = 0; t < pairing.size(); ++t) pairing[t] = coarse.quadPartnerAt(t);
     }
-    std::shared_ptr<SubdivTopology> tp = buildCoarse(coarse, std::move(pairing), cc, smooth);
+    std::shared_ptr<SubdivTopology> tp = buildCoarse(coarse.triangles, uint32_t(coarse.vertexCount()), std::move(pairing), cc, smooth);
+    tp->generated = true;
     SubdivLevel level;
     level.data = divideData(*tp, coarse);
     level.topo = tp;
     level.layerDetail.resize(coarse.layers.size());
     s.levels.push_back(std::move(level));
     s.current = int(s.levels.size()) - 1;
-    enterLevel(mesh, s.current, bvh, std::move(leaving));
+    enterLevel(mesh, s.current, bvh, &leaving);
     return true;
 }
 
@@ -1402,6 +1562,11 @@ bool subdivDeleteLower(Mesh& mesh, std::string& error) {
         return false;
     }
     MultiresStack& s = mutableStack(mesh);
+    if (generatedLevel(s.levels[size_t(s.current)])) { // the new base keeps its triangles itself
+        Mesh& base = mutableData(s.levels[size_t(s.current)]);
+        base.triangles = mesh.triangles;
+        base.quadPartners = mesh.quadPartners;
+    }
     s.levels.erase(s.levels.begin(), s.levels.begin() + s.current);
     s.current = 0;
     s.levels[0].topo.reset();
@@ -1445,20 +1610,30 @@ Mesh subdivLevelMesh(const Mesh& mesh, int level) {
 
 // --- Project files ---
 
-std::shared_ptr<const SubdivTopology> rebuildSubdivTopology(const Mesh& coarse, const Mesh& fine,
+std::shared_ptr<const SubdivTopology> rebuildSubdivTopology(const std::vector<glm::uvec3>& coarseTriangles,
+                                                            uint32_t coarseVertices, uint32_t fineVertices,
+                                                            const std::vector<glm::uvec3>* fineTriangles,
                                                             std::vector<uint32_t> pairing, bool catmullClark,
                                                             bool smooth, std::vector<uint32_t> vertexChild,
                                                             std::vector<uint32_t> edgeChild,
                                                             std::vector<uint32_t> faceChild, std::string& error) {
-    std::shared_ptr<SubdivTopology> tp = buildCoarse(coarse, std::move(pairing), catmullClark, smooth);
-    tp->vertexChild = std::move(vertexChild);
-    tp->edgeChild = std::move(edgeChild);
-    tp->faceChild = std::move(faceChild);
-    if (tp->fineVertices != fine.vertexCount()) {
+    std::shared_ptr<SubdivTopology> tp = buildCoarse(coarseTriangles, coarseVertices, std::move(pairing), catmullClark, smooth);
+    if (tp->fineVertices != fineVertices) {
         error = "subdivision level vertex counts don't match";
         return nullptr;
     }
-    if (!buildFineMetadata(*tp, coarse, fine.triangles, error)) return nullptr;
+    if (!fineTriangles) {
+        tp->generated = true;
+        return tp;
+    }
+    tp->vertexChild = std::move(vertexChild);
+    tp->edgeChild = std::move(edgeChild);
+    tp->faceChild = std::move(faceChild);
+    if (canonicalChildren(*tp) && matchesGenerated(*tp, *fineTriangles)) {
+        markGenerated(*tp);
+        return tp;
+    }
+    if (!buildFineMetadata(*tp, *fineTriangles, error)) return nullptr;
     return tp;
 }
 
@@ -1469,9 +1644,17 @@ bool attachSubdivStack(Mesh& mesh, MultiresStack stack, std::string& error) {
         return false;
     }
     for (size_t j = 0; j < n; ++j) {
-        const SubdivLevel& l = stack.levels[j];
+        SubdivLevel& l = stack.levels[j];
+        if (l.data && generatedLevel(l) && !l.data->triangles.empty()) { // they follow from the topology
+            if (l.data.use_count() > 1) l.data = std::make_shared<Mesh>(*l.data);
+            std::vector<glm::uvec3>().swap(l.data->triangles);
+            bool generatedPairs = l.topo->catmullClark && l.data->quadPartners.size() == l.topo->fineTriangles;
+            for (size_t t = 0; t < l.data->quadPartners.size() && generatedPairs; ++t)
+                generatedPairs = l.data->quadPartners[t] == uint32_t(t ^ 1);
+            if (generatedPairs) std::vector<uint32_t>().swap(l.data->quadPartners);
+        }
         if (!l.data || (j > 0 && (!l.topo || l.topo->fineVertices != l.data->vertexCount() ||
-                                  l.topo->fineParentTri.size() != l.data->triangleCount())) ||
+                                  (!l.topo->generated && l.topo->fineTriangles != l.data->triangleCount()))) ||
             (l.detail && l.detail->size() != l.data->vertexCount())) {
             error = "subdivision level " + std::to_string(j + 1) + " doesn't fit the level below";
             return false;
@@ -1486,8 +1669,9 @@ bool attachSubdivStack(Mesh& mesh, MultiresStack stack, std::string& error) {
             return false;
         }
     }
-    const Mesh& cur = *stack.levels[size_t(stack.current)].data;
-    if (cur.vertexCount() != mesh.vertexCount() || cur.triangles != mesh.triangles) {
+    const SubdivLevel& cl = stack.levels[size_t(stack.current)];
+    if (cl.data->vertexCount() != mesh.vertexCount() ||
+        !(generatedLevel(cl) ? matchesGenerated(*cl.topo, mesh.triangles) : cl.data->triangles == mesh.triangles)) {
         error = "the current subdivision level doesn't match the mesh";
         return false;
     }
@@ -1507,11 +1691,13 @@ void convertWorldLayerDetail(MultiresStack& s) {
         if (k >= 2 && s.levels[k - 1].stale) evaluateLevel(s, int(k) - 1);
         const SubdivTopology& tp = *L.topo;
         const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, baseChannel(*s.levels[k - 1].data));
-        const std::vector<glm::vec3> n = fineNormals(L.data->triangles, Q);
+        std::vector<glm::vec3> n;
+        std::vector<uint32_t> refs;
+        levelFrames(L, Q, n, refs);
         for (auto& d : L.layerDetail) {
             if (!d || d->size() != Q.size()) continue;
             auto local = std::make_shared<std::vector<glm::vec3>>();
-            layerDetailToLocal(tp, n, Q, *d, *local);
+            layerDetailToLocal(refs, n, Q, *d, *local);
             d = std::move(local);
         }
     }
@@ -1519,10 +1705,20 @@ void convertWorldLayerDetail(MultiresStack& s) {
 
 const Mesh& subdivLevelData(const Mesh& mesh, int level) { return *mesh.multires->levels[size_t(level)].data; }
 
+const SubdivLevel& subdivLevel(const Mesh& mesh, int level) { return mesh.multires->levels[size_t(level)]; }
+
+void subdivLevelFaces(const Mesh& mesh, int level, std::vector<glm::uvec3>& out) {
+    const SubdivLevel& l = mesh.multires->levels[size_t(level)];
+    if (generatedLevel(l)) generateFaces(*l.topo, out, nullptr);
+    else out = l.data->triangles;
+}
+
 bool subdivInSync(const Mesh& mesh) {
     if (!mesh.multires) return true;
-    const Mesh& r = *mesh.multires->levels[size_t(mesh.multires->current)].data;
-    return sameArray(mesh.triangles, r.triangles) && !levelsDiffer(mesh, r);
+    const SubdivLevel& l = mesh.multires->levels[size_t(mesh.multires->current)];
+    const Mesh& r = *l.data;
+    return (generatedLevel(l) ? matchesGenerated(*l.topo, mesh.triangles) : sameArray(mesh.triangles, r.triangles)) &&
+           !levelsDiffer(mesh, r);
 }
 
 // --- Reconstruct Subdiv ---
@@ -1551,7 +1747,7 @@ bool reconstructCatmullClark(const Mesh& m, Reconstruction& out, std::string& er
             return false;
         }
     }
-    const std::shared_ptr<SubdivTopology> w = buildCoarse(m, pairing, true, true);
+    const std::shared_ptr<SubdivTopology> w = buildCoarse(m.triangles, uint32_t(m.vertexCount()), pairing, true, true);
     const size_t np = w->polygonCount();
     for (size_t p = 0; p < np; ++p)
         if (polySize(*w, p) != 4) {
@@ -1708,7 +1904,7 @@ bool reconstructCatmullClark(const Mesh& m, Reconstruction& out, std::string& er
 
 // All-triangle mesh: label vertices O / E so every triangle is a corner (O, E, E) or a centre (E, E, E) one.
 bool reconstructLoop(const Mesh& m, Reconstruction& out, std::string& error) {
-    const std::shared_ptr<SubdivTopology> w = buildCoarse(m, {}, false, true);
+    const std::shared_ptr<SubdivTopology> w = buildCoarse(m.triangles, uint32_t(m.vertexCount()), {}, false, true);
     const uint32_t nv = uint32_t(m.vertexCount()), nt = uint32_t(m.triangleCount());
     std::vector<uint8_t> label(nv, kUnset), type(nt, 0), done(nt, 0); // type 1 = corner, 2 = centre
     for (uint32_t seed = 0; seed < nt; ++seed) {
@@ -1855,7 +2051,7 @@ bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh) {
     Mesh& coarse = rec.coarse;
     coarse.positions.resize(nc);
     for (uint32_t v = 0; v < nc; ++v) coarse.positions[v] = mesh.positions[rec.vertexChild[v]];
-    std::shared_ptr<SubdivTopology> tp = buildCoarse(coarse, rec.pairing, rec.catmullClark, true);
+    std::shared_ptr<SubdivTopology> tp = buildCoarse(coarse.triangles, nc, rec.pairing, rec.catmullClark, true);
     tp->vertexChild = rec.vertexChild;
     tp->faceChild = rec.catmullClark ? rec.faceChild : std::vector<uint32_t>{};
     tp->edgeChild.resize(tp->edges.size());
@@ -1871,7 +2067,7 @@ bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh) {
         error = "The mesh is not a regular subdivision (vertex counts don't add up)";
         return false;
     }
-    if (!buildFineMetadata(*tp, coarse, mesh.triangles, error)) return false;
+    if (!buildFineMetadata(*tp, mesh.triangles, error)) return false;
     // Expected fine triangle count: 2n per n-gon (Catmull-Clark) or 4 per triangle (Loop).
     size_t expected = 0;
     for (size_t p = 0; p < tp->polygonCount(); ++p) expected += tp->catmullClark ? 2 * polySize(*tp, p) : 4;
@@ -1891,7 +2087,7 @@ bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh) {
     if (mesh.hasColors()) restrictVertices(*tp, mesh.colors, coarse.colors, glm::vec3(1.0f), nullptr, f);
     if (mesh.hasPolygroups()) restrictFaces(*tp, mesh.polygroups, coarse.polygroups, coarse.triangleCount(), 0u, nullptr, f);
     if (mesh.hasHidden()) restrictFaces(*tp, mesh.hidden, coarse.hidden, coarse.triangleCount(), uint8_t(0), nullptr, f);
-    if (mesh.hasUvs()) restrictUvs(*tp, coarse, mesh.uvs, coarse.uvs, nullptr, f);
+    if (mesh.hasUvs()) restrictUvs(*tp, coarse.triangles, mesh.uvs, coarse.uvs, nullptr, f);
     if (!rec.pairing.empty()) coarse.quadPartners = rec.pairing;
     if (!mesh.paintLayers.empty()) {
         restrictVertices(*tp, mesh.paintBase, coarse.paintBase, glm::vec3(1.0f), nullptr, f);
@@ -1908,11 +2104,12 @@ bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh) {
     }
     SubdivLevel fineLevel;
     fineLevel.topo = tp;
-    // The coarse base is the positions so far (the layers' offsets are added below).
-    const std::vector<glm::vec3> Q = subdivideField(*tp, true, coarse.positions);
     if (!mesh.layers.empty()) {
+        // The coarse base is the positions so far (the layers' offsets are added below).
+        const std::vector<glm::vec3> Q = subdivideField(*tp, true, coarse.positions);
         coarse.base = coarse.positions;
         const std::vector<glm::vec3> n = fineNormals(mesh.triangles, Q);
+        const std::vector<uint32_t> refs = frameRefs(tp->fineVertices, mesh.triangles);
         for (const SculptLayer& l : mesh.layers) {
             SculptLayer cl{l.name, std::vector<glm::vec3>(nc), l.weight};
             for (uint32_t v = 0; v < nc; ++v) cl.delta[v] = l.delta[rec.vertexChild[v]];
@@ -1920,21 +2117,20 @@ bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh) {
             std::vector<glm::vec3> world(s.size());
             for (size_t v = 0; v < s.size(); ++v) world[v] = l.delta[v] - s[v];
             auto d = std::make_shared<std::vector<glm::vec3>>();
-            layerDetailToLocal(*tp, n, Q, world, *d);
+            layerDetailToLocal(refs, n, Q, world, *d);
             fineLevel.layerDetail.push_back(std::move(d));
             coarse.layers.push_back(std::move(cl));
         }
         evaluateLayers(coarse);
     }
-    fineLevel.detail = std::make_shared<std::vector<glm::vec3>>();
-    fitDetail(*tp, fineNormals(mesh.triangles, Q), Q, fineBase, *fineLevel.detail);
+    // The fine level's detail is what fits its positions (fitted when the coarse level changes; SubdivLevel::detail).
     MultiresStack& s = ensureStack(mesh);
     fineLevel.data = s.levels[0].data;
     fineLevel.stale = false;
     s.levels[0] = std::move(fineLevel);
     s.levels.insert(s.levels.begin(), SubdivLevel{std::make_shared<Mesh>(std::move(coarse)), nullptr, nullptr, {}, false});
     s.current = 0;
-    enterLevel(mesh, 0, bvh, s.levels[1].data);
+    enterLevel(mesh, 0, bvh, &s.levels[1]);
     return true;
 }
 
@@ -1953,12 +2149,12 @@ size_t SubdivUndo::bytes() const {
 
 void applySubdivUndo(SubdivUndo& r, Mesh& mesh, BVH& bvh) {
     subdivCommit(mesh);
-    std::shared_ptr<Mesh> leaving = mesh.multires ? mesh.multires->levels[size_t(mesh.multires->current)].data : nullptr;
+    const SubdivLevel leaving = mesh.multires ? mesh.multires->levels[size_t(mesh.multires->current)] : SubdivLevel{};
     std::shared_ptr<SubdivLevelCache> cache = mesh.multires ? mesh.multires->cache : nullptr;
     std::swap(mesh.multires, r.stack);
     if (mesh.multires) {
         if (!mesh.multires->cache) mesh.multires->cache = std::move(cache);
-        enterLevel(mesh, mesh.multires->current, &bvh, std::move(leaving));
+        enterLevel(mesh, mesh.multires->current, &bvh, &leaving);
         return;
     } else if (r.plain) {
         std::shared_ptr<PaintTexture> texture = mesh.texture;

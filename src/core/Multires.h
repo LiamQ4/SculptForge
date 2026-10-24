@@ -52,10 +52,18 @@ struct Document;
 
 // How level k is built from level k-1. Vertex, edge and face points of the coarse level map to fine vertices
 // through vertexChild / edgeChild / faceChild, so a reconstructed level keeps the vertex order it was found in.
+//
+// A level made by Divide (or loaded / checked to be one) is `generated`: its fine vertices are the coarse
+// vertices, then one per coarse edge, then one per polygon (Catmull-Clark), and its fine triangles and quad
+// pairs are the ones generateFaces() makes, polygon by polygon. Such a level stores neither the child maps,
+// nor its triangles (in SubdivLevel::data), nor their parents and corner codes: all of them follow from the
+// coarse polygons, which saves about 30 bytes per triangle at the top level.
 struct SubdivTopology {
     bool catmullClark = false; // quads (and triangles) -> quads; false = Loop, triangles -> 4 triangles
     bool smooth = true;        // false: flat subdivision (Smt off), the shape is not smoothed
+    bool generated = false;
     uint32_t coarseVertices = 0, fineVertices = 0;
+    size_t fineTriangles = 0;
     // The quad pairing of the coarse level's triangles this level was built with (Mesh::kNoQuad = triangle).
     std::vector<uint32_t> pairing;
     // Coarse polygons (triangles and quads), corners in winding order (CSR).
@@ -66,29 +74,45 @@ struct SubdivTopology {
     // Coarse edges (a < b) and the polygons on each side; y = kNone on boundaries and non-manifold edges.
     std::vector<glm::uvec2> edges, edgeFaces;
     std::vector<uint32_t> vertEdgeOffsets, vertEdges; // coarse vertex -> incident edges (CSR)
-    std::vector<uint32_t> vertexChild, edgeChild, faceChild; // fine vertex of each coarse vertex / edge / polygon
-    // Per fine triangle: the polygon and the coarse triangle it lies in, and per fine corner where it sits on
-    // that polygon (0-3 = corner i, 4-7 = midpoint of side i, 8 = centre), for UVs.
+    // Not generated only: the fine vertex of each coarse vertex / edge / polygon, and per fine triangle the
+    // polygon and the coarse triangle it lies in, and per fine corner where it sits on that polygon (0-3 =
+    // corner i, 4-7 = midpoint of side i, 8 = centre), for UVs.
+    std::vector<uint32_t> vertexChild, edgeChild, faceChild;
     std::vector<uint32_t> fineParentPoly, fineParentTri;
     std::vector<uint8_t> fineCode;
-    std::vector<uint32_t> frameRef; // per fine vertex: the neighbour that fixes its tangent direction
+    bool nonManifold = false; // some coarse edge has more than two polygons
+    uint32_t maxValence = 0;  // most edges at one coarse vertex
     static constexpr uint32_t kNone = ~0u;
 
     size_t polygonCount() const { return polyOffsets.empty() ? 0 : polyOffsets.size() - 1; }
+    uint32_t vertexChildOf(uint32_t v) const { return generated ? v : vertexChild[v]; }
+    uint32_t edgeChildOf(uint32_t e) const { return generated ? coarseVertices + e : edgeChild[e]; }
+    uint32_t faceChildOf(uint32_t p) const { return generated ? coarseVertices + uint32_t(edges.size()) + p : faceChild[p]; }
+    // The first fine triangle of polygon p (generated levels: 2 per corner for Catmull-Clark, 4 for Loop).
+    size_t firstFineTriangle(size_t p) const { return catmullClark ? size_t(polyOffsets[p]) * 2 : p * 4; }
     size_t bytes() const;
 };
 
-// One level of the stack. `data` is the level as a mesh without topology (positions, triangles, every
-// attribute, sculpt and paint layers; no texture). For levels above the one last edited `stale` is set and
-// data->positions / base / layer deltas are out of date until the level is evaluated again.
+// The fine triangles of a generated level, in order, and (Catmull-Clark) their quad pairs (each corner of a
+// polygon becomes one quad: triangles 2i and 2i + 1).
+void generateFaces(const SubdivTopology& tp, std::vector<glm::uvec3>& triangles, std::vector<uint32_t>* quadPartners);
+
+// One level of the stack. `data` is the level as a mesh without topology (positions, every attribute, sculpt
+// and paint layers; no texture; the triangles and quad pairs only when the level isn't generated, see
+// SubdivTopology). For levels above the one last edited `stale` is set and data->positions / base / layer
+// deltas are out of date until the level is evaluated again.
 struct SubdivLevel {
     std::shared_ptr<Mesh> data;
     std::shared_ptr<const SubdivTopology> topo; // null for level 0
-    std::shared_ptr<std::vector<glm::vec3>> detail; // local-frame displacement (levels >= 1)
+    // Local-frame displacement (levels >= 1). Null on a level that isn't stale: its positions are what counts
+    // and its detail is fitted to them when it is needed (when a lower level changes), so the stack doesn't
+    // keep both. Null on a stale level: no detail (the level is the smooth subdivision of the one below).
+    std::shared_ptr<std::vector<glm::vec3>> detail;
     // Per sculpt layer: its offsets minus the subdivided offsets of the level below, in the local frame of the
     // subdivided shape (as `detail`), so they turn with the surface.
     std::vector<std::shared_ptr<std::vector<glm::vec3>>> layerDetail;
     bool stale = false;
+    size_t triangleCount() const { return topo && topo->generated ? topo->fineTriangles : data->triangleCount(); }
 };
 
 // Working meshes (with topology and normals) and BVHs of the levels most recently left, so stepping back to
@@ -154,9 +178,14 @@ bool subdivCommit(Mesh& mesh);
 Mesh subdivLevelMesh(const Mesh& mesh, int level);
 
 // --- Project files ---
-// Rebuilds the topology of a saved level (`fine`, built from `coarse`) from what the file keeps: the scheme,
-// Smt, the quad pairing and the child maps. Null with `error` set when they don't fit the meshes.
-std::shared_ptr<const SubdivTopology> rebuildSubdivTopology(const Mesh& coarse, const Mesh& fine,
+// Rebuilds the topology of a saved level from what the file keeps: the coarse level's triangles and vertex
+// count, the fine vertex count, the scheme, Smt, the quad pairing and the child maps. `fineTriangles` are the
+// level's own triangles, or null for a generated level (which stores none). A level whose child maps and
+// triangles are the generated ones becomes generated (attachSubdivStack then drops its triangles). Null with
+// `error` set when they don't fit the meshes.
+std::shared_ptr<const SubdivTopology> rebuildSubdivTopology(const std::vector<glm::uvec3>& coarseTriangles,
+                                                            uint32_t coarseVertices, uint32_t fineVertices,
+                                                            const std::vector<glm::uvec3>* fineTriangles,
                                                             std::vector<uint32_t> pairing, bool catmullClark,
                                                             bool smooth, std::vector<uint32_t> vertexChild,
                                                             std::vector<uint32_t> edgeChild,
@@ -166,8 +195,11 @@ bool attachSubdivStack(Mesh& mesh, MultiresStack stack, std::string& error);
 // Projects before format 5 stored sculpt-layer details in world space: converts a loaded stack's (with its
 // topology) to the local frames SubdivLevel::layerDetail uses now. Evaluates stale levels on the way.
 void convertWorldLayerDetail(MultiresStack& stack);
-// The level data `level` keeps (for writing projects; may be stale, see SubdivLevel).
+// The level data `level` keeps (for writing projects; may be stale, see SubdivLevel), and the level itself.
 const Mesh& subdivLevelData(const Mesh& mesh, int level);
+const SubdivLevel& subdivLevel(const Mesh& mesh, int level);
+// The triangles of level `level` (stored or generated).
+void subdivLevelFaces(const Mesh& mesh, int level, std::vector<glm::uvec3>& out);
 // True when the mesh holds no edits its stack hasn't folded in yet (its current level's data is the mesh).
 bool subdivInSync(const Mesh& mesh);
 
