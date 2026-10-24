@@ -1776,10 +1776,10 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, const RenderSettings& se
     // Constant values for the attribute arrays that are disabled.
     if (!s.hasColors) gl::VertexAttrib4f(2, 1.0f, 1.0f, 1.0f, 1.0f);
     if (!s.hasMask) gl::VertexAttrib1f(3, 0.0f);
-    // While the view moves, the motion proxy where it is built (not with per-triangle data, which follows the
-    // full triangles).
+    // While the view moves, the motion proxy where it is built: not with per-triangle data, which follows the
+    // full triangles, nor under the wireframe, whose edges would sink into it.
     const bool perTriangle = features & (kPrim | kTextured | kNormalMap);
-    cull(s, frameCull_, settings.motionProxy && !perTriangle);
+    cull(s, frameCull_, settings.motionProxy && !perTriangle && !(active && settings.wireframe));
     // The back faces left in clusters along the silhouette: the GPU skips them too when they can't show.
     if (cullBackfaces_) gl::Enable(GL_CULL_FACE);
     drawClusters(s, drawClusters_, GL_TRIANGLES, Part::Triangles, perTriangle ? p->primBase : -1);
