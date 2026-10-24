@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <limits>
 #include <vector>
 
@@ -470,7 +471,8 @@ bool Renderer::init(std::string& error) {
         gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE));
     }
     gl::BindTexture(GL_TEXTURE_2D, 0);
-    vertexIdHasBase_ = checkVertexIdBase();
+    // SF_NO_VERTEXID_BASE=1 takes the other path, to check it on drivers that don't need it.
+    vertexIdHasBase_ = checkVertexIdBase() && !std::getenv("SF_NO_VERTEXID_BASE");
     return true;
 }
 
