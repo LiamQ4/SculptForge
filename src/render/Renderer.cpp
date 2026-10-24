@@ -20,7 +20,7 @@ namespace sf {
 namespace {
 
 // Mesh vertices are PackedVertex (render/Clusters.h): the position on the slot's grid (21 bits per axis in two
-// words), an octahedral normal and the curvature in a third. Decoded here exactly as Clusters.cpp does.
+// words), an octahedral normal and the (companded) curvature in a third. Decoded here exactly as Clusters.cpp does.
 // Compiled per feature set: PAINT (polypaint colour and mask attributes), PRIM (per-triangle data: the first
 // drawn triangle of the vertex's cluster, from a per-block table indexed by gl_VertexID, or uPrimBase when the
 // clusters are drawn one by one), TEXTURED and NORMALMAP (with a geometry shader, below).
@@ -53,7 +53,8 @@ vec3 decodeNormal(uint a) {
 void main() {
     uvec3 q = uvec3(aPos.x & 0x1FFFFFu, (aPos.x >> 21) | ((aPos.y & 0x3FFu) << 11), (aPos.y >> 10) & 0x1FFFFFu);
     vec4 p = uView * vec4(uGridOrigin + vec3(q) * uGridStep, 1.0);
-    vNormalCurv = vec4(mat3(uView) * decodeNormal(aNormal), float(int(aNormal >> 22) - 512) / 511.0 * 0.25);
+    float curvature = float(int(aNormal >> 22) - 512) / 511.0; // sign(c) sqrt(|c|), render/Clusters.h
+    vNormalCurv = vec4(mat3(uView) * decodeNormal(aNormal), curvature * abs(curvature));
 #ifdef PAINT
     vPaint = vec4(pow(aColor.rgb, vec3(2.2)), aMask);
 #endif
@@ -762,10 +763,11 @@ using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
 // Uploads the GPU index ranges `runs` of one vertex array (`allocate` sizes it to `count` elements first):
 // fill(begin, end, dst) writes those elements, in GPU order, to dst. The runs are cut into pieces of a few
 // thousand elements filled in parallel (a dab's runs are short, so per run would be one thread), batched
-// through `staging` so a full upload never copies the whole array at once.
+// through `staging` so a full upload never copies the whole array at once. Pieces start on block boundaries.
+// With `changed` (a flag per UploadOrder block, set by fill), only the blocks flagged are sent.
 template <class Fill>
 void uploadGathered(std::vector<uint8_t>& staging, GLuint buffer, size_t elementSize, size_t count, bool allocate,
-                    const Runs& runs, const Fill& fill) {
+                    const Runs& runs, const Fill& fill, const std::vector<uint8_t>* changed = nullptr) {
     constexpr uint32_t kPiece = 2048, kBatch = 1u << 18;
     gl::BindBuffer(GL_ARRAY_BUFFER, buffer);
     if (allocate) gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(count * elementSize), nullptr, GL_DYNAMIC_DRAW);
@@ -779,14 +781,27 @@ void uploadGathered(std::vector<uint8_t>& staging, GLuint buffer, size_t element
         poolFor(pieces.size(), [&](size_t i0, size_t i1) {
             for (size_t i = i0; i < i1; ++i) fill(pieces[i].begin, pieces[i].end, staging.data() + pieces[i].offset);
         }, 1, 2);
-        // One upload per stretch of adjacent pieces.
-        for (size_t i = 0; i < pieces.size();) {
-            size_t j = i + 1;
-            while (j < pieces.size() && pieces[j].begin == pieces[j - 1].end) ++j;
-            gl::BufferSubData(GL_ARRAY_BUFFER, GLintptr(size_t(pieces[i].begin) * elementSize),
-                              GLsizeiptr(size_t(pieces[j - 1].end - pieces[i].begin) * elementSize), staging.data() + pieces[i].offset);
-            i = j;
-        }
+        // One upload per stretch of adjacent (changed) elements; adjacent pieces are adjacent in staging too.
+        uint32_t from = 0, to = 0;
+        size_t fromOffset = 0;
+        auto send = [&]() {
+            if (to > from)
+                gl::BufferSubData(GL_ARRAY_BUFFER, GLintptr(size_t(from) * elementSize), GLsizeiptr(size_t(to - from) * elementSize),
+                                  staging.data() + fromOffset);
+            from = to = 0;
+        };
+        for (const Piece& p : pieces)
+            for (uint32_t b = p.begin; b < p.end; b = std::min(p.end, (b & ~(UploadOrder::kBlock - 1)) + UploadOrder::kBlock)) {
+                const uint32_t e = std::min(p.end, (b & ~(UploadOrder::kBlock - 1)) + UploadOrder::kBlock);
+                if (changed && !(*changed)[b >> UploadOrder::kBlockShift]) continue;
+                if (b != to || to == from) {
+                    send();
+                    from = b;
+                    fromOffset = p.offset + size_t(b - p.begin) * elementSize;
+                }
+                to = e;
+            }
+        send();
         pieces.clear();
     };
     // A whole array: written straight into the mapped buffer, in parallel (no staging copy).
@@ -884,29 +899,59 @@ void Renderer::syncScene(const std::vector<SceneMesh>& scene) {
 // the position grid (sculpting outwards) gets the mesh a new grid and every vertex re-sent.
 void Renderer::uploadVertices(MeshSlot& s, const Mesh& mesh, bool full) {
     const size_t ns = s.order.size();
+    const size_t nb = (ns + UploadOrder::kBlock - 1) / UploadOrder::kBlock;
     const std::span<const uint32_t> order = s.order.fromGpu();
     std::atomic<bool> outside{false};
     const bool normals = mesh.normals.size() == mesh.vertexCount();
+    // Per block, hashes of what it last sent (positions; normals and curvature): a block a dab marked but didn't
+    // change (paint, mask) isn't sent again, and a cluster whose positions didn't move keeps its bounds and proxy.
+    s.blockHash.resize(nb * 2, 0);
+    blockChanged_.assign(nb, 0);
+    blockMoved_.assign(nb, 0);
+    bool everything = full;
     auto fill = [&](uint32_t b, uint32_t e, void* dst) {
         PackedVertex* out = static_cast<PackedVertex*>(dst);
         bool inside = true;
+        uint64_t hp = 0, hn = 0;
         for (uint32_t i = b; i < e; ++i) {
             const uint32_t v = order[i];
+            PackedVertex& pv = out[i - b];
             inside &= packVertex(s.grid, mesh.positions[v], normals ? mesh.normals[v] : glm::vec3(0.0f, 0.0f, 1.0f),
-                                 curvatureAt(mesh, v), out[i - b]);
+                                 curvatureAt(mesh, v), pv);
+            hp = (hp ^ (uint64_t(pv.pos[0]) | uint64_t(pv.pos[1]) << 32)) * 0x100000001B3ull + i;
+            hn = (hn ^ pv.normal) * 0x100000001B3ull + i;
+            if ((i + 1) % UploadOrder::kBlock == 0 || i + 1 == e) {
+                const size_t g = i >> UploadOrder::kBlockShift;
+                blockMoved_[g] = everything || s.blockHash[g * 2] != hp;
+                blockChanged_[g] = blockMoved_[g] || s.blockHash[g * 2 + 1] != hn;
+                s.blockHash[g * 2] = hp;
+                s.blockHash[g * 2 + 1] = hn;
+                hp = hn = 0;
+            }
         }
         if (!inside) outside.store(true, std::memory_order_relaxed);
     };
-    uploadGathered(staging_, s.vertexBuffer, sizeof(PackedVertex), ns, full, dirtyRuns_, fill);
+    uploadGathered(staging_, s.vertexBuffer, sizeof(PackedVertex), ns, full, dirtyRuns_, fill, &blockChanged_);
     if (outside.load()) {
+        // A vertex left the grid: a new grid, and everything sent again.
         s.grid = PositionGrid::around(meshBounds(mesh));
         dirtyRuns_.assign(1, {0u, uint32_t(ns)});
-        uploadGathered(staging_, s.vertexBuffer, sizeof(PackedVertex), ns, false, dirtyRuns_, fill);
+        everything = true;
+        uploadGathered(staging_, s.vertexBuffer, sizeof(PackedVertex), ns, false, dirtyRuns_, fill, &blockChanged_);
     }
+    // The runs whose positions moved, for the culling bounds and motion proxies.
+    movedRuns_.clear();
+    for (const auto& [b, e] : dirtyRuns_)
+        for (uint32_t g = b >> UploadOrder::kBlockShift; g < (e + UploadOrder::kBlock - 1) >> UploadOrder::kBlockShift; ++g) {
+            if (!blockMoved_[g]) continue;
+            const uint32_t lo = g << UploadOrder::kBlockShift, hi = std::min(uint32_t(ns), lo + UploadOrder::kBlock);
+            if (!movedRuns_.empty() && movedRuns_.back().second == lo) movedRuns_.back().second = hi;
+            else movedRuns_.emplace_back(lo, hi);
+        }
     s.bytes[0] = ns * sizeof(PackedVertex);
 }
 
-// Culling bounds of the clusters dirtyRuns_ touches (every copy of a moved vertex is in a run, so every cluster
+// Culling bounds of the clusters movedRuns_ touches (every copy of a moved vertex is in a run, so every cluster
 // with a moved triangle is), or of all.
 void Renderer::updateBounds(MeshSlot& s, const Mesh& mesh, bool all) {
     const auto clusters = s.order.clusters();
@@ -915,7 +960,7 @@ void Renderer::updateBounds(MeshSlot& s, const Mesh& mesh, bool all) {
     if (all) {
         for (uint32_t c = 0; c < clusters.size(); ++c) cullScratch_.push_back(c);
     } else {
-        for (const auto& [b, e] : dirtyRuns_) {
+        for (const auto& [b, e] : movedRuns_) {
             if (b >= e) continue;
             const uint32_t c0 = s.order.clusterOfSlot(b), c1 = s.order.clusterOfSlot(e - 1);
             for (uint32_t c = c0; c <= c1; ++c)
@@ -931,6 +976,8 @@ void Renderer::updateBounds(MeshSlot& s, const Mesh& mesh, bool all) {
         }
     }, 1, 2);
     s.box = AABB();
+    s.volume = 0.0;
+    for (const ClusterBounds& b : s.bounds) s.volume += b.volume;
     for (const ClusterBounds& b : s.bounds)
         if (b.radius >= 0.0f) {
             s.box.expand(b.center - glm::vec3(b.radius));
@@ -1654,7 +1701,7 @@ void Renderer::cull(const MeshSlot& s, const CullView& frame, bool proxy) {
     proxy = proxy && s.proxyCount.size() == s.drawCount.size() && s.proxyBounds.size() == s.drawCount.size();
     CullView v = frame;
     const glm::vec3 e = v.eye;
-    v.backfaces = s.closed && !s.anyHidden && s.box.valid() &&
+    v.backfaces = s.closed && s.volume > 0.0 && !s.anyHidden && s.box.valid() &&
                   (e.x < s.box.min.x || e.y < s.box.min.y || e.z < s.box.min.z || e.x > s.box.max.x || e.y > s.box.max.y ||
                    e.z > s.box.max.z);
     if (v.backfaces)

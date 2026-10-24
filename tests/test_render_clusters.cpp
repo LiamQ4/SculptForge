@@ -146,7 +146,7 @@ TEST(packed_vertex_round_trip) {
         glm::vec3 n(u(rng), u(rng), u(rng));
         if (glm::length(n) < 1e-3f) continue;
         n = glm::normalize(n);
-        const float curv = u(rng) * 0.3f;
+        const float curv = u(rng) * u(rng) * 1.2f; // mostly small, some beyond the +-1 kept
         PackedVertex v;
         inside = inside && packVertex(grid, p, n, curv, v);
         worstPos = std::max(worstPos, glm::length(unpackPosition(grid, v) - p) / grid.step);
@@ -158,12 +158,19 @@ TEST(packed_vertex_round_trip) {
     CHECK(inside);
     CHECK(worstPos < 1.25f);                      // half a step per axis, plus float rounding
     CHECK(worstAngle < glm::radians(0.15f));      // 11-bit octahedral normals
-    CHECK(worstCurv <= kCurvatureRange / 511.0f); // 10-bit curvature
+    CHECK(worstCurv <= 2.0f / 511.0f); // 10 bits, square-root companded: within 0.004, finer near 0
     // Exact values where it matters: zero curvature, axis normals, and the same point always packs the same.
     PackedVertex a, b;
     packVertex(grid, glm::vec3(0.1f), glm::vec3(0, 0, -1), 0.0f, a);
     packVertex(grid, glm::vec3(0.1f), glm::vec3(0, 0, -1), 0.0f, b);
     CHECK(unpackCurvature(a) == 0.0f);
+    float worstSmall = 0.0f; // where the cavity shading ramps
+    for (float c = -0.2f; c <= 0.2f; c += 0.0007f) {
+        PackedVertex q;
+        packVertex(grid, glm::vec3(0.1f), glm::vec3(0, 0, 1), c, q);
+        worstSmall = std::max(worstSmall, std::abs(unpackCurvature(q) - c));
+    }
+    CHECK(worstSmall < 0.0011f);
     CHECK(glm::length(unpackNormal(a) - glm::vec3(0, 0, -1)) < 1e-6f);
     CHECK(a.pos[0] == b.pos[0] && a.pos[1] == b.pos[1] && a.normal == b.normal);
     // Outside the grid: reported (the renderer then fits a new one) and clamped.

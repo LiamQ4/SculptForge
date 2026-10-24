@@ -157,6 +157,7 @@ private:
         PositionGrid grid; // the positions' quantisation
         std::vector<ClusterBounds> bounds; // per cluster, for culling
         AABB box;                          // all clusters
+        double volume = 0.0;               // sum of the clusters' volumes (> 0: wound outwards)
         bool closed = false;               // closedOriented: back-facing clusters may be culled (without hidden triangles)
         bool anyHidden = false;
         std::vector<GLsizei> drawCount;    // per cluster: indices drawn (hidden triangles left out)
@@ -172,6 +173,7 @@ private:
         std::vector<uint32_t> drawnOrder; // the mesh triangle of each drawn triangle (meshes with UVs only)
         size_t drawnTriangles = 0;
         size_t vertexCapacity = 0;
+        std::vector<uint64_t> blockHash; // per UploadOrder block: hashes of its packed positions, and the rest
         size_t bytes[8] = {}; // GPU sizes: vertices, indices, lines, colours, mask, groups, prims, uvs + tangents
     };
     MeshSlot& slot(uint32_t id); // created on first use
@@ -189,6 +191,8 @@ private:
     void uploadIndices(MeshSlot& s, const Mesh& mesh);
     std::vector<std::pair<uint32_t, uint32_t>> dirtyRuns_; // scratch for sync: UploadOrder::dirtyRuns
     std::vector<uint8_t> staging_;                         // scratch for sync: gathered vertex data
+    std::vector<uint8_t> blockChanged_, blockMoved_;      // scratch for uploadVertices, per block
+    std::vector<std::pair<uint32_t, uint32_t>> movedRuns_; // the dirty runs whose positions moved
     void syncTexture(MeshSlot& s, Mesh& mesh);
     // The clusters of `s` to draw this frame: in full (drawClusters_), and with `proxy` as their motion proxy
     // where it is built (proxyClusters_).

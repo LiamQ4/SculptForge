@@ -6,7 +6,7 @@
 // - The compact vertex the GPU keeps (12 bytes, was 28): the position on a 21-bit grid over the mesh's bounds
 //   (with a margin, so sculpting rarely leaves it; one grid for the whole mesh, so a vertex copied into two
 //   clusters lands on exactly the same point and seams can't crack), an octahedral normal (2 x 11 bits) and the
-//   curvature the shading uses for cavities (10 bits). The shader decodes it the same way (Renderer.cpp).
+//   curvature the shading uses for cavities (10 bits, square-root companded). The shader decodes it the same way (Renderer.cpp).
 // - Culling per cluster (core/UploadOrder.h): outside the view, or every triangle facing away. The second only
 //   holds for a closed mesh seen from outside (closedOriented, and nothing cut by the near plane): its back
 //   faces are then always behind front faces. Open meshes, hidden triangles and views from inside draw them.
@@ -42,7 +42,10 @@ bool packVertex(const PositionGrid& grid, const glm::vec3& p, const glm::vec3& n
 glm::vec3 unpackPosition(const PositionGrid& grid, const PackedVertex& v);
 glm::vec3 unpackNormal(const PackedVertex& v);
 float unpackCurvature(const PackedVertex& v);
-constexpr float kCurvatureRange = 0.25f; // stored range +-; the shading saturates at 0.16 / 0.2
+// Curvature (Renderer.cpp: neighbour average over mean edge length, so within +-1) is stored as
+// sign(c) sqrt(|c|): finest near 0, where the cavity shading ramps (to 0.16 and 0.2), and the whole range kept,
+// since coarse meshes interpolate it across big triangles.
+constexpr float kCurvatureRange = 1.0f;
 
 // Polypaint colours in 8 bits per channel, gamma 2.2 encoded so dark colours keep their steps (the shader
 // decodes with pow 2.2). A table lookup, it is called for every vertex of an upload.
@@ -56,6 +59,7 @@ struct ClusterBounds {
     float radius = -1.0f; // < 0: empty
     glm::vec3 axis{0.0f, 0.0f, 1.0f};
     float coneAngle = -1.0f;
+    double volume = 0.0; // six times the signed volume its triangles add to a closed mesh's (outward winding: > 0)
 };
 ClusterBounds clusterBounds(const Mesh& mesh, const UploadOrder& order, uint32_t cluster);
 
@@ -70,7 +74,9 @@ bool clusterProxy(const Mesh& mesh, const UploadOrder& order, uint32_t c, size_t
                   ClusterBounds& bounds);
 
 // Every directed edge a->b has as many b->a: the mesh is the closed, consistently wound boundary of a volume
-// (it may intersect itself). Then from outside, every back face lies behind a front face.
+// (it may intersect itself). Wound outwards (a positive signed volume: the sum of ClusterBounds::volume), every
+// back face then lies behind a front face from outside. (Strictly: where no part of the surface is turned
+// inside out, a lobe pushed through the rest; there a back face can show.)
 bool closedOriented(const Mesh& mesh);
 
 // One frame's culling: the view's frustum planes, the eye, and whether back-facing clusters may go.

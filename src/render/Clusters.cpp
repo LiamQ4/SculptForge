@@ -74,8 +74,9 @@ bool packVertex(const PositionGrid& grid, const glm::vec3& p, const glm::vec3& n
         if (a.z < 0.0f)
             e = glm::vec2((1.0f - std::abs(a.y)) * (a.x >= 0.0f ? 1.0f : -1.0f), (1.0f - std::abs(a.x)) * (a.y >= 0.0f ? 1.0f : -1.0f));
     }
-    const float c = std::isfinite(curvature) ? curvature / kCurvatureRange : 0.0f;
-    out.normal = snorm(e.x, 11) | (snorm(e.y, 11) << 11) | (snorm(c, 10) << 22);
+    const float c = std::isfinite(curvature) ? std::clamp(curvature / kCurvatureRange, -1.0f, 1.0f) : 0.0f;
+    const float companded = c < 0.0f ? -std::sqrt(-c) : std::sqrt(c);
+    out.normal = snorm(e.x, 11) | (snorm(e.y, 11) << 11) | (snorm(companded, 10) << 22);
     return inside;
 }
 
@@ -94,7 +95,10 @@ glm::vec3 unpackNormal(const PackedVertex& v) {
     return glm::normalize(n);
 }
 
-float unpackCurvature(const PackedVertex& v) { return unsnorm(v.normal >> 22, 10) * kCurvatureRange; }
+float unpackCurvature(const PackedVertex& v) {
+    const float q = unsnorm(v.normal >> 22, 10);
+    return q * std::abs(q) * kCurvatureRange;
+}
 
 uint32_t packColor(const glm::vec3& c) {
     static const std::vector<uint8_t> table = [] {
@@ -123,6 +127,8 @@ ClusterBounds clusterBounds(const Mesh& mesh, const UploadOrder& order, uint32_t
         box.expand(a);
         box.expand(P[tri.y]);
         box.expand(P[tri.z]);
+        const glm::dvec3 da(a), db(P[tri.y]), dc(P[tri.z]);
+        b.volume += glm::dot(da, glm::cross(db, dc));
         const glm::vec3 c = glm::cross(e1, e2);
         const float l2 = glm::dot(c, c);
         if (l2 > 0.0f && std::isfinite(l2)) {
