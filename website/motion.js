@@ -4,6 +4,7 @@
 //   you're reading.
 // - Guide pages: swipe (touch) or the arrow keys for the previous / next chapter, the contents drawer on
 //   phones, search, copy buttons on code and a full-size view of screenshots.
+// - A site menu button when the header links don't fit.
 // Everything respects "reduce motion" and works as plain links without JavaScript.
 (() => {
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -68,6 +69,66 @@
       el.classList.add(el.matches("figure, .demo, .vfx-code") ? "reveal-media" : "reveal");
       reveal.observe(el);
     }
+  }
+
+  // --- Site menu: when the header links don't fit beside the logo (a narrow window, a tablet or a phone), the
+  // secondary links move into a menu behind a button; Download and GitHub stay in the bar. Measured, not a fixed
+  // breakpoint, since pages have different links. ---
+  const siteHeader = document.querySelector(".nav");
+  const mainNav = siteHeader?.querySelector("nav");
+  if (siteHeader && mainNav) {
+    const inner = siteHeader.querySelector(".nav-inner"), brand = siteHeader.querySelector(".brand");
+    const items = [...mainNav.querySelectorAll("a:not(.gh):not(.nav-dl)")];
+    const gh = mainNav.querySelector("a.gh");
+    if (!brand.hasAttribute("aria-label")) brand.setAttribute("aria-label", brand.textContent.trim());
+    const menu = document.createElement("div");
+    menu.className = "nav-menu";
+    menu.id = "site-menu";
+    menu.hidden = true;
+    const list = document.createElement("div");
+    list.className = "wrap";
+    for (const a of items) list.append(a.cloneNode(true));
+    if (gh) list.append(Object.assign(gh.cloneNode(true), { className: "menu-gh" }));
+    menu.append(list);
+    siteHeader.append(menu);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "nav-toggle";
+    btn.setAttribute("aria-controls", "site-menu");
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-label", "Menu");
+    btn.innerHTML = "<span></span><span></span><span></span>";
+    mainNav.append(btn);
+    const setOpen = (open) => {
+      menu.hidden = !open;
+      btn.setAttribute("aria-expanded", String(open));
+      siteHeader.classList.toggle("menu-open", open);
+    };
+    btn.addEventListener("click", () => setOpen(menu.hidden));
+    menu.addEventListener("click", (e) => { if (e.target.closest("a")) setOpen(false); });
+    document.addEventListener("click", (e) => { if (!menu.hidden && !siteHeader.contains(e.target)) setOpen(false); });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !menu.hidden) { setOpen(false); btn.focus(); }
+    });
+    // Compact: the secondary links go into the menu (too wide for the bar, or already hidden by the phone layout
+    // in style.css). Tight: on the narrowest screens GitHub goes too, so Download and the button fit by the logo.
+    // Tiny: below that (the smallest phones) the logo drops its name.
+    const tooWide = () => {
+      const pad = getComputedStyle(inner);
+      const room = inner.clientWidth - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight);
+      return brand.offsetWidth + mainNav.offsetWidth + 32 > room;
+    };
+    const fit = () => {
+      siteHeader.classList.remove("compact", "tight", "tiny");
+      const compact = tooWide() || items.some((a) => a.offsetWidth === 0);
+      siteHeader.classList.toggle("compact", compact);
+      siteHeader.classList.toggle("tight", compact && tooWide());
+      siteHeader.classList.toggle("tiny", siteHeader.classList.contains("tight") && tooWide());
+      if (!compact) setOpen(false);
+    };
+    new ResizeObserver(fit).observe(inner);
+    document.fonts?.ready.then(fit);
+    fit();
   }
 
   if (!guide) return;

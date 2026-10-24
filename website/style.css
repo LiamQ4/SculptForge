@@ -43,10 +43,34 @@ p { margin: 0 0 1em; }
 .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 600; font-size: 1.1rem; }
 .brand:hover { text-decoration: none; }
-.nav nav { display: flex; gap: 22px; align-items: center; }
-.nav nav a { color: var(--muted); font-size: 0.95rem; }
+.nav nav { display: flex; gap: 22px; align-items: center; flex: none; }
+.nav nav a { color: var(--muted); font-size: 0.95rem; white-space: nowrap; }
 .nav nav a:hover { color: var(--text); text-decoration: none; }
 .nav nav a.gh { color: var(--text); border: 1px solid var(--border); padding: 6px 14px; border-radius: 999px; }
+/* Site menu (motion.js adds .compact when the links don't fit beside the logo). */
+.nav-toggle { display: none; }
+.nav.compact nav a:not(.gh):not(.nav-dl), .nav.tight nav a.gh { display: none; }
+.nav.tiny .brand span { display: none; }
+.nav.compact nav a.nav-dl { color: #1a0d04; background: linear-gradient(180deg, #f6994d, #e2742a); padding: 6px 14px;
+                            border-radius: 999px; font-weight: 600; }
+.nav-menu .menu-gh { display: none; }
+.nav.tight .nav-menu .menu-gh { display: block; }
+.nav.compact .nav-toggle { display: inline-flex; flex-direction: column; justify-content: center; gap: 4px; width: 38px;
+                           height: 34px; padding: 0 9px; border: 1px solid var(--border); border-radius: 10px;
+                           background: none; cursor: pointer; }
+.nav-toggle span { display: block; height: 2px; border-radius: 2px; background: var(--text);
+                   transition: transform 0.2s, opacity 0.2s; }
+.nav.menu-open .nav-toggle span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+.nav.menu-open .nav-toggle span:nth-child(2) { opacity: 0; }
+.nav.menu-open .nav-toggle span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+.nav-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nav-menu { padding: 8px 0 14px; border-top: 1px solid var(--border);
+            animation: drawer-in 0.25s cubic-bezier(.2, .7, .2, 1); }
+.nav-menu[hidden] { display: none; }
+.nav-menu .wrap { display: flex; flex-direction: column; }
+.nav-menu a { padding: 11px 12px; margin: 0 -12px; border-radius: 10px; color: var(--text); font-size: 1.02rem; }
+.nav-menu a:hover, .nav-menu a:focus-visible { background: rgba(255, 255, 255, 0.05); text-decoration: none; }
+.nav-menu a[aria-current="page"] { color: var(--accent); }
 
 /* Hero */
 .hero { padding: 72px 0 56px; background: radial-gradient(1200px 600px at 15% -10%, rgba(242, 140, 60, 0.16), transparent 60%); }
@@ -215,6 +239,8 @@ p { margin: 0 0 1em; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .reveal, .reveal-media { opacity: 1; transform: none; filter: none; transition: none; }
+  .nav-menu { animation: none; }
+  .nav-toggle span { transition: none; }
 }
 
 .code { background: #0b0b0e; border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; overflow-x: auto;
@@ -235,6 +261,8 @@ p { margin: 0 0 1em; }
                     background: rgba(15, 15, 18, 0.55); }
 .strip-items b { color: #fff; font-weight: 600; }
 .strip-items .key { border-color: rgba(242, 140, 60, 0.6); background: rgba(242, 140, 60, 0.14); color: #fff; }
+/* The smallest phones: the long VFX Reference Platform pill may wrap rather than widen the page. */
+@media (max-width: 360px) { .strip-items .key { white-space: normal; } }
 .strip-more { flex: none; margin-left: auto; color: var(--accent-2); font-size: 0.9rem; font-weight: 600; }
 
 .vfx { background: radial-gradient(900px 420px at 85% 0%, rgba(242, 140, 60, 0.10), transparent 65%), var(--bg-alt);
@@ -511,6 +539,7 @@ kbd { display: inline-block; min-width: 1.5em; padding: 0.05em 0.45em; border: 1
   .guide-article table { font-size: 0.84rem; }
   .guide-article th, .guide-article td { padding: 8px 10px; }
   .guide-article td code { word-break: break-word; }
+  .guide-article p a { overflow-wrap: anywhere; }
   .shot { margin: 1.2em -16px; }
   .shot img { border-radius: 0; border-left: 0; border-right: 0; }
   .pager { grid-template-columns: 1fr; }
