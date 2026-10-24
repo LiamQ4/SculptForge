@@ -325,7 +325,8 @@ TEST(stl_round_trip_and_ascii) {
     CHECK(r.vertexCount() == m.vertexCount() && r.triangleCount() == m.triangleCount());
     bool same = true;
     for (size_t t = 0; t < m.triangleCount() && t < r.triangleCount(); ++t)
-        for (int c = 0; c < 3; ++c) same = same && r.positions[r.triangles[t][c]] == m.positions[m.triangles[t][c]];
+        for (int c = 0; c < 3; ++c)
+            same = same && glm::length(r.positions[r.triangles[t][c]] - m.positions[m.triangles[t][c]]) < 1e-6f;
     CHECK(same);
 
     // Commands: export_stl and open.
@@ -347,6 +348,68 @@ TEST(stl_round_trip_and_ascii) {
     CHECK(tet.vertexCount() == 5 && tet.triangleCount() == 4); // 0 0 1 and 0 0 1.5 differ
     const char notStl[] = "hello";
     CHECK(!parseStl(std::span(reinterpret_cast<const uint8_t*>(notStl), sizeof(notStl) - 1), tet, err));
+}
+
+TEST(stl_is_millimetres_z_up) {
+    // A 2 m tall box (1 unit = 1 m, Y up) prints 2000 mm tall along Z, with its faces still pointing out.
+    Mesh m = makeCube(2); // -1..1
+    for (auto& p : m.positions) p = glm::vec3(p.x * 0.5f, p.y + 1.0f, p.z * 0.25f);
+    const std::string path = tempPath("sf_stl_print.stl");
+    std::string err;
+    CHECK(saveStl(path, m, err));
+    const std::vector<uint8_t> bytes = readFile(path);
+    CHECK(std::string(reinterpret_cast<const char*>(bytes.data())).find("millimetres, Z up") != std::string::npos);
+    auto fileBounds = [](const std::vector<uint8_t>& b, double* volume) {
+        AABB box;
+        uint32_t count;
+        std::memcpy(&count, b.data() + 80, 4);
+        *volume = 0;
+        for (uint32_t t = 0; t < count; ++t) {
+            glm::vec3 v[3];
+            std::memcpy(v, b.data() + 84 + t * 50 + 12, 36);
+            for (const auto& p : v) box.expand(p);
+            *volume += glm::dot(v[0], glm::cross(v[1], v[2])) / 6.0;
+        }
+        return box;
+    };
+    double volume;
+    AABB box = fileBounds(bytes, &volume);
+    CHECK(std::abs(box.extent().z - 2000.0f) < 0.1f && std::abs(box.extent().x - 1000.0f) < 0.1f &&
+          std::abs(box.extent().y - 500.0f) < 0.1f);
+    CHECK(std::abs(box.min.z) < 0.1f); // the bottom stays on the bed
+    CHECK(volume > 0);                // outward winding
+
+    // Opening it gives back the sculpt-space mesh.
+    Mesh r;
+    CHECK(loadStl(path, r, err));
+    CHECK(glm::length(r.bounds().min - m.bounds().min) < 1e-5f && glm::length(r.bounds().max - m.bounds().max) < 1e-5f);
+
+    // height_mm scales to a print height; the status line gives the printed size.
+    CommandRegistry reg;
+    Document doc = makeDoc(m);
+    CommandResult res = reg.execute(doc, "export_stl", {{"path", path}, {"height_mm", 80.0}});
+    CHECK(res.ok && res.message.find("40.0 x 20.0 x 80.0 mm") != std::string::npos);
+    box = fileBounds(readFile(path), &volume);
+    CHECK(std::abs(box.extent().z - 80.0f) < 0.01f && volume > 0);
+    // z_up=false and scale=1 write sculpt space as it is.
+    CHECK(reg.execute(doc, "export_stl", {{"path", path}, {"scale", 1.0}, {"z_up", false}}).ok);
+    box = fileBounds(readFile(path), &volume);
+    CHECK(std::abs(box.extent().y - 2.0f) < 1e-4f);
+    CHECK(!reg.execute(doc, "export_stl", {{"path", path}, {"scale", -1.0}}).ok);
+
+    // Files from SculptForge 0.5 and earlier (metres, Y up) are recognised by their header and kept as stored.
+    std::vector<uint8_t> legacy(84, 0);
+    std::memcpy(legacy.data(), "SculptForge binary STL", 22);
+    const uint32_t count = uint32_t(m.triangleCount());
+    std::memcpy(legacy.data() + 80, &count, 4);
+    for (const auto& t : m.triangles) {
+        uint8_t tri[50] = {};
+        for (int c = 0; c < 3; ++c) std::memcpy(tri + 12 + 12 * c, &m.positions[t[c]], 12);
+        legacy.insert(legacy.end(), tri, tri + 50);
+    }
+    CHECK(parseStl(legacy, r, err));
+    CHECK(r.bounds().min == m.bounds().min && r.bounds().max == m.bounds().max);
+    std::filesystem::remove(path);
 }
 
 TEST(goz_large_polygroup_ids_stay_distinct) {

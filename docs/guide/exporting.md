@@ -18,7 +18,7 @@ or mark it saved, so your next <kbd>Ctrl</kbd>+<kbd>S</kbd> still saves the proj
 | FBX for Unreal (`.fbx`) | **File > Export FBX for Unreal...** | Unreal naming and scale, quads, UVs, LOD group, layers as blend shapes, the painted texture as a PNG beside it | Unreal Engine (by hand) |
 | Wavefront OBJ (`.obj`) | **File > Export OBJ...** | One `o` object per SubTool, quads, polygroups as `g` groups, polypaint as vertex colour, UVs, the painted texture through a `.mtl` (`map_Kd`) and a PNG beside it. Layers are baked into the current blend | Any 3D app, ZBrush |
 | ZBrush GoZ (`.GoZ`) | **File > ZBrush (GoZ) > Export GoZ...** | Quads, polygroups, mask, polypaint, UVs, the painted texture as a PNG beside it | ZBrush |
-| STL (`.stl`) | **File > ZBrush (GoZ) > Export STL...** | Geometry only (triangles), visible SubTools merged | 3D printing |
+| STL (`.stl`) | **File > ZBrush (GoZ) > Export STL...** | Geometry only (triangles), visible SubTools merged, in millimetres with Z up | [3D printing](#3d-printing) |
 | PLY (`.ply`) | `export_ply` command | Geometry, quads and polypaint, visible SubTools merged | Scan tools, MeshLab, Blender |
 | FBX (general) | `export_fbx` command | One model per SubTool, quads, UVs, blend shapes, optional LOD groups, the painted texture | Other FBX pipelines |
 
@@ -50,7 +50,11 @@ UV convention), checked colour by colour against SculptForge's own sampling. The
 
 - glTF, USD and OBJ are written Y-up with 1 unit = 1 metre, the same space you sculpt in.
 - FBX uses centimetres: `export_fbx` multiplies positions by 100 by default (`scale=`), so 1 unit = 1 m.
-- STL and PLY keep positions as they are (no unit conversion).
+- STL is written in millimetres with Z up, as slicers expect: a 0.3 m sculpt prints 300 mm tall, standing
+  upright. `export_stl height_mm=80` scales it to a print height instead (see [3D printing](#3d-printing)).
+  Opening an STL converts back, so a downloaded print model comes in upright and at its real size. STL files
+  from SculptForge 0.5 and earlier (metres, Y up) are recognised and open as they were saved.
+- PLY keeps positions as they are (no unit conversion).
 - For Unreal, **Height** sets the real-world size directly (see below).
 
 ## Export a model
@@ -70,6 +74,25 @@ sculptforge-cli -c 'open path=bust.sfproj; export_usd path=bust.usdz'
 sculptforge-cli -c 'open path=bust.sfproj; save_obj path=bust.obj'
 sculptforge-cli -c 'open path=bust.sfproj; export_fbx path=bust.fbx lods=3 ratio=0.5'
 sculptforge-cli -c 'open path=bust.sfproj; export_stl path=bust.stl; export_ply path=bust.ply'
+```
+
+## 3D printing
+
+**File > ZBrush (GoZ) > Export STL...** writes every visible SubTool as one binary STL, ready for a slicer
+(PrusaSlicer, Cura, Bambu Studio, OrcaSlicer ...). The status line gives the printed size, for example
+"Exported lion.stl (47214 triangles, 320.8 x 206.6 x 436.4 mm)": width, depth and height as the slicer shows them.
+
+- **Size:** 1 unit in SculptForge is 1 m, so 1 unit becomes 1000 mm. To print at a given height, use
+  `export_stl path=lion.stl height_mm=80`, or scale the model in the slicer.
+- **One solid:** overlapping SubTools go into the file as they are, which some slicers and print services
+  reject. **Merge visible** them ([SubTools](subtools.md#merge-subtools)) and
+  [Remesh](geometry.md#voxel-remesh) to turn them into one closed surface first.
+- **Detail:** printers resolve about 0.05-0.1 mm, so millions of triangles rarely help.
+  [Decimate](geometry.md#decimate) makes the file smaller without visible loss.
+
+```sh
+sculptforge-cli -c 'open path=bust.sfproj; export_stl path=bust.stl height_mm=120'
+sculptforge-cli -c 'open path=bust.sfproj; export_stl path=bust.stl scale=1 z_up=false'   # sculpt space as it is
 ```
 
 ## LOD chains for games
@@ -198,7 +221,8 @@ any others.
 > files, but has not yet been tested against a live ZBrush. If a send does not arrive, export a `.GoZ` file
 > and import it in ZBrush by hand, and please report it (**Help > Report a problem**).
 
-From scripts: `goz_export path=`, `goz_import path=`, `goz_send`, `goz_receive` and `export_stl path=`.
+From scripts: `goz_export path=`, `goz_import path=`, `goz_send`, `goz_receive` and `export_stl path=` (see
+[3D printing](#3d-printing) for its options).
 
 ## See also
 

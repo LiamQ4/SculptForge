@@ -113,7 +113,7 @@ the ones you will use most:
 | Polypaint | `paint_from_cavity` | `color`, `strength`, `smoothing` |
 | AI | `image_to_3d` | `path` (required), `service`, `model`, `remesh`, `resolution` |
 | AI | `text_to_3d` | `prompt` (required), `service`, `model` |
-| Export | `export_glb`, `export_usd`, `export_stl`, `export_ply` | `path` (required) |
+| Export | `export_glb`, `export_usd`, `export_stl`, `export_ply` | `path` (required); `export_stl` also `height_mm`, `scale`, `z_up` |
 | Export | `export_fbx` | `path` (required), `lods`, `ratio`, `scale` |
 | Export | `export_lods` | `path` (required), `levels`, `ratio` |
 | Unreal | `unreal_send` | `destination`, `height_cm`, `lods`, `network` |

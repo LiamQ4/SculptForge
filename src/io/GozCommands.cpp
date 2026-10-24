@@ -7,6 +7,7 @@
 #include "io/StlIO.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <filesystem>
 
 namespace sf {
@@ -183,15 +184,32 @@ void registerGozCommands(CommandRegistry& reg) {
              }});
 
     reg.add({"export_stl",
-             "Export the visible SubTools as one binary STL mesh (for 3D printing).",
-             {{"path", T::String, "Output .stl path (UTF-8).", true}},
+             "Export the visible SubTools as one binary STL mesh for 3D printing, in millimetres with Z up (what "
+             "slicers expect): 1 unit = 1 m in SculptForge becomes 1000 mm.",
+             {{"path", T::String, "Output .stl path (UTF-8).", true},
+              {"height_mm", T::Number, "Print height in millimetres: scales the model to this height (overrides scale).", false},
+              {"scale", T::Number, "File units per SculptForge unit. Default 1000 (metres to millimetres).", false},
+              {"z_up", T::Bool, "Turn Y up into Z up, so the model stands upright on the print bed. Default true.", false}},
              [](Document& doc, const Args& a) -> CommandResult {
                  const std::string path = argString(a, "path");
                  std::string err;
                  Mesh merged; // no copy for a single SubTool
                  const Mesh& mesh = doc.subtoolCount() == 1 ? doc.mesh : (merged = mergedVisibleMesh(doc));
-                 if (!saveStl(path, mesh, err)) return {false, err};
-                 return {true, "Exported " + path + " (" + std::to_string(mesh.triangleCount()) + " triangles)"};
+                 StlExportOptions o;
+                 o.heightMm = float(argNumber(a, "height_mm", 0.0));
+                 o.scale = float(argNumber(a, "scale", 1000.0));
+                 o.zUp = argBool(a, "z_up", true);
+                 if (!saveStl(path, mesh, err, o)) return {false, err};
+                 // In millimetres, the printed size as a slicer shows it: width x depth x height.
+                 std::string size;
+                 if (o.zUp && (o.heightMm > 0.0f || o.scale == 1000.0f)) {
+                     const glm::vec3 e = mesh.bounds().extent();
+                     const float s = o.heightMm > 0.0f ? o.heightMm / e.y : o.scale;
+                     char text[96];
+                     std::snprintf(text, sizeof(text), ", %.1f x %.1f x %.1f mm", e.x * s, e.z * s, e.y * s);
+                     size = text;
+                 }
+                 return {true, "Exported " + path + " (" + std::to_string(mesh.triangleCount()) + " triangles" + size + ")"};
              }});
 }
 

@@ -6,6 +6,13 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- STL export is now in millimetres with Z up, as slicers expect: models used to arrive 1000 times too small
+  (0.44 mm instead of 44 cm) and lying on their back. `export_stl` takes `height_mm=` to scale to a print height,
+  plus `scale=` and `z_up=`, and the status line gives the printed size. Opening an STL converts back, so
+  downloaded print models come in upright and at their real size; STL files from 0.5 and earlier still open as
+  saved.
+
 ## [0.5.0] - 2026-10-23
 
 ### Subdivision levels (multiresolution)
