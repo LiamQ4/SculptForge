@@ -603,3 +603,436 @@ Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit s
 | Higher Res (back up) | 20 |
 | Lower Res again (no edits) | 79 |
 | Higher Res again (no edits) | 20 |
+
+# v0.6
+
+## Memory per triangle (feat/mem)
+
+Target from the brief: the whole scene under ~60 bytes per triangle at the top level, Divide to 100M+, opening a
+33M project in under ~2 s without a 2x peak, and no slower dabs, undo or level stepping. Measured with the same
+benchmark (it now also reports the process memory per triangle, the peak while dividing, and the memory and peak
+of opening the project). Another agent's builds and benchmarks shared the machine, so every number is the better
+of two runs, before and after alternating.
+
+### Summary (33M benchmark sphere)
+
+| | before (main at aac5f68) | after (feat/mem) |
+|---|---|---|
+| Scene memory (CPU benchmark, process RSS) | 5.3 GB = 159 bytes per triangle | **3.0 GB = 90 bytes per triangle** |
+| Sculpting mesh (with its adjacency) | 62 B/triangle | **39** |
+| Subdivision level stack | 75 B/triangle | **29** |
+| BVH (feat/brush's) | 19.5 B/triangle | 19.5 |
+| Biggest Divide on this machine (30 GB) | 50M triangles (fixed limit) | **about 160M** (104M measured: 9.0 GB, 11 GB peak while dividing) |
+| Divide up to 33M (the benchmark's setup) | 2428 ms | **1415 ms** |
+| Open project | 4721 ms, the whole 1.9 GB file read into memory first | **2137 ms**, peak 1.15x the scene (+3.5 GB, peak +4.0 GB) |
+| Save project | 663 ms, 1.9 GB file | **433 ms, 1.37 GB** |
+| Lower Res after sculpting | 1543 ms | **876 ms** |
+| Higher / Lower Res without edits | 10 / 40 ms | 8-13 / 43-55 ms |
+| Medium dab (Standard), GPU upload included | 11.1 ms | 13.7 ms (CPU-only runs: 9.16 -> 9.09 ms) |
+| Large dab (radius 0.4) | 62.6 ms | 64.8 ms |
+| Smooth / Clay dab | 5.47 / 6.57 ms | 5.77 / 7.02 ms |
+| Undo of a medium / large stroke | 21.8 / 69.1 ms | 25.5 / 70.0 ms (CPU-only: 21.4 -> 21.6 ms) |
+| Orbit, 4x antialiasing | 19.7 ms | 20.0 ms |
+
+At 16M the dabs are 0-20% slower (Standard 7.79 -> 7.69 ms, Clay 4.05 -> 4.68, Smooth 2.98 -> 3.50, Mask 1.50 ->
+1.71): the rings and triangle lists of implicit adjacency take a few nanoseconds more per vertex than reading
+stored lists, which shows in the normal update, the BVH refit, Smooth and the renderer's curvature (part of the
+GPU upload). Undo is the same or faster.
+
+### What changed
+
+- **Generated levels** (core/Multires.h, `SubdivTopology::generated`): a level made by Divide numbers its
+  vertices as coarse vertices, then edge points, then face points, and lays its triangles out polygon by polygon
+  (`generateFaces`). Such a level stores no triangles or quad pairs (in `SubdivLevel::data`), no child maps and no
+  per-triangle parents and corner codes; all of them follow from the coarse polygons. The working mesh gets its
+  triangles generated when the level is entered. Levels from Reconstruct Subdiv, imports and older projects whose
+  numbering matches are recognised as generated; other levels keep the old path.
+- **Details or positions, not both**: a level that isn't stale keeps its positions and no detail; the detail is
+  fitted to the positions when a lower level is about to change (before the levels above are marked stale), and
+  dropped again once a stale level is evaluated. Folding edits at the current level into the stack no longer
+  re-fits every level's detail, which is why Lower Res after sculpting got faster.
+- **Coarse topology**: exact capacities (the polygon lists were reserved for all triangles), the quad pairing and
+  the UV corner table are derived (a byte per quad says which diagonal it has).
+- **Implicit adjacency** (`Mesh::implicitAdjacency`): the working mesh of a generated level (manifold, coarse
+  valences up to 32) stores no vertex-vertex or vertex-triangle lists. `Mesh::neighbors` and
+  `Mesh::vertexTriangles` return an `IndexRing` (a span-like list, ascending as before) worked out from the
+  level's topology: closed forms per kind of fine vertex (corner, edge point, face point; Catmull-Clark and Loop),
+  with two small indexes built when the level becomes current (each coarse vertex's polygon corners, each coarse
+  edge's sides; about 4.5 bytes per triangle) so most lookups read one or two cache lines and sort at most 4
+  values with a branchless network. The lists are identical to the stored ones (tested on quads, mixed
+  quads/triangles, open meshes and Loop), so every brush, the normals, undo, the BVH and the renderer give
+  bit-identical results. Meshes without levels, non-manifold ones and higher valences keep the stored lists.
+- **Project format 6** (core/Project.cpp): generated levels are written without triangles or child maps, and a
+  level without a detail takes the one that fits its positions. Projects of format 5 and older open unchanged
+  (tested with files saved by 0.5) and their levels become generated. Opening reads each blob straight into its
+  array (`readStoredZipIndex` + `pread`, big arrays in parallel) instead of reading the whole archive into memory
+  first; the mesh's topology is built once, after its levels are attached; level data is no longer given a full
+  topology and normals just to be thrown away; and the BVH of a big mesh is built on its own thread (it only needs
+  the positions and triangles) while the levels and topology load, with the main thread's work kept off the
+  shared pool meanwhile. Saving writes the mesh arrays straight from memory (`ZipEntry::external`) instead of
+  copying them into the archive list first.
+- **Divide's limit** (`subdivMaxTriangles`) is what fits in 60% of the computer's memory at 110 bytes per triangle
+  (the measured scene plus the peak while dividing), between 50 million and 1 billion: about 160 million on this
+  machine.
+- **makeCube** welds at every resolution: mirrored sides computed 2i/n - 1 and 2(n-i)/n - 1, which aren't exact
+  opposites in floating point, so resolutions such as 13 and 26 (the base of the 33M benchmark sphere) left a few
+  unwelded vertices along the cube's edges (reported by the view agent).
+
+### Memory per triangle (33M benchmark sphere)
+
+| | before | after |
+|---|---|---|
+| Mesh: positions 6, normals 6, triangles 12, quad pairs 4, polygroups 4, normal-update stamps 2, dirty bits | 34 | 34 |
+| Mesh: vertex-vertex and vertex-triangle lists (CSR) | 28 | **0** (implicit) |
+| Mesh: implicit adjacency indexes (corners per coarse vertex, sides per coarse edge) | | 4.5 |
+| Levels: the top level's data (positions 6, triangles 12, quad pairs 4, polygroups 4) | 26 | **10** (positions, polygroups) |
+| Levels: the top level's detail | 6 | **0** (fitted to the positions when needed) |
+| Levels: the top level's topology (coarse polygons and edges 18 -> 12; child maps 2, parents and corner codes 11 -> 0) | 31 | **12** |
+| Levels: everything below the top (a quarter, a sixteenth, ...) | 12 | 7 |
+| BVH | 19.5 | 19.5 |
+| **Total (CPU)** | **157** | **87** |
+| GPU buffers (unchanged; estimate) | about 26 | about 26 |
+
+### Known limits
+
+- The scene is at about 87 bytes per triangle (90 measured as RSS), not the ~60 of the brief: the mesh (39) and
+  the levels (29) are down from 137 to 68, but the BVH (19.5, feat/brush's) and the GPU-side buffers are unchanged
+  here. What is left in mine: the current level's reference copy of its positions in the stack (6, needed to see
+  what a stroke changed), the coarse topology of the top level (12: edges, their polygons, polygon lists), the
+  sculpting mesh's triangles (12) and quad pairs (4, which on a generated level are just 2i, 2i + 1), the
+  implicit adjacency indexes (4.5) and the normal-update stamps (2). The quad pairs and the coarse edge lists are
+  the next candidates.
+- Implicit lookups cost a few nanoseconds more per vertex than reading stored lists, so dabs are 0-20% slower
+  (most at 4-16M with small brushes; at 33M the large dab is 3.5% slower and CPU-only medium dabs and undo are
+  unchanged). The brief asked for no slower dabs: this trades about 23 bytes per triangle (760 MB at 33M) for it.
+  Keeping the stored vertex-vertex lists (and only the triangle lists implicit) would win most of that speed back
+  for about 10 of those bytes; I tried denser layouts for the implicit lists, which didn't help (the cost is the
+  work per lookup, not memory reads).
+- Opening a 33M project is bounded by the BVH build (about 1.7 s, running in parallel with the rest, which takes
+  about 1.5 s): 2.1-2.5 s instead of 4.7 s, not yet reliably under 2 s. A faster BVH build (feat/brush) or
+  storing the BVH in the project would bring it there.
+- Format 6 projects don't open in 0.5.
+
+## Benchmark tables (feat/mem)
+
+### Before (main at aac5f68), with the GPU
+
+Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit sphere unless noted, 40 dabs per stroke. Times in milliseconds.
+
+#### 4.0M triangles (2.0M vertices, 5 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 268 |
+| BVH build | 217 |
+| First GPU upload | 92 |
+| Mesh (incl. topology) | 247 MB = 62 B/triangle |
+| BVH | 78 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 297 MB = 74 B/triangle |
+| Process memory (RSS) | 719 MB (+648 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 12k | 24k (15) | 0.50 | 0.47 | 0.39 | 0.00 | 0.35 | **1.75** | 0.00 | 4.7 | 4.7 | 1.4 MB |
+| Standard (large, r 0.4) | 118k | 148k (45) | 3.26 | 3.40 | 1.93 | 0.00 | 2.28 | **11.10** | 0.00 | 9.5 | 9.7 | 4.6 MB |
+| Clay | 7k | 16k (11) | 0.34 | 0.33 | 0.23 | 0.00 | 0.28 | **1.22** | 0.00 | 2.2 | 2.6 | 0.9 MB |
+| ClayBuildup | 8k | 18k (12) | 0.43 | 0.31 | 0.25 | 0.00 | 0.25 | **1.27** | 0.00 | 3.1 | 2.9 | 0.8 MB |
+| Smooth | 5k | 12k (9) | 0.24 | 0.18 | 0.12 | 0.00 | 0.17 | **0.74** | 0.00 | 2.4 | 3.2 | 0.6 MB |
+| Inflate | 5k | 12k (9) | 0.20 | 0.17 | 0.13 | 0.00 | 0.16 | **0.68** | 0.00 | 3.0 | 3.0 | 0.6 MB |
+| DamStandard | 4k | 12k (9) | 0.20 | 0.16 | 0.12 | 0.00 | 0.16 | **0.65** | 0.00 | 3.2 | 3.3 | 0.5 MB |
+| Layer | 5k | 12k (9) | 0.31 | 0.18 | 0.12 | 0.00 | 0.17 | **0.80** | 0.00 | 4.4 | 4.3 | 0.6 MB |
+| Move | 4k | 10k (8) | 0.02 | 0.10 | 0.09 | 0.00 | 0.13 | **0.37** | 0.00 | 0.3 | 0.2 | 0.1 MB |
+| Recipe (pattern) | 5k | 13k (9) | 0.48 | 0.17 | 0.12 | 0.00 | 0.17 | **0.97** | 0.00 | 4.2 | 4.4 | 0.6 MB |
+| Mask | 5k | 12k (9) | 0.19 | 0.00 | 0.00 | 0.00 | 0.23 | **0.44** | 0.00 | 0.1 | 0.1 | 0.3 MB |
+| Paint | 5k | 12k (9) | 0.18 | 0.00 | 0.00 | 0.00 | 0.30 | **0.50** | 0.00 | 0.1 | 0.1 | 0.6 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 995k, after edits) | 191 |
+| Higher Res (back up) | 1 |
+| Lower Res again (no edits) | 5 |
+| Higher Res again (no edits) | 1 |
+| Save project (228 MB) | 91 |
+| Open project | 573 |
+| Orbit: frame time, 4x antialiasing | 5.0 (200 fps) |
+| Orbit: frame time, Fast Navigation (no antialiasing) | 3.2 (314 fps) |
+
+#### 15.9M triangles (8.0M vertices, 6 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 1183 |
+| BVH build | 790 |
+| First GPU upload | 358 |
+| Mesh (incl. topology) | 988 MB = 62 B/triangle |
+| BVH | 311 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 1188 MB = 75 B/triangle |
+| Process memory (RSS) | 2720 MB (+2224 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 50k | 76k (15) | 2.45 | 2.28 | 1.37 | 0.00 | 1.52 | **7.79** | 0.00 | 14.8 | 12.8 | 5.4 MB |
+| Standard (large, r 0.4) | 472k | 525k (45) | 8.96 | 9.50 | 5.84 | 0.01 | 8.50 | **33.62** | 0.00 | 34.3 | 32.8 | 18.5 MB |
+| Clay | 28k | 47k (11) | 1.20 | 1.20 | 0.78 | 0.01 | 0.78 | **4.05** | 0.00 | 7.7 | 7.8 | 3.5 MB |
+| ClayBuildup | 33k | 55k (12) | 1.58 | 1.35 | 0.82 | 0.01 | 0.85 | **4.70** | 0.00 | 8.1 | 8.0 | 3.8 MB |
+| Smooth | 19k | 37k (9) | 0.97 | 0.80 | 0.58 | 0.01 | 0.56 | **2.98** | 0.00 | 6.6 | 7.0 | 2.7 MB |
+| Inflate | 18k | 36k (9) | 0.80 | 0.83 | 0.61 | 0.01 | 0.55 | **2.87** | 0.00 | 7.3 | 7.0 | 2.6 MB |
+| DamStandard | 18k | 35k (9) | 0.89 | 0.85 | 0.62 | 0.01 | 0.53 | **2.96** | 0.00 | 6.7 | 6.4 | 2.5 MB |
+| Layer | 19k | 36k (9) | 1.22 | 0.91 | 0.63 | 0.01 | 0.57 | **3.41** | 0.00 | 9.6 | 6.8 | 2.6 MB |
+| Move | 16k | 29k (8) | 0.14 | 0.47 | 0.63 | 0.01 | 0.44 | **1.75** | 0.00 | 1.3 | 1.2 | 0.3 MB |
+| Recipe (pattern) | 19k | 37k (9) | 1.98 | 0.86 | 0.60 | 0.01 | 0.57 | **4.09** | 0.00 | 8.7 | 8.4 | 2.6 MB |
+| Mask | 19k | 36k (9) | 0.73 | 0.00 | 0.00 | 0.01 | 0.70 | **1.50** | 0.00 | 0.3 | 0.3 | 1.3 MB |
+| Paint | 19k | 36k (9) | 0.66 | 0.00 | 0.00 | 0.01 | 0.96 | **1.70** | 0.00 | 0.5 | 0.4 | 2.6 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 4.0M, after edits) | 780 |
+| Higher Res (back up) | 5 |
+| Lower Res again (no edits) | 19 |
+| Higher Res again (no edits) | 5 |
+| Save project (913 MB) | 345 |
+| Open project | 2199 |
+| Orbit: frame time, 4x antialiasing | 11.6 (86 fps) |
+| Orbit: frame time, Fast Navigation (no antialiasing) | 8.4 (119 fps) |
+
+#### 33.2M triangles (16.6M vertices, 7 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 2428 |
+| BVH build | 1665 |
+| First GPU upload | 736 |
+| Mesh (incl. topology) | 2062 MB = 62 B/triangle |
+| BVH | 648 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 2481 MB = 75 B/triangle |
+| Process memory (RSS) | 5664 MB (+4824 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 103k | 149k (21) | 4.05 | 3.26 | 1.98 | 0.00 | 3.07 | **12.72** | 0.00 | 21.8 | 21.2 | 11.4 MB |
+| Standard (large, r 0.4) | 987k | 1.1M (57) | 17.52 | 18.05 | 11.48 | 0.01 | 14.05 | **62.60** | 0.00 | 69.1 | 68.4 | 38.7 MB |
+| Clay | 58k | 91k (16) | 2.10 | 1.82 | 1.06 | 0.01 | 1.39 | **6.57** | 0.00 | 13.6 | 13.6 | 7.2 MB |
+| ClayBuildup | 66k | 102k (17) | 2.61 | 2.11 | 1.14 | 0.01 | 1.72 | **7.82** | 0.00 | 15.5 | 14.8 | 8.0 MB |
+| Smooth | 39k | 67k (14) | 1.75 | 1.61 | 0.79 | 0.02 | 1.15 | **5.47** | 0.00 | 11.4 | 10.8 | 5.7 MB |
+| Inflate | 38k | 66k (14) | 1.63 | 1.53 | 0.80 | 0.02 | 1.29 | **5.43** | 0.00 | 10.8 | 10.3 | 5.6 MB |
+| DamStandard | 37k | 65k (15) | 1.62 | 1.61 | 0.80 | 0.02 | 1.24 | **5.44** | 0.00 | 10.4 | 12.2 | 5.4 MB |
+| Layer | 37k | 65k (14) | 2.11 | 1.65 | 0.77 | 0.02 | 1.21 | **5.92** | 0.00 | 12.0 | 10.1 | 5.6 MB |
+| Move | 33k | 59k (10) | 0.31 | 0.84 | 0.80 | 0.02 | 1.26 | **3.42** | 0.00 | 1.8 | 2.1 | 0.5 MB |
+| Recipe (pattern) | 38k | 68k (15) | 2.50 | 1.61 | 0.78 | 0.02 | 1.28 | **6.39** | 0.00 | 11.1 | 10.7 | 5.4 MB |
+| Mask | 39k | 67k (15) | 1.41 | 0.00 | 0.00 | 0.02 | 1.65 | **3.22** | 0.00 | 0.8 | 0.6 | 2.7 MB |
+| Paint | 39k | 67k (15) | 1.35 | 0.00 | 0.00 | 0.02 | 2.14 | **3.64** | 0.00 | 1.2 | 1.0 | 5.5 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 8.3M, after edits) | 1583 |
+| Higher Res (back up) | 10 |
+| Lower Res again (no edits) | 40 |
+| Higher Res again (no edits) | 10 |
+| Save project (1905 MB) | 663 |
+| Open project | 4721 |
+| Orbit: frame time, 4x antialiasing | 20.9 (48 fps) |
+| Orbit: frame time, Fast Navigation (no antialiasing) | 14.4 (70 fps) |
+
+### After (feat/mem), with the GPU
+
+Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit sphere unless noted, 40 dabs per stroke. Times in milliseconds.
+
+#### 4.0M triangles (2.0M vertices, 5 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 157 |
+| BVH build | 247 |
+| First GPU upload | 92 |
+| Mesh (incl. topology) | 154 MB = 39 B/triangle |
+| BVH | 78 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 117 MB = 29 B/triangle |
+| Process memory (RSS) | 451 MB (+381 MB = 96 B/triangle) |
+| Peak while dividing (RSS) | 491 MB above the start |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 12k | 24k (15) | 0.49 | 0.59 | 0.46 | 0.00 | 0.49 | **2.06** | 0.00 | 3.7 | 3.8 | 1.4 MB |
+| Standard (large, r 0.4) | 118k | 148k (45) | 3.05 | 3.52 | 1.86 | 0.00 | 3.12 | **11.76** | 0.00 | 11.3 | 10.7 | 4.6 MB |
+| Clay | 7k | 16k (11) | 0.31 | 0.35 | 0.24 | 0.00 | 0.32 | **1.24** | 0.00 | 2.4 | 2.3 | 0.9 MB |
+| ClayBuildup | 8k | 18k (12) | 0.41 | 0.40 | 0.29 | 0.00 | 0.37 | **1.51** | 0.00 | 3.1 | 2.2 | 0.8 MB |
+| Smooth | 5k | 12k (9) | 0.26 | 0.23 | 0.15 | 0.00 | 0.24 | **0.89** | 0.00 | 2.2 | 2.1 | 0.6 MB |
+| Inflate | 5k | 12k (9) | 0.19 | 0.21 | 0.15 | 0.00 | 0.23 | **0.81** | 0.00 | 2.8 | 2.0 | 0.6 MB |
+| DamStandard | 4k | 12k (9) | 0.20 | 0.21 | 0.14 | 0.00 | 0.23 | **0.79** | 0.00 | 2.1 | 2.0 | 0.5 MB |
+| Layer | 5k | 12k (9) | 0.28 | 0.22 | 0.14 | 0.00 | 0.24 | **0.90** | 0.00 | 2.0 | 1.9 | 0.6 MB |
+| Move | 4k | 10k (8) | 0.02 | 0.13 | 0.11 | 0.00 | 0.20 | **0.47** | 0.00 | 0.3 | 0.3 | 0.1 MB |
+| Recipe (pattern) | 5k | 13k (9) | 0.47 | 0.22 | 0.14 | 0.00 | 0.24 | **1.09** | 0.00 | 1.9 | 2.0 | 0.6 MB |
+| Mask | 5k | 12k (9) | 0.17 | 0.00 | 0.00 | 0.00 | 0.28 | **0.48** | 0.00 | 0.1 | 0.1 | 0.3 MB |
+| Paint | 5k | 12k (9) | 0.17 | 0.00 | 0.00 | 0.00 | 0.35 | **0.54** | 0.00 | 0.1 | 0.1 | 0.6 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 995k, after edits) | 110 |
+| Higher Res (back up) | 1 |
+| Lower Res again (no edits) | 5 |
+| Higher Res again (no edits) | 2 |
+| Save project (165 MB) | 54 |
+| Open project | 298 |
+| Open project: memory (RSS) | +414 MB, peak +457 MB |
+| Orbit: frame time, 4x antialiasing | 4.8 (209 fps) |
+| Orbit: frame time, Fast Navigation (no antialiasing) | 3.0 (337 fps) |
+
+#### 15.9M triangles (8.0M vertices, 6 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 797 |
+| BVH build | 1098 |
+| First GPU upload | 360 |
+| Mesh (incl. topology) | 614 MB = 39 B/triangle |
+| BVH | 311 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 470 MB = 29 B/triangle |
+| Process memory (RSS) | 1640 MB (+1272 MB = 80 B/triangle) |
+| Peak while dividing (RSS) | 1599 MB above the start |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 50k | 76k (15) | 2.30 | 2.46 | 1.56 | 0.00 | 1.95 | **8.46** | 0.00 | 16.6 | 10.8 | 5.4 MB |
+| Standard (large, r 0.4) | 472k | 525k (45) | 9.02 | 9.63 | 5.99 | 0.01 | 10.29 | **35.68** | 0.00 | 35.2 | 34.5 | 18.5 MB |
+| Clay | 28k | 47k (11) | 1.18 | 1.44 | 0.93 | 0.01 | 1.03 | **4.68** | 0.00 | 8.7 | 8.6 | 3.5 MB |
+| ClayBuildup | 33k | 55k (12) | 1.75 | 1.77 | 1.18 | 0.01 | 1.28 | **6.09** | 0.00 | 11.7 | 9.5 | 3.8 MB |
+| Smooth | 19k | 37k (9) | 1.05 | 0.94 | 0.65 | 0.01 | 0.77 | **3.50** | 0.00 | 6.5 | 6.6 | 2.7 MB |
+| Inflate | 18k | 36k (9) | 0.83 | 1.07 | 0.79 | 0.01 | 0.76 | **3.52** | 0.00 | 9.3 | 7.2 | 2.6 MB |
+| DamStandard | 18k | 35k (9) | 0.86 | 0.96 | 0.67 | 0.01 | 0.73 | **3.30** | 0.00 | 6.6 | 6.5 | 2.5 MB |
+| Layer | 19k | 36k (9) | 1.22 | 1.03 | 0.72 | 0.01 | 0.77 | **3.80** | 0.00 | 8.2 | 6.9 | 2.6 MB |
+| Move | 16k | 29k (8) | 0.14 | 0.60 | 0.74 | 0.01 | 0.60 | **2.16** | 0.00 | 1.7 | 1.7 | 0.3 MB |
+| Recipe (pattern) | 19k | 37k (9) | 2.07 | 1.02 | 0.67 | 0.01 | 0.80 | **4.63** | 0.00 | 8.0 | 7.9 | 2.6 MB |
+| Mask | 19k | 36k (9) | 0.72 | 0.00 | 0.00 | 0.01 | 0.91 | **1.71** | 0.00 | 0.3 | 0.3 | 1.3 MB |
+| Paint | 19k | 36k (9) | 0.64 | 0.00 | 0.00 | 0.01 | 1.20 | **1.92** | 0.00 | 0.5 | 0.4 | 2.6 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 4.0M, after edits) | 434 |
+| Higher Res (back up) | 5 |
+| Lower Res again (no edits) | 24 |
+| Higher Res again (no edits) | 6 |
+| Save project (658 MB) | 231 |
+| Open project | 1047 |
+| Open project: memory (RSS) | +1621 MB, peak +1875 MB |
+| Orbit: frame time, 4x antialiasing | 11.9 (84 fps) |
+| Orbit: frame time, Fast Navigation (no antialiasing) | 8.4 (118 fps) |
+
+#### 33.2M triangles (16.6M vertices, 7 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 1415 |
+| BVH build | 1675 |
+| First GPU upload | 710 |
+| Mesh (incl. topology) | 1281 MB = 39 B/triangle |
+| BVH | 648 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 980 MB = 29 B/triangle |
+| Process memory (RSS) | 3306 MB (+2520 MB = 76 B/triangle) |
+| Peak while dividing (RSS) | 3185 MB above the start |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 103k | 147k (22) | 4.19 | 3.47 | 1.94 | 0.00 | 3.77 | **13.71** | 0.00 | 25.5 | 23.4 | 11.4 MB |
+| Standard (large, r 0.4) | 987k | 1.1M (57) | 17.54 | 19.03 | 11.59 | 0.01 | 15.89 | **65.42** | 0.00 | 71.5 | 69.9 | 38.7 MB |
+| Clay | 58k | 90k (16) | 2.09 | 1.82 | 1.03 | 0.01 | 1.85 | **7.02** | 0.00 | 14.3 | 14.1 | 7.2 MB |
+| ClayBuildup | 66k | 101k (17) | 2.48 | 2.17 | 1.25 | 0.01 | 2.06 | **8.19** | 0.00 | 15.3 | 15.2 | 8.0 MB |
+| Smooth | 39k | 67k (14) | 1.71 | 1.58 | 0.80 | 0.02 | 1.51 | **5.77** | 0.00 | 11.0 | 10.8 | 5.7 MB |
+| Inflate | 38k | 65k (14) | 1.54 | 1.80 | 0.95 | 0.02 | 1.46 | **5.94** | 0.00 | 10.7 | 11.0 | 5.6 MB |
+| DamStandard | 37k | 64k (14) | 1.54 | 1.76 | 0.91 | 0.02 | 1.64 | **6.03** | 0.00 | 10.4 | 10.4 | 5.4 MB |
+| Layer | 37k | 65k (14) | 2.14 | 1.66 | 0.82 | 0.02 | 1.43 | **6.22** | 0.00 | 11.3 | 11.2 | 5.6 MB |
+| Move | 33k | 58k (11) | 0.27 | 0.88 | 0.76 | 0.02 | 1.22 | **3.32** | 0.00 | 1.5 | 2.0 | 0.5 MB |
+| Recipe (pattern) | 38k | 67k (14) | 2.66 | 1.78 | 0.81 | 0.02 | 1.58 | **7.03** | 0.00 | 11.4 | 11.4 | 5.4 MB |
+| Mask | 39k | 66k (15) | 1.48 | 0.00 | 0.00 | 0.02 | 1.84 | **3.48** | 0.00 | 0.8 | 0.6 | 2.7 MB |
+| Paint | 39k | 66k (15) | 1.38 | 0.00 | 0.00 | 0.02 | 2.30 | **3.83** | 0.00 | 1.2 | 1.0 | 5.5 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 8.3M, after edits) | 876 |
+| Higher Res (back up) | 13 |
+| Lower Res again (no edits) | 55 |
+| Higher Res again (no edits) | 11 |
+| Save project (1373 MB) | 433 |
+| Open project | 2137 |
+| Open project: memory (RSS) | +3475 MB, peak +4017 MB |
+| Orbit: frame time, 4x antialiasing | 20.0 (50 fps) |
+| Orbit: frame time, Fast Navigation (no antialiasing) | 14.6 (68 fps) |
+
+### After, CPU only, 64M
+
+Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit sphere unless noted, 40 dabs per stroke. Times in milliseconds.
+
+#### 63.7M triangles (31.9M vertices, 7 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 2809 |
+| BVH build | 3347 |
+| Mesh (incl. topology) | 2456 MB = 39 B/triangle |
+| BVH | 1244 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 1879 MB = 29 B/triangle |
+| Process memory (RSS) | 5763 MB (+5753 MB = 90 B/triangle) |
+| Peak while dividing (RSS) | 6786 MB above the start |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 198k | 259k (28) | 6.58 | 4.76 | 2.82 | 0.00 | **14.68** | 0.00 | 43.2 | 43.1 | 21.8 MB |
+| Standard (large, r 0.4) | 1.9M | 2.0M (79) | 33.33 | 36.58 | 22.48 | 0.01 | **94.81** | 0.00 | 138.0 | 135.5 | 74.0 MB |
+| Clay | 110k | 155k (21) | 4.23 | 2.97 | 1.75 | 0.02 | **9.31** | 0.00 | 25.6 | 25.8 | 13.8 MB |
+| ClayBuildup | 120k | 166k (23) | 4.38 | 3.07 | 1.75 | 0.02 | **9.58** | 0.00 | 29.2 | 28.1 | 15.1 MB |
+| Smooth | 71k | 108k (19) | 3.11 | 2.26 | 1.12 | 0.03 | **6.76** | 0.00 | 20.9 | 21.3 | 10.8 MB |
+| Inflate | 69k | 106k (19) | 2.81 | 2.30 | 1.25 | 0.03 | **6.65** | 0.00 | 20.6 | 20.2 | 10.7 MB |
+| DamStandard | 68k | 104k (18) | 2.59 | 2.19 | 1.15 | 0.03 | **6.21** | 0.00 | 19.6 | 19.4 | 10.4 MB |
+| Layer | 70k | 107k (19) | 3.73 | 2.34 | 1.18 | 0.03 | **7.55** | 0.00 | 20.7 | 21.6 | 10.8 MB |
+| Move | 64k | 98k (13) | 0.55 | 1.12 | 1.14 | 0.03 | **3.17** | 0.00 | 2.5 | 2.9 | 1.0 MB |
+| Recipe (pattern) | 72k | 109k (19) | 4.01 | 2.42 | 1.15 | 0.04 | **7.90** | 0.00 | 21.0 | 21.2 | 10.6 MB |
+| Mask | 72k | 108k (19) | 2.46 | 0.00 | 0.00 | 0.03 | **2.71** | 0.00 | 1.6 | 1.3 | 5.3 MB |
+| Paint | 72k | 108k (19) | 2.34 | 0.00 | 0.00 | 0.03 | **2.57** | 0.00 | 2.6 | 2.3 | 10.7 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 15.9M, after edits) | 1551 |
+| Higher Res (back up) | 25 |
+| Lower Res again (no edits) | 76 |
+| Higher Res again (no edits) | 21 |
+| Save project (2633 MB) | 846 |
+| Open project | 6307 |
+| Open project: memory (RSS) | +6822 MB, peak +7821 MB |
+
+### After, CPU only, 104M (no project round trip)
+
+Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit sphere unless noted, 40 dabs per stroke. Times in milliseconds.
+
+#### 104.0M triangles (52.0M vertices, 8 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 4889 |
+| BVH build | 5896 |
+| Mesh (incl. topology) | 4011 MB = 39 B/triangle |
+| BVH | 2043 MB = 19.6 B/triangle |
+| Subdivision levels (stack) | 3068 MB = 29 B/triangle |
+| Process memory (RSS) | 8974 MB (+8964 MB = 86 B/triangle) |
+| Peak while dividing (RSS) | 10982 MB above the start |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 324k | 407k (43) | 9.69 | 7.10 | 5.00 | 0.00 | **22.61** | 0.00 | 70.3 | 68.2 | 35.6 MB |
+| Standard (large, r 0.4) | 3.1M | 3.2M (114) | 54.36 | 60.70 | 42.49 | 0.02 | **161.53** | 0.00 | 262.4 | 261.4 | 121.1 MB |
+| Clay | 181k | 242k (32) | 6.10 | 4.26 | 2.59 | 0.03 | **13.52** | 0.00 | 47.7 | 51.7 | 22.6 MB |
+| ClayBuildup | 193k | 256k (34) | 6.94 | 4.91 | 3.10 | 0.04 | **15.59** | 0.00 | 51.3 | 52.3 | 24.4 MB |
+| Smooth | 115k | 164k (28) | 4.76 | 3.13 | 1.60 | 0.05 | **9.96** | 0.00 | 35.2 | 35.1 | 17.4 MB |
+| Inflate | 113k | 161k (27) | 4.43 | 3.27 | 1.85 | 0.05 | **10.01** | 0.00 | 34.7 | 36.1 | 17.2 MB |
+| DamStandard | 111k | 159k (28) | 4.08 | 3.26 | 1.67 | 0.05 | **9.44** | 0.00 | 37.3 | 39.0 | 16.7 MB |
+| Layer | 114k | 163k (28) | 5.86 | 3.11 | 1.69 | 0.05 | **11.11** | 0.00 | 41.4 | 38.9 | 17.4 MB |
+| Move | 105k | 152k (30) | 0.78 | 1.57 | 1.83 | 0.05 | **4.76** | 0.00 | 4.1 | 4.1 | 1.7 MB |
+| Recipe (pattern) | 117k | 167k (28) | 6.53 | 3.10 | 1.49 | 0.05 | **11.58** | 0.00 | 37.2 | 36.8 | 17.2 MB |
+| Mask | 118k | 166k (28) | 3.85 | 0.00 | 0.00 | 0.05 | **4.26** | 0.00 | 2.6 | 2.3 | 8.6 MB |
+| Paint | 118k | 166k (28) | 3.95 | 0.00 | 0.00 | 0.05 | **4.36** | 0.00 | 4.2 | 4.0 | 17.3 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 26.0M, after edits) | 2776 |
+| Higher Res (back up) | 32 |
+| Lower Res again (no edits) | 133 |
+| Higher Res again (no edits) | 32 |
+

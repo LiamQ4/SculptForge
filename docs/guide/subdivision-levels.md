@@ -35,7 +35,9 @@ can step back down at any time.
 - Divide always adds the level on top. If you are at a lower level it steps to the highest first.
 - Mask, polypaint, paint layers and UVs are interpolated onto the new level; polygroups and hidden faces carry
   over; sculpt layers are divided with the shape.
-- SculptForge refuses to go past 50 million triangles.
+- How far you can divide depends on your computer's memory: about 160 million triangles with 32 GB (each
+  triangle of a divided model takes about 90 bytes, plus some room while dividing). Divide says so when the next
+  level wouldn't fit.
 
 > **Tip:** Start from a light mesh. A cube of 108 triangles divided five times is a smooth 110,000-triangle
 > head-sized blob; a 25,000-triangle base divided four times is already 6.5 million.

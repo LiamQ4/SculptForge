@@ -5,6 +5,23 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Next version (in development)
+
+### Lighter sculpts
+
+A sculpt with subdivision levels takes half the memory it did: a 33 million triangle model with its levels needs
+about 3 GB instead of 5.3, so a laptop with 32 GB holds models of 100 million triangles and more.
+
+- **Divide goes past 100 million triangles.** The limit now follows your computer's memory instead of stopping at
+  50 million.
+- **Opening a project is twice as fast** and no longer needs twice the model's memory while it loads. Project files
+  of divided models are about 30% smaller. Projects from 0.5 open as before; save a copy if you still need to open
+  it in 0.5.
+- Sculpting gives exactly the same results as before: only the way the levels and the mesh's neighbour lists are
+  stored changed.
+
+See [Performance and big meshes](performance.md).
+
 ## Version 0.5
 
 The ZBrush workflow core: subdivision levels, quad retopology, map baking, the Gizmo 3D, and speed at tens of

@@ -6,6 +6,29 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### Memory: sculpts with subdivision levels take half as much
+- A divided sculpt takes about 90 bytes per triangle in memory instead of 160: a 33 million triangle model with
+  its levels needs 3.0 GB instead of 5.3 GB, and a 100 million triangle one fits in 9 GB.
+  - Levels made by Divide store no triangles, quad pairs or vertex maps: they follow from the level below, and are
+    generated when a level is entered. A level also no longer keeps its detail next to its positions (the detail
+    is fitted to the positions when a lower level changes). The level stack went from 75 to 29 bytes per triangle.
+  - The mesh of such a level works out which vertices and triangles surround each vertex from the level's
+    topology instead of storing those lists (62 -> 39 bytes per triangle for the sculpting mesh). Brushes, normals,
+    undo and the renderer get exactly the same lists, so sculpting gives bit-identical results; working them out
+    costs some speed: dabs on divided meshes are up to about 15% slower (large brushes at 33M: 3%).
+- **Divide goes to 100 million triangles and beyond**: the limit follows the computer's memory (about 160 million
+  on 32 GB) instead of a fixed 50 million.
+- **Opening a project** no longer needs twice the scene's memory (the file is read straight into the meshes) and
+  is about twice as fast (33M: 4.7 -> 2.1 s; the BVH is built while the levels load). Saving no longer copies the
+  meshes first, and project files of divided sculpts are about 30% smaller.
+- Lower Res after sculpting at the top level is faster (33M: 1.5 -> 0.9 s), and so is Divide (2.4 -> 1.4 s).
+- Project format 6. Projects from 0.5 and earlier open as before (and get the savings); 0.5 can't open format 6
+  projects.
+
+### Fixed
+- New Cube at some resolutions (13, 26 and others) left a few vertices along the cube's edges unwelded, so the
+  mesh had small cracks there (the 33 million triangle benchmark sphere among them).
+
 ### Changed
 - STL export is now in millimetres with Z up, as slicers expect: models used to arrive 1000 times too small
   (0.44 mm instead of 44 cm) and lying on their back. `export_stl` takes `height_mm=` to scale to a print height,

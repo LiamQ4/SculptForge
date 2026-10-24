@@ -49,9 +49,12 @@ setting is also in the <kbd>F3</kbd> command palette (type "antialiasing", "fast
   lighter.
 - **Hide what you're not working on.** Hidden SubTools aren't drawn and hidden parts of a SubTool aren't
   sculpted (**Tool > Visibility**). A hidden SubTool costs no drawing time at all.
-- **Memory.** A sculpting mesh takes about 60 bytes per triangle, its BVH about 20, and its subdivision levels
-  about 75 more, so a 33 million triangle sculpt with levels needs about 5 GB of memory, and opening or saving a
-  project briefly needs about twice that. Project files over 4 GB are saved in the ZIP64 format.
+- **Memory.** A divided model takes about 90 bytes per triangle: about 40 for the sculpting mesh, 20 for its
+  BVH and 30 for its subdivision levels. A 33 million triangle sculpt with levels needs about 3 GB of memory, a 100
+  million one about 9 GB (and a little more while dividing). Opening a project needs only a little more than the
+  model itself. A mesh without levels (an import, a remesh) takes about 60 bytes per triangle for the mesh. Project
+  files over 4 GB are saved in the ZIP64 format.
+- **How far Divide goes** depends on the memory: about 160 million triangles on a computer with 32 GB.
 - **The graphics card.** A mesh needs about 25 bytes per triangle on the graphics card. If a SubTool doesn't fit,
   SculptForge doesn't draw it and says so in the status bar instead of failing: hide other SubTools or step down
   a subdivision level.
