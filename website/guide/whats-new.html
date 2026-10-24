@@ -69,6 +69,23 @@ Sculpting gives exactly the same results as before: only the way the levels and 
 <p>See <a href="performance.html">Performance and big meshes</a>.</p>
 <h3 id="big-brushes-on-huge-meshes">Big brushes on huge meshes<a class="anchor" href="#big-brushes-on-huge-meshes" aria-label="Link to this section">#</a></h3>
 <p>Large Move, Smooth, Inflate and Standard strokes are much quicker on tens of millions of polygons: on a 33 million triangle model a brush covering a tenth of it (a million vertices per dab with symmetry) takes about 39 ms per dab instead of 63, Move at that size 12 instead of 22, a medium brush 6.5 ms instead of 11, and undoing a big stroke is about twice as fast. Sculpting also needs about 300 MB less memory at that size. See <a href="performance.html">Performance and big meshes</a>.</p>
+<h3 id="a-faster-lighter-viewport">A faster, lighter viewport<a class="anchor" href="#a-faster-lighter-viewport" aria-label="Link to this section">#</a></h3>
+<p>Turning the view around a huge sculpt is now about twice as fast, and the graphics card needs about a third of the memory it did.</p>
+<ul>
+<li>
+<strong>Only what you can see is drawn.</strong> The mesh is drawn in patches of a few thousand triangles; patches outside the view, and on closed meshes the ones facing away from you, are skipped.
+</li>
+<li>
+<strong>Fast Navigation draws a lighter version</strong> of big meshes while the view moves, about a fifth of the triangles, and the full mesh again as soon as it stops. A 100 million triangle sphere turns at about 100 frames a second on an M1 Pro laptop.
+</li>
+<li>
+<strong>A third of the graphics memory</strong>: about 15 bytes per triangle (it was over 40 on meshes with quads), so bigger sculpts fit on the graphics card. The wireframe&#x27;s edges are only kept while the wireframe is on.
+</li>
+<li>
+Opening a big model or dividing it sends it to the graphics card about 40% faster.
+</li>
+</ul>
+<p>See <a href="performance.html">Performance and big meshes</a>.</p>
 <h2 id="version-05">Version 0.5<a class="anchor" href="#version-05" aria-label="Link to this section">#</a></h2>
 <p>The ZBrush workflow core: subdivision levels, quad retopology, map baking, the Gizmo 3D, and speed at tens of millions of polygons.</p>
 <h3 id="subdivision-levels">Subdivision levels<a class="anchor" href="#subdivision-levels" aria-label="Link to this section">#</a></h3>

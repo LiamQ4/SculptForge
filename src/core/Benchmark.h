@@ -25,8 +25,13 @@ struct BenchGpu {
     // Uploads what the mesh marked dirty and waits for the GPU; returns milliseconds. First call: everything.
     std::function<double(Mesh&)> upload;
     // Average milliseconds per frame over a turn around the mesh (already uploaded), drawn with `samples`
-    // antialiasing samples as the app's view draws (1 = Fast Navigation while the view moves).
-    std::function<double(Mesh&, int samples)> orbitFrameMs;
+    // antialiasing samples as the app's view draws; `moving`: as Fast Navigation draws while the view moves
+    // (the renderer's motion proxy, if it has one; the app also drops to 1 sample).
+    std::function<double(Mesh&, int samples, bool moving)> orbitFrameMs;
+    // Milliseconds to build what moving the view needs first (the motion proxy) for the uploaded mesh (optional).
+    std::function<double(Mesh&)> motionSetupMs;
+    std::function<size_t()> gpuBytes;          // GPU memory the renderer holds for the mesh (optional)
+    std::function<size_t()> drawnTriangles;    // triangles the last orbit frame drew, after culling (optional)
     std::string description; // GPU / driver, for the report
 };
 
@@ -36,13 +41,16 @@ struct BenchOptions {
     std::string projectDir; // where the project round trip writes (default: the system temp folder)
     bool projectRoundTrip = true;
     std::string brushFilter; // only the brushes whose row name contains this (empty = all)
+    // Only what the viewport costs (--bench-view): setup, the first upload, the strokes whose uploads differ
+    // (Standard, Mask, Paint), orbiting; no other brushes, subdivision levels or project round trip.
+    bool viewOnly = false;
     std::function<void(const std::string&)> log; // progress lines (optional)
     std::function<void(const std::string&)> partial; // the report so far, after each size (optional)
 };
 
 // Command-line options shared by sculptforge-cli and the app: --bench, --bench-sizes 4,16,32 (millions of
 // triangles), --bench-dabs N, --bench-no-project (skip saving / opening, which needs twice the memory),
-// --bench-brushes TEXT (only the rows whose name contains TEXT), --bench-out FILE. parseBenchArg returns true when argv[i] was one of them
+// --bench-brushes TEXT (only the rows whose name contains TEXT), --bench-view (only the viewport's costs), --bench-out FILE. parseBenchArg returns true when argv[i] was one of them
 // (advancing i past its value).
 struct BenchCommandLine {
     bool run = false;

@@ -6,6 +6,7 @@
 #include "core/Splats.h"
 #include "core/UploadOrder.h"
 #include "render/Camera.h"
+#include "render/Clusters.h"
 #include "render/GL.h"
 
 #include <cstdint>
@@ -26,6 +27,7 @@ struct RenderSettings {
     bool showSplats = true;
     float splatOpacity = 1.0f; // global fade for using a capture as reference
     bool dimInactive = true;   // SubTools other than the active one render slightly darker (ZBrush style)
+    bool motionProxy = false;  // the view is moving (Fast Navigation): draw big meshes' lighter proxy (render/Clusters.h)
 };
 
 // A baked tangent-space normal map to preview on a mesh (core/Bake.h): RGB8 rows bottom-up, with the
@@ -45,6 +47,8 @@ struct SceneMesh {
     bool active = false; // gets mask darkening, polygroup colours and wireframe; never dimmed
     bool visible = true; // hidden meshes keep their GPU slot but aren't drawn (or uploaded)
     const NormalMapView* normalMap = nullptr; // shade with this normal map (needs the mesh's UVs)
+    bool wireframe = false; // keep the wireframe's edges on the GPU (built on first need; draw() falls back to
+                            // outlining the triangles, quad diagonals included, until they are)
 };
 
 // Part of the target the 3D view is drawn into (framebuffer pixels, origin bottom-left); the rest is
@@ -59,7 +63,8 @@ struct RenderViewport {
 glm::vec3 polygroupColor(uint32_t id);
 
 // Draws every visible SubTool, each from its own GPU buffers (a slot keyed by
-// SubTool id). Mesh drawing honours the optional Mesh attributes: colours
+// SubTool id), in clusters (core/UploadOrder.h) culled on the CPU every frame
+// (render/Clusters.h) and drawn with one multi-draw. Mesh drawing honours the optional Mesh attributes: colours
 // (polypaint), mask (darkening), polygroups (group colours) and hidden
 // triangles (not drawn). Mark changed vertices dirty for colour/mask edits and
 // set Mesh::facesDirty after changing `hidden` or `polygroups`. Only what a
@@ -94,6 +99,11 @@ public:
     // GL texture of the painted texture of SubTool `id` as last synced (0 if none), for UI previews (rows bottom-up).
     GLuint paintTexture(uint32_t id) const;
 
+    // Bytes of GPU buffers and textures the mesh slots hold.
+    size_t gpuBytes() const;
+    // Triangles the last draw() sent to the GPU (after culling), for the benchmark.
+    size_t lastDrawnTriangles() const { return lastDrawn_; }
+
     // Texture of built-in matcap `index` (sRGB RGBA8, rows bottom-up) for UI previews; 0 if none.
     GLuint matcapTexture(int index) const;
 
@@ -106,7 +116,7 @@ public:
 private:
     void drawSplats(const glm::mat4& view, const glm::mat4& proj, int fbWidth, int fbHeight, float opacity);
 
-    GLuint meshProgram_ = 0, meshTexProgram_ = 0, meshNormalProgram_ = 0, wireProgram_ = 0, bgProgram_ = 0, splatProgram_ = 0;
+    GLuint wireProgram_ = 0, bgProgram_ = 0, splatProgram_ = 0;
     // Splats: per-splat data in a texture buffer, drawn as instanced quads in back-to-front order.
     GLuint splatVao_ = 0, splatData_ = 0, splatTexture_ = 0, splatOrder_ = 0;
     GLsizei splatCount_ = 0;
@@ -122,13 +132,16 @@ private:
     int captureW_ = 0, captureH_ = 0;
     GLuint emptyVao_ = 0;
     bool thumbnailPass_ = false; // draw(): transparent background, no gradient (renderMeshThumbnail)
-    // The GPU copy of one mesh (one SubTool).
+    // The GPU copy of one mesh (one SubTool), in the cluster layout of `order`.
     struct MeshSlot {
         uint32_t id = 0;
-        GLuint vao = 0;
-        GLuint posBuffer = 0, nrmBuffer = 0, curvBuffer = 0, indexBuffer = 0;
-        GLuint colorBuffer = 0, maskBuffer = 0;
-        GLuint groupData = 0, groupTexture = 0; // polygroup id per drawn triangle (texture buffer)
+        GLuint vao = 0, lineVao = 0;
+        GLuint vertexBuffer = 0; // PackedVertex per GPU slot (render/Clusters.h)
+        GLuint indexBuffer = 0;  // 16-bit, relative to each cluster's first vertex; kClusterTriangles * 3 per cluster
+        GLuint lineBuffer = 0;   // wireframe edges, 16-bit like the triangles, each edge once
+        GLuint colorBuffer = 0, maskBuffer = 0; // RGBA8 (gamma encoded), R8
+        GLuint groupData = 0, groupTexture = 0; // polygroup id per drawn triangle (texture buffer, R16UI or R32UI)
+        GLuint primData = 0, primTexture = 0;   // per GPU block: the first drawn triangle of its cluster (R32UI)
         GLuint uvData = 0, uvTexture = 0; // per drawn triangle corner UVs (texture buffer), meshes with a texture
         GLuint paintTexture = 0;          // the painted texture (sRGB, mipmapped)
         uint64_t textureSerial = 0, textureRevision = 0;
@@ -140,30 +153,87 @@ private:
         bool hasColors = false, hasMask = false, hasGroups = false, hasUvs = false;
         bool fresh = true; // nothing uploaded yet
         bool outOfMemory = false; // the last full upload ran out of GPU memory: not drawn
-        UploadOrder order; // the vertices' order in the GPU buffers
-        GLsizei indexCount = 0;
-        GLsizei lineCount = 0; // wireframe edge indices after the triangles (meshes with quads; 0 = draw triangles)
+        UploadOrder order; // the cluster layout
+        PositionGrid grid; // the positions' quantisation
+        std::vector<ClusterBounds> bounds; // per cluster, for culling
+        AABB box;                          // all clusters
+        double volume = 0.0;               // sum of the clusters' volumes (> 0: wound outwards)
+        bool closed = false;               // closedOriented: back-facing clusters may be culled (without hidden triangles)
+        bool anyHidden = false;
+        std::vector<GLsizei> drawCount;    // per cluster: indices drawn (hidden triangles left out)
+        std::vector<uint32_t> primBase;    // per cluster: its first drawn triangle
+        std::vector<uint32_t> lineFirst, lineCount; // per cluster: its edges in lineBuffer (in indices)
+        bool linesValid = false;
+        // Motion proxy (clusterProxy): per cluster up to a quarter of its triangles, at (firstTriangle / 4) * 3.
+        GLuint proxyVao = 0, proxyBuffer = 0;
+        std::vector<uint32_t> proxyCount;    // indices; 0: none (the cluster draws in full)
+        std::vector<uint8_t> proxyStale;     // to rebuild before use
+        std::vector<ClusterBounds> proxyBounds; // the proxy's normal cone
+        bool proxyAllocated = false;
+        std::vector<uint32_t> drawnOrder; // the mesh triangle of each drawn triangle (meshes with UVs only)
+        size_t drawnTriangles = 0;
         size_t vertexCapacity = 0;
+        std::vector<uint64_t> blockHash; // per UploadOrder block: hashes of its packed positions, and the rest
+        size_t bytes[8] = {}; // GPU sizes: vertices, indices, lines, colours, mask, groups, prims, uvs + tangents
     };
     MeshSlot& slot(uint32_t id); // created on first use
     static void freeSlot(MeshSlot& s);
-    void sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap = nullptr);
+    void sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap = nullptr, bool wireframe = false);
+    void uploadVertices(MeshSlot& s, const Mesh& mesh, bool full);
+    // `computed`: the bounds are already current (only the totals are left).
+    void updateBounds(MeshSlot& s, const Mesh& mesh, bool all, bool computed = false);
+    void buildLines(MeshSlot& s, const Mesh& mesh);
+    void buildProxies(MeshSlot& s, const Mesh& mesh);
+    bool proxyUsed_ = false; // the last draw() drew motion proxies: sync keeps them current
     void syncNormalMap(MeshSlot& s, const Mesh& mesh, const NormalMapView* normalMap);
-    void uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs);
+    // `indicesDone`: the index buffer and drawCount are already written (a full upload writes them while
+    // building the layout).
+    void uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs, bool indicesDone = false);
+    void uploadIndices(MeshSlot& s, const Mesh& mesh);
     std::vector<std::pair<uint32_t, uint32_t>> dirtyRuns_; // scratch for sync: UploadOrder::dirtyRuns
     std::vector<uint8_t> staging_;                         // scratch for sync: gathered vertex data
+    std::vector<uint8_t> blockChanged_, blockMoved_;      // scratch for uploadVertices, per block
+    std::vector<std::pair<uint32_t, uint32_t>> movedRuns_; // the dirty runs whose positions moved
     void syncTexture(MeshSlot& s, Mesh& mesh);
+    // The clusters of `s` to draw this frame: in full (drawClusters_), and with `proxy` as their motion proxy
+    // where it is built (proxyClusters_).
+    void cull(const MeshSlot& s, const CullView& view, bool proxy = false);
     void drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings);
+    enum class Part { Triangles, Lines, Proxy };
+    void drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clusters, GLenum mode, Part part, GLint primBaseLocation);
+    std::vector<uint32_t> proxyClusters_;
+    std::vector<GLsizei> drawCounts_;
+    std::vector<const void*> drawOffsets_;
+    std::vector<GLint> drawBases_;
+    std::vector<uint32_t> drawClusters_;
+    bool cullBackfaces_ = false; // the last cull(): back faces can't show (so the GPU may skip them too)
+    std::vector<uint32_t> cullScratch_;
+    size_t lastDrawn_ = 0;
+    // The frame draw() is drawing: matrices, the view's rectangle (x, y, w, h) and its culling.
+    glm::mat4 frameView_{1.0f}, frameProj_{1.0f};
+    glm::vec4 frameViewport_{0.0f};
+    CullView frameCull_;
+    // Mesh shader variants by feature bits (kPaint, kPrim, kTextured, kNormalMap), compiled on first use.
+    struct MeshProgram {
+        GLuint id = 0;
+        GLint view = -1, proj = -1, gridOrigin = -1, gridStep = -1, viewport = -1, projScale = -1, baseColor = -1, paint = -1,
+              showMask = -1, groups = -1, matcap = -1, matcapCavity = -1, dim = -1, primBase = -1, hasPaint = -1,
+              normalFlipY = -1, twoSided = -1;
+    };
+    static constexpr int kPaint = 1, kPrim = 2, kTextured = 4, kNormalMap = 8;
+    MeshProgram programs_[16];
+    std::string programError_;
+    const MeshProgram* meshProgram(int features);
+    bool vertexIdHasBase_ = true; // gl_VertexID includes the base vertex (checked at init; else per-cluster draws)
+    bool checkVertexIdBase();
     std::vector<MeshSlot> slots_;
     struct DrawItem {
         uint32_t id;
         bool active;
     };
     std::vector<DrawItem> drawList_;      // visible meshes, in scene order
-    std::vector<glm::uvec3> visibleTris_; // scratch for uploadFaces
-    std::vector<uint32_t> visibleGroups_;
-    std::vector<glm::vec2> visibleUvs_; // scratch for uploadFaces
-    std::vector<uint32_t> wireLines_; // scratch for uploadFaces: wireframe edges of meshes with quads
+    std::vector<uint32_t> visibleGroups_; // scratch for uploadFaces
+    std::vector<glm::vec2> visibleUvs_;   // scratch for uploadFaces
     std::vector<GLuint> matcapTextures_; // one per built-in matcap (core/Matcap.h)
 };
 

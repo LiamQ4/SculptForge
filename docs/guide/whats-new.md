@@ -31,6 +31,22 @@ big stroke is about twice as fast.
 Sculpting also needs about 300 MB less memory at that size. See
 [Performance and big meshes](performance.md).
 
+### A faster, lighter viewport
+
+Turning the view around a huge sculpt is now about twice as fast, and the graphics card needs about a third of
+the memory it did.
+
+- **Only what you can see is drawn.** The mesh is drawn in patches of a few thousand triangles; patches outside
+  the view, and on closed meshes the ones facing away from you, are skipped.
+- **Fast Navigation draws a lighter version** of big meshes while the view moves, about a fifth of the triangles,
+  and the full mesh again as soon as it stops. A 100 million triangle sphere turns at about 100 frames a second
+  on an M1 Pro laptop.
+- **A third of the graphics memory**: about 15 bytes per triangle (it was over 40 on meshes with quads), so
+  bigger sculpts fit on the graphics card. The wireframe's edges are only kept while the wireframe is on.
+- Opening a big model or dividing it sends it to the graphics card about 40% faster.
+
+See [Performance and big meshes](performance.md).
+
 ## Version 0.5
 
 The ZBrush workflow core: subdivision levels, quad retopology, map baking, the Gizmo 3D, and speed at tens of

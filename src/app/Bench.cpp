@@ -73,13 +73,15 @@ int runAppBenchmark(BenchCommandLine cl) {
             gl::Finish();
             return msSince(t);
         };
-        gpu.orbitFrameMs = [&](Mesh& m, int samples) {
+        size_t orbitDrawn = 0; // triangles the last orbit frame drew
+        gpu.orbitFrameMs = [&](Mesh& m, int samples, bool moving) {
             int w = 0, h = 0;
             SDL_GetWindowSizeInPixels(window, &w, &h);
             Camera camera;
             camera.aspect = float(w) / float(std::max(h, 1));
             camera.frame(m.bounds());
             RenderSettings settings;
+            settings.motionProxy = moving;
             renderer.syncScene(scene(m));
             const int warmup = 5, frames = 120;
             Clock::time_point t;
@@ -89,14 +91,18 @@ int runAppBenchmark(BenchCommandLine cl) {
                     t = Clock::now();
                 }
                 SDL_PumpEvents();
+                if (moving) renderer.syncScene(scene(m)); // as the app does every frame (builds the proxy once)
                 camera.yaw = float(i) * 6.2831853f / float(frames);
                 renderer.drawView(camera, w, h, settings, {}, samples);
                 SDL_GL_SwapWindow(window);
             }
             gl::Finish();
             const double ms = msSince(t) / frames;
+            orbitDrawn = renderer.lastDrawnTriangles();
+            settings.motionProxy = false; // the view settles (else the next upload would build a proxy too)
             // SF_BENCH_SHOT=prefix: one frame as the window shows it, read back, to check the view draws right.
             if (const char* shot = std::getenv("SF_BENCH_SHOT")) {
+                settings.motionProxy = moving;
                 renderer.drawView(camera, w, h, settings, {}, samples);
                 Image img;
                 img.width = w;
@@ -110,10 +116,32 @@ int runAppBenchmark(BenchCommandLine cl) {
                 img.rgba = std::move(flipped);
                 for (size_t i = 3; i < img.rgba.size(); i += 4) img.rgba[i] = 255;
                 std::string err;
-                img.savePng(std::string(shot) + "-" + std::to_string(m.triangleCount()) + "-" + std::to_string(samples) + "x.png", err);
+                img.savePng(std::string(shot) + "-" + std::to_string(m.triangleCount()) + "-" + std::to_string(samples) + (moving ? "x-moving" : "x") + ".png", err);
+                settings.motionProxy = false;
             }
+            renderer.drawView(camera, w, h, settings, {}, samples);
+            gl::Finish();
             return ms;
         };
+        gpu.motionSetupMs = [&](Mesh& m) {
+            int w = 0, h = 0;
+            SDL_GetWindowSizeInPixels(window, &w, &h);
+            Camera camera;
+            camera.aspect = float(w) / float(std::max(h, 1));
+            camera.frame(m.bounds());
+            RenderSettings settings;
+            settings.motionProxy = true;
+            m.topologyDirty = true; // everything new, as after opening or dividing
+            renderer.syncScene(scene(m));
+            renderer.drawView(camera, w, h, settings, {}, 1); // the first moving frame asks for the proxy
+            gl::Finish();
+            const auto t = Clock::now();
+            renderer.syncScene(scene(m));
+            gl::Finish();
+            return msSince(t);
+        };
+        gpu.gpuBytes = [&] { return renderer.gpuBytes(); };
+        gpu.drawnTriangles = [&] { return orbitDrawn; };
         code = runBenchCommandLine(cl, "## With the GPU (sculptforge --bench)\n\n", &gpu);
         renderer.shutdown();
     }

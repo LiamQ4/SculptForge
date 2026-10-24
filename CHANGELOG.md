@@ -46,6 +46,26 @@ All notable changes to SculptForge are listed here. The format follows
   (20 bytes per vertex, about 330 MB at 33M triangles) are bits now.
 - `--bench-brushes TEXT` runs only some benchmark rows; the benchmark measures Smooth and Move at a large radius.
 
+### Faster viewport
+- Meshes are drawn in clusters of up to 4096 triangles (64-triangle runs sorted along a Morton curve). Each
+  frame skips the clusters outside the view and, on closed meshes seen from outside, the clusters facing away
+  (the GPU also skips the back faces left in the others); the rest go in one multi-draw with 16-bit indices.
+  Orbiting a 33M triangle sphere with 4x antialiasing: 20.6 -> 8.7 ms; 104M: 19.6 ms.
+- Vertices take 12 bytes on the GPU (28 before): positions on a 21-bit grid over the mesh, octahedral normals,
+  square-root companded curvature. Polypaint is 8-bit (gamma encoded), the mask 8-bit, polygroups 16-bit. With
+  the index and wireframe savings a mesh needs about 15 bytes per triangle on the GPU (46 before on meshes with
+  quads, whose wireframe edges were always kept).
+- Fast Navigation also draws big meshes as a motion proxy while the view moves: per cluster, the vertices
+  snapped to a grid a few edges wide (seam vertices kept, so the proxy of a closed mesh is closed too), about a
+  fifth of the triangles. 104M triangles orbit at about 100 fps. Built only for clusters that changed, when the
+  view starts moving.
+- The wireframe's edges are built when the wireframe is turned on, each edge once (they were always kept,
+  every edge twice).
+- First upload of a 33M mesh 701 -> 422 ms (indices and vertices written straight into mapped buffers while
+  the layout is built); paint and mask dabs no longer re-send positions and normals.
+- `sculptforge --bench` reports GPU memory, triangles drawn after culling, the motion proxy, and orbiting with and
+  without antialiasing; `--bench-view` runs only the viewport's part.
+
 ### Changed
 - STL export is now in millimetres with Z up, as slicers expect: models used to arrive 1000 times too small
   (0.44 mm instead of 44 cm) and lying on their back. `export_stl` takes `height_mm=` to scale to a print height,

@@ -282,6 +282,7 @@ int App::renderHeadless() {
     camera_.aspect = float(options_.width) / float(std::max(options_.height, 1));
     camera_.pitch = glm::radians(options_.pitchDegrees);
     camera_.distance /= options_.zoom;
+    renderSettings_.wireframe = renderSettings_.wireframe || options_.wireframe; // syncScene builds its edges
     RenderSettings settings = renderSettings_;
     settings.wireframe = options_.wireframe;
     settings.showPolygroups = settings.showPolygroups || options_.polygroups;
@@ -581,7 +582,10 @@ int App::run() {
         const auto syncStart = std::chrono::steady_clock::now();
         syncScene();
         notePerformanceFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - syncStart).count());
-        perf_.samplesUsed = renderer_.drawView(camera_, fbW, fbH, renderSettings_, canvasViewport(fbW, fbH), viewSamples());
+        const int samples = viewSamples();
+        renderSettings_.motionProxy = perf_.proxyNow; // big meshes draw their lighter proxy while the view moves
+        perf_.samplesUsed = renderer_.drawView(camera_, fbW, fbH, renderSettings_, canvasViewport(fbW, fbH), samples);
+        renderSettings_.motionProxy = false; // (other renders, e.g. project thumbnails, draw in full)
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(window_);
         tickProject(dt);
@@ -1142,7 +1146,7 @@ void App::syncScene() {
         SubTool& s = doc_.subtools[size_t(i)];
         const bool active = i == doc_.activeSubtool;
         Mesh* mesh = active ? &shown : &s.mesh;
-        scene.push_back({s.id, mesh, active, s.visible, bakeNormalMap(s.id, *mesh)});
+        scene.push_back({s.id, mesh, active, s.visible, bakeNormalMap(s.id, *mesh), renderSettings_.wireframe});
     }
     renderer_.syncScene(scene);
     renderer_.syncSplats(doc_.splats, doc_.splatsVersion);

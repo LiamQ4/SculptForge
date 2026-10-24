@@ -24,6 +24,115 @@ GPU runs use 10 dabs per stroke (the old upload made 40 too slow), CPU-only runs
 the project round trip: opening a second copy of a 33M project next to the first ran out of memory on this
 machine before the changes.
 
+## v0.6 (in development)
+
+The v0.6 performance work ran on three branches at once (mesh memory, brushes, viewport), each measured
+against main at aac5f68 with `sculptforge --bench --bench-sizes 4,16,33 --bench-dabs 10 --bench-no-project`, on
+the same machine as below, one benchmark at a time; every figure is the better of two runs. The sections after
+this one (from "Summary") are v0.5's.
+
+### Viewport (feat/view)
+
+"Before" is main at aac5f68 plus the benchmark rows below; "after" is feat/view. The 33M benchmark sphere has a
+few cracks on main (makeCube welded badly at 26 quads per side; fixed in feat/mem), so the 33M "after" runs
+use that one-line fix, as the merged branches will; without it, the 33M sphere counts as open and draws its back
+faces too (last column). 104M ran with `--bench-view` (the full brush suite at that size doesn't fit in memory);
+neither 64M nor 104M was drawn before (v0.5 only measured 64M on the CPU). Full reports are at the end.
+
+| | 4M | 16M | 33M | 64M | 104M | 33M, open (no fix) |
+|---|---|---|---|---|---|---|
+| Orbit, 4x antialiasing (ms) | 4.8 -> **2.9** | 11.4 -> **4.9** | 20.6 -> **8.7** | **14.0** | **19.6** (51 fps) | 15.3 |
+| Orbit, no antialiasing | 3.0 -> **1.6** | 8.2 -> **3.2** | 14.3 -> **6.1** | **11.3** | **16.9** (59 fps) | 12.2 |
+| Orbit, Fast Navigation (no AA, motion proxy) | 3.0 -> **1.1** | 8.2 -> **1.9** | 14.3 -> **3.2** (314 fps) | **6.5** | **9.9** (101 fps) | 4.6 |
+| Triangles drawn after culling (proxy) | 53% (19%) | 49% (19%) | 48% (19%) | 47% (19%) | 46% (19%) | 100% (19%) |
+| First GPU upload (ms) | 87 -> **52** | 337 -> **199** | 701 -> **422** | **784** | **1283** | 571 |
+| GPU memory, bytes per triangle | 46 -> **14.8** | 46 -> **14.8** | 46 -> **14.8** (1.53 -> 0.49 GB) | **14.8** | **14.8** (1.5 GB) | 14.8 |
+| Motion proxy build, first move after an upload (ms) | 16 | 60 | 126 | 241 | 408 | 127 |
+| GPU upload per medium dab: Standard / Mask / Paint (ms) | 0.28 / 0.39 / 0.62 -> 0.57 / 0.34 / 0.70 | 0.95 / 1.33 / 2.16 -> 1.19 / 1.05 / 1.76 | 2.19 / 2.89 / 4.64 -> **2.08 / 1.89 / 3.69** | 3.8 / 3.7 / 7.3 | 6.6 / 6.5 / 12.8 | |
+
+"Before" GPU memory is the old buffers' size, which the old renderer didn't report: positions, normals and
+curvature as floats (28 bytes per vertex, 14 per triangle), 32-bit indices (12), 32-bit polygroups (4) and, on
+meshes with quads like this one, the wireframe's edges, always kept, every edge twice (16): 46 bytes per
+triangle (26 without the last two). After: 12-byte vertices with about 10% copies on cluster seams (6.6 per
+triangle), 16-bit indices (6), 16-bit polygroups (2), cluster tables (0.1). Polypaint adds 2.2, a mask 0.6,
+the motion proxy 1.5 once the view has moved, the wireframe about 4 while it is on.
+
+Targets from the brief: GPU memory down at least a third (down 68%, or 43% against the 26 bytes counted
+before); 60 fps at 100M (101 fps with Fast Navigation, 59 without antialiasing, 51 with 4x); orbit at 33M under
+about 8 ms with 4x antialiasing (8.7 ms, from 20.6: not quite); first upload at 33M under about 300 ms (422,
+from 701: not reached).
+
+#### What changed
+
+- **Clusters** (core/UploadOrder.h). The triangles are cut into runs of 64 consecutive triangles (compact on
+  any mesh whose triangle order isn't random: a divided mesh keeps each cage face's triangles together), the
+  runs sorted along a Morton curve of their centres, and every 64 runs make a cluster of up to 4096 triangles.
+  Each cluster has its own block-aligned range of GPU vertices, numbered by first use, so its indices are 16-bit
+  with a base vertex; vertices on seams between clusters are copied into each cluster that uses them (about
+  10%). The mesh's own vertex numbering is untouched. Without the Morton step, clusters on meshes with small cage
+  faces (a remesh divided three times) were long strips whose normals point every way: a test sphere culled 9%
+  of its clusters, 28% with it.
+- **Culling** (render/Clusters.h), on the CPU every frame: clusters outside the view, and clusters whose
+  triangles all face away (a normal cone per cluster against a bounding sphere). Back faces may only be skipped
+  where they can't show: on a mesh that is closed and wound consistently (every directed edge has its reverse;
+  found with a 64-bit hash sum while the layout is built, with a fallback that accepts unwelded seams) and
+  outwards (positive signed volume), with nothing hidden, the eye outside its bounds and nothing reaching into
+  the near plane's slab. Then every back face lies behind a front face, so the picture is the same; the GPU
+  also culls the back faces left in clusters along the silhouette. The visible clusters go in one
+  `glMultiDrawElementsBaseVertex`. About half the triangles of a sphere are drawn.
+- **12-byte vertices**: the position on a 21-bit grid over the mesh's bounds plus a margin (one grid for the
+  whole mesh, so a vertex copied into two clusters decodes to exactly the same point and seams can't crack; a
+  stroke that leaves the grid re-sends the mesh on a new one), an octahedral normal (2 x 11 bits, within 0.12
+  degrees) and the curvature (10 bits, square-root companded over its whole range, within 0.001 where the
+  cavity shading ramps). Polypaint is RGBA8 with gamma 2.2 (decoded in the shader), the mask 8-bit. The
+  fragment shader works out the view direction from the pixel instead of an interpolated position, so a vertex
+  passes only a normal and the curvature (plus colour and mask when the mesh has them; shader variants per
+  feature).
+- **Motion proxy**: while a scene of 10M+ triangles moves with Fast Navigation on, each cluster of a mesh of
+  256k+ triangles draws a proxy: its vertices snapped to the one nearest the centre of each cell of a grid 2.5
+  average edges wide, collapsed triangles dropped, seam vertices kept, using the same vertex buffer (indices
+  only, up to a quarter of the cluster's triangles; 19% in practice). The proxies of a closed mesh form a closed
+  mesh (a simplicial map of it), so the same culling applies to them with their own normal cones and no
+  hole can open between clusters. Proxies are built for the clusters that changed, when the view starts moving
+  (126 ms at 33M after an upload, a few clusters after a stroke). Polygroup and texture display and the
+  wireframe keep the full mesh.
+- **Uploads**: a full upload writes the index buffer straight into the mapped buffer from the threads building
+  the layout, and whole vertex arrays mapped in parallel; dab uploads gather all their runs in parallel. Each
+  128-vertex block keeps a hash of what it last sent: blocks a dab marked but didn't change (paint, mask) aren't
+  sent again, and clusters whose positions didn't move keep their bounds and proxy.
+- **Wireframe** edges are built when the wireframe is first shown, each edge once (from the lowest-numbered
+  drawn triangle using it), at the opacity two overlapping lines had.
+- Per-triangle data (polygroups, texture UVs, baked-normal tangents) is found from `gl_PrimitiveID` plus the
+  cluster's first drawn triangle, read through `gl_VertexID` (which includes the base vertex) from a table per
+  vertex block. A start-up check draws one point to see that the driver does include it; where it doesn't, those
+  meshes draw one cluster at a time with the base as a uniform (`SF_NO_VERTEXID_BASE=1` forces that path).
+
+#### Looks the same
+
+Every UI test's screenshots were compared pixel by pixel with main's, and the benchmark's frames too. The
+viewport matches except for: outline pixels of closed meshes, where back faces used to cover a few
+antialiasing samples and show as a faint light rim (now the background shows there, as it would with a closed
+surface seen exactly edge-on); a few silhouette pixels moved by the position grid (a millionth of the model);
+and the wireframe on quad meshes, where line ends overlap a little differently now that each edge is drawn once.
+Shelf and LightBox thumbnails differ in the UI tests only because they arrive sooner.
+
+#### Known limits
+
+- Back faces are drawn (twice the work on huge meshes) on open meshes, with hidden polygons, when the eye is
+  inside the mesh's bounds or the near plane cuts it: the cases where they can show. On a closed mesh, a lobe
+  pushed through the surface so that it is inside out (winding below zero) would show a hole where its back
+  faces are culled; ZBrush culls back faces always.
+- The proxy is coarse on a mesh with fine detail (detail under 2.5 edges disappears while moving), and the first
+  move after opening or dividing a big mesh waits for it (126 ms at 33M, 408 ms at 104M).
+- 33M orbiting is 8.7 ms with antialiasing: what's left is 16M sub-pixel triangles a frame, which only a level
+  of detail at rest would remove.
+- The first upload at 33M (422 ms) spends most of its time building the layout (about 250 ms: two passes over
+  every cluster's triangles) and packing vertices (about 100 ms, mostly curvature).
+- The per-cluster fallback for drivers without the base vertex in `gl_VertexID` was checked by forcing it on
+  Mesa; macOS (GL 4.1) wasn't tried on hardware.
+- Upload per dab at 4M and 16M is a little slower (0.3-0.6 ms) than before: runs are finer (128 vertices) and
+  the clusters a dab touches get new bounds.
+
 ## Summary
 
 | | 4M triangles | 16M triangles | 33M triangles |
@@ -721,6 +830,14 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 #### 4.0M triangles (2.0M vertices, 5 subdivision levels)
 
+## v0.6 viewport reports (feat/view)
+
+### Before: main at aac5f68 with the benchmark
+
+Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit sphere unless noted, 10 dabs per stroke. Times in milliseconds.
+
+##### 4.0M triangles (2.0M vertices, 5 subdivision levels)
+
 | Setup | |
 |---|---|
 | Divide up to this size | 268 |
@@ -1215,3 +1332,361 @@ to see the first one's).
 | Move (large, r 0.4) | 22.07 | **11.88** | 5.98 | 11.1 | **5.8** |
 | Clay | 6.60 | **4.44** | 1.74 | 13.2 | **6.6** |
 | Inflate | 5.10 | **3.68** | 1.47 | 10.5 | **5.6** |
+
+| BVH build | 222 |
+| First GPU upload | 90 |
+| Mesh (incl. topology) | 247 MB = 62 B/triangle |
+| BVH | 78 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 297 MB = 74 B/triangle |
+| Process memory (RSS) | 718 MB (+648 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 9k | 20k (12) | 0.36 | 0.36 | 0.30 | 0.00 | 0.28 | **1.33** | 0.00 | 1.3 | 1.3 | 0.3 MB |
+| Standard (large, r 0.4) | 147k | 183k (53) | 3.70 | 4.00 | 2.07 | 0.00 | 2.85 | **12.88** | 0.00 | 9.3 | 9.5 | 4.2 MB |
+| Clay | 8k | 17k (11) | 0.33 | 0.30 | 0.24 | 0.00 | 0.23 | **1.13** | 0.00 | 1.0 | 0.9 | 0.3 MB |
+| ClayBuildup | 13k | 24k (13) | 0.54 | 0.44 | 0.40 | 0.00 | 0.32 | **1.73** | 0.00 | 2.1 | 2.2 | 0.4 MB |
+| Smooth | 7k | 16k (10) | 0.34 | 0.26 | 0.19 | 0.00 | 0.22 | **1.03** | 0.00 | 0.8 | 1.4 | 0.2 MB |
+| Inflate | 7k | 16k (10) | 0.28 | 0.25 | 0.20 | 0.00 | 0.21 | **0.96** | 0.00 | 0.6 | 1.6 | 0.2 MB |
+| DamStandard | 7k | 16k (10) | 0.29 | 0.25 | 0.19 | 0.00 | 0.21 | **0.96** | 0.00 | 1.0 | 2.1 | 0.2 MB |
+| Layer | 7k | 16k (10) | 0.59 | 0.30 | 0.20 | 0.00 | 0.22 | **1.34** | 0.00 | 1.3 | 2.1 | 0.2 MB |
+| Move | 6k | 14k (9) | 0.03 | 0.15 | 0.18 | 0.00 | 0.18 | **0.59** | 0.00 | 0.4 | 0.4 | 0.1 MB |
+| Recipe (pattern) | 8k | 17k (11) | 0.72 | 0.27 | 0.20 | 0.00 | 0.22 | **1.44** | 0.00 | 0.7 | 1.4 | 0.2 MB |
+| Mask | 8k | 16k (10) | 0.30 | 0.00 | 0.00 | 0.00 | 0.39 | **0.71** | 0.00 | 0.0 | 0.0 | 0.1 MB |
+| Paint | 8k | 16k (10) | 0.25 | 0.00 | 0.00 | 0.00 | 0.65 | **0.93** | 0.00 | 0.0 | 0.0 | 0.2 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 995k, after edits) | 184 |
+| Higher Res (back up) | 1 |
+| Lower Res again (no edits) | 5 |
+| Higher Res again (no edits) | 1 |
+| Orbit: frame time, 4x antialiasing | 5.0 (199 fps) |
+| Orbit: frame time, Fast Navigation (no antialiasing) | 3.2 (308 fps) |
+
+##### 15.9M triangles (8.0M vertices, 6 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 1189 |
+| BVH build | 794 |
+| First GPU upload | 337 |
+| Mesh (incl. topology) | 988 MB = 62 B/triangle |
+| BVH | 311 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 1188 MB = 75 B/triangle |
+| Process memory (RSS) | 2712 MB (+2172 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 37k | 60k (12) | 1.55 | 1.65 | 1.09 | 0.00 | 0.95 | **5.35** | 0.00 | 3.1 | 3.1 | 1.3 MB |
+| Standard (large, r 0.4) | 589k | 650k (53) | 11.12 | 11.62 | 7.06 | 0.01 | 9.93 | **40.64** | 0.00 | 30.7 | 30.4 | 17.0 MB |
+| Clay | 32k | 53k (11) | 1.31 | 1.46 | 0.87 | 0.00 | 0.83 | **4.58** | 0.00 | 2.2 | 2.6 | 1.1 MB |
+| ClayBuildup | 51k | 77k (13) | 1.87 | 1.54 | 1.01 | 0.00 | 1.20 | **5.76** | 0.00 | 3.1 | 3.0 | 1.5 MB |
+| Smooth | 30k | 51k (10) | 1.17 | 1.18 | 0.54 | 0.00 | 1.02 | **4.02** | 0.00 | 2.3 | 2.4 | 1.0 MB |
+| Inflate | 29k | 50k (10) | 1.24 | 1.30 | 0.86 | 0.00 | 0.76 | **4.25** | 0.00 | 2.5 | 2.4 | 1.0 MB |
+| DamStandard | 29k | 49k (10) | 1.27 | 1.38 | 0.66 | 0.00 | 0.99 | **4.42** | 0.00 | 3.0 | 2.7 | 1.0 MB |
+| Layer | 30k | 51k (10) | 2.29 | 1.42 | 0.59 | 0.00 | 1.06 | **5.49** | 0.00 | 2.9 | 3.2 | 1.0 MB |
+| Move | 23k | 42k (9) | 0.19 | 0.64 | 0.66 | 0.00 | 0.63 | **2.37** | 0.00 | 1.6 | 1.8 | 0.4 MB |
+| Recipe (pattern) | 31k | 52k (11) | 1.69 | 1.20 | 0.50 | 0.00 | 0.80 | **4.31** | 0.00 | 2.0 | 2.5 | 1.0 MB |
+| Mask | 31k | 52k (11) | 1.29 | 0.00 | 0.00 | 0.01 | 1.44 | **2.82** | 0.00 | 0.1 | 0.1 | 0.5 MB |
+| Paint | 31k | 52k (11) | 0.98 | 0.00 | 0.00 | 0.00 | 2.64 | **3.71** | 0.00 | 0.2 | 0.1 | 1.0 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 4.0M, after edits) | 766 |
+| Higher Res (back up) | 5 |
+| Lower Res again (no edits) | 21 |
+| Higher Res again (no edits) | 5 |
+| Orbit: frame time, 4x antialiasing | 11.8 (84 fps) |
+| Orbit: frame time, Fast Navigation (no antialiasing) | 8.7 (115 fps) |
+
+##### 33.2M triangles (16.6M vertices, 7 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 2469 |
+| BVH build | 1655 |
+| First GPU upload | 701 |
+| Mesh (incl. topology) | 2062 MB = 62 B/triangle |
+| BVH | 648 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 2481 MB = 75 B/triangle |
+| Process memory (RSS) | 5642 MB (+4820 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 78k | 117k (18) | 3.34 | 3.86 | 1.84 | 0.00 | 2.62 | **11.91** | 0.00 | 6.9 | 5.6 | 2.8 MB |
+| Standard (large, r 0.4) | 1.2M | 1.3M (67) | 21.60 | 22.79 | 14.70 | 0.01 | 17.56 | **78.51** | 0.00 | 63.7 | 62.8 | 35.5 MB |
+| Clay | 68k | 104k (17) | 2.63 | 2.26 | 1.34 | 0.00 | 1.76 | **8.20** | 0.00 | 4.4 | 4.6 | 2.4 MB |
+| ClayBuildup | 107k | 151k (21) | 4.31 | 2.84 | 1.68 | 0.01 | 2.87 | **12.06** | 0.00 | 6.0 | 6.3 | 3.1 MB |
+| Smooth | 63k | 98k (17) | 2.55 | 1.91 | 1.05 | 0.01 | 1.70 | **7.46** | 0.00 | 4.3 | 4.6 | 2.1 MB |
+| Inflate | 61k | 96k (16) | 2.36 | 2.27 | 1.31 | 0.01 | 1.67 | **7.82** | 0.00 | 4.4 | 4.0 | 2.1 MB |
+| DamStandard | 61k | 96k (16) | 2.30 | 1.85 | 1.15 | 0.01 | 1.42 | **6.92** | 0.00 | 4.2 | 3.9 | 2.0 MB |
+| Layer | 63k | 99k (17) | 4.53 | 2.18 | 1.14 | 0.01 | 1.60 | **9.66** | 0.00 | 3.7 | 3.8 | 2.1 MB |
+| Move | 49k | 79k (14) | 0.39 | 0.83 | 1.02 | 0.01 | 1.39 | **4.17** | 0.00 | 2.1 | 1.7 | 0.9 MB |
+| Recipe (pattern) | 65k | 102k (18) | 4.06 | 2.12 | 1.13 | 0.01 | 1.84 | **9.39** | 0.00 | 4.0 | 4.3 | 2.1 MB |
+| Mask | 66k | 101k (18) | 2.54 | 0.00 | 0.00 | 0.01 | 2.89 | **5.63** | 0.00 | 0.3 | 0.2 | 1.0 MB |
+| Paint | 66k | 101k (18) | 2.19 | 0.00 | 0.00 | 0.01 | 4.64 | **7.03** | 0.00 | 0.4 | 0.3 | 2.1 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 8.3M, after edits) | 1588 |
+| Higher Res (back up) | 10 |
+| Lower Res again (no edits) | 40 |
+| Higher Res again (no edits) | 10 |
+| Orbit: frame time, 4x antialiasing | 20.6 (49 fps) |
+| Orbit: frame time, Fast Navigation (no antialiasing) | 14.8 (68 fps) |
+
+### After: feat/view (33M with the makeCube fix from feat/mem)
+
+Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit sphere unless noted, 10 dabs per stroke. Times in milliseconds.
+
+##### 4.0M triangles (2.0M vertices, 5 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 268 |
+| BVH build | 227 |
+| First GPU upload | 52 |
+| GPU memory (buffers) | 59 MB = 14.8 B/triangle |
+| Mesh (incl. topology) | 247 MB = 62 B/triangle |
+| BVH | 78 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 297 MB = 74 B/triangle |
+| Process memory (RSS) | 721 MB (+650 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 9k | 21k (14) | 0.40 | 0.43 | 0.30 | 0.00 | 0.58 | **1.79** | 0.00 | 1.1 | 1.1 | 0.3 MB |
+| Standard (large, r 0.4) | 147k | 191k (39) | 3.58 | 3.34 | 2.04 | 0.01 | 2.89 | **12.78** | 0.00 | 9.3 | 8.1 | 4.2 MB |
+| Clay | 8k | 18k (10) | 0.38 | 0.36 | 0.25 | 0.00 | 0.52 | **1.58** | 0.00 | 1.1 | 1.2 | 0.3 MB |
+| ClayBuildup | 13k | 25k (15) | 0.68 | 0.55 | 0.42 | 0.00 | 0.57 | **2.33** | 0.00 | 1.8 | 1.4 | 0.4 MB |
+| Smooth | 7k | 17k (10) | 0.36 | 0.30 | 0.19 | 0.00 | 0.47 | **1.38** | 0.00 | 0.9 | 1.6 | 0.2 MB |
+| Inflate | 7k | 16k (10) | 0.34 | 0.34 | 0.21 | 0.00 | 0.48 | **1.44** | 0.00 | 0.9 | 0.7 | 0.2 MB |
+| DamStandard | 7k | 16k (10) | 0.40 | 0.35 | 0.21 | 0.00 | 0.48 | **1.50** | 0.00 | 1.4 | 1.1 | 0.2 MB |
+| Layer | 7k | 17k (10) | 0.69 | 0.34 | 0.20 | 0.00 | 0.55 | **1.85** | 0.00 | 1.0 | 1.2 | 0.2 MB |
+| Move | 6k | 12k (10) | 0.05 | 0.17 | 0.18 | 0.00 | 0.40 | **0.87** | 0.00 | 0.5 | 0.6 | 0.1 MB |
+| Recipe (pattern) | 8k | 17k (10) | 0.95 | 0.41 | 0.25 | 0.00 | 0.50 | **2.18** | 0.00 | 1.3 | 1.2 | 0.2 MB |
+| Mask | 8k | 17k (10) | 0.37 | 0.00 | 0.00 | 0.01 | 0.42 | **0.87** | 0.00 | 0.0 | 0.0 | 0.1 MB |
+| Paint | 8k | 17k (10) | 0.49 | 0.00 | 0.00 | 0.01 | 0.70 | **1.29** | 0.00 | 0.1 | 0.3 | 0.2 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 995k, after edits) | 175 |
+| Higher Res (back up) | 1 |
+| Lower Res again (no edits) | 5 |
+| Higher Res again (no edits) | 1 |
+| Motion proxy build (first move after an upload) | 16 |
+| Orbit: frame time, 4x antialiasing | 2.9 (347 fps) |
+| Orbit: frame time, no antialiasing | 1.7 (605 fps) |
+| Orbit: triangles drawn | 2.1M (53%) |
+| Orbit: frame time, Fast Navigation (no antialiasing, motion proxy) | 1.1 (932 fps) |
+| Orbit: triangles drawn (motion proxy) | 771k (19%) |
+| GPU memory with the motion proxy | 76 MB = 19.1 B/triangle |
+
+##### 15.9M triangles (8.0M vertices, 6 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 1145 |
+| BVH build | 787 |
+| First GPU upload | 200 |
+| GPU memory (buffers) | 235 MB = 14.8 B/triangle |
+| Mesh (incl. topology) | 988 MB = 62 B/triangle |
+| BVH | 311 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 1188 MB = 75 B/triangle |
+| Process memory (RSS) | 2786 MB (+2286 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 37k | 61k (25) | 1.47 | 1.23 | 0.87 | 0.00 | 1.19 | **5.10** | 0.00 | 2.9 | 2.5 | 1.3 MB |
+| Standard (large, r 0.4) | 589k | 699k (74) | 10.90 | 11.26 | 7.20 | 0.01 | 10.53 | **43.38** | 0.00 | 31.2 | 30.8 | 17.0 MB |
+| Clay | 32k | 54k (21) | 1.22 | 1.28 | 0.73 | 0.00 | 1.03 | **4.54** | 0.00 | 2.1 | 2.5 | 1.1 MB |
+| ClayBuildup | 51k | 78k (25) | 2.37 | 1.92 | 1.04 | 0.01 | 1.39 | **7.14** | 0.00 | 3.2 | 4.0 | 1.5 MB |
+| Smooth | 30k | 51k (19) | 1.36 | 1.29 | 0.75 | 0.00 | 0.97 | **4.63** | 0.00 | 2.2 | 2.1 | 1.0 MB |
+| Inflate | 29k | 50k (19) | 1.21 | 1.21 | 0.63 | 0.01 | 0.96 | **4.26** | 0.00 | 2.5 | 2.3 | 1.0 MB |
+| DamStandard | 29k | 50k (19) | 1.15 | 1.18 | 0.59 | 0.01 | 1.06 | **4.23** | 0.00 | 2.3 | 1.9 | 1.0 MB |
+| Layer | 30k | 51k (20) | 2.01 | 1.10 | 0.52 | 0.01 | 0.86 | **4.74** | 0.00 | 2.3 | 2.3 | 1.0 MB |
+| Move | 23k | 40k (11) | 0.21 | 0.38 | 0.45 | 0.01 | 0.72 | **2.13** | 0.00 | 0.9 | 1.0 | 0.4 MB |
+| Recipe (pattern) | 31k | 53k (19) | 1.76 | 1.25 | 0.55 | 0.01 | 1.14 | **4.98** | 0.00 | 2.9 | 2.4 | 1.0 MB |
+| Mask | 31k | 52k (19) | 1.26 | 0.00 | 0.00 | 0.01 | 1.08 | **2.60** | 0.00 | 0.1 | 0.1 | 0.5 MB |
+| Paint | 31k | 52k (19) | 1.12 | 0.00 | 0.00 | 0.01 | 1.80 | **3.17** | 0.00 | 0.2 | 0.2 | 1.0 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 4.0M, after edits) | 748 |
+| Higher Res (back up) | 5 |
+| Lower Res again (no edits) | 25 |
+| Higher Res again (no edits) | 7 |
+| Motion proxy build (first move after an upload) | 68 |
+| Orbit: frame time, 4x antialiasing | 4.9 (202 fps) |
+| Orbit: frame time, no antialiasing | 3.2 (317 fps) |
+| Orbit: triangles drawn | 7.8M (49%) |
+| Orbit: frame time, Fast Navigation (no antialiasing, motion proxy) | 1.9 (525 fps) |
+| Orbit: triangles drawn (motion proxy) | 3.1M (19%) |
+| GPU memory with the motion proxy | 304 MB = 19.1 B/triangle |
+
+##### 33.2M triangles (16.6M vertices, 7 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 3030 |
+| BVH build | 1693 |
+| First GPU upload | 461 |
+| GPU memory (buffers) | 490 MB = 14.8 B/triangle |
+| Mesh (incl. topology) | 2062 MB = 62 B/triangle |
+| BVH | 648 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 2481 MB = 75 B/triangle |
+| Process memory (RSS) | 5757 MB (+4345 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 78k | 114k (35) | 2.95 | 2.73 | 1.55 | 0.00 | 2.35 | **10.25** | 0.00 | 6.4 | 5.0 | 2.8 MB |
+| Standard (large, r 0.4) | 1.2M | 1.4M (104) | 22.30 | 24.75 | 15.38 | 0.01 | 22.64 | **92.39** | 0.00 | 67.3 | 68.8 | 35.5 MB |
+| Clay | 68k | 101k (30) | 2.67 | 2.49 | 1.42 | 0.01 | 2.07 | **9.26** | 0.00 | 5.4 | 4.9 | 2.4 MB |
+| ClayBuildup | 107k | 150k (35) | 4.00 | 3.00 | 1.58 | 0.01 | 2.77 | **12.20** | 0.00 | 6.2 | 6.9 | 3.1 MB |
+| Smooth | 63k | 95k (28) | 2.88 | 2.22 | 1.10 | 0.01 | 2.17 | **8.93** | 0.00 | 5.2 | 5.3 | 2.1 MB |
+| Inflate | 61k | 92k (28) | 2.52 | 2.68 | 1.34 | 0.01 | 1.88 | **8.98** | 0.00 | 4.8 | 4.8 | 2.1 MB |
+| DamStandard | 61k | 93k (27) | 2.35 | 2.42 | 1.22 | 0.01 | 1.90 | **8.46** | 0.00 | 4.4 | 4.3 | 2.0 MB |
+| Layer | 63k | 96k (27) | 4.21 | 1.98 | 0.97 | 0.01 | 1.72 | **9.48** | 0.00 | 4.6 | 5.0 | 2.1 MB |
+| Move | 49k | 77k (15) | 0.39 | 1.13 | 1.32 | 0.01 | 1.51 | **5.16** | 0.00 | 2.1 | 2.1 | 0.9 MB |
+| Recipe (pattern) | 65k | 99k (28) | 4.60 | 2.42 | 1.15 | 0.01 | 2.19 | **10.95** | 0.00 | 5.0 | 5.8 | 2.1 MB |
+| Mask | 66k | 97k (28) | 2.43 | 0.00 | 0.00 | 0.01 | 1.89 | **4.87** | 0.00 | 0.3 | 0.3 | 1.0 MB |
+| Paint | 66k | 97k (28) | 2.33 | 0.00 | 0.00 | 0.01 | 3.69 | **6.58** | 0.00 | 0.5 | 0.5 | 2.1 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 8.3M, after edits) | 1557 |
+| Higher Res (back up) | 10 |
+| Lower Res again (no edits) | 41 |
+| Higher Res again (no edits) | 10 |
+| Motion proxy build (first move after an upload) | 142 |
+| Orbit: frame time, 4x antialiasing | 8.7 (115 fps) |
+| Orbit: frame time, no antialiasing | 6.1 (163 fps) |
+| Orbit: triangles drawn | 15.9M (48%) |
+| Orbit: frame time, Fast Navigation (no antialiasing, motion proxy) | 3.2 (314 fps) |
+| Orbit: triangles drawn (motion proxy) | 6.4M (19%) |
+| GPU memory with the motion proxy | 633 MB = 19.1 B/triangle |
+
+### After: feat/view, 33M without the makeCube fix (the sphere has cracks, so it counts as open)
+
+Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit sphere unless noted, 10 dabs per stroke. Times in milliseconds.
+
+##### 33.2M triangles (16.6M vertices, 7 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 2463 |
+| BVH build | 1653 |
+| First GPU upload | 571 |
+| GPU memory (buffers) | 490 MB = 14.8 B/triangle |
+| Mesh (incl. topology) | 2062 MB = 62 B/triangle |
+| BVH | 648 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 2481 MB = 75 B/triangle |
+| Process memory (RSS) | 5497 MB (+5427 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 78k | 114k (35) | 3.14 | 2.73 | 1.44 | 0.00 | 2.25 | **10.23** | 0.00 | 5.5 | 5.5 | 2.8 MB |
+| Standard (large, r 0.4) | 1.2M | 1.4M (104) | 22.73 | 22.99 | 14.65 | 0.01 | 21.52 | **89.23** | 0.00 | 64.1 | 63.2 | 35.5 MB |
+| Clay | 68k | 101k (30) | 3.13 | 2.15 | 1.24 | 0.01 | 1.95 | **9.06** | 0.00 | 4.9 | 5.0 | 2.4 MB |
+| ClayBuildup | 107k | 150k (35) | 4.85 | 2.71 | 1.74 | 0.01 | 2.74 | **13.00** | 0.00 | 7.2 | 7.1 | 3.1 MB |
+| Smooth | 63k | 95k (28) | 2.82 | 1.77 | 1.03 | 0.01 | 1.80 | **7.96** | 0.00 | 4.7 | 4.7 | 2.1 MB |
+| Inflate | 61k | 92k (28) | 2.89 | 1.96 | 1.22 | 0.01 | 1.83 | **8.43** | 0.00 | 4.2 | 4.8 | 2.1 MB |
+| DamStandard | 61k | 93k (27) | 2.80 | 1.97 | 1.17 | 0.01 | 1.82 | **8.32** | 0.00 | 4.1 | 4.1 | 2.0 MB |
+| Layer | 63k | 96k (27) | 4.58 | 2.05 | 1.07 | 0.01 | 1.83 | **10.10** | 0.01 | 4.5 | 4.1 | 2.1 MB |
+| Move | 49k | 77k (15) | 0.41 | 0.79 | 1.01 | 0.01 | 1.40 | **4.43** | 0.00 | 2.4 | 2.1 | 0.9 MB |
+| Recipe (pattern) | 65k | 99k (28) | 3.28 | 1.91 | 1.01 | 0.01 | 2.04 | **8.85** | 0.00 | 4.3 | 4.4 | 2.1 MB |
+| Mask | 66k | 97k (28) | 2.58 | 0.00 | 0.00 | 0.01 | 2.04 | **5.21** | 0.01 | 0.4 | 0.3 | 1.0 MB |
+| Paint | 66k | 97k (28) | 2.84 | 0.00 | 0.00 | 0.01 | 3.67 | **7.11** | 0.01 | 0.8 | 1.0 | 2.1 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 8.3M, after edits) | 1541 |
+| Higher Res (back up) | 10 |
+| Lower Res again (no edits) | 40 |
+| Higher Res again (no edits) | 10 |
+| Motion proxy build (first move after an upload) | 127 |
+| Orbit: frame time, 4x antialiasing | 15.3 (66 fps) |
+| Orbit: frame time, no antialiasing | 12.2 (82 fps) |
+| Orbit: triangles drawn | 33.2M (100%) |
+| Orbit: frame time, Fast Navigation (no antialiasing, motion proxy) | 4.6 (218 fps) |
+| Orbit: triangles drawn (motion proxy) | 6.5M (19%) |
+| GPU memory with the motion proxy | 633 MB = 19.1 B/triangle |
+
+### After: feat/view, 64M
+
+Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit sphere unless noted, 10 dabs per stroke. Times in milliseconds.
+
+##### 63.7M triangles (31.9M vertices, 7 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 4596 |
+| BVH build | 3209 |
+| First GPU upload | 784 |
+| GPU memory (buffers) | 940 MB = 14.8 B/triangle |
+| Mesh (incl. topology) | 3953 MB = 62 B/triangle |
+| BVH | 1244 MB = 19.5 B/triangle |
+| Subdivision levels (stack) | 4756 MB = 75 B/triangle |
+| Process memory (RSS) | 10407 MB (+10337 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 149k | 204k (46) | 5.29 | 3.40 | 2.23 | 0.00 | 3.79 | **16.17** | 0.00 | 10.5 | 10.2 | 5.3 MB |
+| Standard (large, r 0.4) | 2.4M | 2.7M (141) | 42.11 | 43.62 | 28.13 | 0.01 | 40.24 | **167.87** | 0.00 | 125.7 | 123.4 | 67.9 MB |
+| Clay | 129k | 180k (40) | 4.91 | 3.28 | 1.88 | 0.01 | 3.40 | **14.67** | 0.00 | 9.4 | 10.1 | 4.5 MB |
+| ClayBuildup | 204k | 271k (46) | 7.79 | 4.76 | 2.66 | 0.01 | 4.79 | **21.48** | 0.00 | 11.7 | 12.6 | 6.0 MB |
+| Smooth | 120k | 167k (37) | 4.84 | 3.12 | 1.42 | 0.01 | 3.01 | **13.37** | 0.01 | 10.0 | 10.1 | 4.0 MB |
+| Inflate | 117k | 164k (37) | 4.65 | 3.14 | 1.93 | 0.01 | 3.13 | **13.81** | 0.01 | 8.1 | 8.1 | 3.9 MB |
+| DamStandard | 116k | 165k (37) | 4.61 | 3.07 | 1.62 | 0.01 | 3.27 | **13.70** | 0.00 | 7.5 | 7.7 | 3.9 MB |
+| Layer | 120k | 169k (39) | 8.03 | 3.36 | 1.44 | 0.01 | 3.09 | **16.93** | 0.01 | 10.5 | 11.0 | 4.0 MB |
+| Move | 93k | 130k (29) | 0.74 | 1.46 | 1.60 | 0.01 | 2.43 | **7.76** | 0.00 | 3.7 | 3.8 | 1.6 MB |
+| Recipe (pattern) | 125k | 175k (40) | 7.13 | 3.07 | 1.37 | 0.02 | 3.43 | **16.15** | 0.01 | 10.4 | 10.4 | 4.0 MB |
+| Mask | 126k | 174k (39) | 4.59 | 0.00 | 0.00 | 0.02 | 3.66 | **9.19** | 0.00 | 0.6 | 0.6 | 2.0 MB |
+| Paint | 126k | 174k (39) | 4.64 | 0.00 | 0.00 | 0.01 | 7.28 | **12.88** | 0.00 | 0.9 | 0.9 | 4.0 MB |
+
+| Operation | ms |
+|---|---:|
+| Lower Res (to 15.9M, after edits) | 2842 |
+| Higher Res (back up) | 19 |
+| Lower Res again (no edits) | 77 |
+| Higher Res again (no edits) | 19 |
+| Motion proxy build (first move after an upload) | 241 |
+| Orbit: frame time, 4x antialiasing | 14.0 (71 fps) |
+| Orbit: frame time, no antialiasing | 11.3 (88 fps) |
+| Orbit: triangles drawn | 29.9M (47%) |
+| Orbit: frame time, Fast Navigation (no antialiasing, motion proxy) | 6.5 (154 fps) |
+| Orbit: triangles drawn (motion proxy) | 12.4M (19%) |
+| GPU memory with the motion proxy | 1214 MB = 19.1 B/triangle |
+
+### After: feat/view, 104M (--bench-view)
+
+Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit sphere unless noted, 10 dabs per stroke. Times in milliseconds.
+
+##### 104.0M triangles (52.0M vertices, 8 subdivision levels)
+
+| Setup | |
+|---|---|
+| Divide up to this size | 7638 |
+| BVH build | 5301 |
+| First GPU upload | 1283 |
+| GPU memory (buffers) | 1535 MB = 14.8 B/triangle |
+| Mesh (incl. topology) | 6455 MB = 62 B/triangle |
+| BVH | 2043 MB = 19.6 B/triangle |
+| Subdivision levels (stack) | 7765 MB = 75 B/triangle |
+| Process memory (RSS) | 16656 MB (+16586 MB) |
+
+| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | GPU upload | **dab total** | stroke end (undo record) | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 244k | 321k (59) | 8.15 | 5.73 | 3.85 | 0.01 | 6.60 | **26.45** | 0.00 | 17.3 | 17.0 | 8.6 MB |
+| Mask | 237k | 309k (58) | 8.68 | 0.00 | 0.00 | 0.01 | 6.54 | **17.23** | 0.00 | 1.2 | 1.2 | 4.2 MB |
+| Paint | 237k | 309k (58) | 8.79 | 0.00 | 0.00 | 0.01 | 12.77 | **23.43** | 0.00 | 2.0 | 1.9 | 8.4 MB |
+
+| Operation | ms |
+|---|---:|
+| Motion proxy build (first move after an upload) | 408 |
+| Orbit: frame time, 4x antialiasing | 19.6 (51 fps) |
+| Orbit: frame time, no antialiasing | 16.9 (59 fps) |
+| Orbit: triangles drawn | 48.1M (46%) |
+| Orbit: frame time, Fast Navigation (no antialiasing, motion proxy) | 9.9 (101 fps) |
+| Orbit: triangles drawn (motion proxy) | 20.1M (19%) |
+| GPU memory with the motion proxy | 1982 MB = 19.1 B/triangle |

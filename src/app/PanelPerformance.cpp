@@ -102,7 +102,8 @@ int App::viewSamples() {
     size_t triangles = 0;
     for (int i = 0; i < doc_.subtoolCount(); ++i)
         if (doc_.subtools[size_t(i)].visible) triangles += doc_.subtoolMesh(i).triangleCount();
-    perf_.fastNow = aa > 1 && uiPrefs_.fastNavigation && moving && triangles >= fastNavigationTriangles();
+    perf_.proxyNow = uiPrefs_.fastNavigation && moving && triangles >= fastNavigationTriangles();
+    perf_.fastNow = aa > 1 && perf_.proxyNow;
     perf_.samplesWanted = perf_.fastNow ? 1 : aa;
     return perf_.samplesWanted;
 }

@@ -437,6 +437,7 @@ private:
         glm::mat4 lastView{0.0f};
         int framesStill = 0;          // frames since the view last moved
         bool fastNow = false;         // this frame draws without antialiasing (fast navigation)
+        bool proxyNow = false;        // this frame draws big meshes' motion proxy (fast navigation)
         int samplesWanted = 0;        // viewSamples() for the last frame
         int samplesUsed = 0;          // what the renderer managed last frame (fewer when out of memory)
         double strokeSyncMs = 0.0;    // upload time summed over the open stroke's frames
