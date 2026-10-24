@@ -1262,7 +1262,9 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
     }
     if (!full && (mesh.facesDirty || wantUvs != s.hasUvs)) uploadFaces(s, mesh, wantUvs);
     if (wireframe && !s.linesValid && !s.outOfMemory) buildLines(s, mesh);
-    if (proxyUsed_ && !s.outOfMemory) buildProxies(s, mesh);
+    // Small meshes draw in full while the view moves too (their proxy would save little).
+    constexpr size_t kProxyMinTriangles = size_t(1) << 18;
+    if (proxyUsed_ && !s.outOfMemory && s.drawnTriangles >= kProxyMinTriangles) buildProxies(s, mesh);
     syncTexture(s, mesh);
     syncNormalMap(s, mesh, normalMap);
 
