@@ -289,6 +289,7 @@ UndoRecord Sculptor::endStroke() {
 
 void Sculptor::dab(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p, Symmetry sym) {
     if (!active_) return;
+    dabVerts_.clear();
     for (const glm::vec3& m : mirrors(sym)) {
         DabParams mp = p;
         mp.center *= m;
@@ -297,6 +298,7 @@ void Sculptor::dab(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p, Sym
         mp.alphaUp *= m;
         dabSingle(mesh, bvh, type, mp);
     }
+    updateDabNormals(mesh);
 }
 
 void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p) {
@@ -461,21 +463,25 @@ void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& 
     });
 
     displaceAll(mesh, verts_, scratch_);
-    finishDab(mesh, bvh, verts_, clock, true);
+    finishDab(mesh, bvh, clock);
 }
 
-// Normals and BVH after a dab moved `verts`, with the time each takes (the kernel ran since `clock`).
-// `queried`: verts are (some of) what the BVH's last vertex query returned.
-void Sculptor::finishDab(Mesh& mesh, BVH& bvh, std::span<const uint32_t> verts, std::chrono::steady_clock::time_point clock,
-                         bool queried) {
+// The BVH after a mirror's dab moved (some of) the vertices its query returned, verts_ (the kernel ran since
+// `clock`). The next mirror's query needs the new boxes; normals wait until every mirror moved its vertices
+// (updateDabNormals), so where mirrors overlap they are updated once.
+void Sculptor::finishDab(Mesh& mesh, BVH& bvh, std::chrono::steady_clock::time_point clock) {
     timings.kernelMs += lapMs(clock);
-    mesh.updateNormals(verts);
-    timings.normalsMs += lapMs(clock);
-    if (queried) bvh.refitQueried(mesh);
-    else bvh.refit(mesh, verts);
+    bvh.refitQueried(mesh);
     timings.bvhMs += lapMs(clock);
     ++timings.dabs;
-    timings.vertices += verts.size();
+    timings.vertices += verts_.size();
+    dabVerts_.insert(dabVerts_.end(), verts_.begin(), verts_.end()); // a vertex twice is fine: updateNormals dedups
+}
+
+void Sculptor::updateDabNormals(Mesh& mesh) {
+    auto clock = std::chrono::steady_clock::now();
+    mesh.updateNormals(dabVerts_);
+    timings.normalsMs += lapMs(clock);
 }
 
 void Sculptor::dabRecipe(Mesh& mesh, BVH& bvh, const BrushRecipe& recipe, const DabParams& p, Symmetry sym) {
@@ -483,6 +489,7 @@ void Sculptor::dabRecipe(Mesh& mesh, BVH& bvh, const BrushRecipe& recipe, const 
     DabParams base = p;
     base.pressure = std::pow(std::clamp(p.pressure, 0.0f, 1.0f), recipe.pressureCurve);
     base.frontFacesOnly = p.frontFacesOnly || recipe.frontFacesOnly;
+    dabVerts_.clear();
     for (const glm::vec3& m : mirrors(sym)) {
         DabParams mp = base;
         mp.center *= m;
@@ -491,6 +498,7 @@ void Sculptor::dabRecipe(Mesh& mesh, BVH& bvh, const BrushRecipe& recipe, const 
         mp.alphaUp *= m;
         dabRecipeSingle(mesh, bvh, recipe, mp);
     }
+    updateDabNormals(mesh);
 }
 
 void Sculptor::dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const DabParams& p) {
@@ -617,7 +625,7 @@ void Sculptor::dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const
         });
         displaceAll(mesh, verts_, scratch_);
     }
-    finishDab(mesh, bvh, verts_, clock, true);
+    finishDab(mesh, bvh, clock);
 }
 
 void Sculptor::beginGrab(Mesh& mesh, BVH& bvh, const DabParams& p, Symmetry sym) {

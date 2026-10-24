@@ -110,8 +110,8 @@ public:
 private:
     void dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p);
     void dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const DabParams& p);
-    void finishDab(Mesh& mesh, BVH& bvh, std::span<const uint32_t> verts, std::chrono::steady_clock::time_point clock,
-                   bool queried = false);
+    void finishDab(Mesh& mesh, BVH& bvh, std::chrono::steady_clock::time_point clock);
+    void updateDabNormals(Mesh& mesh);
     void touch(Mesh& mesh, uint32_t v);
     // The one place brushes move vertices: scales `d` by vertexInfluence().
     void displace(Mesh& mesh, uint32_t v, const glm::vec3& d);
@@ -125,7 +125,7 @@ private:
     uint64_t strokeId_ = 0;
     void clearRecorded();
 
-    std::vector<uint32_t> verts_;
+    std::vector<uint32_t> verts_, dabVerts_; // one mirror's vertices; every mirror's (for the normals)
     std::vector<glm::vec3> scratch_;
     std::vector<float> weights_, influence_;
     std::vector<uint8_t> firstTouch_;
