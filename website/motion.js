@@ -1,4 +1,5 @@
-// SculptForge website: motion and the user guide's interactions. No frameworks, no trackers.
+// SculptForge website: motion and the user guide's interactions. No frameworks; visits and download clicks are
+// counted anonymously with GoatCounter (no cookies, no personal data).
 // - Sections, cards, screenshots and videos rise into place as they scroll into view (staggered in rows).
 // - A scroll progress bar; page-to-page transitions (style.css, View Transitions API) slide in the direction
 //   you're reading.
@@ -130,6 +131,16 @@
     document.fonts?.ready.then(fit);
     fit();
   }
+
+  // --- Download counts: GoatCounter (loaded beside this script) records which file was downloaded, so the
+  // stats show downloads per platform next to the visits and the sites that sent them. ---
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest('a[href*="github.com/islandmed/SculptForge/releases"]');
+    if (!a || !window.goatcounter?.count) return;
+    const file = a.href.split("/download/")[1] || "releases page";
+    const title = a.innerText.replace(/\s+/g, " ").trim().slice(0, 60);
+    window.goatcounter.count({ path: "download: " + file, title, event: true });
+  });
 
   if (!guide) return;
 
