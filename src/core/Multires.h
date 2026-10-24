@@ -176,7 +176,12 @@ void noteSubtoolLevelsDropped(Document& doc, int index);
 // mesh (rebuilt, or taken from the level cache); otherwise the caller rebuilds it.
 //
 // Adds a level on top (stepping to the highest level first) and makes it current. `smooth` = Smt.
-bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, BVH* bvh = nullptr, size_t maxTriangles = 50'000'000);
+// `maxTriangles` 0 = subdivMaxTriangles().
+bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, BVH* bvh = nullptr, size_t maxTriangles = 0);
+// The most triangles Divide makes on this computer: what fits in about 60% of its memory at kDivideBytesPerTriangle
+// (mesh, levels, BVH, GPU buffers and the peak while dividing), between 50 million and 1 billion (32-bit indices).
+constexpr size_t kDivideBytesPerTriangle = 110;
+size_t subdivMaxTriangles();
 // Makes `level` current, with topology and normals.
 bool subdivSetLevel(Mesh& mesh, int level, std::string& error, BVH* bvh = nullptr);
 // Deletes the levels below / above the current one (the current level becomes the base / the top).

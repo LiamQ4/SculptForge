@@ -5,16 +5,28 @@
 #include "core/Multires.h"
 
 #include "core/Texture.h"
+#include "core/ThreadPool.h"
 #include "io/Zip.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cctype>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <system_error>
+#include <thread>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <fcntl.h>
+#include <unistd.h>
+#define SF_PREAD 1
+#else
+#define SF_PREAD 0
+#endif
 
 #ifndef SCULPTFORGE_VERSION
 #define SCULPTFORGE_VERSION "unknown"
@@ -136,6 +148,8 @@ class Reader {
 public:
     std::map<std::string, ZipFileEntry> files;
     std::string error;
+    // Big blobs are read on the shared thread pool, except while a BVH builds on another thread (it gets the pool).
+    bool parallelReads = true;
 
     bool open(const std::string& path, std::string& err) {
         std::vector<ZipFileEntry> index;
@@ -146,7 +160,15 @@ public:
             err = "Cannot open " + path;
             return false;
         }
+#if SF_PREAD
+        fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+#endif
         return true;
+    }
+    ~Reader() {
+#if SF_PREAD
+        if (fd_ >= 0) ::close(fd_);
+#endif
     }
     // The whole entry `name` (false if missing or unreadable).
     bool entry(const std::string& name, std::vector<uint8_t>& out) {
@@ -189,9 +211,34 @@ public:
 
 private:
     std::ifstream file_;
+#if SF_PREAD
+    int fd_ = -1;
+#endif
 
     bool readAt(uint64_t offset, size_t n, void* out) {
         if (n == 0) return true;
+#if SF_PREAD
+        // Big arrays in 8 MB pieces on every core (the copies and the page faults of the fresh array are the cost).
+        constexpr size_t kPiece = size_t(8) << 20;
+        if (fd_ >= 0 && n >= 2 * kPiece && parallelReads) {
+            std::atomic<bool> ok = true;
+            poolFor((n + kPiece - 1) / kPiece, [&](size_t b, size_t e) {
+                for (size_t i = b; i < e; ++i) {
+                    size_t done = i * kPiece;
+                    const size_t end = std::min(n, done + kPiece);
+                    while (done < end) {
+                        const ssize_t got = ::pread(fd_, static_cast<char*>(out) + done, end - done, off_t(offset + done));
+                        if (got <= 0) {
+                            ok = false;
+                            break;
+                        }
+                        done += size_t(got);
+                    }
+                }
+            }, 1, 1);
+            return ok;
+        }
+#endif
         file_.clear();
         file_.seekg(std::streamoff(offset));
         return bool(file_.read(static_cast<char*>(out), std::streamsize(n)));
@@ -670,6 +717,25 @@ struct LoadedSubtool {
     bool visible = true;
     int activeLayer = -1;
     Mesh mesh;
+    // A big mesh's BVH is built on its own thread once the positions and triangles are read (they don't change
+    // after that), while the subdivision levels, topology and normals load.
+    BVH bvh;
+    std::thread bvhBuilder;
+    LoadedSubtool() = default;
+    LoadedSubtool(const LoadedSubtool&) = delete;
+    ~LoadedSubtool() { finishBvh(); }
+    void startBvh() {
+        if (mesh.triangleCount() >= 1'000'000) bvhBuilder = std::thread([this] { bvh.build(mesh); });
+    }
+    // The BVH to hand over (null: build it on the spot).
+    BVH* finishBvh() {
+        if (bvhBuilder.joinable()) {
+            bvhBuilder.join();
+            built = true;
+        }
+        return built ? &bvh : nullptr;
+    }
+    bool built = false;
 };
 
 constexpr size_t kMaxProjectSubtools = 100000;
@@ -793,14 +859,13 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     }
 
     // SubTools: version 1 has one mesh at the top level, version 2 a "subtools" list.
-    std::vector<LoadedSubtool> subtools;
+    std::deque<LoadedSubtool> subtools; // (stable addresses: BVH threads use them)
     int activeSubtool = 0;
     if (version < 2) {
-        LoadedSubtool s;
+        LoadedSubtool& s = subtools.emplace_back();
         s.name = "Sculpt";
         if (!readMesh(r, manifest["mesh"], manifest["layers"], s.mesh, error)) return false;
         s.activeLayer = int(manifest["active_layer"].asNumber(-1));
-        subtools.push_back(std::move(s));
     } else {
         const Json& list = manifest["subtools"];
         if (!list.isArray() || list.size() == 0 || list.size() > kMaxProjectSubtools) {
@@ -808,18 +873,23 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
             return false;
         }
         for (const Json& sj : list.items()) {
-            LoadedSubtool s;
+            LoadedSubtool& s = subtools.emplace_back();
             s.name = sj["name"].asString();
             if (s.name.empty()) s.name = "SubTool";
             s.visible = sj["visible"].asBool(true);
             s.gozName = sj["goz_name"].asString();
             if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error, false, false)) return false;
+            // The BVH builds (on the pool) while the levels and topology load (off it), then the normals.
+            s.startBvh();
+            r.parallelReads = !s.bvhBuilder.joinable();
             if (!readPaintLayers(r, sj["paint_layers"], s.mesh, error)) return false;
             if (!readTexture(r, sj["texture"], s.mesh, error)) return false;
             if (!readSubdiv(r, sj["subdiv"], s.mesh, error, version < 5)) return false;
-            finishMesh(s.mesh);
+            s.mesh.rebuildTopology();
+            s.finishBvh();
+            r.parallelReads = true;
+            s.mesh.recomputeAllNormals();
             s.activeLayer = int(sj["active_layer"].asNumber(-1));
-            subtools.push_back(std::move(s));
         }
         const double active = manifest["active_subtool"].asNumber(0);
         activeSubtool = active >= 0 && active < double(subtools.size()) ? int(active) : 0;
@@ -853,12 +923,14 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     // Everything parsed: replace the scene. SubTool 0 is checked out first; the others are added
     // behind it, given their layer and GoZ name, and the saved active SubTool is selected last.
     auto validLayer = [](int layer, const Mesh& m) { return layer >= 0 && layer < int(m.layers.size()) ? layer : -1; };
-    doc.setMesh(std::move(subtools[0].mesh), subtools[0].name);
+    BVH* built = subtools[0].finishBvh();
+    doc.setMesh(std::move(subtools[0].mesh), subtools[0].name, built);
     doc.activeLayer = validLayer(subtools[0].activeLayer, doc.mesh);
     doc.gozName = subtools[0].gozName;
     doc.subtools[0].visible = subtools[0].visible;
     for (size_t i = 1; i < subtools.size(); ++i) {
-        const int at = doc.addSubtool(std::move(subtools[i].mesh), subtools[i].name, false);
+        BVH* builtI = subtools[i].finishBvh();
+        const int at = doc.addSubtool(std::move(subtools[i].mesh), subtools[i].name, false, -1, builtI);
         SubTool& s = doc.subtools[size_t(at)];
         s.visible = subtools[i].visible;
         s.activeLayer = validLayer(subtools[i].activeLayer, s.mesh);

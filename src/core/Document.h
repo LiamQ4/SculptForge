@@ -97,8 +97,9 @@ struct Document {
     const Mesh& subtoolMesh(int i) const { return i == activeSubtool ? mesh : subtools[size_t(i)].mesh; }
     // Makes SubTool `i` the one tools and commands edit.
     void selectSubtool(int i);
-    // Inserts a SubTool at `at` (-1 = end of the list), made active when `select`; returns its index.
-    int addSubtool(Mesh m, std::string name, bool select = true, int at = -1);
+    // Inserts a SubTool at `at` (-1 = end of the list), made active when `select`; returns its index. `built`:
+    // the mesh's BVH, built already (moved from; null = built here).
+    int addSubtool(Mesh m, std::string name, bool select = true, int at = -1, BVH* built = nullptr);
     // Replaces the active SubTool's mesh outside undo (its history is cleared), e.g. after a merge.
     void replaceActiveMesh(Mesh m);
     // Removes SubTool `i` (never the last one); the active one moves to a neighbour if needed.
@@ -112,8 +113,8 @@ struct Document {
     // Bounds of every visible SubTool.
     AABB visibleBounds() const;
 
-    // Replaces the whole scene with one SubTool holding `m` and clears the edit history.
-    void setMesh(Mesh m, std::string name = "Sculpt");
+    // Replaces the whole scene with one SubTool holding `m` and clears the edit history (`built`: as addSubtool).
+    void setMesh(Mesh m, std::string name = "Sculpt", BVH* built = nullptr);
     // Replaces the mesh as an undoable topology change. A result without the old mesh's subdivision levels (a
     // remesh, decimate, ...) leaves a `notice` saying the levels were removed; undo brings them back.
     void replaceMeshUndoable(Mesh m, std::string label);

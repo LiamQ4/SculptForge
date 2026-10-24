@@ -48,6 +48,22 @@ size_t residentBytes() {
     return 0;
 }
 
+size_t resetPeakResidentBytes() {
+#if defined(__linux__)
+    std::ofstream("/proc/self/clear_refs") << "5"; // resets the peak (VmHWM) to the current RSS
+#endif
+    return residentBytes();
+}
+
+size_t peakResidentBytes() {
+#if defined(__linux__)
+    std::ifstream f("/proc/self/status");
+    for (std::string line; std::getline(f, line);)
+        if (line.rfind("VmHWM:", 0) == 0) return size_t(std::atoll(line.c_str() + 6)) * 1024;
+#endif
+    return 0;
+}
+
 MemoryUse documentMemory(const Document& doc) {
     MemoryUse u;
     for (int i = 0; i < doc.subtoolCount(); ++i) {
@@ -288,7 +304,7 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         const size_t target = size_t(sizeM * 1e6);
         log("Building a " + millions(double(target)) + " triangle sphere...");
         Document doc;
-        const size_t rss0 = residentBytes();
+        const size_t rss0 = resetPeakResidentBytes();
         auto t = Clock::now();
         doc.mesh = makeBenchSphere(target);
         const double divideMs = msSince(t);
@@ -300,7 +316,7 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         double uploadAll = 0;
         if (gpu && gpu->upload) uploadAll = gpu->upload(m);
         const size_t meshBytes = m.memoryBytes(), bvhBytes = doc.bvh.memoryBytes(), stackBytes = subdivBytes(m);
-        const size_t rss = residentBytes();
+        const size_t rss = residentBytes(), setupPeak = peakResidentBytes();
         UploadOrder order;
         order.build(m);
 
@@ -316,7 +332,9 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
            << " B/triangle |\n";
         md << "| Subdivision levels (stack) | " << fmt("%.0f MB", double(stackBytes) / 1e6) << " = "
            << fmt("%.0f", double(stackBytes) / nt) << " B/triangle |\n";
-        if (rss) md << "| Process memory (RSS) | " << fmt("%.0f MB", double(rss) / 1e6) << " (+" << fmt("%.0f", double(rss - std::min(rss, rss0)) / 1e6) << " MB) |\n";
+        if (rss) md << "| Process memory (RSS) | " << fmt("%.0f MB", double(rss) / 1e6) << " (+" << fmt("%.0f", double(rss - std::min(rss, rss0)) / 1e6) << " MB = "
+                    << fmt("%.0f", double(rss - std::min(rss, rss0)) / nt) << " B/triangle) |\n";
+        if (setupPeak > rss0) md << "| Peak while dividing (RSS) | " << fmt("%.0f MB", double(setupPeak - rss0) / 1e6) << " above the start |\n";
         md << "\n";
 
         md << "| Brush | verts/dab | uploaded verts (ranges) | kernel | normals | BVH refit | pick | " << (gpu ? "GPU upload | " : "")
@@ -368,12 +386,17 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
             const double saveMs = msSince(t);
             const double fileMb = saved ? double(fs::file_size(path, ec)) / 1e6 : 0.0;
             Document loaded;
+            const size_t beforeOpen = resetPeakResidentBytes();
             t = Clock::now();
             const bool opened = saved && loadProject(path, loaded, err);
             const double openMs = msSince(t);
+            const size_t openPeak = peakResidentBytes(), afterOpen = residentBytes();
             fs::remove(path, ec);
             md << "| Save project (" << fmt("%.0f MB", fileMb) << ") | " << (saved ? fmt("%.0f", saveMs) : "failed: " + err) << " |\n";
             md << "| Open project | " << (opened ? fmt("%.0f", openMs) : "failed: " + err) << " |\n";
+            if (opened && openPeak > beforeOpen)
+                md << "| Open project: memory (RSS) | +" << fmt("%.0f MB", double(afterOpen - std::min(afterOpen, beforeOpen)) / 1e6) << ", peak +"
+                   << fmt("%.0f MB", double(openPeak - beforeOpen) / 1e6) << " |\n";
         }
         if (gpu && gpu->orbitFrameMs) {
             log("  orbit");

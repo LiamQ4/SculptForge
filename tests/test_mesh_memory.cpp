@@ -156,6 +156,19 @@ TEST(divided_levels_store_little) {
     CHECK(m.implicitAdjacency());
     CHECK(stack < 32.0); // was 74
     CHECK(mesh < 40.0);  // was 62
+    // Saved and opened again, the levels take as little.
+    {
+        Document d = makeDoc(m);
+        const std::string path = (std::filesystem::temp_directory_path() / "sf_mesh_memory_bench.sfproj").string();
+        std::string err;
+        CHECK(saveProject(path, d, err));
+        Document e;
+        CHECK(loadProject(path, e, err));
+        CHECK(subdivBytes(e.mesh) == subdivBytes(d.mesh));
+        CHECK(e.mesh.memoryBytes() == d.mesh.memoryBytes());
+        CHECK(e.mesh.implicitAdjacency());
+        std::filesystem::remove(path);
+    }
     // Every generated level stores no triangles; the top keeps its positions but no detail.
     for (int i = 1; i < subdivLevelCount(m); ++i) {
         CHECK(subdivLevel(m, i).topo->generated);

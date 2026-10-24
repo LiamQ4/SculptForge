@@ -15,6 +15,18 @@
 #include <thread>
 #include <unordered_map>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace sf {
 
 namespace {
@@ -1532,7 +1544,21 @@ bool subdivSetLevel(Mesh& mesh, int level, std::string& error, BVH* bvh) {
     return true;
 }
 
+size_t subdivMaxTriangles() {
+    size_t memory = 0;
+#if defined(_WIN32)
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof status;
+    if (GlobalMemoryStatusEx(&status)) memory = size_t(status.ullTotalPhys);
+#elif defined(_SC_PHYS_PAGES)
+    const long pages = sysconf(_SC_PHYS_PAGES), page = sysconf(_SC_PAGESIZE);
+    if (pages > 0 && page > 0) memory = size_t(pages) * size_t(page);
+#endif
+    return std::clamp<size_t>(memory / 10 * 6 / kDivideBytesPerTriangle, 50'000'000, 1'000'000'000);
+}
+
 bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, BVH* bvh, size_t maxTriangles) {
+    if (maxTriangles == 0) maxTriangles = subdivMaxTriangles();
     if (mesh.triangleCount() == 0) {
         error = "Nothing to divide";
         return false;
@@ -1552,7 +1578,8 @@ bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, BVH* bvh, size_t 
     if (cc) projected = mesh.quadCount() * 8 + (mesh.triangleCount() - 2 * mesh.quadCount()) * 6;
     else projected = mesh.triangleCount() * 4;
     if (projected > maxTriangles) {
-        error = "Dividing would make " + std::to_string(projected) + " triangles (the limit is " + std::to_string(maxTriangles) + ")";
+        error = "Dividing would make " + std::to_string(projected) + " triangles (the limit for this computer's memory is " +
+                std::to_string(maxTriangles) + ")";
         return false;
     }
     MultiresStack& s = ensureStack(mesh);
@@ -1669,13 +1696,15 @@ bool attachSubdivStack(Mesh& mesh, MultiresStack stack, std::string& error) {
     }
     for (size_t j = 0; j < n; ++j) {
         SubdivLevel& l = stack.levels[j];
-        if (l.data && generatedLevel(l) && !l.data->triangles.empty()) { // they follow from the topology
-            if (l.data.use_count() > 1) l.data = std::make_shared<Mesh>(*l.data);
-            std::vector<glm::uvec3>().swap(l.data->triangles);
+        if (l.data && generatedLevel(l)) { // the triangles and the generated quad pairs follow from the topology
             bool generatedPairs = l.topo->catmullClark && l.data->quadPartners.size() == l.topo->fineTriangles;
             for (size_t t = 0; t < l.data->quadPartners.size() && generatedPairs; ++t)
                 generatedPairs = l.data->quadPartners[t] == uint32_t(t ^ 1);
-            if (generatedPairs) std::vector<uint32_t>().swap(l.data->quadPartners);
+            if (!l.data->triangles.empty() || generatedPairs) {
+                if (l.data.use_count() > 1) l.data = std::make_shared<Mesh>(*l.data);
+                std::vector<glm::uvec3>().swap(l.data->triangles);
+                if (generatedPairs) std::vector<uint32_t>().swap(l.data->quadPartners);
+            }
         }
         if (!l.data || (j > 0 && (!l.topo || l.topo->fineVertices != l.data->vertexCount() ||
                                   (!l.topo->generated && l.topo->fineTriangles != l.data->triangleCount()))) ||

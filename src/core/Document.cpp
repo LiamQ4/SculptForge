@@ -15,10 +15,11 @@ Document::Document() {
     subtools.back().name = "Sculpt";
 }
 
-void Document::setMesh(Mesh m, std::string name) {
+void Document::setMesh(Mesh m, std::string name, BVH* built) {
     mesh = std::move(m);
     mesh.topologyDirty = true;
-    bvh.build(mesh);
+    if (built) bvh = std::move(*built);
+    else bvh.build(mesh);
     undo.clear();
     activeLayer = -1;
     bvhDirty = false;
@@ -67,13 +68,14 @@ void Document::selectSubtool(int i) {
     syncBvh();
 }
 
-int Document::addSubtool(Mesh m, std::string name, bool select, int at) {
+int Document::addSubtool(Mesh m, std::string name, bool select, int at, BVH* built) {
     SubTool s;
     s.id = nextSubtoolId_++;
     s.name = uniqueSubtoolName(name.empty() ? "SubTool" : name);
     s.mesh = std::move(m);
     s.mesh.topologyDirty = true;
-    s.bvh.build(s.mesh);
+    if (built) s.bvh = std::move(*built);
+    else s.bvh.build(s.mesh);
     const int index = at < 0 || at > subtoolCount() ? subtoolCount() : at;
     subtools.insert(subtools.begin() + index, std::move(s));
     if (index <= activeSubtool) ++activeSubtool;
