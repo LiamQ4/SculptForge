@@ -603,3 +603,183 @@ Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit s
 | Higher Res (back up) | 20 |
 | Lower Res again (no edits) | 79 |
 | Higher Res again (no edits) | 20 |
+
+## v0.6
+
+The v0.6 performance batch ran as three branches side by side (mem, brush, view); each adds its own subsection
+here. Same machine and benchmark as above.
+
+### Brushes: vertex sets, normals, BVH refits (feat/brush)
+
+Goal: big Move / Smooth / Inflate / Standard strokes fluid on huge meshes (a large dab under about 25 ms at 33M
+triangles, a medium one under about 5 ms, undo of a large stroke at least twice as fast), with results still
+identical with multithreading on or off. "Before" is main at aac5f68 with the two large-radius rows added to the
+benchmark (28fb707), "after" is feat/brush; both binaries were run in turn, three times each, at 4, 16 and 33M
+(CPU only, no project round trip, 40 dabs per stroke, X symmetry), keeping each row's best run, because the
+other branches' builds and tests kept the machine busy (load 8-20). 64M: best of two runs each.
+
+| 33M triangles, X symmetry | before | after | |
+|---|---:|---:|---|
+| Medium dab (Standard, radius 0.12: 100k vertices per step) | 8.6 ms | **3.6 ms** | 2.4x |
+| Large dab (Standard, radius 0.4: 1M vertices per step) | 49.4 ms | **21.0 ms** | 2.3x |
+| Large Smooth | 27.8 ms | **9.8 ms** | 2.8x |
+| Large Move | 16.5 ms | **5.2 ms** | 3.2x |
+| Undo of the 40-dab large Standard stroke (2.4M vertices) | 69.5 ms | **35.0 ms** | 2.0x |
+| Undo of a medium stroke | 21.7 ms | **10.5 ms** | 2.1x |
+| BVH | 19.5 B/triangle | **17.1** | |
+| Mesh | 62 B/triangle | **60** | |
+| Stroke recorder (allocated by the first stroke) | 12 B/vertex | **3 bits** | |
+
+At 64M triangles (CPU only): medium dab 14.2 -> **7.4 ms**, large 95.9 -> **57.5 ms**, large Smooth 48.2 -> **25.8 ms**,
+large Move 34.9 -> **14.7 ms**, undo of the large stroke 138 -> **98 ms**.
+
+The v0.5 summary's 93 ms for the large dab includes the GPU upload; CPU only, the v0.5 "after" table above
+has 53 ms and 77 ms for its undo, in line with today's "before" runs of the same code (49 and 70 ms).
+
+With the GPU (`sculptforge --bench`, the same runs order, best of two, upload of what each dab changed
+included; the upload itself is the view branch's work and unchanged here), at 33M: medium dab 11.4 -> **6.5 ms**,
+large 62.8 -> **38.7 ms** (15 ms of it the upload), large Move 22.1 -> **11.9 ms**. The CPU-side target (large
+dab under 25 ms) is met; with the upload the large dab is still above it.
+
+#### What changed
+
+- **Vertex sets as bitmaps, listed in index order** (core/IndexBits.h): one bit per vertex (or BVH leaf) plus a
+  summary bit per 4096, so listing a set visits only the chunks that hold members. The BVH vertex query, the
+  normal update and the refit used 32-bit stamps per vertex and listed vertices in the order threads found
+  them; now every dab's vertex list is in increasing index order. On a divided mesh a dab's vertices lie in a few
+  dozen runs of the numbering, so the kernel, the normal update and the undo record walk positions, normals and
+  adjacency front to back instead of jumping between subdivision levels. The order doesn't depend on the thread
+  count, so results stay identical with multithreading on or off (the tests compare bit for bit).
+- **Each thread marks a bitmap of its own** (IndexBits::insertParallel, scratch sets shared process-wide): with
+  one shared bitmap, threads fought over its cache lines and the query scaled 3x on 10 cores; merging per-job
+  sets by chunk made it twice as fast. The query also splits the sphere's subtrees breadth first until it has 128
+  tasks (it used a fixed depth, which gave a medium dab fewer than 8 tasks, so it ran on one thread), skips the
+  distance tests for leaves wholly inside the sphere, and stays on one thread for small dabs.
+- **Refit from the query**: the query already visits the BVH leaves holding the vertices it returns, so a dab
+  refits exactly those (BVH::refitQueried, BVH::refitLeaves) instead of looking every moved vertex's triangles
+  up; the Move brush keeps its stroke's leaves. Generic refits (undo, transforms) use a leaf bitmap. At 33M the
+  large dab's refit went from 11.7 to 5.5 ms.
+- **Normals**: the vertices to update (moved ones and their ring) are a bitmap, listed in order and ORed straight
+  into the mesh's dirty bits; each vertex sums its faces as before (identical values), with the faces of
+  vertices 16 ahead and their corners 8 ahead prefetched (core/Prefetch.h), about 30% less time on one thread.
+  Symmetric dabs update the normals once after all mirrors moved, so a vertex in both halves (near the symmetry
+  plane) is updated once; each mirror still refits the BVH before the next one queries it.
+- **Undo record and Move in parallel**: displaceAll counts per block which vertices the stroke moves for the
+  first time and writes their undo entries at those offsets (same order as before) while moving them; the
+  Sculptor's per-vertex stamps for positions, mask and colours are bitmaps cleared from the stroke's own lists.
+  The Move brush moves each mirror's region in parallel (it was a serial loop). Undo and redo swap position
+  channels in parallel (each lists a vertex once).
+- **Benchmark**: Smooth and Move at radius 0.4, and `--bench-brushes TEXT` to run only the rows whose name
+  contains TEXT.
+
+Tried and dropped: computing each face normal once into a compact array (gathering the faces as a set and
+finding each by its rank) was slower than summing the faces per vertex; prefetching in the refit's leaf loop and
+in the Smooth kernel, longer prefetch distances, and skipping repeated leaves in the refit's lookup made no
+difference or were slower.
+
+Behaviour: results are identical with multithreading on or off. Compared with 0.5 they differ by rounding (a
+brush's area normal and centre are summed over its vertices in index order instead of BVH order) and, where the
+two halves of a symmetric dab overlap, both halves now see the normals from before the dab (the second one used
+to see the first one's).
+
+#### Known limits
+
+- Normal updates and refits still wait on memory: a vertex's faces and their corners are scattered over the
+  triangle and position arrays. Per-leaf contiguous vertex lists would let a leaf's box be recomputed from its
+  15 or so vertices instead of 48 corners, but cost about 4 bytes per triangle; quantised BVH nodes and SoA
+  positions were not tried.
+- At 64M the gains are smaller (1.4x for undo of a large stroke, 98 ms): the generic refit's per-vertex leaf
+  lookup and the normal update over 4.6M vertices dominate.
+- Undo of a Mask or Paint stroke is about 0.4 ms slower at 33M (1.2 instead of 0.8 ms): its entries are now in
+  index order per dab rather than in BVH order.
+- Prefetching is a no-op with MSVC (core/Prefetch.h uses the GCC / Clang builtin).
+
+#### CPU only, 4.0M triangles
+
+| Brush | dab before | dab after | kernel | normals | BVH refit | undo before | undo after |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 1.40 | **1.09** | 0.49 -> 0.44 | 0.48 -> 0.38 | 0.39 -> 0.24 | 2.9 | **1.2** |
+| Standard (large, r 0.4) | 8.04 | **3.51** | 2.95 -> 1.44 | 3.06 -> 0.93 | 1.80 -> 0.89 | 10.0 | **4.1** |
+| Clay | 0.79 | **0.68** | 0.30 -> 0.30 | 0.27 -> 0.22 | 0.20 -> 0.13 | 2.4 | **1.0** |
+| ClayBuildup | 1.03 | **0.82** | 0.43 -> 0.38 | 0.33 -> 0.25 | 0.25 -> 0.16 | 2.5 | **0.8** |
+| Smooth | 0.55 | **0.48** | 0.24 -> 0.23 | 0.17 -> 0.15 | 0.12 -> 0.08 | 2.0 | **1.1** |
+| Smooth (large, r 0.4) | 5.24 | **2.42** | 2.15 -> 1.18 | 2.04 -> 0.68 | 0.93 -> 0.43 | 6.3 | **2.6** |
+| Inflate | 0.51 | **0.47** | 0.19 -> 0.20 | 0.17 -> 0.16 | 0.12 -> 0.08 | 1.9 | **1.1** |
+| DamStandard | 0.49 | **0.45** | 0.19 -> 0.21 | 0.16 -> 0.15 | 0.11 -> 0.08 | 2.4 | **1.0** |
+| Layer | 0.58 | **0.55** | 0.28 -> 0.29 | 0.17 -> 0.15 | 0.11 -> 0.08 | 1.9 | **1.2** |
+| Move | 0.26 | **0.22** | 0.02 -> 0.02 | 0.10 -> 0.12 | 0.12 -> 0.07 | 0.3 | **0.2** |
+| Move (large, r 0.4) | 2.17 | **1.13** | 0.41 -> 0.21 | 0.73 -> 0.55 | 0.86 -> 0.27 | 2.4 | **0.9** |
+| Recipe (pattern) | 0.77 | **0.73** | 0.46 -> 0.48 | 0.17 -> 0.15 | 0.12 -> 0.08 | 2.0 | **0.8** |
+| Mask | 0.19 | **0.21** | 0.17 -> 0.19 | 0.00 -> 0.00 | 0.00 -> 0.00 | 0.1 | **0.1** |
+| Paint | 0.20 | **0.19** | 0.17 -> 0.17 | 0.00 -> 0.00 | 0.00 -> 0.00 | 0.1 | **0.1** |
+
+#### CPU only, 15.9M triangles
+
+| Brush | dab before | dab after | kernel | normals | BVH refit | undo before | undo after |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 4.91 | **2.49** | 1.88 -> 1.03 | 1.82 -> 0.69 | 1.07 -> 0.59 | 10.8 | **4.7** |
+| Standard (large, r 0.4) | 24.70 | **10.29** | 8.98 -> 3.29 | 9.29 -> 3.14 | 5.72 -> 2.90 | 33.8 | **16.9** |
+| Clay | 3.09 | **1.89** | 1.16 -> 0.94 | 1.13 -> 0.48 | 0.71 -> 0.33 | 7.1 | **3.4** |
+| ClayBuildup | 3.35 | **2.18** | 1.33 -> 0.96 | 1.20 -> 0.67 | 0.72 -> 0.43 | 7.6 | **3.4** |
+| Smooth | 2.15 | **1.55** | 0.89 -> 0.78 | 0.69 -> 0.39 | 0.50 -> 0.30 | 5.5 | **2.7** |
+| Smooth (large, r 0.4) | 12.95 | **5.43** | 5.48 -> 2.33 | 4.75 -> 1.51 | 2.30 -> 1.09 | 20.2 | **10.0** |
+| Inflate | 2.12 | **1.54** | 0.77 -> 0.68 | 0.74 -> 0.43 | 0.53 -> 0.33 | 5.4 | **2.6** |
+| DamStandard | 2.07 | **1.54** | 0.76 -> 0.71 | 0.73 -> 0.42 | 0.50 -> 0.31 | 5.4 | **2.5** |
+| Layer | 2.41 | **1.73** | 1.04 -> 0.92 | 0.78 -> 0.44 | 0.51 -> 0.29 | 6.5 | **2.7** |
+| Move | 1.15 | **0.68** | 0.14 -> 0.11 | 0.42 -> 0.37 | 0.51 -> 0.12 | 0.9 | **0.6** |
+| Move (large, r 0.4) | 7.39 | **2.80** | 1.57 -> 0.34 | 2.37 -> 1.23 | 2.67 -> 0.77 | 5.6 | **2.4** |
+| Recipe (pattern) | 3.17 | **2.65** | 1.78 -> 1.81 | 0.80 -> 0.45 | 0.50 -> 0.28 | 6.6 | **2.6** |
+| Mask | 0.76 | **0.54** | 0.69 -> 0.47 | 0.00 -> 0.00 | 0.00 -> 0.00 | 0.3 | **0.5** |
+| Paint | 0.69 | **0.58** | 0.62 -> 0.51 | 0.00 -> 0.00 | 0.00 -> 0.00 | 0.5 | **0.8** |
+
+#### CPU only, 33.2M triangles
+
+| Brush | dab before | dab after | kernel | normals | BVH refit | undo before | undo after |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 8.59 | **3.64** | 3.66 -> 1.47 | 2.87 -> 0.98 | 1.76 -> 0.85 | 21.7 | **10.5** |
+| Standard (large, r 0.4) | 49.42 | **21.03** | 18.08 -> 6.06 | 18.22 -> 7.63 | 11.67 -> 5.53 | 69.5 | **35.0** |
+| Clay | 5.63 | **2.70** | 2.36 -> 1.22 | 2.00 -> 0.76 | 1.03 -> 0.51 | 14.3 | **6.7** |
+| ClayBuildup | 6.32 | **2.96** | 2.60 -> 1.28 | 2.26 -> 0.80 | 1.22 -> 0.59 | 15.8 | **7.5** |
+| Smooth | 3.95 | **2.14** | 1.62 -> 1.00 | 1.44 -> 0.64 | 0.73 -> 0.30 | 12.1 | **5.3** |
+| Smooth (large, r 0.4) | 27.81 | **9.78** | 12.07 -> 3.80 | 9.97 -> 3.14 | 4.98 -> 1.84 | 40.5 | **18.2** |
+| Inflate | 4.39 | **2.02** | 1.72 -> 0.87 | 1.67 -> 0.63 | 0.83 -> 0.37 | 11.1 | **4.9** |
+| DamStandard | 4.28 | **2.41** | 1.64 -> 1.04 | 1.74 -> 0.74 | 0.73 -> 0.38 | 11.4 | **4.8** |
+| Layer | 4.85 | **2.80** | 2.14 -> 1.47 | 1.73 -> 0.74 | 0.81 -> 0.36 | 11.5 | **5.0** |
+| Move | 2.14 | **1.26** | 0.28 -> 0.28 | 0.90 -> 0.62 | 0.78 -> 0.23 | 1.8 | **1.1** |
+| Move (large, r 0.4) | 16.52 | **5.23** | 3.23 -> 0.55 | 5.88 -> 2.34 | 5.98 -> 1.53 | 10.7 | **4.4** |
+| Recipe (pattern) | 5.05 | **3.33** | 2.57 -> 2.15 | 1.53 -> 0.64 | 0.77 -> 0.33 | 11.1 | **5.1** |
+| Mask | 1.39 | **1.08** | 1.26 -> 0.90 | 0.00 -> 0.00 | 0.00 -> 0.00 | 0.8 | **1.2** |
+| Paint | 1.34 | **1.06** | 1.21 -> 0.90 | 0.00 -> 0.00 | 0.00 -> 0.00 | 1.3 | **1.8** |
+
+#### With the GPU, 4.0M triangles
+
+| Brush | dab before | dab after | of which GPU upload (after) | undo before | undo after |
+|---|---:|---:|---:|---:|---:|
+| Standard | 1.77 | **1.47** | 0.36 | 3.4 | **1.6** |
+| Standard (large, r 0.4) | 10.76 | **5.97** | 2.28 | 9.8 | **4.2** |
+| Smooth (large, r 0.4) | 6.98 | **3.83** | 1.21 | 5.7 | **3.1** |
+| Move (large, r 0.4) | 3.03 | **2.12** | 0.78 | 2.0 | **1.2** |
+| Clay | 1.04 | **0.90** | 0.22 | 2.6 | **1.6** |
+| Inflate | 0.67 | **0.62** | 0.16 | 1.5 | **1.1** |
+
+#### With the GPU, 15.9M triangles
+
+| Brush | dab before | dab after | of which GPU upload (after) | undo before | undo after |
+|---|---:|---:|---:|---:|---:|
+| Standard | 6.80 | **3.68** | 1.29 | 12.9 | **5.2** |
+| Standard (large, r 0.4) | 32.72 | **18.57** | 7.68 | 33.2 | **17.4** |
+| Smooth (large, r 0.4) | 18.38 | **9.54** | 4.00 | 20.6 | **10.3** |
+| Move (large, r 0.4) | 10.35 | **5.82** | 3.03 | 5.6 | **2.5** |
+| Clay | 3.80 | **2.60** | 0.81 | 6.9 | **2.9** |
+| Inflate | 2.64 | **2.23** | 0.66 | 5.3 | **2.2** |
+
+#### With the GPU, 33.2M triangles
+
+| Brush | dab before | dab after | of which GPU upload (after) | undo before | undo after |
+|---|---:|---:|---:|---:|---:|
+| Standard | 11.42 | **6.50** | 2.64 | 21.7 | **11.8** |
+| Standard (large, r 0.4) | 62.83 | **38.74** | 14.97 | 68.7 | **36.7** |
+| Smooth (large, r 0.4) | 32.19 | **20.94** | 8.62 | 36.6 | **19.8** |
+| Move (large, r 0.4) | 22.07 | **11.88** | 5.98 | 11.1 | **5.8** |
+| Clay | 6.60 | **4.44** | 1.74 | 13.2 | **6.6** |
+| Inflate | 5.10 | **3.68** | 1.47 | 10.5 | **5.6** |

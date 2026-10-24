@@ -5,6 +5,17 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Next version (in development)
+
+### Big brushes on huge meshes
+
+Large Move, Smooth, Inflate and Standard strokes are much quicker on tens of millions of polygons: on a 33
+million triangle model a brush covering a tenth of it (a million vertices per dab with symmetry) takes about 39
+ms per dab instead of 63, Move at that size 12 instead of 22, a medium brush 6.5 ms instead of 11, and undoing a
+big stroke is about twice as fast.
+Sculpting also needs about 300 MB less memory at that size. See
+[Performance and big meshes](performance.md).
+
 ## Version 0.5
 
 The ZBrush workflow core: subdivision levels, quad retopology, map baking, the Gizmo 3D, and speed at tens of

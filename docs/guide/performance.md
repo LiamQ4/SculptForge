@@ -15,13 +15,14 @@ On a 2021 laptop (Apple M1 Pro, 10 cores, integrated GPU), with X symmetry on an
 | Mesh | One dab of a medium brush | Turning the view |
 |---|---|---|
 | 4 million triangles | about 1.5 ms | about 200 frames a second |
-| 16 million triangles | about 6 ms | about 85 frames a second |
-| 33 million triangles | about 10 ms | about 50 (4x antialiasing), 70 with Fast Navigation |
+| 16 million triangles | about 4 ms | about 85 frames a second |
+| 33 million triangles | about 6.5 ms | about 50 (4x antialiasing), 70 with Fast Navigation |
 
 A dab is one step of the brush along the stroke; the app draws several per frame when you move fast. Under
 16 ms per dab a stroke keeps up with a 60 Hz display. Very large brushes cost more, since they move more
-vertices: a brush covering a tenth of a 33 million triangle sphere (over a million vertices per dab) takes about
-90 ms per dab.
+vertices: a brush covering a tenth of a 33 million triangle sphere (about a million vertices per dab with
+symmetry) takes about 40 ms per dab with Standard, 20 ms with Smooth and 12 ms with Move, of which sending the
+change to the graphics card is about a third.
 
 [Performance figures](https://github.com/islandmed/SculptForge/blob/main/docs/performance.md) has the full
 measurements, and how to run the same benchmark on your own machine.
@@ -49,7 +50,7 @@ setting is also in the <kbd>F3</kbd> command palette (type "antialiasing", "fast
   lighter.
 - **Hide what you're not working on.** Hidden SubTools aren't drawn and hidden parts of a SubTool aren't
   sculpted (**Tool > Visibility**). A hidden SubTool costs no drawing time at all.
-- **Memory.** A sculpting mesh takes about 60 bytes per triangle, its BVH about 20, and its subdivision levels
+- **Memory.** A sculpting mesh takes about 60 bytes per triangle, its BVH about 17, and its subdivision levels
   about 75 more, so a 33 million triangle sculpt with levels needs about 5 GB of memory, and opening or saving a
   project briefly needs about twice that. Project files over 4 GB are saved in the ZIP64 format.
 - **The graphics card.** A mesh needs about 25 bytes per triangle on the graphics card. If a SubTool doesn't fit,
