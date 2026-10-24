@@ -10,7 +10,7 @@ All notable changes to SculptForge are listed here. The format follows
 - Meshes are drawn in clusters of up to 4096 triangles (64-triangle runs sorted along a Morton curve). Each
   frame skips the clusters outside the view and, on closed meshes seen from outside, the clusters facing away
   (the GPU also skips the back faces left in the others); the rest go in one multi-draw with 16-bit indices.
-  Orbiting a 33M triangle sphere with 4x antialiasing: 20.6 -> 7.7 ms; 104M: 19.3 ms.
+  Orbiting a 33M triangle sphere with 4x antialiasing: 20.6 -> 8.7 ms; 104M: 19.6 ms.
 - Vertices take 12 bytes on the GPU (28 before): positions on a 21-bit grid over the mesh, octahedral normals,
   square-root companded curvature. Polypaint is 8-bit (gamma encoded), the mask 8-bit, polygroups 16-bit. With
   the index and wireframe savings a mesh needs about 15 bytes per triangle on the GPU (46 before on meshes with
@@ -21,8 +21,8 @@ All notable changes to SculptForge are listed here. The format follows
   view starts moving.
 - The wireframe's edges are built when the wireframe is turned on, each edge once (they were always kept,
   every edge twice).
-- First upload of a 33M mesh about twice as fast (indices and vertices written straight into mapped buffers
-  while the layout is built); paint and mask dabs no longer re-send positions and normals.
+- First upload of a 33M mesh 701 -> 422 ms (indices and vertices written straight into mapped buffers while
+  the layout is built); paint and mask dabs no longer re-send positions and normals.
 - `sculptforge --bench` reports GPU memory, triangles drawn after culling, the motion proxy, and orbiting with and
   without antialiasing; `--bench-view` runs only the viewport's part.
 

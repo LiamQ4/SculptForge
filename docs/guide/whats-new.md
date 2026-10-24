@@ -19,7 +19,7 @@ the memory it did.
   on an M1 Pro laptop.
 - **A third of the graphics memory**: about 15 bytes per triangle (it was over 40 on meshes with quads), so
   bigger sculpts fit on the graphics card. The wireframe's edges are only kept while the wireframe is on.
-- Opening a big model or dividing it sends it to the graphics card about twice as fast.
+- Opening a big model or dividing it sends it to the graphics card about 40% faster.
 
 See [Performance and big meshes](performance.md).
 
