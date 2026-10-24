@@ -254,6 +254,16 @@ inline void sortSmall(uint32_t* a, uint32_t n) {
     }
 }
 
+// Four values in ascending order (a branchless sorting network, in registers: rings are sorted per lookup).
+inline void sort4(uint32_t* out, uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
+    const uint32_t ab0 = std::min(a, b), ab1 = std::max(a, b), cd0 = std::min(c, d), cd1 = std::max(c, d);
+    const uint32_t lo = std::min(ab0, cd0), m0 = std::max(ab0, cd0), m1 = std::min(ab1, cd1), hi = std::max(ab1, cd1);
+    out[0] = lo;
+    out[1] = std::min(m0, m1);
+    out[2] = std::max(m0, m1);
+    out[3] = hi;
+}
+
 inline uint32_t uniqueSmall(uint32_t* a, uint32_t n) {
     uint32_t k = 0;
     for (uint32_t i = 0; i < n; ++i)
@@ -288,6 +298,11 @@ IndexRing Mesh::implicitTriangles(uint32_t v) const {
             }
         } else if (v < nv + ne) {
             const glm::uvec2 sides = ia.edgeSides[v - nv];
+            if (cc && sides.y != kNone) {
+                sort4(r.buf_, 2 * sides.x, 2 * ia.next(sides.x) + 1, 2 * sides.y, 2 * ia.next(sides.y) + 1);
+                r.size_ = 4;
+                return r;
+            }
             for (uint32_t q : {sides.x, sides.y}) {
                 if (q == kNone) continue;
                 if (cc) {
@@ -421,7 +436,15 @@ IndexRing Mesh::implicitNeighbors(uint32_t v) const {
             n += uniqueSmall(others, m);
         }
     } else {
-        const uint32_t p = v - nf, o = tp.polyOffsets[p], sides = tp.polyOffsets[p + 1] - o;
+        const uint32_t p = v - nf, o = ia.sides == 4 ? 4 * p : tp.polyOffsets[p], sides = ia.sides == 4 ? 4 : tp.polyOffsets[p + 1] - o;
+        if (sides == 4) {
+            const uint32_t* c = &tp.polyVerts[o];
+            const uint32_t* e = &tp.polyEdges[o];
+            sort4(out, c[0], c[1], c[2], c[3]);
+            sort4(out + 4, nv + e[0], nv + e[1], nv + e[2], nv + e[3]);
+            r.size_ = 8;
+            return r;
+        }
         for (uint32_t i = 0; i < sides; ++i) out[n++] = tp.polyVerts[o + i];
         sortSmall(out, sides);
         for (uint32_t i = 0; i < sides; ++i) out[n++] = nv + tp.polyEdges[o + i];
