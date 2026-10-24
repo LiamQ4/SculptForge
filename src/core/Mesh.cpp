@@ -126,6 +126,21 @@ void Mesh::sanitizeAttributes() {
 void Mesh::rebuildTopology() {
     sanitizeAttributes();
     const size_t nv = positions.size();
+    finishTopology(); // (the stamps, normals and dirty bits first: they don't depend on the adjacency)
+
+    // A level made by Divide: its adjacency follows from the level's topology.
+    implicit_.reset();
+    if (multires) {
+        const std::shared_ptr<const SubdivTopology>& tp = multires->levels[size_t(multires->current)].topo;
+        if (tp && subdivImplicitAdjacency(*tp, triangles)) implicit_ = tp;
+    }
+    if (implicit_) {
+        std::vector<uint32_t>().swap(adjOffsets_);
+        std::vector<uint32_t>().swap(adjList_);
+        std::vector<uint32_t>().swap(vtOffsets_);
+        std::vector<uint32_t>().swap(vtList_);
+        return;
+    }
 
     vtOffsets_.assign(nv + 1, 0);
     for (const auto& t : triangles)
@@ -165,7 +180,10 @@ void Mesh::rebuildTopology() {
             std::copy(r.begin(), r.end(), adjList_.begin() + adjOffsets_[v]);
         }
     });
+}
 
+void Mesh::finishTopology() {
+    const size_t nv = positions.size();
     vertStamp_.assign(nv, 0);
     stamp_ = 0;
     normals.resize(nv);
@@ -174,6 +192,101 @@ void Mesh::rebuildTopology() {
     if (dirtyBegin < dirtyEnd) markDirtyRange(dirtyBegin, std::min(dirtyEnd, uint32_t(nv)));
     topologyDirty = true;
     facesDirty = true;
+}
+
+namespace {
+
+inline void sortSmall(uint32_t* a, uint32_t n) {
+    for (uint32_t i = 1; i < n; ++i) {
+        const uint32_t x = a[i];
+        uint32_t j = i;
+        for (; j > 0 && a[j - 1] > x; --j) a[j] = a[j - 1];
+        a[j] = x;
+    }
+}
+
+inline uint32_t uniqueSmall(uint32_t* a, uint32_t n) {
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n; ++i)
+        if (k == 0 || a[k - 1] != a[i]) a[k++] = a[i];
+    return k;
+}
+
+} // namespace
+
+IndexRing Mesh::implicitTriangles(uint32_t v) const {
+    // Fine vertices are the coarse vertices, then one per coarse edge, then one per polygon; each polygon's fine
+    // triangles are laid out as generateFaces does (Catmull-Clark: corner i -> triangles 2i, 2i + 1 of the
+    // polygon, the first holding side i's edge point, the second side i - 1's; Loop: corner i -> triangle i,
+    // the edge points' triangle last).
+    const SubdivTopology& tp = *implicit_;
+    const uint32_t nv = tp.coarseVertices, ne = uint32_t(tp.edges.size());
+    constexpr uint32_t kNone = SubdivTopology::kNone;
+    IndexRing r;
+    auto add = [&](size_t f) { r.buf_[r.size_++] = uint32_t(f); };
+    if (v < nv) {
+        uint32_t polys[IndexRing::kCapacity];
+        uint32_t n = 0;
+        for (uint32_t k = tp.vertEdgeOffsets[v]; k < tp.vertEdgeOffsets[v + 1]; ++k) {
+            const glm::uvec2 f = tp.edgeFaces[tp.vertEdges[k]];
+            polys[n++] = f.x;
+            if (f.y != kNone) polys[n++] = f.y;
+        }
+        sortSmall(polys, n);
+        n = uniqueSmall(polys, n);
+        for (uint32_t k = 0; k < n; ++k) {
+            const uint32_t p = polys[k], o = tp.polyOffsets[p], sides = tp.polyOffsets[p + 1] - o;
+            uint32_t i = 0;
+            while (i + 1 < sides && tp.polyVerts[o + i] != v) ++i;
+            if (tp.catmullClark) {
+                add(2 * size_t(o + i));
+                add(2 * size_t(o + i) + 1);
+            } else {
+                add(4 * size_t(p) + i);
+            }
+        }
+    } else if (v < nv + ne) {
+        const uint32_t e = v - nv;
+        const glm::uvec2 f = tp.edgeFaces[e];
+        const uint32_t polys[2] = {std::min(f.x, f.y), f.y == kNone ? kNone : std::max(f.x, f.y)};
+        for (uint32_t p : polys) {
+            if (p == kNone) break;
+            const uint32_t o = tp.polyOffsets[p], sides = tp.polyOffsets[p + 1] - o;
+            uint32_t s = 0;
+            while (s + 1 < sides && tp.polyEdges[o + s] != e) ++s;
+            if (tp.catmullClark) {
+                const size_t a = 2 * size_t(o + s), b = 2 * size_t(o + (s + 1) % sides) + 1;
+                add(std::min(a, b));
+                add(std::max(a, b));
+            } else {
+                const size_t a = 4 * size_t(p) + s, b = 4 * size_t(p) + (s + 1) % 3;
+                add(std::min(a, b));
+                add(std::max(a, b));
+                add(4 * size_t(p) + 3);
+            }
+        }
+    } else {
+        const uint32_t p = v - nv - ne;
+        for (size_t t = tp.firstFineTriangle(p), end = tp.firstFineTriangle(p + 1); t < end; ++t) add(t);
+    }
+    return r;
+}
+
+IndexRing Mesh::implicitNeighbors(uint32_t v) const {
+    const IndexRing tris = implicitTriangles(v);
+    uint32_t all[2 * IndexRing::kCapacity];
+    uint32_t n = 0;
+    for (uint32_t t : tris) {
+        const glm::uvec3& tri = triangles[t];
+        for (int c = 0; c < 3; ++c)
+            if (tri[c] != v) all[n++] = tri[c];
+    }
+    sortSmall(all, n);
+    n = uniqueSmall(all, n);
+    IndexRing r;
+    std::copy(all, all + n, r.buf_);
+    r.size_ = n;
+    return r;
 }
 
 uint32_t Mesh::nextStamp() {
@@ -385,7 +498,7 @@ size_t Mesh::memoryBytes() const {
                bytes(adjList_) + bytes(vtOffsets_) + bytes(vtList_) + bytes(vertStamp_) + bytes(scratchVerts_) + bytes(dirtyBlocks) + bytes(dirtyBits);
     for (const auto& l : layers) n += bytes(l.delta);
     for (const auto& l : paintLayers) n += bytes(l.color) + bytes(l.alpha);
-    return n;
+    return n; // (implicit adjacency: the level topology is counted with the subdivision levels)
 }
 
 static void laplacianStep(Mesh& m, float lambda, std::vector<glm::vec3>& next) {

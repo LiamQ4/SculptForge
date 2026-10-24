@@ -18,6 +18,31 @@ namespace sf {
 
 struct PaintTexture;
 struct MultiresStack;
+struct SubdivTopology;
+
+// The vertices or triangles around a vertex (Mesh::neighbors, Mesh::vertexTriangles), in ascending order: a view
+// of the mesh's adjacency lists or, where the mesh's adjacency is implicit, the list itself. Use it like a span
+// (but don't keep a pointer into it past its lifetime).
+class IndexRing {
+public:
+    static constexpr uint32_t kCapacity = 64;
+    IndexRing() = default;
+    IndexRing(const uint32_t* b, const uint32_t* e) : ptr_(b), size_(uint32_t(e - b)) {}
+    const uint32_t* data() const { return ptr_ ? ptr_ : buf_; }
+    const uint32_t* begin() const { return data(); }
+    const uint32_t* end() const { return data() + size_; }
+    size_t size() const { return size_; }
+    bool empty() const { return size_ == 0; }
+    uint32_t operator[](size_t i) const { return data()[i]; }
+    uint32_t front() const { return data()[0]; }
+    uint32_t back() const { return data()[size_ - 1]; }
+
+private:
+    friend class Mesh;
+    const uint32_t* ptr_ = nullptr; // null: the indices are in buf_
+    uint32_t size_ = 0;
+    uint32_t buf_[kCapacity]; // (not initialised: only the first size_ are used)
+};
 
 struct AABB {
     glm::vec3 min{std::numeric_limits<float>::max()};
@@ -159,18 +184,24 @@ public:
     size_t vertexCount() const { return positions.size(); }
     size_t triangleCount() const { return triangles.size(); }
 
-    // Must be called after the triangle list or vertex count changes.
+    // Must be called after the triangle list or vertex count changes. A mesh that is the current level of its
+    // subdivision stack, made by Divide, gets implicit adjacency (implicitAdjacency).
     void rebuildTopology();
     void recomputeAllNormals();
     // Recompute normals of the faces around `verts` and of every vertex they touch.
     void updateNormals(std::span<const uint32_t> verts);
 
-    std::span<const uint32_t> neighbors(uint32_t v) const {
+    // The vertices sharing an edge with `v`, and the triangles around it, in ascending order.
+    IndexRing neighbors(uint32_t v) const {
+        if (implicit_) return implicitNeighbors(v);
         return {adjList_.data() + adjOffsets_[v], adjList_.data() + adjOffsets_[v + 1]};
     }
-    std::span<const uint32_t> vertexTriangles(uint32_t v) const {
+    IndexRing vertexTriangles(uint32_t v) const {
+        if (implicit_) return implicitTriangles(v);
         return {vtList_.data() + vtOffsets_[v], vtList_.data() + vtOffsets_[v + 1]};
     }
+    // True when the adjacency follows from the subdivision level this mesh is (see rebuildTopology).
+    bool implicitAdjacency() const { return bool(implicit_); }
 
     AABB bounds() const;
     // Bytes this mesh holds (every array, topology included; not the shared texture or subdivision stack).
@@ -210,9 +241,16 @@ public:
 
 private:
     uint32_t nextStamp();
+    void finishTopology();
+    IndexRing implicitTriangles(uint32_t v) const;
+    IndexRing implicitNeighbors(uint32_t v) const;
 
+    // Vertex adjacency (CSR), or, on a mesh that is a level made by Divide (whose triangles are the ones its
+    // subdivision topology generates), that topology: the triangles and rings around a vertex are worked out from
+    // the coarse polygons around it instead of stored, which saves about 28 bytes per triangle.
     std::vector<uint32_t> adjOffsets_, adjList_;
     std::vector<uint32_t> vtOffsets_, vtList_;
+    std::shared_ptr<const SubdivTopology> implicit_;
 
     // updateNormals: vertices already gathered this call (== stamp_), the gathered ones, per-block parts.
     std::vector<uint32_t> vertStamp_;

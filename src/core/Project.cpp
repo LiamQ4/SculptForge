@@ -208,7 +208,10 @@ void writeMesh(Writer& w, const std::string& prefix, const Mesh& m, Json& out, s
 
 // Reads a mesh from its `mesh` and `layers` manifest entries (size-checked against the blobs). `levelData`: a
 // subdivision level's arrays, kept without topology or normals; a generated level's have no triangles.
-bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& error, bool levelData = false) {
+// `topology` false: the caller calls finishMesh once the mesh has its subdivision levels (so it gets the
+// adjacency they give).
+bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& error, bool levelData = false,
+              bool topology = true) {
     const size_t nv = countOf(mj["vertex_count"]), nt = countOf(mj["triangle_count"]);
     if (nv == size_t(-1) || nt == size_t(-1)) {
         error = "Project mesh has no valid vertex/triangle count";
@@ -260,14 +263,20 @@ bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& e
         error = r.error;
         return false;
     }
-    if (levelData) {
+    if (levelData || !topology) {
         if (!m.layers.empty()) m.evaluateAll();
+        if (!topology) m.sanitizeAttributes();
         return true;
     }
     m.rebuildTopology();
     if (!m.layers.empty()) m.evaluateAll();
     m.recomputeAllNormals();
     return true;
+}
+
+void finishMesh(Mesh& m) {
+    m.rebuildTopology();
+    m.recomputeAllNormals();
 }
 
 // Paint layers (core/PaintLayer.h) are their own SubTool key, "paint_layers", next to "mesh":
@@ -741,10 +750,11 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
             if (s.name.empty()) s.name = "SubTool";
             s.visible = sj["visible"].asBool(true);
             s.gozName = sj["goz_name"].asString();
-            if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error)) return false;
+            if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error, false, false)) return false;
             if (!readPaintLayers(r, sj["paint_layers"], s.mesh, error)) return false;
             if (!readTexture(r, sj["texture"], s.mesh, error)) return false;
             if (!readSubdiv(r, sj["subdiv"], s.mesh, error, version < 5)) return false;
+            finishMesh(s.mesh);
             s.activeLayer = int(sj["active_layer"].asNumber(-1));
             subtools.push_back(std::move(s));
         }

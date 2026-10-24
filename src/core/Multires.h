@@ -81,7 +81,7 @@ struct SubdivTopology {
     std::vector<uint32_t> vertexChild, edgeChild, faceChild;
     std::vector<uint32_t> fineParentPoly, fineParentTri;
     std::vector<uint8_t> fineCode;
-    bool nonManifold = false; // some coarse edge has more than two polygons
+    bool nonManifold = false; // some coarse edge has more than two polygons, or a polygon repeats a corner
     uint32_t maxValence = 0;  // most edges at one coarse vertex
     static constexpr uint32_t kNone = ~0u;
 
@@ -103,6 +103,10 @@ struct SubdivTopology {
     size_t firstFineTriangle(size_t p) const { return catmullClark ? size_t(polyOffsets[p]) * 2 : p * 4; }
     size_t bytes() const;
 };
+
+// True when a mesh with these triangles can work out its adjacency from `tp` (Mesh::implicitAdjacency): a
+// generated level of a manifold mesh without very high valences, whose triangles are the generated ones.
+bool subdivImplicitAdjacency(const SubdivTopology& tp, const std::vector<glm::uvec3>& triangles);
 
 // The fine triangles of a generated level, in order, and (Catmull-Clark) their quad pairs (each corner of a
 // polygon becomes one quad: triangles 2i and 2i + 1).

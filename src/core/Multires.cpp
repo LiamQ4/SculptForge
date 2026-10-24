@@ -183,6 +183,7 @@ std::shared_ptr<SubdivTopology> buildCoarse(const std::vector<glm::uvec3>& trian
         const uint32_t u = pairing.empty() ? kNone : pairing[t];
         const glm::uvec3& a = triangles[t];
         if (u == kNone) {
+            if (a.x == a.y || a.y == a.z || a.x == a.z) tp->nonManifold = true; // degenerate: no implicit adjacency
             for (uint32_t c = 0; c < 3; ++c) {
                 tp->polyVerts.push_back(a[c]);
             }
@@ -399,6 +400,14 @@ bool matchesGenerated(const SubdivTopology& tp, const std::vector<glm::uvec3>& t
     });
     return same;
 }
+
+} // namespace
+
+bool subdivImplicitAdjacency(const SubdivTopology& tp, const std::vector<glm::uvec3>& triangles) {
+    return tp.generated && !tp.nonManifold && tp.maxValence <= IndexRing::kCapacity / 2 && matchesGenerated(tp, triangles);
+}
+
+namespace {
 
 // True when the child maps number the fine vertices as a generated level does.
 bool canonicalChildren(const SubdivTopology& tp) {
