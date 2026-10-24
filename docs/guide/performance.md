@@ -14,9 +14,9 @@ On a 2021 laptop (Apple M1 Pro, 10 cores, integrated GPU), with X symmetry on an
 
 | Mesh | One dab of a medium brush | Turning the view |
 |---|---|---|
-| 4 million triangles | about 1.5 ms | about 350 frames a second |
-| 16 million triangles | about 4 ms | about 200 frames a second |
-| 33 million triangles | about 6.5 ms | about 115 (4x antialiasing), 300 with Fast Navigation |
+| 4 million triangles | about 2 ms | about 350 frames a second |
+| 16 million triangles | about 4.5 ms | about 170 frames a second |
+| 33 million triangles | about 7.5 ms | about 110 (4x antialiasing), 270 with Fast Navigation |
 
 Turning the view stays smooth at 100 million triangles: about 50 frames a second with 4x antialiasing, 100 with
 Fast Navigation. These figures are for closed models (no holes); see "Closed meshes draw faster" below.
@@ -24,7 +24,7 @@ Fast Navigation. These figures are for closed models (no holes); see "Closed mes
 A dab is one step of the brush along the stroke; the app draws several per frame when you move fast. Under
 16 ms per dab a stroke keeps up with a 60 Hz display. Very large brushes cost more, since they move more
 vertices: a brush covering a tenth of a 33 million triangle sphere (about a million vertices per dab with
-symmetry) takes about 40 ms per dab with Standard, 20 ms with Smooth and 12 ms with Move, of which sending the
+symmetry) takes about 45 ms per dab with Standard, 21 ms with Smooth and 15 ms with Move, of which sending the
 change to the graphics card is about a third.
 
 [Performance figures](https://github.com/islandmed/SculptForge/blob/main/docs/performance.md) has the full
@@ -53,8 +53,8 @@ setting is also in the <kbd>F3</kbd> command palette (type "antialiasing", "fast
   lighter.
 - **Hide what you're not working on.** Hidden SubTools aren't drawn and hidden parts of a SubTool aren't
   sculpted (**Tool > Visibility**). A hidden SubTool costs no drawing time at all.
-- **Memory.** A divided model takes about 90 bytes per triangle: about 40 for the sculpting mesh, 17 for its
-  BVH and 30 for its subdivision levels. A 33 million triangle sculpt with levels needs about 3 GB of memory, a 100
+- **Memory.** A divided model takes about 85 bytes per triangle: about 37 for the sculpting mesh, 17 for its
+  BVH and 29 for its subdivision levels. A 33 million triangle sculpt with levels needs about 3.4 GB of memory, a 100
   million one about 9 GB (and a little more while dividing). Opening a project needs only a little more than the
   model itself. A mesh without levels (an import, a remesh) takes about 60 bytes per triangle for the mesh. Project
   files over 4 GB are saved in the ZIP64 format.
