@@ -9,12 +9,15 @@
 
 #include "core/Benchmark.h"
 #include "core/BrushRecipe.h"
+#include "core/IndexBits.h"
 #include "core/Primitives.h"
 #include "core/ThreadPool.h"
 #include "core/UploadOrder.h"
 #include "io/Zip.h"
 
+#include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <thread>
 
@@ -250,6 +253,136 @@ TEST(bvh_refit_after_big_stroke_finds_everything) {
         ok = ok && found.size() == brute;
     }
     CHECK(ok);
+}
+
+TEST(index_bits_list_members_in_order) {
+    // Three chunks and a bit, with members at the chunk edges, added twice over.
+    const uint32_t n = 3 * IndexBits::kChunk + 77;
+    IndexBits bits;
+    bits.resize(n);
+    CHECK(bits.empty() && bits.capacity() >= n);
+    std::vector<uint32_t> want;
+    for (uint32_t i = 0; i < n; ++i)
+        if ((i * 2654435761u) % 7 == 0 || i == IndexBits::kChunk - 1 || i == IndexBits::kChunk || i == n - 1) want.push_back(i);
+    for (int pass = 0; pass < 2; ++pass)
+        for (size_t k = want.size(); k-- > 0;) CHECK(bits.insert(want[k]) == (pass == 0));
+    CHECK(bits.contains(want[0]) && !bits.contains(1) && !bits.empty());
+    std::vector<uint32_t> got{12345}; // take appends
+    bits.take(got);
+    CHECK(got.size() == want.size() + 1 && got[0] == 12345 && std::equal(want.begin(), want.end(), got.begin() + 1));
+    CHECK(bits.empty() && !bits.contains(want[0]));
+    got.clear();
+    bits.take(got);
+    CHECK(got.empty());
+
+    // insertParallel (each job into a set of its own, merged) finds the same set as one thread, and so does the
+    // word callback of take().
+    auto fill = [&](IndexBits& b) {
+        b.insertParallel(200000, 1000, [&](size_t first, size_t last, IndexBits& set) {
+            for (size_t i = first; i < last; ++i) set.insertLocal(uint32_t((i * 7919u) % n));
+        });
+    };
+    IndexBits par, ser;
+    par.resize(n);
+    ser.resize(n);
+    fill(par);
+    serially([&] { fill(ser); });
+    std::vector<uint32_t> a, b;
+    size_t words = 0, bitsSeen = 0;
+    par.take(a, [&](size_t, uint64_t w) {
+        ++words;
+        bitsSeen += size_t(std::popcount(w));
+    });
+    ser.take(b);
+    CHECK(a == b && a.size() == n && bitsSeen == n && words == (n + 63) / 64);
+    CHECK(std::is_sorted(a.begin(), a.end()));
+}
+
+TEST(bvh_query_lists_inside_vertices_in_order) {
+    Document d = sphereDoc(7);
+    std::vector<uint32_t> found, brute;
+    bool ok = true;
+    for (int i = 0; i < 12; ++i) {
+        const glm::vec3 c = glm::normalize(glm::vec3(std::sin(float(i)), std::cos(float(i) * 1.7f), 0.5f));
+        const float r = i == 0 ? 0.0f : i == 1 ? 5.0f : 0.02f * float(i);
+        d.bvh.queryVertices(d.mesh, c, r, found);
+        brute.clear();
+        for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) {
+            const glm::vec3 o = d.mesh.positions[v] - c;
+            if (glm::dot(o, o) <= r * r) brute.push_back(v);
+        }
+        ok = ok && found == brute;
+    }
+    CHECK(ok);
+}
+
+TEST(bvh_refit_from_query_matches_refit) {
+    // Move what a query found, then refit one copy of the tree from the query's leaves and another the usual
+    // way: both find exactly what a brute force search does.
+    Document d = sphereDoc(7);
+    BVH other = d.bvh;
+    std::vector<uint32_t> moved;
+    const glm::vec3 c = glm::normalize(glm::vec3(0.2f, 0.3f, 1.0f));
+    d.bvh.queryVertices(d.mesh, c, 0.4f, moved);
+    CHECK(!d.bvh.queriedLeaves().empty());
+    for (uint32_t v : moved) d.mesh.positions[v] += glm::vec3(0.1f, -0.05f, 0.2f) * (1.0f + 0.3f * std::sin(float(v)));
+    d.bvh.refitQueried(d.mesh);
+    other.refit(d.mesh, moved);
+    std::vector<uint32_t> a, b;
+    bool ok = true;
+    for (int i = 0; i < 20; ++i) {
+        const glm::vec3 q = glm::normalize(glm::vec3(0.3f, 0.4f - 0.05f * float(i), 1.0f)) * 1.1f;
+        d.bvh.queryVertices(d.mesh, q, 0.15f, a);
+        other.queryVertices(d.mesh, q, 0.15f, b);
+        size_t brute = 0;
+        for (const glm::vec3& p : d.mesh.positions) {
+            const glm::vec3 o = p - q;
+            brute += glm::dot(o, o) <= 0.15f * 0.15f;
+        }
+        ok = ok && a == b && a.size() == brute;
+    }
+    CHECK(ok);
+}
+
+TEST(stroke_records_each_vertex_once_per_stroke) {
+    // The Sculptor's per-stroke "already recorded" bits start empty for every stroke, also after one that never
+    // ended: each stroke's undo step restores exactly what it changed.
+    Document d = sphereDoc(6);
+    const std::vector<glm::vec3> start = d.mesh.positions;
+    DabParams p;
+    p.center = glm::normalize(glm::vec3(0.1f, 0.2f, 1.0f));
+    p.radius = 0.5f;
+    auto stroke = [&](int dabs) {
+        d.sculptor.beginStroke(d.mesh, "Standard");
+        for (int i = 0; i < dabs; ++i) d.sculptor.dab(d.mesh, d.bvh, BrushType::Standard, p, Symmetry{});
+    };
+    stroke(3);
+    UndoRecord first = d.sculptor.endStroke();
+    const size_t recorded = first.positions.indices.size();
+    std::vector<uint32_t> idx = first.positions.indices;
+    std::sort(idx.begin(), idx.end());
+    CHECK(recorded > 0 && std::unique(idx.begin(), idx.end()) == idx.end());
+    d.undo.push(std::move(first));
+    const std::vector<glm::vec3> afterFirst = d.mesh.positions;
+    stroke(1); // abandoned: never ended (and not undoable)
+    const std::vector<glm::vec3> afterAbandoned = d.mesh.positions;
+    stroke(2);
+    UndoRecord third = d.sculptor.endStroke();
+    CHECK(!third.positions.indices.empty());
+    d.undo.push(std::move(third));
+    d.sculptor.beginStroke(d.mesh, "Mask");
+    d.mesh.ensureMask();
+    for (int k = 0; k < 2; ++k)
+        for (uint32_t v = 0; v < 50; ++v) d.sculptor.recordMask(d.mesh, v);
+    CHECK(d.sculptor.endStroke().mask.indices.size() == 50);
+    d.undo.undo(d.mesh, d.bvh);
+    CHECK(sameVec3(d.mesh.positions, afterAbandoned));
+    d.undo.redo(d.mesh, d.bvh);
+    d.undo.undo(d.mesh, d.bvh);
+    d.undo.undo(d.mesh, d.bvh);
+    bool restored = true; // the first stroke's vertices are back where they started
+    for (uint32_t v : idx) restored = restored && d.mesh.positions[v] == start[v];
+    CHECK(restored && !sameVec3(afterFirst, start));
 }
 
 TEST(first_paint_undo_is_cheap_and_exact) {
