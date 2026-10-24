@@ -19,6 +19,7 @@ namespace sf {
 struct PaintTexture;
 struct MultiresStack;
 struct SubdivTopology;
+struct ImplicitAdjacency;
 
 // The vertices or triangles around a vertex (Mesh::neighbors, Mesh::vertexTriangles), in ascending order: a view
 // of the mesh's adjacency lists or, where the mesh's adjacency is implicit, the list itself. Use it like a span
@@ -246,11 +247,12 @@ private:
     IndexRing implicitNeighbors(uint32_t v) const;
 
     // Vertex adjacency (CSR), or, on a mesh that is a level made by Divide (whose triangles are the ones its
-    // subdivision topology generates), that topology: the triangles and rings around a vertex are worked out from
-    // the coarse polygons around it instead of stored, which saves about 28 bytes per triangle.
+    // subdivision topology generates), that topology and two small indexes into it: the triangles and rings
+    // around a vertex are worked out from the coarse polygons around it instead of stored, which saves about 24
+    // bytes per triangle.
     std::vector<uint32_t> adjOffsets_, adjList_;
     std::vector<uint32_t> vtOffsets_, vtList_;
-    std::shared_ptr<const SubdivTopology> implicit_;
+    std::shared_ptr<const ImplicitAdjacency> implicit_; // (core/Mesh.cpp)
 
     // updateNormals: vertices already gathered this call (== stamp_), the gathered ones, per-block parts.
     std::vector<uint32_t> vertStamp_;

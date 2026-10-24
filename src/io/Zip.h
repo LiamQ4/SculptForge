@@ -14,6 +14,19 @@ namespace sf {
 struct ZipEntry {
     std::string name;
     std::vector<uint8_t> data;
+    // Instead of `data`: bytes owned by the caller, which must stay valid until writeStoredZip returns (saving a
+    // project writes the meshes' arrays without copying them first).
+    const uint8_t* external = nullptr;
+    size_t externalSize = 0;
+
+    const uint8_t* bytes() const { return external ? external : data.data(); }
+    size_t size() const { return external ? externalSize : data.size(); }
+};
+
+// Where a stored entry's data sits in the archive file.
+struct ZipFileEntry {
+    std::string name;
+    uint64_t offset = 0, size = 0;
 };
 
 uint32_t crc32(const uint8_t* data, size_t size);
@@ -25,5 +38,7 @@ bool writeStoredZip(const std::string& path, const std::vector<ZipEntry>& entrie
 
 // Reads a ZIP (or ZIP64) whose entries are stored (uncompressed), as USDZ requires.
 bool readStoredZip(const std::string& path, std::vector<ZipEntry>& entries, std::string& error);
+// Lists the entries of such a ZIP and where their data is (checked to lie within the file), without reading it.
+bool readStoredZipIndex(const std::string& path, std::vector<ZipFileEntry>& entries, std::string& error);
 
 } // namespace sf

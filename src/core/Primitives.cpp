@@ -86,10 +86,11 @@ Mesh makeCube(int resolution, float size) {
     for (int f = 0; f < 6; ++f) {
         const glm::vec3 normal = axes[f][0], u = axes[f][2], v = axes[f][1];
         const uint32_t first = uint32_t(raw.positions.size());
+        // (2i - n) / n: exactly opposite for i and n - i, so the sides' shared edges weld at every resolution
+        // (2i / n - 1 left a few unwelded vertices at some, e.g. 13 and 26).
         for (int j = 0; j <= n; ++j)
             for (int i = 0; i <= n; ++i)
-                raw.positions.push_back(h * (normal + (2.0f * float(i) / float(n) - 1.0f) * u +
-                                             (2.0f * float(j) / float(n) - 1.0f) * v));
+                raw.positions.push_back(h * (normal + float(2 * i - n) / float(n) * u + float(2 * j - n) / float(n) * v));
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
                 const uint32_t a = first + uint32_t(j * (n + 1) + i), b = a + 1, c = a + uint32_t(n + 1), d = c + 1;

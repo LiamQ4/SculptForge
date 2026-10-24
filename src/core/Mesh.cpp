@@ -12,6 +12,54 @@
 
 namespace sf {
 
+// Implicit adjacency (Mesh::implicitAdjacency): the level's topology, plus, when every coarse polygon has the
+// same number of sides (always so above the first Catmull-Clark level, and for Loop), where each coarse vertex's
+// corners and each coarse edge's sides sit in the polygon lists, so a vertex's triangles take one or two reads.
+struct ImplicitAdjacency {
+    std::shared_ptr<const SubdivTopology> topo;
+    uint32_t sides = 0; // 4 or 3 when every polygon has that many sides (polygon p's corners start at sides * p), else 0
+    std::vector<uint32_t> cornerOffsets, corners; // per coarse vertex: its polygon corner slots, ascending (CSR)
+    std::vector<glm::uvec2> edgeSides; // per coarse edge: the slot of its side in edgeFaces.x / .y (kNone)
+
+    // The slot after `q` around its polygon.
+    uint32_t next(uint32_t q) const { return sides == 4 ? (q & ~3u) | ((q + 1) & 3u) : q % 3 == 2 ? q - 2 : q + 1; }
+    size_t bytes() const {
+        return cornerOffsets.capacity() * 4 + corners.capacity() * 4 + edgeSides.capacity() * sizeof(glm::uvec2);
+    }
+};
+
+namespace {
+
+std::shared_ptr<const ImplicitAdjacency> buildImplicitAdjacency(std::shared_ptr<const SubdivTopology> topo) {
+    auto a = std::make_shared<ImplicitAdjacency>();
+    const SubdivTopology& tp = *topo;
+    a->topo = std::move(topo);
+    const size_t np = tp.polygonCount(), nc = tp.polyVerts.size();
+    const uint32_t want = tp.catmullClark ? 4u : 3u;
+    bool uniform = true;
+    for (size_t p = 0; p < np && uniform; ++p) uniform = tp.polyOffsets[p] == want * p;
+    uniform = uniform && tp.polyOffsets[np] == want * np;
+    if (!uniform) return a;
+    a->sides = want;
+    a->cornerOffsets.assign(size_t(tp.coarseVertices) + 1, 0);
+    for (size_t q = 0; q < nc; ++q) ++a->cornerOffsets[tp.polyVerts[q] + 1];
+    for (size_t v = 0; v < tp.coarseVertices; ++v) a->cornerOffsets[v + 1] += a->cornerOffsets[v];
+    a->corners.resize(nc);
+    {
+        std::vector<uint32_t> cursor(a->cornerOffsets.begin(), a->cornerOffsets.end() - 1);
+        for (size_t q = 0; q < nc; ++q) a->corners[cursor[tp.polyVerts[q]]++] = uint32_t(q);
+    }
+    a->edgeSides.assign(tp.edges.size(), glm::uvec2(SubdivTopology::kNone));
+    for (size_t q = 0; q < nc; ++q) {
+        const uint32_t e = tp.polyEdges[q], p = uint32_t(q / want);
+        if (tp.edgeFaces[e].x == p) a->edgeSides[e].x = uint32_t(q);
+        else a->edgeSides[e].y = uint32_t(q);
+    }
+    return a;
+}
+
+} // namespace
+
 static glm::vec3 faceNormal(const std::vector<glm::vec3>& p, const glm::uvec3& t) {
     // Unnormalised: magnitude is twice the triangle area, giving area weighting.
     return glm::cross(p[t.y] - p[t.x], p[t.z] - p[t.x]);
@@ -129,10 +177,11 @@ void Mesh::rebuildTopology() {
     finishTopology(); // (the stamps, normals and dirty bits first: they don't depend on the adjacency)
 
     // A level made by Divide: its adjacency follows from the level's topology.
-    implicit_.reset();
+    std::shared_ptr<const ImplicitAdjacency> before = std::move(implicit_); // reused if it is for the same level
     if (multires) {
         const std::shared_ptr<const SubdivTopology>& tp = multires->levels[size_t(multires->current)].topo;
-        if (tp && subdivImplicitAdjacency(*tp, triangles)) implicit_ = tp;
+        if (tp && subdivImplicitAdjacency(*tp, triangles))
+            implicit_ = before && before->topo == tp ? std::move(before) : buildImplicitAdjacency(tp);
     }
     if (implicit_) {
         std::vector<uint32_t>().swap(adjOffsets_);
@@ -219,11 +268,45 @@ IndexRing Mesh::implicitTriangles(uint32_t v) const {
     // triangles are laid out as generateFaces does (Catmull-Clark: corner i -> triangles 2i, 2i + 1 of the
     // polygon, the first holding side i's edge point, the second side i - 1's; Loop: corner i -> triangle i,
     // the edge points' triangle last).
-    const SubdivTopology& tp = *implicit_;
+    const ImplicitAdjacency& ia = *implicit_;
+    const SubdivTopology& tp = *ia.topo;
     const uint32_t nv = tp.coarseVertices, ne = uint32_t(tp.edges.size());
     constexpr uint32_t kNone = SubdivTopology::kNone;
     IndexRing r;
     auto add = [&](size_t f) { r.buf_[r.size_++] = uint32_t(f); };
+    if (ia.sides) { // every polygon has `sides` corners: slots straight from the indexes
+        const bool cc = ia.sides == 4;
+        if (v < nv) {
+            for (uint32_t k = ia.cornerOffsets[v]; k < ia.cornerOffsets[v + 1]; ++k) {
+                const uint32_t q = ia.corners[k];
+                if (cc) {
+                    add(2 * size_t(q));
+                    add(2 * size_t(q) + 1);
+                } else {
+                    add(4 * size_t(q / 3) + q % 3);
+                }
+            }
+        } else if (v < nv + ne) {
+            const glm::uvec2 sides = ia.edgeSides[v - nv];
+            for (uint32_t q : {sides.x, sides.y}) {
+                if (q == kNone) continue;
+                if (cc) {
+                    add(2 * size_t(q));
+                    add(2 * size_t(ia.next(q)) + 1);
+                } else {
+                    const size_t p = q / 3;
+                    add(4 * p + q % 3);
+                    add(4 * p + ia.next(q) % 3);
+                    add(4 * p + 3);
+                }
+            }
+            sortSmall(r.buf_, r.size_);
+        } else {
+            const size_t p = v - nv - ne;
+            for (size_t t = 8 * p; t < 8 * p + 8; ++t) add(t);
+        }
+        return r;
+    }
     if (v < nv) {
         uint32_t polys[IndexRing::kCapacity];
         uint32_t n = 0;
@@ -273,18 +356,77 @@ IndexRing Mesh::implicitTriangles(uint32_t v) const {
 }
 
 IndexRing Mesh::implicitNeighbors(uint32_t v) const {
-    const IndexRing tris = implicitTriangles(v);
-    uint32_t all[2 * IndexRing::kCapacity];
-    uint32_t n = 0;
-    for (uint32_t t : tris) {
-        const glm::uvec3& tri = triangles[t];
-        for (int c = 0; c < 3; ++c)
-            if (tri[c] != v) all[n++] = tri[c];
-    }
-    sortSmall(all, n);
-    n = uniqueSmall(all, n);
+    // The ring follows from the same layout: Catmull-Clark joins a corner to the edge points of its edges and the
+    // face points of its polygons, an edge point to the edge's ends and face points, and a face point to the
+    // polygon's corners and edge points; Loop joins a corner to its edges' points, and an edge point to the
+    // edge's ends and the other edge points of its two triangles. Corners < edge points < face points, so each
+    // group is sorted on its own.
+    const ImplicitAdjacency& ia = *implicit_;
+    const SubdivTopology& tp = *ia.topo;
+    const uint32_t nv = tp.coarseVertices, ne = uint32_t(tp.edges.size()), nf = nv + ne;
+    constexpr uint32_t kNone = SubdivTopology::kNone;
     IndexRing r;
-    std::copy(all, all + n, r.buf_);
+    uint32_t* out = r.buf_;
+    uint32_t n = 0;
+    if (v < nv) {
+        const uint32_t k0 = tp.vertEdgeOffsets[v], k1 = tp.vertEdgeOffsets[v + 1];
+        for (uint32_t k = k0; k < k1; ++k) out[n++] = nv + tp.vertEdges[k]; // ascending (listed in edge order)
+        if (tp.catmullClark && ia.sides) { // one corner per polygon around v, ascending
+            for (uint32_t k = ia.cornerOffsets[v]; k < ia.cornerOffsets[v + 1]; ++k) out[n++] = nf + ia.corners[k] / 4;
+        } else if (tp.catmullClark) {
+            uint32_t* faces = out + n;
+            uint32_t m = 0;
+            for (uint32_t k = k0; k < k1; ++k) {
+                const glm::uvec2 f = tp.edgeFaces[tp.vertEdges[k]];
+                faces[m++] = nf + f.x;
+                if (f.y != kNone) faces[m++] = nf + f.y;
+            }
+            sortSmall(faces, m);
+            n += uniqueSmall(faces, m);
+        }
+    } else if (v < nf) {
+        const uint32_t e = v - nv;
+        const glm::uvec2 ends = tp.edges[e], f = tp.edgeFaces[e];
+        out[n++] = ends.x;
+        out[n++] = ends.y;
+        if (tp.catmullClark) {
+            if (f.y == kNone) {
+                out[n++] = nf + f.x;
+            } else {
+                out[n++] = nf + std::min(f.x, f.y);
+                out[n++] = nf + std::max(f.x, f.y);
+            }
+        } else if (ia.sides) {
+            uint32_t* others = out + n;
+            uint32_t m = 0;
+            const glm::uvec2 sides = ia.edgeSides[e];
+            for (uint32_t q : {sides.x, sides.y}) {
+                if (q == kNone) continue;
+                const uint32_t q1 = ia.next(q);
+                others[m++] = nv + tp.polyEdges[q1];
+                others[m++] = nv + tp.polyEdges[ia.next(q1)];
+            }
+            sortSmall(others, m);
+            n += uniqueSmall(others, m);
+        } else {
+            uint32_t* others = out + n;
+            uint32_t m = 0;
+            for (uint32_t p : {f.x, f.y}) {
+                if (p == kNone) continue;
+                const uint32_t o = tp.polyOffsets[p];
+                for (uint32_t s = 0; s < 3; ++s)
+                    if (tp.polyEdges[o + s] != e) others[m++] = nv + tp.polyEdges[o + s];
+            }
+            sortSmall(others, m);
+            n += uniqueSmall(others, m);
+        }
+    } else {
+        const uint32_t p = v - nf, o = tp.polyOffsets[p], sides = tp.polyOffsets[p + 1] - o;
+        for (uint32_t i = 0; i < sides; ++i) out[n++] = tp.polyVerts[o + i];
+        sortSmall(out, sides);
+        for (uint32_t i = 0; i < sides; ++i) out[n++] = nv + tp.polyEdges[o + i];
+        sortSmall(out + sides, sides);
+    }
     r.size_ = n;
     return r;
 }
@@ -498,7 +640,8 @@ size_t Mesh::memoryBytes() const {
                bytes(adjList_) + bytes(vtOffsets_) + bytes(vtList_) + bytes(vertStamp_) + bytes(scratchVerts_) + bytes(dirtyBlocks) + bytes(dirtyBits);
     for (const auto& l : layers) n += bytes(l.delta);
     for (const auto& l : paintLayers) n += bytes(l.color) + bytes(l.alpha);
-    return n; // (implicit adjacency: the level topology is counted with the subdivision levels)
+    if (implicit_) n += implicit_->bytes(); // (the level topology itself is counted with the subdivision levels)
+    return n;
 }
 
 static void laplacianStep(Mesh& m, float lambda, std::vector<glm::vec3>& next) {

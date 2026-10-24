@@ -86,49 +86,91 @@ class Writer {
 public:
     // Adds a blob and returns its manifest descriptor.
     Json add(const std::string& file, Scalar type, int components, size_t count, std::vector<uint8_t> data) {
-        Json d = Json::object();
-        d.set("file", file);
-        d.set("type", scalarName(type));
-        d.set("components", components);
-        d.set("count", double(count));
         entries.push_back({file, std::move(data)});
-        return d;
+        return descriptor(file, type, components, count);
+    }
+    // Adds `count` elements of `components` 32-bit values at `v` (which must outlive the save): written straight
+    // from memory on little-endian machines, without a copy of the scene.
+    Json add32(const std::string& file, Scalar type, int components, size_t count, const void* v) {
+        const size_t n = count * size_t(components);
+        if constexpr (std::endian::native == std::endian::little) {
+            ZipEntry e{file, {}};
+            e.external = n ? static_cast<const uint8_t*>(v) : nullptr;
+            e.externalSize = n * 4;
+            entries.push_back(std::move(e));
+            return descriptor(file, type, components, count);
+        } else {
+            return add(file, type, components, count, littleEndian(static_cast<const uint32_t*>(v), n));
+        }
     }
     Json floats(const std::string& file, const float* v, size_t count, int components) {
-        return add(file, Scalar::F32, components, count, littleEndian(v, count * size_t(components)));
+        return add32(file, Scalar::F32, components, count, v);
     }
     Json vec3s(const std::string& file, const std::vector<glm::vec3>& v) {
         return floats(file, v.empty() ? nullptr : &v[0].x, v.size(), 3);
     }
     Json uints(const std::string& file, const uint32_t* v, size_t count, int components) {
-        return add(file, Scalar::U32, components, count, littleEndian(v, count * size_t(components)));
+        return add32(file, Scalar::U32, components, count, v);
+    }
+    // Copied: for arrays that don't outlive the save.
+    Json ownedUints(const std::string& file, const std::vector<uint32_t>& v) {
+        return add(file, Scalar::U32, 1, v.size(), littleEndian(v.data(), v.size()));
     }
     Json bytes(const std::string& file, const std::vector<uint8_t>& v) { return add(file, Scalar::U8, 1, v.size(), v); }
 
     std::vector<ZipEntry> entries;
+
+private:
+    static Json descriptor(const std::string& file, Scalar type, int components, size_t count) {
+        Json d = Json::object();
+        d.set("file", file);
+        d.set("type", scalarName(type));
+        d.set("components", components);
+        d.set("count", double(count));
+        return d;
+    }
 };
 
+// Reads blobs straight from the archive into the arrays they belong in (no copy of the file in memory).
 class Reader {
 public:
-    std::map<std::string, const std::vector<uint8_t>*> files;
+    std::map<std::string, ZipFileEntry> files;
     std::string error;
 
-    // Validates `desc` against the expected layout and returns its bytes (nullptr + error on mismatch).
-    const uint8_t* blob(const Json& desc, const char* what, Scalar type, int components, size_t count) {
+    bool open(const std::string& path, std::string& err) {
+        std::vector<ZipFileEntry> index;
+        if (!readStoredZipIndex(path, index, err)) return false;
+        for (auto& e : index) files[e.name] = std::move(e);
+        file_.open(fsPath(path), std::ios::binary);
+        if (!file_) {
+            err = "Cannot open " + path;
+            return false;
+        }
+        return true;
+    }
+    // The whole entry `name` (false if missing or unreadable).
+    bool entry(const std::string& name, std::vector<uint8_t>& out) {
+        auto it = files.find(name);
+        if (it == files.end() || it->second.size > (uint64_t(1) << 32)) return false;
+        out.resize(size_t(it->second.size));
+        return readAt(it->second.offset, out.size(), out.data());
+    }
+    // Validates `desc` against the expected layout and reads its bytes into `out` (false + error on mismatch).
+    bool read(const Json& desc, const char* what, Scalar type, int components, size_t count, void* out) {
         if (!desc.isObject()) return fail(what, "is missing");
         if (desc["type"].asString() != scalarName(type) || int(desc["components"].asNumber()) != components)
             return fail(what, "has an unexpected layout");
         if (desc["count"].asNumber(-1) != double(count)) return fail(what, "has the wrong size");
         auto it = files.find(desc["file"].asString());
         if (it == files.end()) return fail(what, "data is missing from the archive");
-        if (it->second->size() != count * size_t(components) * scalarSize(type)) return fail(what, "data is truncated");
-        static const uint8_t kEmpty = 0;
-        return it->second->empty() ? &kEmpty : it->second->data();
+        const size_t bytes = count * size_t(components) * scalarSize(type);
+        if (it->second.size != bytes) return fail(what, "data is truncated");
+        if (!readAt(it->second.offset, bytes, out)) return fail(what, "data is truncated");
+        return true;
     }
     bool floats(const Json& desc, const char* what, size_t count, int components, float* out) {
-        const uint8_t* p = blob(desc, what, Scalar::F32, components, count);
-        if (!p) return false;
-        fromLittleEndian(p, count * size_t(components), out);
+        if (!read(desc, what, Scalar::F32, components, count, out)) return false;
+        toNative(out, count * size_t(components));
         return true;
     }
     bool vec3s(const Json& desc, const char* what, size_t count, std::vector<glm::vec3>& out) {
@@ -136,16 +178,38 @@ public:
         return floats(desc, what, count, 3, count ? &out[0].x : nullptr);
     }
     bool uints(const Json& desc, const char* what, size_t count, int components, uint32_t* out) {
-        const uint8_t* p = blob(desc, what, Scalar::U32, components, count);
-        if (!p) return false;
-        fromLittleEndian(p, count * size_t(components), out);
+        if (!read(desc, what, Scalar::U32, components, count, out)) return false;
+        toNative(out, count * size_t(components));
         return true;
+    }
+    bool bytes(const Json& desc, const char* what, size_t count, std::vector<uint8_t>& out) {
+        out.resize(count);
+        return read(desc, what, Scalar::U8, 1, count, out.data());
     }
 
 private:
-    const uint8_t* fail(const char* what, const char* problem) {
+    std::ifstream file_;
+
+    bool readAt(uint64_t offset, size_t n, void* out) {
+        if (n == 0) return true;
+        file_.clear();
+        file_.seekg(std::streamoff(offset));
+        return bool(file_.read(static_cast<char*>(out), std::streamsize(n)));
+    }
+    // Little-endian values read in place become native ones (nothing to do on little-endian machines).
+    template <class T>
+    static void toNative(T* v, size_t n) {
+        static_assert(sizeof(T) == 4);
+        if constexpr (std::endian::native != std::endian::little) {
+            for (size_t i = 0; i < n; ++i) {
+                const uint8_t* p = reinterpret_cast<const uint8_t*>(&v[i]);
+                v[i] = std::bit_cast<T>(get32(p));
+            }
+        }
+    }
+    bool fail(const char* what, const char* problem) {
         if (error.empty()) error = std::string("Project ") + what + " " + problem;
-        return nullptr;
+        return false;
     }
 };
 
@@ -239,7 +303,7 @@ bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& e
         r.uints(mj["polygroups"], "polygroups", nt, 1, m.polygroups.data());
     }
     if (mj.has("hidden")) {
-        if (const uint8_t* p = r.blob(mj["hidden"], "hidden flags", Scalar::U8, 1, nt)) m.hidden.assign(p, p + nt);
+        if (!r.bytes(mj["hidden"], "hidden flags", nt, m.hidden)) m.hidden.clear();
     }
     if (mj.has("uvs")) {
         m.uvs.resize(nt * 3);
@@ -349,10 +413,11 @@ Json pngBlob(Writer& w, const std::string& file, int width, int height, const st
 bool readPngBlob(Reader& r, const Json& desc, const char* what, int width, int height, std::vector<uint8_t>& rgba,
                  std::string& error) {
     const size_t n = countOf(desc["count"]);
-    const uint8_t* p = n == size_t(-1) ? nullptr : r.blob(desc, what, Scalar::U8, 1, n);
+    std::vector<uint8_t> png;
+    const bool ok = n != size_t(-1) && n < (size_t(1) << 31) && r.bytes(desc, what, n, png);
     Image img;
     std::string why;
-    if (!p || !Image::decode(p, n, img, why) || img.width != width || img.height != height) {
+    if (!ok || !Image::decode(png.data(), n, img, why) || img.width != width || img.height != height) {
         error = r.error.empty() ? std::string("Project ") + what + " is not a " + std::to_string(width) + "x" +
                                       std::to_string(height) + " image" + (why.empty() ? "" : " (" + why + ")")
                                 : r.error;
@@ -457,7 +522,7 @@ Json writeSubdiv(Writer& w, const std::string& prefix, const Mesh& m) {
             t.set("catmull_clark", tp.catmullClark);
             t.set("smooth", tp.smooth);
             if (const std::vector<uint32_t> pairing = tp.pairing(); !pairing.empty())
-                t.set("pairing", w.uints(p + "pairing.bin", pairing.data(), pairing.size(), 1));
+                t.set("pairing", w.ownedUints(p + "pairing.bin", pairing));
             if (generated) {
                 t.set("generated", true);
             } else {
@@ -667,7 +732,7 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
         std::vector<float> rot;
         rot.reserve(s.size() * 4);
         for (const auto& q : s.rotations) rot.insert(rot.end(), {q.x, q.y, q.z, q.w});
-        splats.set("rotations", w.floats("splats/rotations.bin", rot.data(), s.size(), 4));
+        splats.set("rotations", w.add("splats/rotations.bin", Scalar::F32, 4, s.size(), littleEndian(rot.data(), rot.size())));
         splats.set("scales", w.vec3s("splats/scales.bin", s.scales));
         splats.set("opacities", w.floats("splats/opacities.bin", s.opacities.data(), s.size(), 1));
         splats.set("sh", w.vec3s("splats/sh.bin", s.sh));
@@ -702,17 +767,15 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
 }
 
 bool loadProject(const std::string& path, Document& doc, std::string& error) {
-    std::vector<ZipEntry> entries;
-    if (!readStoredZip(path, entries, error)) return false;
     Reader r;
-    for (const auto& e : entries) r.files[e.name] = &e.data;
-    auto mf = r.files.find(kManifestName);
-    if (mf == r.files.end()) {
+    if (!r.open(path, error)) return false;
+    std::vector<uint8_t> manifestText;
+    if (!r.entry(kManifestName, manifestText)) {
         error = path + " is not a SculptForge project (no manifest)";
         return false;
     }
     Json manifest;
-    if (!Json::parse(std::string(mf->second->begin(), mf->second->end()), manifest, error) || !manifest.isObject() ||
+    if (!Json::parse(std::string(manifestText.begin(), manifestText.end()), manifest, error) || !manifest.isObject() ||
         manifest["format"].asString() != kFormatName) {
         error = path + " is not a SculptForge project" + (error.empty() ? "" : " (" + error + ")");
         return false;

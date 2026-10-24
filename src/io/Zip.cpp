@@ -71,7 +71,7 @@ bool writeStoredZip(const std::string& path, const std::vector<ZipEntry>& entrie
     // CRCs first, in parallel (one entry per job: the big arrays of a project are separate entries).
     std::vector<uint32_t> crcs(entries.size());
     poolFor(entries.size(), [&](size_t b, size_t e) {
-        for (size_t i = b; i < e; ++i) crcs[i] = crc32(entries[i].data.data(), entries[i].data.size());
+        for (size_t i = b; i < e; ++i) crcs[i] = crc32(entries[i].bytes(), entries[i].size());
     }, 1, 2);
 
     std::ofstream f(fsPath(path), std::ios::binary);
@@ -86,7 +86,7 @@ bool writeStoredZip(const std::string& path, const std::vector<ZipEntry>& entrie
     bool anyZip64 = forceZip64;
     for (size_t k = 0; k < entries.size(); ++k) {
         const ZipEntry& e = entries[k];
-        const uint64_t size = e.data.size();
+        const uint64_t size = e.size();
         const bool big = forceZip64 || size >= kMax32, farOff = forceZip64 || offset >= kMax32;
         anyZip64 = anyZip64 || big || farOff;
         header.clear();
@@ -119,7 +119,7 @@ bool writeStoredZip(const std::string& path, const std::vector<ZipEntry>& entrie
             header.insert(header.end(), pad - 4, 0);
         }
         if (!f.write(reinterpret_cast<const char*>(header.data()), std::streamsize(header.size())) ||
-            !f.write(reinterpret_cast<const char*>(e.data.data()), std::streamsize(size))) {
+            !f.write(reinterpret_cast<const char*>(e.bytes()), std::streamsize(size))) {
             error = "Cannot write " + path;
             return false;
         }
@@ -193,6 +193,26 @@ bool writeStoredZip(const std::string& path, const std::vector<ZipEntry>& entrie
 }
 
 bool readStoredZip(const std::string& path, std::vector<ZipEntry>& entries, std::string& error) {
+    std::vector<ZipFileEntry> index;
+    if (!readStoredZipIndex(path, index, error)) return false;
+    std::ifstream f(fsPath(path), std::ios::binary);
+    entries.clear();
+    for (const ZipFileEntry& z : index) {
+        ZipEntry e;
+        e.name = z.name;
+        e.data.resize(size_t(z.size));
+        f.clear();
+        f.seekg(std::streamoff(z.offset));
+        if (z.size && !f.read(reinterpret_cast<char*>(e.data.data()), std::streamsize(z.size))) {
+            error = "Truncated ZIP entry " + e.name;
+            return false;
+        }
+        entries.push_back(std::move(e));
+    }
+    return true;
+}
+
+bool readStoredZipIndex(const std::string& path, std::vector<ZipFileEntry>& entries, std::string& error) {
     std::ifstream f(fsPath(path), std::ios::binary);
     if (!f) {
         error = "Cannot open " + path;
@@ -259,7 +279,7 @@ bool readStoredZip(const std::string& path, std::vector<ZipEntry>& entries, std:
             error = "Corrupt ZIP central directory";
             return false;
         }
-        ZipEntry e;
+        ZipFileEntry e;
         e.name.assign(reinterpret_cast<const char*>(&z[p + 46]), nameLen);
         // ZIP64 extra field: 64-bit values for whichever of these were saturated, in this order.
         for (size_t x = p + 46 + nameLen; x + 4 <= p + 46 + nameLen + extraLen;) {
@@ -295,11 +315,8 @@ bool readStoredZip(const std::string& path, std::vector<ZipEntry>& entries, std:
             error = "Truncated ZIP entry " + e.name;
             return false;
         }
-        e.data.resize(size_t(size));
-        if (size && !readAt(data, size_t(size), e.data.data())) {
-            error = "Truncated ZIP entry " + e.name;
-            return false;
-        }
+        e.offset = data;
+        e.size = size;
         entries.push_back(std::move(e));
     }
     return true;
