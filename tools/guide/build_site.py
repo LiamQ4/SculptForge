@@ -492,7 +492,7 @@ def page_html(page: Page, index: Page, chapters, position: int) -> str:
   <meta property="og:description" content="{desc}">
   <meta property="og:image" content="{SITE}img/social-preview.png?v=3">
   <meta property="og:url" content="{url}">
-  <link rel="stylesheet" href="../style.css?v=14">
+  <link rel="stylesheet" href="../style.css?v=15">
   <script src="../motion.js?v=8" defer></script>
   <script src="search-index.js?v={len(chapters)}" defer></script>
 </head>

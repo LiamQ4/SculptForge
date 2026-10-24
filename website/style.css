@@ -43,6 +43,8 @@ p { margin: 0 0 1em; }
 .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 64px; }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 600; font-size: 1.1rem; }
 .brand:hover { text-decoration: none; }
+/* The cube's drawing starts 2/24 of the way into the icon: pull it out so its edge lines up with the page text. */
+.brand img { margin-left: calc(-34px * 2 / 24); }
 .nav nav { display: flex; gap: 22px; align-items: center; flex: none; }
 .nav nav a { color: var(--muted); font-size: 0.95rem; white-space: nowrap; }
 .nav nav a:hover { color: var(--text); text-decoration: none; }
@@ -76,6 +78,7 @@ p { margin: 0 0 1em; }
 .hero { padding: 72px 0 56px; background: radial-gradient(1200px 600px at 15% -10%, rgba(242, 140, 60, 0.16), transparent 60%); }
 .hero-grid { display: grid; grid-template-columns: 1.05fr 1.2fr; gap: 48px; align-items: center; }
 .new-badge { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 18px; padding: 5px 14px 5px 5px;
+             margin-left: -6px; /* the orange pill, not the faint outline, lines up with the text and logo */
              border: 1px solid var(--border); border-radius: 999px; background: rgba(242, 140, 60, 0.06); color: #cfcfd6;
              font-size: 0.88rem; }
 .new-badge span { flex: none; white-space: nowrap; background: var(--accent); color: #1a0d04; font-weight: 600; font-size: 0.75rem; padding: 3px 10px;
