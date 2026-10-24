@@ -27,6 +27,8 @@ struct BenchGpu {
     // Average milliseconds per frame over a turn around the mesh (already uploaded), drawn with `samples`
     // antialiasing samples as the app's view draws (1 = Fast Navigation while the view moves).
     std::function<double(Mesh&, int samples)> orbitFrameMs;
+    std::function<size_t()> gpuBytes;          // GPU memory the renderer holds for the mesh (optional)
+    std::function<size_t()> drawnTriangles;    // triangles the last orbit frame drew, after culling (optional)
     std::string description; // GPU / driver, for the report
 };
 
@@ -35,13 +37,16 @@ struct BenchOptions {
     int dabsPerStroke = 40;
     std::string projectDir; // where the project round trip writes (default: the system temp folder)
     bool projectRoundTrip = true;
+    // Only what the viewport costs (--bench-view): setup, the first upload, the strokes whose uploads differ
+    // (Standard, Mask, Paint), orbiting; no other brushes, subdivision levels or project round trip.
+    bool viewOnly = false;
     std::function<void(const std::string&)> log; // progress lines (optional)
     std::function<void(const std::string&)> partial; // the report so far, after each size (optional)
 };
 
 // Command-line options shared by sculptforge-cli and the app: --bench, --bench-sizes 4,16,32 (millions of
 // triangles), --bench-dabs N, --bench-no-project (skip saving / opening, which needs twice the memory),
-// --bench-out FILE. parseBenchArg returns true when argv[i] was one of them
+// --bench-view (only the viewport's costs), --bench-out FILE. parseBenchArg returns true when argv[i] was one of them
 // (advancing i past its value).
 struct BenchCommandLine {
     bool run = false;

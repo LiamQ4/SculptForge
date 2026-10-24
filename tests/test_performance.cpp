@@ -152,15 +152,11 @@ TEST(upload_runs_cover_changed_vertices) {
     bvh.build(m);
     UploadOrder order;
     order.build(m);
-    // A permutation: every vertex once.
-    std::vector<uint8_t> seen(m.vertexCount(), 0);
-    bool perm = order.size() == m.vertexCount();
-    for (uint32_t i = 0; perm && i < order.size(); ++i) {
-        const uint32_t v = order.fromGpu()[i];
-        perm = v < m.vertexCount() && !seen[v] && order.toGpu(v) == i;
-        seen[v] = 1;
-    }
-    CHECK(perm);
+    // Every vertex has a slot (the sphere uses them all); toGpu is its first.
+    bool mapped = order.size() >= m.vertexCount();
+    for (uint32_t v = 0; mapped && v < m.vertexCount(); ++v)
+        mapped = order.toGpu(v) != UploadOrder::kNone && order.fromGpu()[order.toGpu(v)] == v;
+    CHECK(mapped);
 
     m.clearDirty();
     std::vector<std::pair<uint32_t, uint32_t>> runs;
@@ -177,21 +173,25 @@ TEST(upload_runs_cover_changed_vertices) {
     p.radius = 0.2f;
     s.dab(m, bvh, BrushType::Standard, p, Symmetry{});
     order.dirtyRuns(m, runs);
-    std::vector<uint8_t> inRun(m.vertexCount(), 0);
+    std::vector<uint8_t> slotInRun(order.size(), 0);
     size_t uploaded = 0;
     for (size_t i = 0; i < runs.size(); ++i) {
-        CHECK(runs[i].first < runs[i].second && runs[i].second <= m.vertexCount());
+        CHECK(runs[i].first < runs[i].second && runs[i].second <= order.size());
         if (i) CHECK(runs[i - 1].second < runs[i].first);
         uploaded += runs[i].second - runs[i].first;
-        for (uint32_t g = runs[i].first; g < runs[i].second; ++g) inRun[order.fromGpu()[g]] = 1;
+        for (uint32_t g = runs[i].first; g < runs[i].second; ++g) slotInRun[g] = 1;
     }
+    // Every slot of a changed vertex, the copies on cluster seams included.
     bool allCovered = true;
     size_t changed = 0, dirty = 0;
+    std::vector<uint32_t> slots;
     for (uint32_t v = 0; v < m.vertexCount(); ++v) {
         dirty += m.vertexDirty(v);
         if (m.normals[v] != before[v]) {
             ++changed;
-            allCovered = allCovered && inRun[v] && m.vertexDirty(v);
+            order.slotsOf(v, slots);
+            allCovered = allCovered && m.vertexDirty(v) && !slots.empty();
+            for (uint32_t g : slots) allCovered = allCovered && slotInRun[g];
         }
     }
     CHECK(changed > 1000);
@@ -209,7 +209,7 @@ TEST(upload_runs_cover_changed_vertices) {
     CHECK(!m.vertexDirty(69) && m.vertexDirty(70) && m.vertexDirty(199) && !m.vertexDirty(200));
     m.markAllDirty();
     order.dirtyRuns(m, runs);
-    CHECK(runs.size() == 1 && runs[0].first == 0 && runs[0].second == m.vertexCount());
+    CHECK(runs.size() == 1 && runs[0].first == 0 && runs[0].second == order.size());
 }
 
 TEST(parallel_bvh_build_answers_like_serial) {

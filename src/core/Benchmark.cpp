@@ -60,8 +60,10 @@ MemoryUse documentMemory(const Document& doc) {
         u.undo += (active ? doc.undo : st.undo).undoBytes();
         u.triangles += m.triangleCount();
         u.vertices += m.vertexCount();
-        if (st.visible) // positions, normals, curvature (+ colours, mask) per vertex; indices per triangle
-            u.gpu += m.vertexCount() * (28 + (m.hasColors() ? 12 : 0) + (m.hasMask() ? 4 : 0)) + m.triangleCount() * 12;
+        if (st.visible) // the renderer's cluster layout (core/UploadOrder.h): packed vertices (12 bytes, + colour 4,
+                        // mask 1), about a tenth more for the copies on cluster seams; 16-bit indices and polygroups
+            u.gpu += m.vertexCount() * (12 + (m.hasColors() ? 4 : 0) + (m.hasMask() ? 1 : 0)) * 11 / 10 +
+                     m.triangleCount() * (6 + (m.hasPolygroups() ? 2 : 0));
     }
     return u;
 }
@@ -224,6 +226,9 @@ bool parseBenchArg(int argc, char** argv, int& i, BenchCommandLine& cl) {
         cl.options.dabsPerStroke = std::max(1, std::atoi(next().c_str()));
     } else if (a == "--bench-no-project") {
         cl.options.projectRoundTrip = false;
+    } else if (a == "--bench-view") {
+        cl.options.viewOnly = true;
+        cl.options.projectRoundTrip = false;
     } else if (a == "--bench-out") {
         cl.outPath = next();
     } else {
@@ -310,6 +315,10 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         md << "| Divide up to this size | " << fmt("%.0f", divideMs) << " |\n";
         md << "| BVH build | " << fmt("%.0f", bvhMs) << " |\n";
         if (gpu) md << "| First GPU upload | " << fmt("%.0f", uploadAll) << " |\n";
+        if (gpu && gpu->gpuBytes) {
+            const double b = double(gpu->gpuBytes());
+            md << "| GPU memory (buffers) | " << fmt("%.0f MB", b / 1e6) << " = " << fmt("%.1f", b / nt) << " B/triangle |\n";
+        }
         md << "| Mesh (incl. topology) | " << fmt("%.0f MB", double(meshBytes) / 1e6) << " = "
            << fmt("%.0f", double(meshBytes) / nt) << " B/triangle |\n";
         md << "| BVH | " << fmt("%.0f MB", double(bvhBytes) / 1e6) << " = " << fmt("%.1f", double(bvhBytes) / nt)
@@ -323,6 +332,7 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
            << "**dab total** | stroke end (undo record) | undo | redo | undo step |\n";
         md << "|---|---:|---:|---:|---:|---:|---:|" << (gpu ? "---:|" : "") << "---:|---:|---:|---:|---:|\n";
         for (const BenchBrush& b : brushes) {
+            if (o.viewOnly && b.name != "Standard" && b.kind != Kind::Mask && b.kind != Kind::Paint) continue;
             log("  " + b.name);
             const StrokeStats s = runStroke(doc, b, o.dabsPerStroke, gpu, order);
             const double d = std::max(s.dabs, 1);
@@ -336,7 +346,7 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         md << "\n";
 
         md << "| Operation | ms |\n|---|---:|\n";
-        if (subdivLevelCount(m) > 1) {
+        if (subdivLevelCount(m) > 1 && !o.viewOnly) {
             std::string err;
             const int top = subdivCurrentLevel(m);
             log("  subdivision levels");
@@ -381,6 +391,10 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
                 const double f = gpu->orbitFrameMs(m, samples);
                 md << "| Orbit: frame time, " << (samples == 1 ? "Fast Navigation (no antialiasing)" : "4x antialiasing") << " | "
                    << fmt("%.1f", f) << " (" << fmt("%.0f", 1000.0 / std::max(f, 1e-3)) << " fps) |\n";
+            }
+            if (gpu->drawnTriangles) {
+                const double d = double(gpu->drawnTriangles());
+                md << "| Orbit: triangles drawn after culling | " << millions(d) << " (" << fmt("%.0f", 100.0 * d / nt) << "%) |\n";
             }
         }
         md << "\n";

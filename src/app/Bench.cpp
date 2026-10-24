@@ -114,6 +114,8 @@ int runAppBenchmark(BenchCommandLine cl) {
             }
             return ms;
         };
+        gpu.gpuBytes = [&] { return renderer.gpuBytes(); };
+        gpu.drawnTriangles = [&] { return renderer.lastDrawnTriangles(); };
         code = runBenchCommandLine(cl, "## With the GPU (sculptforge --bench)\n\n", &gpu);
         renderer.shutdown();
     }
