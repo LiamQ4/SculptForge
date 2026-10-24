@@ -190,6 +190,24 @@ TEST(closed_oriented_meshes) {
     holed.rebuildTopology();
     CHECK(!closedOriented(holed));
     CHECK(!closedOriented(Mesh()));
+    // An unwelded seam (two vertices at one point, each with half the triangles) is still closed; a real
+    // crack is not.
+    Mesh seam = makeIcosphere(2);
+    const uint32_t v = seam.triangles[0].x, twin = uint32_t(seam.vertexCount());
+    seam.positions.push_back(seam.positions[v]);
+    seam.normals.push_back(seam.normals[v]);
+    int moved = 0;
+    for (glm::uvec3& t : seam.triangles)
+        for (int k = 0; k < 3; ++k)
+            if (t[k] == v && moved < 2 && (t.x == v ? 0 : 1) + moved >= 0) {
+                t[k] = twin;
+                ++moved;
+                break;
+            }
+    seam.rebuildTopology();
+    CHECK(closedOriented(seam));
+    seam.positions[twin] += glm::vec3(1e-3f);
+    CHECK(!closedOriented(seam));
 }
 
 TEST(cluster_culling_is_conservative) {

@@ -186,6 +186,7 @@ private:
     std::vector<const void*> drawOffsets_;
     std::vector<GLint> drawBases_;
     std::vector<uint32_t> drawClusters_;
+    bool cullBackfaces_ = false; // the last cull(): back faces can't show (so the GPU may skip them too)
     std::vector<uint32_t> cullScratch_;
     size_t lastDrawn_ = 0;
     // The frame draw() is drawing: matrices, the view's rectangle (x, y, w, h) and its culling.

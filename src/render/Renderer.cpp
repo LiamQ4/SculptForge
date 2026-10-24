@@ -11,9 +11,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
 #include <limits>
 #include <vector>
 
@@ -1137,15 +1134,9 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
     const size_t ns = s.order.size();
     const bool ranged = !full && !dirtyRuns_.empty();
     const std::span<const uint32_t> order = s.order.fromGpu();
-    static const bool prof = std::getenv("SF_PROF");
-    auto T0 = std::chrono::steady_clock::now();
     if (full || ranged) {
         uploadVertices(s, mesh, full);
-        auto T1 = std::chrono::steady_clock::now();
         updateBounds(s, mesh, full);
-        auto T2 = std::chrono::steady_clock::now();
-        if (prof) std::fprintf(stderr, "PROF runs %zu verts %.3f bounds %.3f clusters %zu\n", dirtyRuns_.size(),
-            std::chrono::duration<double,std::milli>(T1-T0).count(), std::chrono::duration<double,std::milli>(T2-T1).count(), cullScratch_.size());
     }
     if (full) {
         s.closed = closedOriented(mesh);
@@ -1571,6 +1562,7 @@ void Renderer::cull(const MeshSlot& s, const CullView& frame) {
                 break;
             }
         }
+    cullBackfaces_ = v.backfaces;
     const size_t nc = std::min(s.bounds.size(), s.drawCount.size());
     for (uint32_t c = 0; c < nc; ++c) {
         if (s.drawCount[c] == 0) continue;
@@ -1664,7 +1656,10 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, const RenderSettings& se
     // Constant values for the attribute arrays that are disabled.
     if (!s.hasColors) gl::VertexAttrib4f(2, 1.0f, 1.0f, 1.0f, 1.0f);
     if (!s.hasMask) gl::VertexAttrib1f(3, 0.0f);
+    // The back faces left in clusters along the silhouette: the GPU skips them too when they can't show.
+    if (cullBackfaces_) gl::Enable(GL_CULL_FACE);
     drawClusters(s, GL_TRIANGLES, false, (features & (kPrim | kTextured | kNormalMap)) ? p->primBase : -1);
+    gl::Disable(GL_CULL_FACE);
 }
 
 // ---------------------------------------------------------------------------

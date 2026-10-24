@@ -8,6 +8,9 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstring>
+#include <map>
+#include <tuple>
 #include <vector>
 
 namespace sf {
@@ -159,27 +162,84 @@ ClusterBounds clusterBounds(const Mesh& mesh, const UploadOrder& order, uint32_t
 bool closedOriented(const Mesh& mesh) {
     const size_t nv = mesh.vertexCount(), nt = mesh.triangleCount();
     if (nt == 0) return false;
-    std::atomic<bool> ok{true};
+    // Directed edges out of and into vertex a (to the next and from the previous corner of each triangle).
+    auto fan = [&](uint32_t a, std::vector<uint32_t>& outs, std::vector<uint32_t>& ins) {
+        for (uint32_t t : mesh.vertexTriangles(a)) {
+            if (t >= nt) continue;
+            const glm::uvec3& tri = mesh.triangles[t];
+            for (int c = 0; c < 3; ++c)
+                if (tri[c] == a) {
+                    outs.push_back(tri[(c + 1) % 3]);
+                    ins.push_back(tri[(c + 2) % 3]);
+                }
+        }
+    };
+    // The vertices whose edges don't pair up.
+    constexpr size_t kBlock = 1 << 14;
+    std::vector<std::vector<uint32_t>> open((nv + kBlock - 1) / kBlock);
+    std::atomic<size_t> openCount{0};
+    const size_t limit = std::max<size_t>(64, nv / 100);
     poolFor(nv, [&](size_t v0, size_t v1) {
         thread_local std::vector<uint32_t> outs, ins;
-        for (size_t a = v0; a < v1 && ok.load(std::memory_order_relaxed); ++a) {
+        std::vector<uint32_t>& list = open[v0 / kBlock];
+        for (size_t a = v0; a < v1 && openCount.load(std::memory_order_relaxed) <= limit; ++a) {
             outs.clear();
             ins.clear();
-            for (uint32_t t : mesh.vertexTriangles(uint32_t(a))) {
-                if (t >= nt) continue;
-                const glm::uvec3& tri = mesh.triangles[t];
-                for (int c = 0; c < 3; ++c)
-                    if (tri[c] == a) {
-                        outs.push_back(tri[(c + 1) % 3]);
-                        ins.push_back(tri[(c + 2) % 3]);
-                    }
-            }
+            fan(uint32_t(a), outs, ins);
             std::sort(outs.begin(), outs.end());
             std::sort(ins.begin(), ins.end());
-            if (outs != ins) ok.store(false, std::memory_order_relaxed);
+            if (outs != ins) {
+                list.push_back(uint32_t(a));
+                openCount.fetch_add(1, std::memory_order_relaxed);
+            }
         }
-    }, 1 << 14);
-    return ok.load();
+    }, kBlock);
+    if (openCount.load() == 0) return true;
+    if (openCount.load() > limit) return false;
+    // A few: maybe a seam of unwelded vertices (the same position twice), which is closed all the same. Count
+    // vertices at one position as one (the lowest id) and check each such group's edges together.
+    struct Key {
+        uint32_t x, y, z;
+        bool operator<(const Key& o) const { return std::tie(x, y, z) < std::tie(o.x, o.y, o.z); }
+    };
+    auto keyOf = [&](uint32_t v) {
+        Key k{};
+        std::memcpy(&k.x, &mesh.positions[v].x, 4);
+        std::memcpy(&k.y, &mesh.positions[v].y, 4);
+        std::memcpy(&k.z, &mesh.positions[v].z, 4);
+        return k;
+    };
+    std::map<Key, uint32_t> canonical;
+    std::vector<uint32_t> outs, ins;
+    auto note = [&](uint32_t v) {
+        auto [it, added] = canonical.emplace(keyOf(v), v);
+        if (!added) it->second = std::min(it->second, v);
+    };
+    for (const auto& list : open)
+        for (uint32_t a : list) {
+            note(a);
+            outs.clear();
+            ins.clear();
+            fan(a, outs, ins);
+            for (uint32_t u : outs) note(u);
+            for (uint32_t u : ins) note(u);
+        }
+    std::map<uint32_t, std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> groups;
+    for (const auto& list : open)
+        for (uint32_t a : list) {
+            auto& [go, gi] = groups[canonical.at(keyOf(a))];
+            outs.clear();
+            ins.clear();
+            fan(a, outs, ins);
+            for (uint32_t u : outs) go.push_back(canonical.at(keyOf(u)));
+            for (uint32_t u : ins) gi.push_back(canonical.at(keyOf(u)));
+        }
+    for (auto& [id, g] : groups) {
+        std::sort(g.first.begin(), g.first.end());
+        std::sort(g.second.begin(), g.second.end());
+        if (g.first != g.second) return false;
+    }
+    return true;
 }
 
 CullView CullView::from(const glm::mat4& view, const glm::mat4& proj) {

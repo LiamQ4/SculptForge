@@ -282,6 +282,7 @@ int App::renderHeadless() {
     camera_.aspect = float(options_.width) / float(std::max(options_.height, 1));
     camera_.pitch = glm::radians(options_.pitchDegrees);
     camera_.distance /= options_.zoom;
+    renderSettings_.wireframe = renderSettings_.wireframe || options_.wireframe; // syncScene builds its edges
     RenderSettings settings = renderSettings_;
     settings.wireframe = options_.wireframe;
     settings.showPolygroups = settings.showPolygroups || options_.polygroups;
@@ -1142,7 +1143,7 @@ void App::syncScene() {
         SubTool& s = doc_.subtools[size_t(i)];
         const bool active = i == doc_.activeSubtool;
         Mesh* mesh = active ? &shown : &s.mesh;
-        scene.push_back({s.id, mesh, active, s.visible, bakeNormalMap(s.id, *mesh)});
+        scene.push_back({s.id, mesh, active, s.visible, bakeNormalMap(s.id, *mesh), renderSettings_.wireframe});
     }
     renderer_.syncScene(scene);
     renderer_.syncSplats(doc_.splats, doc_.splatsVersion);
