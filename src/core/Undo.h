@@ -5,6 +5,7 @@
 #include "core/BVH.h"
 #include "core/Mesh.h"
 #include "core/Multires.h"
+#include "core/ThreadPool.h"
 
 #include <deque>
 #include <memory>
@@ -28,6 +29,12 @@ struct UndoChannel {
     // Exchanges the stored values with `target`, so the channel then holds the inverse.
     void swapWith(std::vector<T>& target) {
         for (size_t i = 0; i < indices.size(); ++i) std::swap(target[indices[i]], values[i]);
+    }
+    // swapWith() in parallel, for channels that list each element once (positions: strokes, transforms).
+    void swapWithUnique(std::vector<T>& target) {
+        poolFor(indices.size(), [&](size_t b, size_t e) {
+            for (size_t i = b; i < e; ++i) std::swap(target[indices[i]], values[i]);
+        }, 1 << 14);
     }
     size_t bytes() const { return indices.size() * (sizeof(uint32_t) + sizeof(T)); }
 };
@@ -88,7 +95,7 @@ inline constexpr int kActivePaintLayer = -2;
 // (topology/layer-set changes; the snapshot holds every attribute).
 //  - positions: the stroke's target array (positions, layer base or a layer's
 //    offsets; see Mesh::layerTarget), selected by `layer`; layerOffsets: every
-//    layer's offsets too (transforms)
+//    layer's offsets too (transforms). Each lists a vertex at most once.
 //  - mask / colors: per-vertex mask and polypaint. `colors` holds the paint
 //    target of `paintLayer` (Mesh::colors without paint layers, else Base for
 //    -1 or that layer's colours, with its coverage in `paintAlpha`)

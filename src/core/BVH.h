@@ -36,6 +36,10 @@ public:
     // refit() after only vertices the last queryVertices() returned moved (brush dabs): the query already
     // found the leaves holding them, so this skips looking them up.
     void refitQueried(const Mesh& mesh);
+    // The leaves holding the vertices the last queryVertices() returned, and refit() given such leaves (from
+    // one or more queries, each once: the Move brush keeps them for its whole stroke).
+    std::span<const uint32_t> queriedLeaves() const { return queryLeaves_; }
+    void refitLeaves(const Mesh& mesh, std::span<const uint32_t> leaves);
     // Recomputes every box (same tree) after most of the mesh moved, e.g. a whole SubTool transformed.
     void refitAll(const Mesh& mesh);
 
@@ -52,7 +56,6 @@ private:
 
     AABB leafBox(const Mesh& mesh, const Node& n) const;
     void recomputeLeaf(const Mesh& mesh, Node& n); // its box, and triLeaf_ for its triangles
-    void refitLeaves(const Mesh& mesh, std::span<const uint32_t> leaves);
 
     std::vector<Node> nodes_;
     std::vector<uint32_t> triIndices_;

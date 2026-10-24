@@ -108,12 +108,6 @@ public:
     void restoreStroke(Mesh& mesh, BVH& bvh);
 
 private:
-    struct GrabEntry {
-        uint32_t vertex;
-        float weight;
-        glm::vec3 mirror;
-    };
-
     void dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p);
     void dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const DabParams& p);
     void finishDab(Mesh& mesh, BVH& bvh, std::span<const uint32_t> verts, std::chrono::steady_clock::time_point clock,
@@ -126,21 +120,30 @@ private:
     bool active_ = false;
     int layer_ = -1;
     UndoRecord record_;
-    std::vector<uint32_t> touchStamp_, maskStamp_, colorStamp_;
-    uint32_t stamp_ = 0;
+    // A bit per vertex: recorded in record_'s positions / mask / colours (cleared from those lists).
+    std::vector<uint64_t> touched_, masked_, colored_;
+    uint64_t strokeId_ = 0;
+    void clearRecorded();
 
     std::vector<uint32_t> verts_;
     std::vector<glm::vec3> scratch_;
     std::vector<float> weights_, influence_;
-    std::vector<GrabEntry> grab_;
+    std::vector<uint8_t> firstTouch_;
+    std::vector<uint32_t> blockFirst_;
+    // Move brush: each mirror's vertices and weights (grabMirrors_: where each mirror's run ends, and its
+    // signs), every vertex once (sorted), and the BVH leaves holding them.
     std::vector<uint32_t> grabVerts_;
+    std::vector<float> grabWeights_;
+    std::vector<std::pair<size_t, glm::vec3>> grabMirrors_;
+    std::vector<uint32_t> grabAll_, grabLeaves_;
 
     // Layer brush: per-stroke height already applied to each vertex.
     void prepareLayer(const Mesh& mesh, float height);
     std::vector<uint32_t> layerStamp_;
     std::vector<float> layerDone_;
     std::vector<glm::vec3> layerDir_;
-    uint32_t layerEpoch_ = 0, layerSeenStamp_ = 0;
+    uint32_t layerEpoch_ = 0;
+    uint64_t layerSeenStroke_ = 0;
     float layerHeight_ = 0.0f;
 
 public:

@@ -159,9 +159,9 @@ void UndoStack::apply(UndoRecord& r, Mesh& mesh, BVH& bvh) {
         return;
     }
     if (!r.positions.empty()) {
-        r.positions.swapWith(mesh.layerTarget(r.layer));
+        r.positions.swapWithUnique(mesh.layerTarget(r.layer));
         for (size_t i = 0; i < r.layerOffsets.size() && i < mesh.layers.size(); ++i)
-            r.layerOffsets[i].swapWith(mesh.layers[i].delta);
+            r.layerOffsets[i].swapWithUnique(mesh.layers[i].delta);
         mesh.evaluate(r.positions.indices);
         mesh.updateNormals(r.positions.indices);
         // Refits only grow boxes: after moving much of the mesh (a transform), tighten the whole tree instead.
