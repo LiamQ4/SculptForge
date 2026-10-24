@@ -243,13 +243,13 @@ void Mesh::updateNormals(std::span<const uint32_t> verts) {
     if (adjOffsets_.size() != nv + 1) return; // no topology
     growDirtyBlocks((nv + kDirtyBlock - 1) / kDirtyBlock);
     if (normalBits_.capacity() < nv) normalBits_.resize(nv);
-    poolFor(verts.size(), [&](size_t b, size_t e) {
+    normalBits_.insertParallel(verts.size(), 4096, [&](size_t b, size_t e, IndexBits& set) {
         for (size_t i = b; i < e; ++i) {
             const uint32_t v = verts[i];
-            normalBits_.insert(v);
-            for (uint32_t u : neighbors(v)) normalBits_.insert(u);
+            set.insertLocal(v);
+            for (uint32_t u : neighbors(v)) set.insertLocal(u);
         }
-    }, 4096);
+    });
     // Listing the set also marks it dirty: its words are laid out like dirtyBits, and each 2048-vertex dirty
     // block lies in one of its chunks (so no two threads write the same word).
     static_assert(IndexBits::kChunk % kDirtyBlock == 0);

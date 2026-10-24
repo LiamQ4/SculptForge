@@ -60,7 +60,7 @@ private:
 
     mutable IndexBits vertBits_;               // queryVertices: the vertices found so far
     mutable std::vector<uint32_t> queryLeaves_; // the leaves holding them, for refitQueried()
-    mutable std::vector<uint32_t> queryTasks_;
+    mutable std::vector<uint32_t> queryTasks_, queryNext_;
     mutable std::vector<std::vector<uint32_t>> queryParts_;
     IndexBits leafBits_; // refit: the leaves to recompute
     std::vector<uint32_t> scratchLeaves_;

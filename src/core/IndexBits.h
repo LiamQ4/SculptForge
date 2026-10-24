@@ -7,6 +7,9 @@
 // same with any thread count, and passes over the list walk the mesh's arrays front to back instead of
 // jumping around (the indices a dab touches lie in a few dozen runs).
 //
+// Threads add with insert() (atomic), or each into a set of its own with insertParallel(), which is faster when
+// many threads add a lot.
+//
 // A summary bit per kChunk indices marks the chunks holding members, so take() only visits those: its cost
 // follows the size of the set, not of the mesh.
 #pragma once
@@ -16,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <vector>
 
 namespace sf {
@@ -47,6 +51,24 @@ public:
         }
         return true;
     }
+
+    // insert() for a set only one thread writes (no atomics).
+    bool insertLocal(uint32_t i) {
+        uint64_t& w = words_[i >> 6];
+        const uint64_t bit = uint64_t(1) << (i & 63);
+        if (w & bit) return false;
+        if (w == 0) summary_[(i / kChunk) >> 6] |= uint64_t(1) << ((i / kChunk) & 63);
+        w |= bit;
+        return true;
+    }
+    // Calls add(begin, end, set) for the blocks [b * block, (b + 1) * block) of [0, n) on the shared pool; `add`
+    // marks members with set.insertLocal(). Each job adds to a scratch set of its own (no atomics, and no cache
+    // lines bouncing between cores), merged into this one at the end. Small or serial runs add here directly,
+    // as do runs while another thread is using the scratch sets (shared by every IndexBits, a bit per index of
+    // the largest one, per thread).
+    void insertParallel(size_t n, size_t block, const std::function<void(size_t, size_t, IndexBits&)>& add);
+    // Moves every member of `parts` (each as big as this set) into this one, in parallel by chunk.
+    void absorb(std::span<IndexBits> parts);
 
     // Appends the members to `out` in increasing order and empties the set (in parallel on the shared pool
     // for big sets). `perWord(wordIndex, bits)`, if given, sees every non-zero word once (from any thread, but

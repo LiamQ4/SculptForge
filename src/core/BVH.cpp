@@ -28,6 +28,12 @@ bool sphereBox(const AABB& b, const glm::vec3& c, float r2) {
     return glm::dot(d, d) <= r2;
 }
 
+// The box lies wholly within the sphere (its farthest corner does).
+bool boxInSphere(const AABB& b, const glm::vec3& c, float r2) {
+    const glm::vec3 d = glm::max(glm::abs(b.min - c), glm::abs(b.max - c));
+    return glm::dot(d, d) <= r2;
+}
+
 // Two-sided Moller-Trumbore.
 bool rayTriangle(const glm::vec3& o, const glm::vec3& d, const glm::vec3& a, const glm::vec3& b,
                  const glm::vec3& c, float& t) {
@@ -251,26 +257,30 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
     if (vertBits_.capacity() < mesh.vertexCount()) vertBits_.resize(mesh.vertexCount());
     const float r2 = radius * radius;
 
-    // The subtrees the sphere touches at a fixed depth (in depth-first order), the units of parallel work.
-    constexpr int kTaskDepth = 9;
+    // The units of parallel work: the subtrees the sphere touches, split breadth first until there are enough
+    // of them (the same ones for any thread count).
+    constexpr size_t kTasks = 128;
     std::vector<uint32_t>& tasks = queryTasks_;
     tasks.clear();
-    std::vector<std::pair<uint32_t, int>> stack{{0u, 0}};
-    while (!stack.empty()) {
-        const auto [ni, depth] = stack.back();
-        stack.pop_back();
-        const Node& n = nodes_[ni];
-        if (!sphereBox(n.box, center, r2)) continue;
-        if (n.count > 0 || depth == kTaskDepth) {
-            tasks.push_back(ni);
-            continue;
+    if (sphereBox(nodes_[0].box, center, r2)) tasks.push_back(0);
+    for (bool split = true; split && tasks.size() < kTasks;) {
+        split = false;
+        queryNext_.clear();
+        for (uint32_t ni : tasks) {
+            const Node& n = nodes_[ni];
+            if (n.count > 0) {
+                queryNext_.push_back(ni);
+                continue;
+            }
+            split = true;
+            for (uint32_t c : {n.first, n.first + 1})
+                if (sphereBox(nodes_[c].box, center, r2)) queryNext_.push_back(c);
         }
-        stack.push_back({n.first, depth + 1});
-        stack.push_back({n.first + 1, depth + 1});
+        tasks.swap(queryNext_);
     }
     // Adds the vertices inside the sphere of the triangles under node `root` that the sphere's boxes touch, and
     // lists (depth first) the leaves holding any of them.
-    auto walk = [&](uint32_t root, std::vector<uint32_t>& nodeStack, std::vector<uint32_t>& leaves) {
+    auto walk = [&](uint32_t root, std::vector<uint32_t>& nodeStack, std::vector<uint32_t>& leaves, IndexBits& found) {
         nodeStack.assign(1, root);
         while (!nodeStack.empty()) {
             const uint32_t ni = nodeStack.back();
@@ -282,18 +292,28 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
                 nodeStack.push_back(n.first + 1);
                 continue;
             }
+            if (boxInSphere(n.box, center, r2)) { // every corner is inside
+                for (uint32_t i = n.first; i < n.first + n.count; ++i) {
+                    const auto& t = mesh.triangles[triIndices_[i]];
+                    found.insertLocal(t.x);
+                    found.insertLocal(t.y);
+                    found.insertLocal(t.z);
+                }
+                leaves.push_back(ni);
+                continue;
+            }
             bool any = false;
             for (uint32_t i = n.first; i < n.first + n.count; ++i) {
                 const auto& t = mesh.triangles[triIndices_[i]];
                 for (int c = 0; c < 3; ++c) {
                     const uint32_t v = t[c];
-                    if (vertBits_.contains(v)) { // only vertices inside are ever added
+                    if (found.contains(v)) { // only vertices inside are ever added
                         any = true;
                         continue;
                     }
                     const glm::vec3 d = mesh.positions[v] - center;
                     if (glm::dot(d, d) <= r2) {
-                        vertBits_.insert(v);
+                        found.insertLocal(v);
                         any = true;
                     }
                 }
@@ -302,30 +322,26 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
         }
     };
     // The set doesn't depend on which thread found what, take() lists it in index order, and the leaves are
-    // joined in task order (the serial order).
-    if (tasks.size() < 8 || ThreadPool::shared().serial()) {
-        for (uint32_t root : tasks) walk(root, stack_, queryLeaves_);
-    } else {
-        if (queryParts_.size() < tasks.size()) queryParts_.resize(tasks.size());
-        poolFor(tasks.size(), [&](size_t b, size_t e) {
-            std::vector<uint32_t> nodeStack;
-            for (size_t k = b; k < e; ++k) {
-                queryParts_[k].clear();
-                walk(tasks[k], nodeStack, queryParts_[k]);
-            }
-        }, 1, 2);
-        for (size_t k = 0; k < tasks.size(); ++k) queryLeaves_.insert(queryLeaves_.end(), queryParts_[k].begin(), queryParts_[k].end());
-    }
+    // joined in task order.
+    if (queryParts_.size() < tasks.size()) queryParts_.resize(tasks.size());
+    vertBits_.insertParallel(tasks.size(), 1, [&](size_t b, size_t e, IndexBits& found) {
+        std::vector<uint32_t> nodeStack;
+        for (size_t k = b; k < e; ++k) {
+            queryParts_[k].clear();
+            walk(tasks[k], nodeStack, queryParts_[k], found);
+        }
+    });
+    for (size_t k = 0; k < tasks.size(); ++k) queryLeaves_.insert(queryLeaves_.end(), queryParts_[k].begin(), queryParts_[k].end());
     vertBits_.take(out);
 }
 
 void BVH::refit(const Mesh& mesh, std::span<const uint32_t> movedVerts) {
     if (nodes_.empty()) return;
     if (leafBits_.capacity() < nodes_.size()) leafBits_.resize(nodes_.size());
-    poolFor(movedVerts.size(), [&](size_t b, size_t e) {
+    leafBits_.insertParallel(movedVerts.size(), 4096, [&](size_t b, size_t e, IndexBits& leaves) {
         for (size_t i = b; i < e; ++i)
-            for (uint32_t ti : mesh.vertexTriangles(movedVerts[i])) leafBits_.insert(triLeaf_[ti]);
-    }, 4096);
+            for (uint32_t ti : mesh.vertexTriangles(movedVerts[i])) leaves.insertLocal(triLeaf_[ti]);
+    });
     scratchLeaves_.clear();
     leafBits_.take(scratchLeaves_);
     refitLeaves(mesh, scratchLeaves_);
