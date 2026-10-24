@@ -262,6 +262,7 @@ void App::drawPalette_Help() {
     menuAction(*this, "help.controls");
     menuAction(*this, "help.guide");
     menuAction(*this, "help.whats_new");
+    menuAction(*this, "help.check_updates");
     menuAction(*this, "ui.command_palette");
     menuAction(*this, "help.website");
     menuAction(*this, "help.report");
@@ -284,6 +285,7 @@ void App::drawPalette_Preferences() {
     if (subpalette("preferences.lightbox", "LightBox")) config::drawLightBoxSection(*this);
     if (subpalette("preferences.tablet", "Tablet")) drawTabletSection();
     if (subpalette("preferences.performance", "Performance")) drawPerformanceSection();
+    if (subpalette("preferences.updates", "Updates")) drawUpdatesSection();
     if (subpalette("preferences.autosave", "Autosave")) {
         ImGui::SetNextItemWidth(-1);
         ImGui::SliderInt("##autosave", &autosaveMinutes_, 0, 60, autosaveMinutes_ ? "Every %d min" : "Autosave off");

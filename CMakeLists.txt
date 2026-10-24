@@ -15,6 +15,7 @@ option(SCULPTFORGE_BUILD_PYTHON "Build the Python module (import sculptforge)" O
 set(SCULPTFORGE_PACKAGE_SUFFIX "" CACHE STRING "Extra tag in package file names, e.g. vfx2026")
 option(SCULPTFORGE_BUILD_TESTS "Build unit tests" ON)
 option(SCULPTFORGE_USE_SYSTEM_SDL "Use an installed SDL3 if one is found" ON)
+option(SCULPTFORGE_UPDATE_CHECK "The app checks the website for a newer version once a day (OFF for package managers)" ON)
 if(SCULPTFORGE_BUILD_TESTS)
   enable_testing()
 endif()
@@ -77,6 +78,7 @@ add_library(sculptforge_core STATIC
   src/core/Matcap.cpp
   src/core/Project.cpp
   src/core/Guide.cpp
+  src/core/UpdateCheck.cpp
   src/core/Tablet.cpp
   src/io/ObjIO.cpp
   src/io/FbxIO.cpp
@@ -195,7 +197,8 @@ if(SCULPTFORGE_BUILD_APP)
   )
   target_link_libraries(sculptforge PRIVATE sculptforge_core sculptforge_ai imgui SDL3::SDL3)
   target_include_directories(sculptforge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lucide)
-  target_compile_definitions(sculptforge PRIVATE SCULPTFORGE_VERSION="${PROJECT_VERSION}")
+  target_compile_definitions(sculptforge PRIVATE SCULPTFORGE_VERSION="${PROJECT_VERSION}"
+                                                 SF_UPDATE_CHECK=$<BOOL:${SCULPTFORGE_UPDATE_CHECK}>)
   if(MSVC)
     target_compile_options(sculptforge PRIVATE /W4 /utf-8 /permissive-)
   else()

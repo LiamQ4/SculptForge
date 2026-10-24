@@ -24,6 +24,7 @@
 #include "core/QRemesh.h"
 #include "core/Stroke.h"
 #include "core/Tablet.h"
+#include "core/UpdateCheck.h"
 #include "core/Texture.h"
 #include "render/Camera.h"
 #include "render/Renderer.h"
@@ -38,6 +39,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -534,6 +536,26 @@ private:
     bool continueAfterSave_ = false; // run discardAction_ once the Save As dialog saved
     bool offerRestore_ = false;
     bool showWhatsNew_ = false; // the first start after an update opens the guide's What's New chapter
+    // Update check (PanelProject.cpp): website/latest.json at most once a day, on a worker thread; a banner when a
+    // newer version is out. Off with Preferences > Updates, SF_NO_UPDATE_CHECK, or -DSCULPTFORGE_UPDATE_CHECK=OFF
+    // (package managers); SF_UPDATE_FEED points it at another URL or a local file (UI tests).
+    struct UpdateJob {
+        std::atomic<bool> done{false};
+        bool manual = false;
+        bool ok = false;
+        UpdateInfo info;
+        std::string error;
+    };
+    void startUpdateCheck(bool manual);
+    void pollUpdateCheck();
+    void drawUpdateBanner();
+    void drawUpdatesSection(); // Preferences > Updates
+    bool checkUpdates_ = true;
+    int64_t updateCheckedAt_ = 0;   // unix time of the last automatic check
+    std::string updateSkipped_;     // "Skip this version"
+    std::shared_ptr<UpdateJob> updateJob_;
+    std::optional<UpdateInfo> updateAvailable_; // shown as the banner until dismissed
+    std::string updateStatus_;                  // the last check's result, for Preferences > Updates
     int autosaveMinutes_ = 5; // 0 = off
     float autosaveTimer_ = 0.0f;
     uint64_t autosaveRevision_ = ~uint64_t(0);

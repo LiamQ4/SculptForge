@@ -6,6 +6,9 @@
 // Recent and autosave with crash recovery. Prompts only appear in interactive
 // sessions; --render, --record and demos run straight through.
 #include "app/App.h"
+#include "app/Ui.h"
+
+#include "ai/Http.h"
 
 #include "core/Matcap.h"
 #include "core/Project.h"
@@ -14,10 +17,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <system_error>
+#include <thread>
 
 namespace sf {
 
@@ -78,9 +84,18 @@ void App::initProject() {
         // Updated since the last start (a new install has no prefs yet and gets the LightBox instead).
         const std::string lastSeen = prefs["last_seen_version"].isString() ? prefs["last_seen_version"].asString() : "";
         showWhatsNew_ = lastSeen != SCULPTFORGE_VERSION;
+        checkUpdates_ = prefs["check_updates"].asBool(checkUpdates_);
+        updateCheckedAt_ = int64_t(prefs["update_checked_at"].asNumber(0));
+        if (prefs["update_skipped"].isString()) updateSkipped_ = prefs["update_skipped"].asString();
     }
     recentFiles_ = pruneRecentFiles(std::move(recentFiles_), fileExists);
     saveProjectPrefs(); // records this version, so What's New shows once
+
+#if SF_UPDATE_CHECK
+    const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    if (checkUpdates_ && options_.uiTest.empty() && !std::getenv("SF_NO_UPDATE_CHECK") && updateCheckDue(updateCheckedAt_, now))
+        startUpdateCheck(false);
+#endif
 
     // An autosave newer than the last clean exit means the previous session ended unexpectedly.
     std::error_code ec;
@@ -106,6 +121,9 @@ void App::saveProjectPrefs() {
     prefs.set("recent_files", std::move(recent));
     prefs.set("autosave_minutes", autosaveMinutes_);
     prefs.set("last_seen_version", std::string(SCULPTFORGE_VERSION));
+    prefs.set("check_updates", checkUpdates_);
+    prefs.set("update_checked_at", double(updateCheckedAt_));
+    if (!updateSkipped_.empty()) prefs.set("update_skipped", updateSkipped_);
     std::ofstream(fsPath(prefDir_ + "project.json"), std::ios::binary | std::ios::trunc) << prefs.dump(true);
 }
 
@@ -409,6 +427,7 @@ void App::drawProjectPopups() {
         guide_.open("whats-new.md");
         showWhatsNew_ = false;
     }
+    drawUpdateBanner();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal(kRestorePopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("SculptForge did not close normally last time.");
@@ -433,6 +452,108 @@ void App::drawProjectPopups() {
         }
         ImGui::EndPopup();
     }
+}
+
+// --- Update check ---
+
+void App::startUpdateCheck(bool manual) {
+    if (updateJob_) return; // one at a time
+    auto job = std::make_shared<UpdateJob>();
+    job->manual = manual;
+    updateJob_ = job;
+    if (!manual) {
+        updateCheckedAt_ = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        saveProjectPrefs();
+    }
+    const char* feed = std::getenv("SF_UPDATE_FEED");
+    std::string source = feed && *feed ? feed : kUpdateFeedUrl;
+    // Detached: a slow network never holds up quitting (the job is shared, so it outlives the app if it must).
+    std::thread([job, source] {
+        std::string body;
+        if (source.rfind("https://", 0) == 0 || source.rfind("http://", 0) == 0) {
+            const ai::HttpResponse r = ai::httpRequest("GET", source, {"Accept: application/json"}, {}, 15);
+            if (r.status == 200) body = r.body;
+            else job->error = r.status ? "the server answered " + std::to_string(r.status) : (r.error.empty() ? "no connection" : r.error);
+        } else {
+            std::ifstream f(fsPath(source), std::ios::binary);
+            if (f) body.assign(std::istreambuf_iterator<char>(f), {});
+            else job->error = "can't read " + source;
+        }
+        if (job->error.empty()) job->ok = parseUpdateFeed(body, job->info, job->error);
+        job->done = true;
+    }).detach();
+}
+
+void App::pollUpdateCheck() {
+    if (!updateJob_ || !updateJob_->done) return;
+    const std::shared_ptr<UpdateJob> job = std::move(updateJob_);
+    updateJob_.reset();
+    if (!job->ok) {
+        updateStatus_ = "Couldn't check for updates: " + job->error;
+        if (job->manual) status_ = updateStatus_;
+        return;
+    }
+    const UpdateInfo& u = job->info;
+    if (compareVersions(u.version, SCULPTFORGE_VERSION) <= 0) {
+        updateStatus_ = "SculptForge " SCULPTFORGE_VERSION " is the newest version";
+        if (job->manual) status_ = updateStatus_;
+        return;
+    }
+    updateStatus_ = "SculptForge " + u.version + " is available";
+    // An automatic check stays quiet about a version the user chose to skip; asking again shows it.
+    if (job->manual || u.version != updateSkipped_) updateAvailable_ = u;
+    if (job->manual) status_ = updateStatus_;
+}
+
+void App::drawUpdateBanner() {
+    pollUpdateCheck(); // (here, not in tickProject: this runs every frame, UI tests included)
+    if (!updateAvailable_) return;
+    const UpdateInfo& u = *updateAvailable_;
+    const CanvasRect c = canvasRect(); // top centre of the 3D view, clear of the shelves
+    ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.5f, c.y + 12.0f * uiScale_), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.96f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+    if (ImGui::Begin("##update_banner", nullptr, flags)) {
+        ImGui::Text("SculptForge %s is available", u.version.c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("(you have %s)", SCULPTFORGE_VERSION);
+        for (const auto& h : u.highlights) ImGui::BulletText("%s", h.c_str());
+        ImGui::Spacing();
+        bool close = false;
+        if (ImGui::Button("What's new")) SDL_OpenURL(u.notesUrl.c_str());
+        ImGui::SameLine();
+        if (ImGui::Button("Download")) {
+            SDL_OpenURL(u.downloadUrl.c_str());
+            close = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Later")) close = true;
+        ImGui::SameLine();
+        if (ImGui::Button("Skip this version")) {
+            updateSkipped_ = u.version;
+            saveProjectPrefs();
+            close = true;
+        }
+        if (close) updateAvailable_.reset();
+    }
+    ImGui::End();
+}
+
+void App::drawUpdatesSection() {
+#if SF_UPDATE_CHECK
+    if (ImGui::Checkbox("Check for updates", &checkUpdates_)) saveProjectPrefs();
+    ui::HelpText("Check for updates", nullptr,
+                 "Once a day at startup, download a small file from the SculptForge website that names the newest "
+                 "version, and show a banner when there is a newer one. Nothing about you or your computer is sent.",
+                 "Preferences > Updates");
+#else
+    ImGui::TextWrapped("This build gets its updates from your package manager.");
+#endif
+    ui::ActionButton(*this, "help.check_updates", ImVec2(-1, 0));
+    if (updateJob_) ImGui::TextDisabled("Checking...");
+    else if (!updateStatus_.empty()) ImGui::TextWrapped("%s", updateStatus_.c_str());
 }
 
 } // namespace sf

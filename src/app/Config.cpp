@@ -280,6 +280,10 @@ void App::initActions() {
         "the chapter about it.");
     add("help.whats_new", "What's New", "Help", nullptr, [this] { guide_.open("whats-new.md"); }, ICON_LC_SPARKLES, nullptr,
         nullptr, nullptr, "What changed in this version and the ones before it (opens once by itself after an update).");
+    add("help.check_updates", "Check for updates", "Help", nullptr, [this] { startUpdateCheck(true); }, ICON_LC_REFRESH_CW,
+        nullptr, nullptr, [this] { return !updateJob_; },
+        "Ask the SculptForge website whether a newer version is out. SculptForge also checks by itself once a day "
+        "(Preferences > Updates).");
     add("help.about", "About SculptForge", "Help", nullptr, [this] { showAbout_ = true; }, ICON_LC_INFO, nullptr, nullptr, nullptr,
         "Version, licence and the open-source components SculptForge is built with.");
     add("help.website", "Website & documentation", "Help", nullptr, [] { SDL_OpenURL("https://islandmed.github.io/SculptForge/"); },
