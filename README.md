@@ -63,11 +63,12 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models over with GoZ (`.GoZ` files
 keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 
-> **Status: early release (v0.5).** The core sculpting, pipeline and AI features work and are tested on every
-> commit. Version 0.5 adds subdivision levels, QRemesh retopology with ProjectAll, map baking, the Gizmo 3D and
-> speed at tens of millions of polygons; 0.4.2 added texture painting on UVs; 0.4 made SculptForge feel like
-> ZBrush, kept quads and added paint layers; 0.3 added SubTools, tablets and the user guide (see the
-> [changelog](CHANGELOG.md)). Dynamic topology is still on the [roadmap](ROADMAP.md).
+> **Status: early release (v0.6).** The core sculpting, pipeline and AI features work and are tested on every
+> commit. Version 0.6 is about performance: about half the memory (a 33 million triangle sculpt with levels in
+> 3.4 GB, Divide past 100 million), a view that turns twice as fast and quicker brushes on huge meshes, plus
+> update notifications; 0.5 added subdivision levels, QRemesh retopology with ProjectAll, map baking and the
+> Gizmo 3D; 0.4 made SculptForge feel like ZBrush (see the [changelog](CHANGELOG.md)). Dynamic topology is still
+> on the [roadmap](ROADMAP.md).
 
 ## Features
 

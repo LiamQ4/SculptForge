@@ -105,9 +105,16 @@ The next chapter, [The interface](interface.md), explains what everything on scr
 
 ## Updating and uninstalling
 
-SculptForge doesn't update itself. To update, download the new release and install it over the old one. Your
-settings, brushes and library are kept: they live in your user folders, not next to the program (see
-[Troubleshooting and FAQ](troubleshooting.md) for where).
+SculptForge doesn't install updates by itself, but it tells you when there is one. Once a day at start-up it
+downloads a small file from its website that names the newest version; if yours is older, a banner at the top
+of the 3D view says what's new, with **What's new**, **Download**, **Later** and **Skip this version**. Nothing
+about you or your computer is sent. **Help > Check for updates** asks right away, and **Preferences > Updates**
+turns the daily check off. Builds from a package manager (such as the AUR package) leave updates to the package
+manager and don't check.
+
+To update, download the new release and install it over the old one. Your settings, brushes and library are
+kept: they live in your user folders, not next to the program (see [Troubleshooting and FAQ](troubleshooting.md)
+for where).
 
 To uninstall, use your system's usual method (Settings > Apps on Windows, dragging the app to the Bin on
 macOS, `sudo apt remove sculptforge` or `sudo dnf remove sculptforge` on Linux, or delete the AppImage).

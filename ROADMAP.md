@@ -118,6 +118,18 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
   Navigation; v0.5)
 - ✅ Gizmo 3D for moving, scaling, rotating and posing parts (W / E / R, masked falloff, Transpose All) (v0.5)
 
+## Done in v0.6 — performance
+
+- ✅ About half the memory per triangle: subdivision levels generated instead of stored, implicit vertex
+  adjacency on divided levels, project open read in place (33M: 156 -> 83 bytes per triangle); Divide limited
+  by memory instead of 50M
+- ✅ Viewport: clusters culled on the CPU, 12-byte vertices, a motion proxy under Fast Navigation (33M orbit
+  20.6 -> 9.2 ms with 4x AA, 3.7 ms with Fast Navigation; GPU 46 -> 15 bytes per triangle)
+- ✅ Brushes: bitmap vertex sets, refits from the query, parallel undo recording (Mask / Paint about 2x)
+- ✅ Update notifications (once a day, nothing sent about the user, off for package managers)
+- 📋 Next: dynamic topology, a Blender bridge add-on, a ZBrush-feel pass from user feedback, mmap project open,
+  an HD Geometry equivalent
+
 ## Phase 3 — AI assistant, beyond brushes
 
 - 📋 Chat assistant that drives any SculptForge command (tool calling over the existing registry)

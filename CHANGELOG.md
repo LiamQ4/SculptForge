@@ -6,6 +6,23 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-24
+
+Performance release. Figures for a 33 million triangle model with 7 subdivision levels on an M1 Pro laptop,
+measured on the merged release against 0.5 with the same benchmark (docs/performance.md): memory for the mesh,
+BVH and levels 156 -> 83 bytes per triangle (whole process 5.6 -> 3.4 GB); GPU memory 46 -> 15 bytes per
+triangle; orbit 20.6 -> 9.2 ms with 4x antialiasing, 14.8 -> 3.7 ms with Fast Navigation; a medium dab 11.9 ->
+7.5 ms and a large one 78.5 -> 45 ms with the GPU upload; Mask / Paint dabs 5.6 / 7.0 -> 2.5 / 3.5 ms; opening
+the project 4.7 -> 2.1 s. The sections below were measured on each part's own branch; the merged figures differ
+a little (dabs on divided meshes are about 15% slower than on the brush branch alone, from the implicit
+adjacency that saves the memory).
+
+### Update check
+- Once a day the app reads https://islandmed.github.io/SculptForge/latest.json (nothing about the user is sent)
+  and, when a newer version is out, shows a banner: What's new, Download, Later, Skip this version.
+  **Help > Check for updates** asks right away; **Preferences > Updates** turns it off. `SF_NO_UPDATE_CHECK=1`
+  turns it off for a run, `-DSCULPTFORGE_UPDATE_CHECK=OFF` at build time (the AUR package uses it).
+
 ### Memory: sculpts with subdivision levels take half as much
 - A divided sculpt takes about 90 bytes per triangle in memory instead of 160: a 33 million triangle model with
   its levels needs 3.0 GB instead of 5.3 GB, and a 100 million triangle one fits in 9 GB.
@@ -493,7 +510,8 @@ First public release.
 - Rez package (`packaging/rez`).
 - Headless thumbnail/turntable rendering and scripted demo recording.
 
-[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/islandmed/SculptForge/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/islandmed/SculptForge/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/islandmed/SculptForge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/islandmed/SculptForge/compare/v0.4.0...v0.4.1

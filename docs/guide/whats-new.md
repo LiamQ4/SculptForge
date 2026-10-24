@@ -5,12 +5,15 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
-## Next version (in development)
+## Version 0.6
+
+Performance: half the memory, a view that turns twice as fast, quicker brushes on huge meshes, and SculptForge
+now tells you when there's a new version.
 
 ### Lighter sculpts
 
-A sculpt with subdivision levels takes half the memory it did: a 33 million triangle model with its levels needs
-about 3 GB instead of 5.3, so a laptop with 32 GB holds models of 100 million triangles and more.
+A sculpt with subdivision levels takes about half the memory it did: a 33 million triangle model with its levels
+needs about 3.4 GB instead of 5.6, so a laptop with 32 GB holds models of 100 million triangles and more.
 
 - **Divide goes past 100 million triangles.** The limit now follows your computer's memory instead of stopping at
   50 million.
@@ -24,17 +27,17 @@ See [Performance and big meshes](performance.md).
 
 ### Big brushes on huge meshes
 
-Large Move, Smooth, Inflate and Standard strokes are much quicker on tens of millions of polygons: on a 33
-million triangle model a brush covering a tenth of it (a million vertices per dab with symmetry) takes about 39
-ms per dab instead of 63, Move at that size 12 instead of 22, a medium brush 6.5 ms instead of 11, and undoing a
-big stroke is about twice as fast.
-Sculpting also needs about 300 MB less memory at that size. See
+Brushes are quicker on tens of millions of polygons. On a 33 million triangle model a medium brush takes about
+7.5 ms per dab (12 in 0.5), a brush covering a tenth of the model (a million vertices per dab with symmetry)
+about 45 ms (60 to 80 in 0.5), and masking and painting about twice as fast. Undoing a big stroke is about twice
+as fast too, and sculpting needs about 300 MB less memory at that size. See
 [Performance and big meshes](performance.md).
 
 ### A faster, lighter viewport
 
-Turning the view around a huge sculpt is now about twice as fast, and the graphics card needs about a third of
-the memory it did.
+Turning the view around a huge sculpt is now about twice as fast (a 33 million triangle model: 109 frames a
+second with 4x antialiasing, 270 with Fast Navigation, from 49 and 68), and the graphics card needs about a third
+of the memory it did.
 
 - **Only what you can see is drawn.** The mesh is drawn in patches of a few thousand triangles; patches outside
   the view, and on closed meshes the ones facing away from you, are skipped.
@@ -46,6 +49,20 @@ the memory it did.
 - Opening a big model or dividing it sends it to the graphics card about 40% faster.
 
 See [Performance and big meshes](performance.md).
+
+### STL files print at the right size
+
+STL export is now in millimetres with Z up, as slicers expect: models used to arrive 1000 times too small and
+lying on their back. Set a print height in millimetres when you export, and STL files you open come in upright
+at their real size. See [Exporting](exporting.md#3d-printing).
+
+### Update notifications
+
+Once a day SculptForge looks on its website for a newer version, and if there is one, a small banner says what's
+in it, with **What's new**, **Download**, **Later** and **Skip this version**. It downloads one small file and
+sends nothing about you or your computer. Turn it off under **Preferences > Updates**, or check by hand with
+**Help > Check for updates**. Builds from a package manager (such as the AUR package) leave the checking to the
+package manager.
 
 ## Version 0.5
 
@@ -157,7 +174,7 @@ See [Performance and big meshes](performance.md).
 - **Tidier top shelf:** the **Vertex / Texture** paint target only shows when the SubTool has a texture.
 - **Exports checked by other tools:** textured GLB, USD/USDZ, FBX and OBJ files were checked with the Khronos
   validator, OpenUSD and ufbx, and the texture is the right way up in each. A model saved as `my scene.obj` now
-  writes `my_scene.mtl` so other apps find it. See [Exporting](exporting.md).
+  writes `my_scene.mtl` so other apps find it. See [Exporting](exporting.md#3d-printing).
 
 ## Version 0.4.2
 
