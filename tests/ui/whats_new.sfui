@@ -7,6 +7,6 @@ expect_guide whats-new.md
 expect_text "Version 0.5"
 expect_text "Version 0.4.2"
 expect_text "Subdivision levels"
-expect_text "The ZBrush workflow core"
+expect_text "Next version (in development)"
 # The newest section is on screen.
 shot whats-new
