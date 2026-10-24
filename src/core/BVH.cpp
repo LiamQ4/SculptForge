@@ -325,7 +325,7 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
     // The set doesn't depend on which thread found what, take() lists it in index order, and the leaves are
     // joined in task order.
     size_t work = 0; // triangles under the tasks, roughly
-    for (uint32_t ni : tasks) work += nodes_[ni].count > 0 ? nodes_[ni].count : mesh.triangleCount() >> depth;
+    for (uint32_t ni : tasks) work += nodes_[ni].count > 0 ? nodes_[ni].count : mesh.triangleCount() >> std::min(depth, 63);
     if (work < kSerialTriangles) { // waking threads would cost more
         for (uint32_t root : tasks) walk(root, stack_, queryLeaves_, vertBits_);
         vertBits_.take(out);
