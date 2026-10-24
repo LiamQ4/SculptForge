@@ -222,6 +222,8 @@ bool parseBenchArg(int argc, char** argv, int& i, BenchCommandLine& cl) {
             if (const double v = std::atof(item.c_str()); v > 0.0) cl.options.sizesMillions.push_back(v);
     } else if (a == "--bench-dabs") {
         cl.options.dabsPerStroke = std::max(1, std::atoi(next().c_str()));
+    } else if (a == "--bench-brushes") {
+        cl.options.brushFilter = next();
     } else if (a == "--bench-no-project") {
         cl.options.projectRoundTrip = false;
     } else if (a == "--bench-out") {
@@ -275,10 +277,12 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         {"Clay", Kind::Brush, BrushType::Clay},
         {"ClayBuildup", Kind::Brush, BrushType::ClayBuildup},
         {"Smooth", Kind::Brush, BrushType::Smooth},
+        {"Smooth (large, r 0.4)", Kind::Brush, BrushType::Smooth, 0.4f},
         {"Inflate", Kind::Brush, BrushType::Inflate},
         {"DamStandard", Kind::Brush, BrushType::DamStandard},
         {"Layer", Kind::Brush, BrushType::Layer},
         {"Move", Kind::Move, BrushType::Move},
+        {"Move (large, r 0.4)", Kind::Move, BrushType::Move, 0.4f},
         {"Recipe (pattern)", Kind::Recipe},
         {"Mask", Kind::Mask},
         {"Paint", Kind::Paint},
@@ -323,6 +327,7 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
            << "**dab total** | stroke end (undo record) | undo | redo | undo step |\n";
         md << "|---|---:|---:|---:|---:|---:|---:|" << (gpu ? "---:|" : "") << "---:|---:|---:|---:|---:|\n";
         for (const BenchBrush& b : brushes) {
+            if (!o.brushFilter.empty() && b.name.find(o.brushFilter) == std::string::npos) continue;
             log("  " + b.name);
             const StrokeStats s = runStroke(doc, b, o.dabsPerStroke, gpu, order);
             const double d = std::max(s.dabs, 1);

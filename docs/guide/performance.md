@@ -68,6 +68,7 @@ stepping subdivision levels, saving and opening a project, and turning the view,
 |---|---|
 | `--bench-sizes 4,16,32` | The sizes, in millions of triangles |
 | `--bench-dabs 40` | Dabs per test stroke |
+| `--bench-brushes large` | Only the brushes whose name contains the text (here the large-radius ones) |
 | `--bench-no-project` | Skip saving and opening the project (which needs twice the memory) |
 | `--bench-out report.md` | Write the report to a file |
 

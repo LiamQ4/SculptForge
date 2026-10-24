@@ -4,7 +4,7 @@ Measurements for the v0.5 performance work ("Performance at 20-100M polygons, mu
 Every number here comes from the benchmark built into SculptForge, so anyone can reproduce it:
 
 ```
-sculptforge --bench [--bench-sizes 4,16,32] [--bench-dabs 40] [--bench-no-project] [--bench-out report.md]
+sculptforge --bench [--bench-sizes 4,16,32] [--bench-dabs 40] [--bench-brushes TEXT] [--bench-no-project] [--bench-out report.md]
 sculptforge-cli --bench ...      # the same without the GPU (CI, servers)
 ```
 
