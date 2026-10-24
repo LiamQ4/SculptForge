@@ -3,6 +3,7 @@
 #include "core/Mesh.h"
 #include "core/Multires.h"
 #include "core/AtomicRef.h"
+#include "core/Prefetch.h"
 #include "core/ThreadPool.h"
 
 #include <algorithm>
@@ -263,6 +264,17 @@ void Mesh::updateNormals(std::span<const uint32_t> verts) {
     dirtyEnd = std::max(dirtyEnd, scratchVerts_.back() + 1);
     poolFor(scratchVerts_.size(), [&](size_t b, size_t e) {
         for (size_t i = b; i < e; ++i) {
+            // The faces around later vertices are scattered over memory: ask for them ahead (their triangles
+            // 16 vertices ahead, by 8 ahead those triangles' corners).
+            if (i + 16 < e)
+                for (uint32_t ti : vertexTriangles(scratchVerts_[i + 16])) prefetch(&triangles[ti]);
+            if (i + 8 < e)
+                for (uint32_t ti : vertexTriangles(scratchVerts_[i + 8])) {
+                    const glm::uvec3& t = triangles[ti];
+                    prefetch(&positions[t.x]);
+                    prefetch(&positions[t.y]);
+                    prefetch(&positions[t.z]);
+                }
             const uint32_t v = scratchVerts_[i];
             glm::vec3 sum(0.0f);
             for (uint32_t ti : vertexTriangles(v)) sum += faceNormal(positions, triangles[ti]);
