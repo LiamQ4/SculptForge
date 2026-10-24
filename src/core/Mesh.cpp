@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Mesh.h"
 #include "core/Multires.h"
+#include "core/AtomicRef.h"
 #include "core/ThreadPool.h"
 
 #include <algorithm>
@@ -277,7 +278,7 @@ void Mesh::updateNormals(std::span<const uint32_t> verts) {
             std::vector<uint32_t>& out = scratchParts_[b / kBlock];
             out.clear();
             for (size_t i = b; i < e; ++i)
-                if (std::atomic_ref<uint32_t>(vertStamp_[verts[i]]).exchange(own, std::memory_order_relaxed) != own)
+                if (AtomicRef<uint32_t>(vertStamp_[verts[i]]).exchange(own, std::memory_order_relaxed) != own)
                     out.push_back(verts[i]);
         }, kBlock);
         poolFor(verts.size(), [&](size_t b, size_t e) {
@@ -285,7 +286,7 @@ void Mesh::updateNormals(std::span<const uint32_t> verts) {
             out.clear();
             for (size_t i = b; i < e; ++i)
                 for (uint32_t u : neighbors(verts[i])) {
-                    std::atomic_ref<uint32_t> stamp(vertStamp_[u]);
+                    AtomicRef<uint32_t> stamp(vertStamp_[u]);
                     const uint32_t seen = stamp.load(std::memory_order_relaxed);
                     if (seen == own || seen == ring) continue;
                     if (stamp.exchange(ring, std::memory_order_relaxed) != ring) out.push_back(u);
@@ -306,8 +307,8 @@ void Mesh::updateNormals(std::span<const uint32_t> verts) {
             if (len > 1e-20f) normals[v] = sum / len;
             lo = std::min(lo, v);
             hi = std::max(hi, v);
-            std::atomic_ref<uint8_t>(dirtyBlocks[v >> kDirtyBlockShift]).store(1, std::memory_order_relaxed);
-            std::atomic_ref<uint64_t>(dirtyBits[v >> 6]).fetch_or(uint64_t(1) << (v & 63), std::memory_order_relaxed);
+            AtomicRef<uint8_t>(dirtyBlocks[v >> kDirtyBlockShift]).store(1, std::memory_order_relaxed);
+            AtomicRef<uint64_t>(dirtyBits[v >> 6]).fetch_or(uint64_t(1) << (v & 63), std::memory_order_relaxed);
         }
         bounds[b / kBlock] = {lo, hi + 1};
     }, kBlock);

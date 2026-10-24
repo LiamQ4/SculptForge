@@ -40,7 +40,7 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF
           -DSCULPTFORGE_BUILD_PYTHON=ON -DPython_EXECUTABLE="${{ env.pythonLocation }}/${{ runner.os == 'Windows' && 'python.exe' || 'bin/python3' }}"
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --config Release --parallel 4
       - name: Test (C++ and Python API)
         run: ctest --test-dir build -C Release --output-on-failure -LE ui
       - name: UI tests (real app, Xvfb + Mesa)
@@ -99,7 +99,7 @@ jobs:
           gcc --version | head -1
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF \
             -DSCULPTFORGE_BUILD_PYTHON=ON -DPython_EXECUTABLE="$PYTHON313"
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           ctest --test-dir build --output-on-failure -LE ui
       - name: Check binary compatibility (glibc <= ${{ matrix.glibc }})
         run: |

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/BVH.h"
 
+#include "core/AtomicRef.h"
 #include "core/ThreadPool.h"
 
 #include <algorithm>
@@ -323,7 +324,7 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
             std::vector<uint32_t>& found = queryParts_[k];
             found.clear();
             walk(tasks[k], nodeStack, [&](uint32_t v) {
-                std::atomic_ref<uint32_t> owner(vertStamp_[v]);
+                AtomicRef<uint32_t> owner(vertStamp_[v]);
                 if (owner.load(std::memory_order_relaxed) == mine || !inside(v)) return;
                 found.push_back(v);
                 for (uint32_t cur = owner.load(std::memory_order_relaxed);
@@ -338,7 +339,7 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
             std::vector<uint32_t>& found = queryParts_[k];
             size_t kept = 0;
             for (uint32_t v : found) {
-                std::atomic_ref<uint32_t> owner(vertStamp_[v]);
+                AtomicRef<uint32_t> owner(vertStamp_[v]);
                 if (owner.load(std::memory_order_relaxed) != mine) continue;
                 owner.store(done, std::memory_order_relaxed);
                 found[kept++] = v;
@@ -374,7 +375,7 @@ void BVH::refit(const Mesh& mesh, std::span<const uint32_t> movedVerts) {
             for (size_t i = b; i < e; ++i)
                 for (uint32_t ti : mesh.vertexTriangles(movedVerts[i])) {
                     const uint32_t leaf = triLeaf_[ti];
-                    if (std::atomic_ref<uint32_t>(leafStamp_[leaf]).exchange(s, std::memory_order_relaxed) != s)
+                    if (AtomicRef<uint32_t>(leafStamp_[leaf]).exchange(s, std::memory_order_relaxed) != s)
                         out.push_back(leaf);
                 }
         }, kBlock);

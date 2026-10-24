@@ -32,7 +32,7 @@ jobs:
       - name: Build and test
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DSCULPTFORGE_USE_SYSTEM_SDL=OFF
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           ctest --test-dir build --output-on-failure -LE ui
       - name: UI tests (real app, Xvfb + Mesa)
         run: |
@@ -88,7 +88,7 @@ jobs:
           source /opt/rh/gcc-toolset-14/enable
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DSCULPTFORGE_USE_SYSTEM_SDL=OFF \
             -DSCULPTFORGE_BUILD_PYTHON=ON -DPython_EXECUTABLE="$PYTHON313" -DSCULPTFORGE_PYTHON_INSTALL_DIR=lib/sculptforge/python
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           # UI tests need a display; they run under Xvfb in the Linux jobs above and in CI.
           ctest --test-dir build --output-on-failure -LE ui
           cd build
@@ -111,7 +111,7 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           # UI tests need a display; they run under Xvfb in the Linux jobs above and in CI.
           ctest --test-dir build --output-on-failure -LE ui
       - name: Package (signed ad-hoc inside CPack, see cmake/MacSign.cmake)
@@ -130,7 +130,7 @@ jobs:
       - name: Build and test
         run: |
           cmake -S . -B build -DSCULPTFORGE_USE_SYSTEM_SDL=OFF
-          cmake --build build --config Release --parallel
+          cmake --build build --config Release --parallel 4
           # UI tests need a display; they run under Xvfb in the Linux jobs above and in CI.
           ctest --test-dir build -C Release --output-on-failure -LE ui
       - name: Package

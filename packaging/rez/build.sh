@@ -9,7 +9,7 @@ if [ -n "$python" ]; then
 fi
 cmake -S "$source_dir" -B . -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$REZ_BUILD_INSTALL_PATH" \
   -DCMAKE_INSTALL_BINDIR=bin -DCMAKE_INSTALL_LIBDIR=lib "${python_args[@]}"
-cmake --build . --parallel
+cmake --build . --parallel "${REZ_BUILD_THREAD_COUNT:-4}"
 ctest --output-on-failure
 if [ "${1:-}" = "install" ]; then
   cmake --install .
