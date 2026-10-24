@@ -387,15 +387,27 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         }
         if (gpu && gpu->orbitFrameMs) {
             log("  orbit");
-            for (int samples : {4, 1}) {
-                const double f = gpu->orbitFrameMs(m, samples);
-                md << "| Orbit: frame time, " << (samples == 1 ? "Fast Navigation (no antialiasing)" : "4x antialiasing") << " | "
-                   << fmt("%.1f", f) << " (" << fmt("%.0f", 1000.0 / std::max(f, 1e-3)) << " fps) |\n";
+            if (gpu->motionSetupMs)
+                md << "| Motion proxy build (first move after an upload) | " << fmt("%.0f", gpu->motionSetupMs(m)) << " |\n";
+            struct Orbit {
+                int samples;
+                bool moving;
+                const char* name;
+            };
+            for (const Orbit& o : {Orbit{4, false, "4x antialiasing"}, Orbit{1, false, "no antialiasing"},
+                                   Orbit{1, true, "Fast Navigation (no antialiasing, motion proxy)"}}) {
+                const double f = gpu->orbitFrameMs(m, o.samples, o.moving);
+                md << "| Orbit: frame time, " << o.name << " | " << fmt("%.1f", f) << " (" << fmt("%.0f", 1000.0 / std::max(f, 1e-3))
+                   << " fps) |\n";
+                if (gpu->drawnTriangles && o.samples == 1) {
+                    const double d = double(gpu->drawnTriangles());
+                    md << "| Orbit: triangles drawn" << (o.moving ? " (motion proxy)" : "") << " | " << millions(d) << " ("
+                       << fmt("%.0f", 100.0 * d / nt) << "%) |\n";
+                }
             }
-            if (gpu->drawnTriangles) {
-                const double d = double(gpu->drawnTriangles());
-                md << "| Orbit: triangles drawn after culling | " << millions(d) << " (" << fmt("%.0f", 100.0 * d / nt) << "%) |\n";
-            }
+            if (gpu->gpuBytes)
+                md << "| GPU memory with the motion proxy | " << fmt("%.0f MB", double(gpu->gpuBytes()) / 1e6) << " = "
+                   << fmt("%.1f", double(gpu->gpuBytes()) / nt) << " B/triangle |\n";
         }
         md << "\n";
         if (o.partial) o.partial(md.str());

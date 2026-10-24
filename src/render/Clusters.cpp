@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <unordered_map>
 #include <tuple>
 #include <vector>
 
@@ -157,6 +158,100 @@ ClusterBounds clusterBounds(const Mesh& mesh, const UploadOrder& order, uint32_t
         b.coneAngle = std::acos(std::min(minDot, 1.0f));
     }
     return b;
+}
+
+bool clusterProxy(const Mesh& mesh, const UploadOrder& order, uint32_t c, size_t maxTriangles, std::vector<uint16_t>& out,
+                  ClusterBounds& bounds) {
+    out.clear();
+    const uint32_t n = order.clusterTriangles(c);
+    const UploadOrder::Cluster& cl = order.clusters()[c];
+    const auto fromGpu = order.fromGpu();
+    thread_local std::vector<uint16_t> local, rep;
+    thread_local std::vector<uint8_t> pinned;
+    local.resize(size_t(n) * 3);
+    order.localTriangles(mesh, c, local.data());
+    const uint32_t nl = cl.vertexCount;
+    pinned.assign(nl, 0);
+    AABB box;
+    for (uint32_t l = 0; l < nl; ++l) {
+        const uint32_t v = fromGpu[cl.firstVertex + l];
+        pinned[l] = order.shared(v);
+        box.expand(mesh.positions[v]);
+    }
+    auto pos = [&](uint32_t l) { return mesh.positions[fromGpu[cl.firstVertex + l]]; };
+    const bool hidden = mesh.hidden.size() == mesh.triangleCount();
+    double edges = 0.0;
+    size_t counted = 0;
+    for (uint32_t i = 0; i < n; i += 7) { // a sample is plenty
+        const uint16_t* t = local.data() + size_t(i) * 3;
+        edges += glm::distance(pos(t[0]), pos(t[1])) + glm::distance(pos(t[1]), pos(t[2]));
+        counted += 2;
+    }
+    if (!counted || !box.valid()) return false;
+    float cell = float(edges / double(counted)) * 2.5f;
+    if (!(cell > 0.0f)) return false;
+    std::unordered_map<uint64_t, std::pair<uint16_t, float>> cells; // cell -> (representative, its distance to the centre)
+    rep.resize(nl);
+    for (int attempt = 0; attempt < 4; ++attempt, cell *= 1.6f) {
+        cells.clear();
+        auto cellOf = [&](const glm::vec3& p, glm::vec3& centre) {
+            const glm::vec3 q = glm::floor((p - box.min) / cell);
+            centre = box.min + (q + 0.5f) * cell;
+            return uint64_t(uint32_t(q.x)) | (uint64_t(uint32_t(q.y)) << 21) | (uint64_t(uint32_t(q.z)) << 42);
+        };
+        for (uint32_t l = 0; l < nl; ++l) {
+            if (pinned[l]) continue;
+            glm::vec3 centre;
+            const glm::vec3 p = pos(l);
+            const uint64_t key = cellOf(p, centre);
+            const float d = glm::distance(p, centre);
+            auto [it, added] = cells.emplace(key, std::make_pair(uint16_t(l), d));
+            if (!added && d < it->second.second) it->second = {uint16_t(l), d};
+        }
+        for (uint32_t l = 0; l < nl; ++l) {
+            glm::vec3 centre;
+            rep[l] = pinned[l] ? uint16_t(l) : cells.at(cellOf(pos(l), centre)).first;
+        }
+        out.clear();
+        for (uint32_t i = 0; i < n; ++i) {
+            if (hidden && mesh.hidden[order.triangle(c, i)]) continue;
+            const uint16_t* t = local.data() + size_t(i) * 3;
+            const uint16_t a = rep[t[0]], b = rep[t[1]], d = rep[t[2]];
+            if (a == b || b == d || a == d) continue;
+            out.insert(out.end(), {a, b, d});
+        }
+        if (out.size() / 3 <= maxTriangles) break;
+    }
+    if (out.size() / 3 > maxTriangles) {
+        out.clear();
+        return false;
+    }
+    // The proxy's own normal cone (its triangles lean differently from the cluster's).
+    glm::vec3 sum(0.0f);
+    float minDot = 1.0f;
+    bool faces = false;
+    thread_local std::vector<glm::vec3> normals;
+    normals.resize(out.size() / 3);
+    for (size_t i = 0; i < normals.size(); ++i) {
+        const glm::vec3 p0 = pos(out[i * 3]);
+        const glm::vec3 cr = glm::cross(pos(out[i * 3 + 1]) - p0, pos(out[i * 3 + 2]) - p0);
+        const float l2 = glm::dot(cr, cr);
+        normals[i] = l2 > 0.0f && std::isfinite(l2) ? cr / std::sqrt(l2) : glm::vec3(0.0f);
+        sum += normals[i];
+    }
+    const float sl = glm::length(sum);
+    for (const glm::vec3& nn : normals)
+        if (nn != glm::vec3(0.0f) && sl > 1e-6f) {
+            minDot = std::min(minDot, glm::dot(nn, sum / sl));
+            faces = true;
+        }
+    bounds.axis = glm::vec3(0.0f, 0.0f, 1.0f);
+    bounds.coneAngle = -1.0f;
+    if (faces && minDot > 0.0f) {
+        bounds.axis = sum / sl;
+        bounds.coneAngle = std::acos(std::min(minDot, 1.0f));
+    }
+    return true;
 }
 
 bool closedOriented(const Mesh& mesh) {

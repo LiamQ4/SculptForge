@@ -51,6 +51,8 @@ public:
     std::span<const uint32_t> fromGpu() const { return fromGpu_; }
     // The first GPU slot holding mesh vertex v (kNone for vertices no triangle uses).
     uint32_t toGpu(uint32_t v) const { return toGpu_[v]; }
+    // v has a copy in more than one cluster (it is on a seam between clusters).
+    bool shared(uint32_t v) const { return v < vertices_ && ((hasCopy_[v >> 6] >> (v & 63)) & 1); }
     // Every GPU slot holding v, in increasing order (one for most vertices).
     void slotsOf(uint32_t v, std::vector<uint32_t>& out) const;
 

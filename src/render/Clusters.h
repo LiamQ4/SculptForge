@@ -59,6 +59,16 @@ struct ClusterBounds {
 };
 ClusterBounds clusterBounds(const Mesh& mesh, const UploadOrder& order, uint32_t cluster);
 
+// The motion proxy of cluster c (drawn while the view moves): its triangles with the vertices snapped to one
+// per cell of a grid a few edges wide (the vertex nearest the cell's centre), the degenerate ones dropped, as
+// indices into the cluster's vertex range like localTriangles. Vertices on seams between clusters stay, so
+// the proxies of neighbouring clusters still meet: the proxy of a closed mesh is closed (a simplicial map of
+// it). `hidden` triangles are left out. At most maxTriangles (a coarser grid until it fits); false (and
+// nothing) when it doesn't fit even then. `bounds` gets the proxy's normal cone (centre and radius as the
+// cluster's, whose vertices it uses).
+bool clusterProxy(const Mesh& mesh, const UploadOrder& order, uint32_t c, size_t maxTriangles, std::vector<uint16_t>& out,
+                  ClusterBounds& bounds);
+
 // Every directed edge a->b has as many b->a: the mesh is the closed, consistently wound boundary of a volume
 // (it may intersect itself). Then from outside, every back face lies behind a front face.
 bool closedOriented(const Mesh& mesh);

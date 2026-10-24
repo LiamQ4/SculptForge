@@ -162,6 +162,8 @@ uniform int uMatcap;          // 1: shade with the matcap texture instead of the
 uniform sampler2D uMatcapTex; // sRGB-encoded lit sphere (core/Matcap.h)
 uniform vec2 uMatcapCavity;   // crease darkening, ridge lift (sf::matcapCavity)
 uniform int uDim;             // 1: an inactive SubTool, shown a little darker and greyer
+uniform int uTwoSided;        // 1: back faces shade with the normal turned towards the viewer; 0: the motion proxy,
+                              // whose folds face backwards on the outside of the surface
 out vec4 fragColor;
 vec4 finish(vec3 c) {
     if (uDim == 1) c = mix(c, vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), 0.25) * 0.72;
@@ -204,7 +206,7 @@ void main() {
     vec3 B = (vTangent.w < 0.0 ? -1.0 : 1.0) * cross(n, T);
     n = normalize(tn.x * T + tn.y * B + tn.z * n);
 #endif
-    if (!gl_FrontFacing) n = -n;
+    if (!gl_FrontFacing && uTwoSided == 1) n = -n;
     vec2 ndc = (gl_FragCoord.xy - uViewport.xy) / uViewport.zw * 2.0 - 1.0;
     vec3 v = normalize(vec3(-ndc / uProjScale, 1.0));
     if (uMatcap == 1) {
@@ -501,6 +503,7 @@ const Renderer::MeshProgram* Renderer::meshProgram(int features) {
     p.primBase = at("uPrimBase");
     p.hasPaint = at("uHasPaint");
     p.normalFlipY = at("uNormalFlipY");
+    p.twoSided = at("uTwoSided");
     // Texture units: groups 1, matcap 2, UVs 3, painted texture 4, normal map 5, tangents 6, cluster table 7.
     gl::UseProgram(p.id);
     gl::Uniform1i(at("uGroupIds"), 1);
@@ -578,7 +581,9 @@ Renderer::MeshSlot& Renderer::slot(uint32_t id) {
     gl::GenTextures(1, &s.primTexture);
     gl::GenBuffers(1, &s.uvData);
     gl::GenTextures(1, &s.uvTexture);
-    for (GLuint vao : {s.vao, s.lineVao}) {
+    gl::GenVertexArrays(1, &s.proxyVao);
+    gl::GenBuffers(1, &s.proxyBuffer);
+    for (GLuint vao : {s.vao, s.lineVao, s.proxyVao}) {
         gl::BindVertexArray(vao);
         gl::BindBuffer(GL_ARRAY_BUFFER, s.vertexBuffer);
         gl::EnableVertexAttribArray(0);
@@ -594,7 +599,7 @@ Renderer::MeshSlot& Renderer::slot(uint32_t id) {
         gl::VertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, 4, nullptr);
         gl::BindBuffer(GL_ARRAY_BUFFER, s.maskBuffer);
         gl::VertexAttribPointer(3, 1, GL_UNSIGNED_BYTE, GL_TRUE, 1, nullptr);
-        gl::BindBuffer(GL_ELEMENT_ARRAY_BUFFER, s.indexBuffer);
+        gl::BindBuffer(GL_ELEMENT_ARRAY_BUFFER, vao == s.proxyVao ? s.proxyBuffer : s.indexBuffer);
     }
     gl::BindVertexArray(0);
     gl::BindBuffer(GL_ARRAY_BUFFER, 0);
@@ -602,7 +607,8 @@ Renderer::MeshSlot& Renderer::slot(uint32_t id) {
 }
 
 void Renderer::freeSlot(MeshSlot& s) {
-    for (GLuint* b : {&s.vertexBuffer, &s.indexBuffer, &s.lineBuffer, &s.colorBuffer, &s.maskBuffer, &s.groupData, &s.primData, &s.uvData})
+    for (GLuint* b : {&s.vertexBuffer, &s.indexBuffer, &s.lineBuffer, &s.proxyBuffer, &s.colorBuffer, &s.maskBuffer, &s.groupData,
+                      &s.primData, &s.uvData})
         gl::DeleteBuffers(1, b);
     gl::DeleteTextures(1, &s.groupTexture);
     gl::DeleteTextures(1, &s.primTexture);
@@ -613,6 +619,7 @@ void Renderer::freeSlot(MeshSlot& s) {
     if (s.tangentTexture) gl::DeleteTextures(1, &s.tangentTexture);
     gl::DeleteVertexArrays(1, &s.vao);
     gl::DeleteVertexArrays(1, &s.lineVao);
+    gl::DeleteVertexArrays(1, &s.proxyVao);
     s = MeshSlot();
 }
 
@@ -620,6 +627,7 @@ size_t Renderer::gpuBytes() const {
     size_t total = 0;
     for (const MeshSlot& s : slots_) {
         for (size_t b : s.bytes) total += b;
+        if (s.proxyAllocated) total += (s.order.triangleCount() / 4) * 3 * sizeof(uint16_t);
         if (s.paintTexture) total += size_t(s.textureW) * size_t(s.textureH) * 4 * 4 / 3; // with mipmaps
     }
     return total;
@@ -903,6 +911,8 @@ void Renderer::updateBounds(MeshSlot& s, const Mesh& mesh, bool all) {
                 if (cullScratch_.empty() || c > cullScratch_.back()) cullScratch_.push_back(c);
         }
     }
+    s.proxyStale.resize(clusters.size(), 1);
+    for (uint32_t c : cullScratch_) s.proxyStale[c] = 1;
     poolFor(cullScratch_.size(), [&](size_t i0, size_t i1) {
         for (size_t i = i0; i < i1; ++i) {
             const uint32_t c = cullScratch_[i];
@@ -1053,6 +1063,7 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs) {
     }
     s.hasUvs = textured;
     s.linesValid = false;
+    s.proxyStale.assign(nc, 1);
     if (textured) s.drawnOrder = std::move(drawnTris); // the normal map's tangents follow it
     else std::vector<uint32_t>().swap(s.drawnOrder);
     if (visibleUvs_.capacity() > (size_t(1) << 16)) std::vector<glm::vec2>().swap(visibleUvs_);
@@ -1115,6 +1126,44 @@ void Renderer::buildLines(MeshSlot& s, const Mesh& mesh) {
     s.linesValid = true;
 }
 
+// The motion proxies of the clusters that changed since they were built (all of them at first), each in its
+// own part of the proxy buffer.
+void Renderer::buildProxies(MeshSlot& s, const Mesh& mesh) {
+    const size_t nc = s.order.clusters().size();
+    s.proxyStale.resize(nc, 1);
+    s.proxyCount.resize(nc, 0);
+    s.proxyBounds.resize(nc);
+    cullScratch_.clear();
+    for (uint32_t c = 0; c < nc; ++c)
+        if (s.proxyStale[c]) cullScratch_.push_back(c);
+    if (cullScratch_.empty()) return;
+    if (!s.proxyAllocated) {
+        gl::BindVertexArray(s.proxyVao);
+        gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr((s.order.triangleCount() / 4) * 3 * sizeof(uint16_t)), nullptr, GL_STATIC_DRAW);
+        gl::BindVertexArray(0);
+        s.proxyAllocated = true;
+    }
+    std::vector<std::vector<uint16_t>> built(cullScratch_.size());
+    poolFor(cullScratch_.size(), [&](size_t i0, size_t i1) {
+        for (size_t i = i0; i < i1; ++i) {
+            const uint32_t c = cullScratch_[i];
+            ClusterBounds b = s.bounds[c];
+            if (!clusterProxy(mesh, s.order, c, s.order.clusterTriangles(c) / 4, built[i], b)) built[i].clear();
+            s.proxyBounds[c] = b;
+        }
+    }, 1, 2);
+    gl::BindVertexArray(s.proxyVao);
+    for (size_t i = 0; i < cullScratch_.size(); ++i) {
+        const uint32_t c = cullScratch_[i];
+        s.proxyCount[c] = uint32_t(built[i].size());
+        s.proxyStale[c] = 0;
+        if (!built[i].empty())
+            gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(size_t(s.order.firstTriangle(c) / 4) * 3 * sizeof(uint16_t)),
+                              GLsizeiptr(built[i].size() * sizeof(uint16_t)), built[i].data());
+    }
+    gl::BindVertexArray(0);
+}
+
 void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, bool wireframe) {
     const size_t nv = mesh.vertexCount();
     if (normalMap && (!normalMap->rgb || !normalMap->tangents || normalMap->tangents->size() != mesh.uvs.size() ||
@@ -1139,6 +1188,8 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
         updateBounds(s, mesh, full);
     }
     if (full) {
+        s.proxyAllocated = false; // sized for the old mesh
+        s.proxyCount.clear();
         s.closed = closedOriented(mesh);
         uploadFaces(s, mesh, wantUvs);
         s.vertexCapacity = nv;
@@ -1163,6 +1214,7 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
     }
     if (!full && (mesh.facesDirty || wantUvs != s.hasUvs)) uploadFaces(s, mesh, wantUvs);
     if (wireframe && !s.linesValid && !s.outOfMemory) buildLines(s, mesh);
+    if (proxyUsed_ && !s.outOfMemory) buildProxies(s, mesh);
     syncTexture(s, mesh);
     syncNormalMap(s, mesh, normalMap);
 
@@ -1180,9 +1232,11 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
             gl::BufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
         }
         if (present != uploaded) {
-            gl::BindVertexArray(s.vao);
-            if (present) gl::EnableVertexAttribArray(location);
-            else gl::DisableVertexAttribArray(location);
+            for (GLuint vao : {s.vao, s.proxyVao}) {
+                gl::BindVertexArray(vao);
+                if (present) gl::EnableVertexAttribArray(location);
+                else gl::DisableVertexAttribArray(location);
+            }
             gl::BindVertexArray(0);
         }
         uploaded = present;
@@ -1495,10 +1549,8 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
     gl::Enable(GL_POLYGON_OFFSET_FILL);
     gl::PolygonOffset(1.0f, 1.0f);
     for (const DrawItem& item : drawList_)
-        if (const MeshSlot* s = findSlot(item.id); s && s->drawnTriangles > 0) {
-            cull(*s, frameCull_);
-            drawSlot(*s, item.active, settings);
-        }
+        if (const MeshSlot* s = findSlot(item.id); s && s->drawnTriangles > 0) drawSlot(*s, item.active, settings);
+    proxyUsed_ = settings.motionProxy;
     gl::Disable(GL_POLYGON_OFFSET_FILL);
     for (GLenum unit : {kTexture7, kTexture6, GL_TEXTURE3, GL_TEXTURE1}) {
         gl::ActiveTexture(unit);
@@ -1526,12 +1578,12 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
             if (s->linesValid) {
                 gl::Uniform1f(gl::GetUniformLocation(wireProgram_, "uAlpha"), 0.5775f); // 1 - (1 - 0.35)^2
                 gl::BindVertexArray(s->lineVao);
-                drawClusters(*s, GL_LINES, true, -1);
+                drawClusters(*s, drawClusters_, GL_LINES, Part::Lines, -1);
             } else { // edges not built (a mesh not synced for the wireframe): outline the triangles
                 gl::Uniform1f(gl::GetUniformLocation(wireProgram_, "uAlpha"), 0.35f);
                 gl::PolygonMode(GL_FRONT_AND_BACK, GL_LINE);
                 gl::BindVertexArray(s->vao);
-                drawClusters(*s, GL_TRIANGLES, false, -1);
+                drawClusters(*s, drawClusters_, GL_TRIANGLES, Part::Triangles, -1);
                 gl::PolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             }
         }
@@ -1546,8 +1598,10 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
 // The clusters of `s` inside the view, less those facing away when that can't open a hole: the mesh is closed
 // and wound consistently (closedOriented) with nothing hidden, the eye is outside its bounds, and no cluster
 // reaches into the near plane's slab (a cut-open front would show the back faces behind it).
-void Renderer::cull(const MeshSlot& s, const CullView& frame) {
+void Renderer::cull(const MeshSlot& s, const CullView& frame, bool proxy) {
     drawClusters_.clear();
+    proxyClusters_.clear();
+    proxy = proxy && s.proxyCount.size() == s.drawCount.size() && s.proxyBounds.size() == s.drawCount.size();
     CullView v = frame;
     const glm::vec3 e = v.eye;
     v.backfaces = s.closed && !s.anyHidden && s.box.valid() &&
@@ -1567,38 +1621,53 @@ void Renderer::cull(const MeshSlot& s, const CullView& frame) {
     for (uint32_t c = 0; c < nc; ++c) {
         if (s.drawCount[c] == 0) continue;
         const ClusterBounds& b = s.bounds[c];
-        if (!insideFrustum(v, b) || facingAway(v, b)) continue;
-        drawClusters_.push_back(c);
+        if (!insideFrustum(v, b)) continue;
+        if (proxy && s.proxyCount[c] > 0 && !s.proxyStale[c]) {
+            if (!facingAway(v, s.proxyBounds[c])) proxyClusters_.push_back(c);
+        } else if (!facingAway(v, b)) {
+            drawClusters_.push_back(c);
+        }
     }
 }
 
-// Draws drawClusters_ of `s` (its VAO bound): triangles, or the wireframe's edges with `lines`. One multi-draw,
-// or with per-triangle data on a driver whose gl_VertexID lacks the base vertex, one draw per cluster with its
-// first drawn triangle in `primBaseLocation`.
-void Renderer::drawClusters(const MeshSlot& s, GLenum mode, bool lines, GLint primBaseLocation) {
+// Draws `clusters` of `s` (the VAO for `part` bound): their triangles, the wireframe's edges, or their motion
+// proxies. One multi-draw, or with per-triangle data on a driver whose gl_VertexID lacks the base vertex, one
+// draw per cluster with its first drawn triangle in `primBaseLocation`.
+void Renderer::drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clusters, GLenum mode, Part part, GLint primBaseLocation) {
     drawCounts_.clear();
     drawOffsets_.clear();
     drawBases_.clear();
-    const auto clusters = s.order.clusters();
+    const auto layout = s.order.clusters();
     size_t indices = 0;
-    for (uint32_t c : drawClusters_) {
-        const GLsizei count = lines ? GLsizei(s.lineCount[c]) : s.drawCount[c];
-        if (count == 0) continue;
-        const size_t first = lines ? size_t(s.lineFirst[c]) : size_t(s.order.firstTriangle(c)) * 3;
+    for (uint32_t c : clusters) {
+        GLsizei count = 0;
+        size_t first = 0;
+        switch (part) {
+        case Part::Triangles:
+            count = s.drawCount[c];
+            first = size_t(s.order.firstTriangle(c)) * 3;
+            break;
+        case Part::Lines:
+            count = GLsizei(s.lineCount[c]);
+            first = s.lineFirst[c];
+            break;
+        case Part::Proxy:
+            count = GLsizei(s.proxyCount[c]);
+            first = size_t(s.order.firstTriangle(c) / 4) * 3;
+            break;
+        }
         drawCounts_.push_back(count);
         drawOffsets_.push_back(reinterpret_cast<const void*>(first * sizeof(uint16_t)));
-        drawBases_.push_back(GLint(clusters[c].firstVertex));
+        drawBases_.push_back(GLint(layout[c].firstVertex));
         indices += size_t(count);
     }
     if (drawCounts_.empty()) return;
-    if (!lines) lastDrawn_ += indices / 3;
+    if (part != Part::Lines) lastDrawn_ += indices / 3;
     if (primBaseLocation >= 0 && !vertexIdHasBase_) {
-        size_t i = 0;
-        for (uint32_t c : drawClusters_) {
-            if (s.drawCount[c] == 0) continue;
-            gl::Uniform1i(primBaseLocation, GLint(s.primBase[c]));
+        for (size_t i = 0; i < clusters.size(); ++i) {
+            if (drawCounts_[i] == 0) continue;
+            gl::Uniform1i(primBaseLocation, GLint(s.primBase[clusters[i]]));
             gl::DrawElementsBaseVertex(mode, drawCounts_[i], GL_UNSIGNED_SHORT, drawOffsets_[i], drawBases_[i]);
-            ++i;
         }
         return;
     }
@@ -1652,13 +1721,25 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, const RenderSettings& se
     gl::Uniform1i(p->showMask, active && settings.showMask && s.hasMask ? 1 : 0);
     gl::Uniform1i(p->groups, groups);
     gl::Uniform1i(p->dim, !active && settings.dimInactive ? 1 : 0);
+    gl::Uniform1i(p->twoSided, 1);
     gl::BindVertexArray(s.vao);
     // Constant values for the attribute arrays that are disabled.
     if (!s.hasColors) gl::VertexAttrib4f(2, 1.0f, 1.0f, 1.0f, 1.0f);
     if (!s.hasMask) gl::VertexAttrib1f(3, 0.0f);
+    // While the view moves, the motion proxy where it is built (not with per-triangle data, which follows the
+    // full triangles).
+    const bool perTriangle = features & (kPrim | kTextured | kNormalMap);
+    cull(s, frameCull_, settings.motionProxy && !perTriangle);
     // The back faces left in clusters along the silhouette: the GPU skips them too when they can't show.
     if (cullBackfaces_) gl::Enable(GL_CULL_FACE);
-    drawClusters(s, GL_TRIANGLES, false, (features & (kPrim | kTextured | kNormalMap)) ? p->primBase : -1);
+    drawClusters(s, drawClusters_, GL_TRIANGLES, Part::Triangles, perTriangle ? p->primBase : -1);
+    if (!proxyClusters_.empty()) {
+        gl::BindVertexArray(s.proxyVao);
+        if (!s.hasColors) gl::VertexAttrib4f(2, 1.0f, 1.0f, 1.0f, 1.0f);
+        if (!s.hasMask) gl::VertexAttrib1f(3, 0.0f);
+        gl::Uniform1i(p->twoSided, 0);
+        drawClusters(s, proxyClusters_, GL_TRIANGLES, Part::Proxy, -1);
+    }
     gl::Disable(GL_CULL_FACE);
 }
 

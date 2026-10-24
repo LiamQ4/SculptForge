@@ -15,6 +15,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
+#include <map>
 #include <random>
 
 using namespace sf;
@@ -283,4 +284,52 @@ TEST(cluster_frustum_culling) {
     b.radius = -1.0f; // empty
     b.center = glm::vec3(0.0f);
     CHECK(!insideFrustum(cv, b));
+}
+
+TEST(motion_proxy_is_closed_and_light) {
+    // The proxies of all clusters of a closed mesh, mapped back to mesh vertices, make a closed surface (no
+    // holes while the view moves), each at most a quarter of its cluster.
+    Mesh m = makeBenchSphere(300000);
+    for (size_t v = 0; v < m.vertexCount(); ++v) { // some sculpted detail
+        const glm::vec3 p = m.positions[v];
+        m.positions[v] = p * (1.0f + 0.02f * std::sin(p.x * 31.0f) * std::sin(p.z * 29.0f));
+    }
+    m.recomputeAllNormals();
+    UploadOrder order;
+    order.build(m);
+    std::map<std::pair<uint32_t, uint32_t>, int> edges; // directed edge -> count, minus the reverse's
+    std::vector<uint16_t> proxy;
+    size_t total = 0;
+    bool light = true, built = true, inRange = true;
+    for (uint32_t c = 0; c < order.clusters().size(); ++c) {
+        ClusterBounds b = clusterBounds(m, order, c);
+        const size_t cap = order.clusterTriangles(c) / 4;
+        built = built && clusterProxy(m, order, c, cap, proxy, b);
+        light = light && proxy.size() / 3 <= cap && proxy.size() % 3 == 0;
+        total += proxy.size() / 3;
+        const auto& cl = order.clusters()[c];
+        for (size_t i = 0; i < proxy.size(); i += 3)
+            for (int k = 0; k < 3; ++k) {
+                inRange = inRange && proxy[i + size_t(k)] < cl.vertexCount;
+                const uint32_t a = order.fromGpu()[cl.firstVertex + proxy[i + size_t(k)]];
+                const uint32_t e = order.fromGpu()[cl.firstVertex + proxy[i + size_t((k + 1) % 3)]];
+                ++edges[{a, e}];
+                --edges[{e, a}];
+            }
+    }
+    bool closed = true;
+    for (const auto& [e, n] : edges) closed = closed && n == 0;
+    std::printf("  motion proxy: %zu of %zu triangles\n", total, m.triangleCount());
+    CHECK(built);
+    CHECK(light);
+    CHECK(inRange);
+    CHECK(closed);
+    CHECK(total * 4 < m.triangleCount());
+    // Hidden triangles stay out of the proxy too.
+    Mesh h = makeBenchSphere(20000);
+    h.ensureHidden();
+    for (size_t t = 0; t < h.triangleCount(); ++t) h.hidden[t] = 1;
+    order.build(h);
+    ClusterBounds b;
+    CHECK(clusterProxy(h, order, 0, order.clusterTriangles(0), proxy, b) && proxy.empty());
 }

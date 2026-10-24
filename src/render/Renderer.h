@@ -27,6 +27,7 @@ struct RenderSettings {
     bool showSplats = true;
     float splatOpacity = 1.0f; // global fade for using a capture as reference
     bool dimInactive = true;   // SubTools other than the active one render slightly darker (ZBrush style)
+    bool motionProxy = false;  // the view is moving (Fast Navigation): draw big meshes' lighter proxy (render/Clusters.h)
 };
 
 // A baked tangent-space normal map to preview on a mesh (core/Bake.h): RGB8 rows bottom-up, with the
@@ -162,6 +163,12 @@ private:
         std::vector<uint32_t> primBase;    // per cluster: its first drawn triangle
         std::vector<uint32_t> lineFirst, lineCount; // per cluster: its edges in lineBuffer (in indices)
         bool linesValid = false;
+        // Motion proxy (clusterProxy): per cluster up to a quarter of its triangles, at (firstTriangle / 4) * 3.
+        GLuint proxyVao = 0, proxyBuffer = 0;
+        std::vector<uint32_t> proxyCount;    // indices; 0: none (the cluster draws in full)
+        std::vector<uint8_t> proxyStale;     // to rebuild before use
+        std::vector<ClusterBounds> proxyBounds; // the proxy's normal cone
+        bool proxyAllocated = false;
         std::vector<uint32_t> drawnOrder; // the mesh triangle of each drawn triangle (meshes with UVs only)
         size_t drawnTriangles = 0;
         size_t vertexCapacity = 0;
@@ -173,15 +180,20 @@ private:
     void uploadVertices(MeshSlot& s, const Mesh& mesh, bool full);
     void updateBounds(MeshSlot& s, const Mesh& mesh, bool all);
     void buildLines(MeshSlot& s, const Mesh& mesh);
+    void buildProxies(MeshSlot& s, const Mesh& mesh);
+    bool proxyUsed_ = false; // the last draw() drew motion proxies: sync keeps them current
     void syncNormalMap(MeshSlot& s, const Mesh& mesh, const NormalMapView* normalMap);
     void uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs);
     std::vector<std::pair<uint32_t, uint32_t>> dirtyRuns_; // scratch for sync: UploadOrder::dirtyRuns
     std::vector<uint8_t> staging_;                         // scratch for sync: gathered vertex data
     void syncTexture(MeshSlot& s, Mesh& mesh);
-    // The clusters of `s` to draw this frame (into drawCounts_ / drawOffsets_ / drawBases_ / drawClusters_).
-    void cull(const MeshSlot& s, const CullView& view);
+    // The clusters of `s` to draw this frame: in full (drawClusters_), and with `proxy` as their motion proxy
+    // where it is built (proxyClusters_).
+    void cull(const MeshSlot& s, const CullView& view, bool proxy = false);
     void drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings);
-    void drawClusters(const MeshSlot& s, GLenum mode, bool lines, GLint primBaseLocation);
+    enum class Part { Triangles, Lines, Proxy };
+    void drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clusters, GLenum mode, Part part, GLint primBaseLocation);
+    std::vector<uint32_t> proxyClusters_;
     std::vector<GLsizei> drawCounts_;
     std::vector<const void*> drawOffsets_;
     std::vector<GLint> drawBases_;
@@ -198,7 +210,7 @@ private:
         GLuint id = 0;
         GLint view = -1, proj = -1, gridOrigin = -1, gridStep = -1, viewport = -1, projScale = -1, baseColor = -1, paint = -1,
               showMask = -1, groups = -1, matcap = -1, matcapCavity = -1, dim = -1, primBase = -1, hasPaint = -1,
-              normalFlipY = -1;
+              normalFlipY = -1, twoSided = -1;
     };
     static constexpr int kPaint = 1, kPrim = 2, kTextured = 4, kNormalMap = 8;
     MeshProgram programs_[16];

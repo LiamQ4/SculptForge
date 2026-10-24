@@ -582,7 +582,10 @@ int App::run() {
         const auto syncStart = std::chrono::steady_clock::now();
         syncScene();
         notePerformanceFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - syncStart).count());
-        perf_.samplesUsed = renderer_.drawView(camera_, fbW, fbH, renderSettings_, canvasViewport(fbW, fbH), viewSamples());
+        const int samples = viewSamples();
+        renderSettings_.motionProxy = perf_.proxyNow; // big meshes draw their lighter proxy while the view moves
+        perf_.samplesUsed = renderer_.drawView(camera_, fbW, fbH, renderSettings_, canvasViewport(fbW, fbH), samples);
+        renderSettings_.motionProxy = false; // (other renders, e.g. project thumbnails, draw in full)
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(window_);
         tickProject(dt);

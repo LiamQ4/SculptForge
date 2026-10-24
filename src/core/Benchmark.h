@@ -25,8 +25,11 @@ struct BenchGpu {
     // Uploads what the mesh marked dirty and waits for the GPU; returns milliseconds. First call: everything.
     std::function<double(Mesh&)> upload;
     // Average milliseconds per frame over a turn around the mesh (already uploaded), drawn with `samples`
-    // antialiasing samples as the app's view draws (1 = Fast Navigation while the view moves).
-    std::function<double(Mesh&, int samples)> orbitFrameMs;
+    // antialiasing samples as the app's view draws; `moving`: as Fast Navigation draws while the view moves
+    // (the renderer's motion proxy, if it has one; the app also drops to 1 sample).
+    std::function<double(Mesh&, int samples, bool moving)> orbitFrameMs;
+    // Milliseconds to build what moving the view needs first (the motion proxy) for the uploaded mesh (optional).
+    std::function<double(Mesh&)> motionSetupMs;
     std::function<size_t()> gpuBytes;          // GPU memory the renderer holds for the mesh (optional)
     std::function<size_t()> drawnTriangles;    // triangles the last orbit frame drew, after culling (optional)
     std::string description; // GPU / driver, for the report
