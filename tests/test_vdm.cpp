@@ -388,3 +388,30 @@ TEST(vdm_library_commands) {
                             {"radius", 0.5}}));
     CHECK(s.mesh.positions != before);
 }
+
+// The VDM plane keeps its UVs through Divide (finer detail to sculpt), and a stamp at the highest subdivision
+// level survives stepping down and back up.
+TEST(vdm_with_subdivision_levels) {
+    Document plane = makeDoc(makeVdmPlane(32));
+    CHECK(run(plane, "subdiv_divide", {{"smooth", false}}));
+    CHECK(run(plane, "subdiv_divide", {{"smooth", false}}));
+    CHECK(plane.mesh.vertexCount() == 129u * 129u && plane.mesh.hasUvs());
+    for (glm::vec3& p : plane.mesh.positions) p += sculptedOffset(p);
+    VectorDisplacement captured;
+    std::string err;
+    CHECK(captureVdm(plane.mesh, 128, captured, err));
+    const glm::vec3 o = sculptedOffset(glm::vec3(0.1f, 0.0f, -0.2f));
+    CHECK(glm::length(captured.sample(0.1f, 0.2f) - glm::vec3(o.x, -o.z, o.y)) < 0.01f);
+
+    Document d = makeDoc(makeIcosphere(3, 1.0f));
+    CHECK(run(d, "subdiv_divide"));
+    CHECK(run(d, "subdiv_divide"));
+    d.brushVdm = builtinVdm("horn");
+    CHECK(run(d, "vdm_stamp", {{"point", std::string("0,0,0")}, {"view", std::string("0,0,-1")}, {"radius", 0.4}}));
+    const auto stamped = d.mesh.positions;
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}));
+    CHECK(run(d, "subdiv_level", {{"level", 3.0}}));
+    float worst = 0.0f;
+    for (size_t v = 0; v < stamped.size(); ++v) worst = std::max(worst, glm::distance(stamped[v], d.mesh.positions[v]));
+    CHECK(worst < 1e-4f);
+}

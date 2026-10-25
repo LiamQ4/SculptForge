@@ -7,7 +7,10 @@
 # Sends a small scene to SculptForge (sculptforge-cli stands in for the app: blender_receive, then
 # blender_send), receives it back and checks that the objects are unchanged: positions, n-gons,
 # transforms, materials, modifiers, UVs, colours, mask and face sets. Then a topology change (subdivide)
-# and a new SubTool come back as a rebuilt mesh and a new object. CMake runs it when `blender` is found.
+# and a new SubTool come back as a rebuilt mesh and a new object. The ZBrush-style keys preference adds and
+# removes its keymap items, each bound to a real operator with valid settings. Vector displacement maps that
+# SculptForge exports read in Blender with the same orientation, and Blender's EXRs load in SculptForge.
+# CMake runs it when `blender` is found.
 import os
 import subprocess
 import sys
@@ -102,6 +105,126 @@ def build_scene():
     return ["Box", "Disc ü", "Suzanne"]
 
 
+def addon_sculpt_items():
+    km = bpy.context.window_manager.keyconfigs.addon.keymaps.get("Sculpt")
+    return list(km.keymap_items) if km else []
+
+
+def test_zbrush_keys():
+    keys = bridge.zbrush_keys
+    p = bridge.prefs()
+    before = len(addon_sculpt_items())
+    check(not p.zbrush_keys and not keys.enabled(), "ZBrush keys: off by default")
+    p.zbrush_keys = True
+    table = keys.key_table()
+    items = addon_sculpt_items()
+    check(len(items) == before + len(table), "ZBrush keys: one keymap item per key (%d)" % len(table))
+    for zkey, what, idname, key, ctrl, shift, alt, value, props in table:
+        kmi = next((i for i in items if i.idname == idname and i.type == key and i.ctrl == ctrl and i.shift == shift
+                    and i.alt == alt), None)
+        check(kmi is not None and kmi.active, "ZBrush keys: %s -> %s" % (zkey or key, idname))
+        mod, fn = idname.split(".")
+        try:  # (hasattr is always true on bpy.ops: the operator is looked up when called)
+            getattr(getattr(bpy.ops, mod), fn).get_rna_type()
+            exists = True
+        except (AttributeError, KeyError, RuntimeError):
+            exists = False
+        check(exists, "ZBrush keys: operator %s exists" % idname)
+        for name, v in props.items():
+            got = getattr(kmi.properties, name) if kmi else None
+            same = got == v or (isinstance(v, str) and isinstance(got, str) and got.upper() == v.upper()) or \
+                (isinstance(v, float) and abs(got - v) < 1e-6)
+            check(same, "ZBrush keys: %s %s = %r" % (idname, name, v))
+    check(not keys.skipped, "ZBrush keys: none skipped %s" % keys.skipped)
+    # Every data path the keys use resolves in Sculpt Mode (they changed between Blender 4.2 and 5).
+    for obj in list(bpy.data.objects):
+        bpy.data.objects.remove(obj)
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=16, ring_count=8)
+    bpy.ops.object.mode_set(mode="SCULPT")
+    for zkey, what, idname, key, ctrl, shift, alt, value, props in table:
+        for name, path in props.items():
+            if name in ("data_path_primary", "data_path_secondary", "use_secondary", "rotation_path", "color_path",
+                        "image_id") or (idname == "wm.context_toggle" and name == "data_path" and
+                                        not path.startswith("space_data")):
+                try:
+                    bpy.context.path_resolve(path)
+                    ok = True
+                except ValueError:
+                    ok = False
+                check(ok, "ZBrush keys: %s resolves (%s)" % (path, zkey or key))
+    check(bpy.types.Menu.bl_rna_get_subclass_py(keys.SCULPTFORGE_MT_zbrush_brushes.bl_idname) is not None,
+          "ZBrush keys: the brush menu is registered")
+    # The brush menu's picks.
+    for name, _, asset, sculpt_tool, _ in keys.BRUSHES:
+        r = bpy.ops.sculptforge.zbrush_brush(brush=name)
+        brush = bpy.context.tool_settings.sculpt.brush
+        got = brush.name if keys.brush_assets() else brush.sculpt_tool
+        check(r == {"FINISHED"} and got == (asset if keys.brush_assets() else sculpt_tool),
+              "ZBrush brush %s -> Blender %s (%s)" % (name, asset, got))
+    # Ctrl+D divides (a Multires level); D / Shift+D step between levels without adding any.
+    check(bpy.ops.sculptforge.zbrush_divide() == {"FINISHED"}, "Ctrl+D: Divide")
+    bpy.ops.sculptforge.zbrush_divide()
+    multires = next((m for m in bpy.context.active_object.modifiers if m.type == "MULTIRES"), None)
+    check(multires is not None and multires.total_levels == 2, "Ctrl+D in Sculpt Mode adds Multires levels")
+    if multires is not None:
+        bpy.ops.sculptforge.zbrush_sdiv(step=-1)
+        bpy.ops.sculptforge.zbrush_sdiv(step=-1)
+        bpy.ops.sculptforge.zbrush_sdiv(step=-1)
+        check(multires.sculpt_levels == 0 and multires.total_levels == 2, "Shift+D steps down to SDiv 0")
+        bpy.ops.sculptforge.zbrush_sdiv(step=1)
+        bpy.ops.sculptforge.zbrush_sdiv(step=1)
+        bpy.ops.sculptforge.zbrush_sdiv(step=1)
+        check(multires.sculpt_levels == 2 and multires.total_levels == 2, "D steps up to the top, adds nothing")
+    bpy.ops.object.mode_set(mode="OBJECT")
+    p.zbrush_keys = False
+    check(len(addon_sculpt_items()) == before and not keys.enabled(), "ZBrush keys: turning it off removes them")
+    p.zbrush_keys = True  # (the add-on's unregister removes them too: checked after disabling it)
+
+
+def read_sfvdm(path):
+    with open(path, "rb") as f:
+        b = f.read()
+    w, h, n = np.frombuffer(b[8:20], dtype="<u4")
+    return np.frombuffer(b[20 + n:], dtype="<f4").reshape(h, w, 3)
+
+
+def test_vdm_exr():
+    # SculptForge's Horn as an EXR and as .sfvdm (row 0 = the top of the map, +Y).
+    exr = os.path.join(ROOT, "horn.exr")
+    raw = os.path.join(ROOT, "horn.sfvdm")
+    sculptforge(['vdm_export name=horn path="%s"' % exr, 'vdm_export name=horn path="%s"' % raw])
+    ours = read_sfvdm(raw)
+    img = bpy.data.images.load(exr)
+    img.colorspace_settings.is_data = True
+    w, h = img.size
+    px = np.array(img.pixels[:], dtype=np.float32).reshape(h, w, img.channels)[::-1, :, :3]  # Blender: bottom row first
+    check((w, h) == (256, 256), "VDM EXR: Blender reads 256 x 256")
+    check(np.abs(px - ours).max() < 1e-6, "VDM EXR: Blender sees the same vectors, the same way up (max diff %g)"
+          % np.abs(px - ours).max())
+    # The horn leans toward the top of the image: +Y in Blender's texture space too.
+    check(px[128, 128, 1] > 0.3 and px[128, 128, 2] > 0.6, "VDM EXR: the horn's tip points up the map and out")
+    # Blender's EXRs (32-bit ZIP, as its VDM Brush Baker writes, and 16-bit) load in SculptForge unchanged.
+    rng = np.random.default_rng(3)
+    vec = rng.uniform(-0.5, 0.5, (32, 48, 3)).astype(np.float32)  # rows from the top
+    for depth, codec, tol in (("32", "ZIP", 1e-6), ("16", "ZIP", 2e-3), ("32", "PIZ", 1e-6)):
+        made = bpy.data.images.new("vdm%s%s" % (depth, codec), 48, 32, alpha=True, float_buffer=True, is_data=True)
+        rgba = np.ones((32, 48, 4), dtype=np.float32)
+        rgba[:, :, :3] = vec
+        made.pixels.foreach_set(rgba[::-1].ravel())
+        path = os.path.join(ROOT, "blender_%s_%s.exr" % (depth, codec))
+        scene = bpy.context.scene
+        settings = scene.render.image_settings
+        settings.file_format = "OPEN_EXR"
+        settings.color_depth = depth
+        settings.exr_codec = codec
+        made.save_render(path, scene=scene)
+        back = os.path.join(ROOT, "blender_%s_%s.sfvdm" % (depth, codec))
+        sculptforge(['vdm_set path="%s" save=false' % path, 'vdm_export path="%s"' % back])
+        got = read_sfvdm(back) if os.path.exists(back) else np.zeros_like(vec)
+        check(got.shape == vec.shape and np.abs(got - vec).max() < tol,
+              "VDM EXR: Blender's %s-bit %s EXR loads in SculptForge (max diff %g)" % (depth, codec, np.abs(got - vec).max()))
+
+
 def main():
     check(bridge.prefs() is not None, "add-on enabled with its preferences")
     # No real SculptForge here: never start one.
@@ -169,7 +292,11 @@ def main():
     bpy.ops.sculptforge.receive()
     check(not box.modifiers["Bevel"].show_viewport, "the applied modifier is turned off")
 
+    test_zbrush_keys()
+    test_vdm_exr()
+
     addon_utils.disable("sculptforge_bridge")
+    check(not bridge.zbrush_keys.enabled(), "disabling the add-on removes the ZBrush keys")
     print("%d failure(s)" % len(failures))
     sys.exit(1 if failures else 0)
 
