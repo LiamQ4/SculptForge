@@ -336,18 +336,8 @@ std::string runDyntopoBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
             log("  " + row.brush.name);
             doc.sculptor.dyntopo.enabled = true;
             doc.sculptor.dyntopo.detail = row.detail;
-            for (double& x : doc.sculptor.dynamicTopology().phaseMs) x = 0;
             const StrokeStats s = runStroke(doc, row.brush, o.dabsPerStroke, gpu, order);
             doc.sculptor.dyntopo.enabled = false;
-            {
-                std::string ph = "    phases:";
-                for (double x : doc.sculptor.dynamicTopology().phaseMs) ph += " " + fmt("%.1f", x);
-                ph += " gather:";
-                for (double& x : doc.sculptor.dynamicTopology().gatherMs) { ph += " " + fmt("%.1f", x); x = 0; }
-                ph += " ops " + std::to_string(doc.sculptor.dynamicTopology().stats.splits) + "/" + std::to_string(doc.sculptor.dynamicTopology().stats.collapses) + "/" + std::to_string(doc.sculptor.dynamicTopology().stats.flips);
-                log(ph);
-                doc.sculptor.dynamicTopology().stats = {};
-            }
             const double d = std::max(s.dabs, 1);
             md << "| " << row.brush.name << " | " << fmt("%.2f", s.remesh / d) << " | " << fmt("%.2f", s.kernel / d) << " | "
                << fmt("%.2f", s.normals / d) << " | " << fmt("%.2f", s.bvh / d) << " | ";

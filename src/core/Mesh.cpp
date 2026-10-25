@@ -257,7 +257,7 @@ void Mesh::endDynamicAdjacency() {
         std::vector<uint32_t> packed;
         size_t total = 0;
         for (size_t v = 0; v < nv; ++v) total += ends[v] - offsets[v];
-        packed.reserve(total);
+        packed.reserve(total + total / 16); // (room for the next stroke's first edits without copying it all)
         for (size_t v = 0; v < nv; ++v) {
             const uint32_t b = offsets[v], e = ends[v];
             offsets[v] = uint32_t(packed.size());

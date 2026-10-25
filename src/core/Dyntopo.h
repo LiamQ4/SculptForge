@@ -113,8 +113,6 @@ public:
 
     DyntopoStats stats;   // since the last reset
     double lastMs = 0.0;  // the last remesh's time
-    double phaseMs[8] = {}; // TEMP
-    double gatherMs[8] = {}; // TEMP
 
 private:
     struct Edge {
