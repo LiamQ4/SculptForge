@@ -45,6 +45,7 @@ Json toJson(const UiPrefs& p) {
     j.set("libraryFolder", p.libraryFolder);
     j.set("cameraNotch", double(p.cameraNotch));
     j.set("turntable", p.turntable);
+    j.set("inputStyle", std::string(p.inputStyle == 1 ? "sculptforge" : "zbrush"));
     j.set("alphabeticalPalettes", p.alphabeticalPalettes);
     j.set("tablet", toJson(p.tablet));
     j.set("antialiasing", double(p.antialiasing));
@@ -66,6 +67,7 @@ void fromJson(const Json& j, UiPrefs& p) {
     if (j["libraryFolder"].isString()) p.libraryFolder = j["libraryFolder"].asString();
     p.cameraNotch = std::clamp(int(j["cameraNotch"].asNumber(p.cameraNotch)), 0, 2);
     p.turntable = j["turntable"].asBool(p.turntable);
+    if (j["inputStyle"].isString()) p.inputStyle = j["inputStyle"].asString() == "sculptforge" ? 1 : 0;
     p.alphabeticalPalettes = j["alphabeticalPalettes"].asBool(p.alphabeticalPalettes);
     fromJson(j["tablet"], p.tablet);
     const int aa = int(j["antialiasing"].asNumber(p.antialiasing));
@@ -345,6 +347,7 @@ void App::initActions() {
     registerBakeUiActions();    // Tool > Bake (PanelBake.cpp)
     registerRetopoUiActions(); // Geometry > QRemesh, SubTool > ProjectAll (PanelRetopo.cpp)
     registerPerformanceUiActions(); // Preferences > Performance (PanelPerformance.cpp)
+    registerInputActions();     // ZBrush keys: U I O, Space, L, V, Ctrl+A / I / H / W..., the input style (Input.cpp)
 
     // Every command, so the command palette finds anything scriptable.
     actions_.registerCommands(
@@ -412,6 +415,7 @@ bool App::readUiConfig(const std::string& path, std::string& err) {
     actions_.overridesFromJson(j["shortcuts"]);
     fromJson(j["prefs"], uiPrefs_);
     applyPerformancePrefs();
+    applyInputStyle();
     return true;
 }
 

@@ -31,9 +31,16 @@ const char* brushName(BrushType type) {
     }
 }
 
-float brushFalloff(float dist, float radius) {
+float brushFalloff(float dist, float radius, float focal) {
     float t = std::clamp(1.0f - dist / radius, 0.0f, 1.0f);
+    if (focal != 0.0f) t = std::pow(t, std::exp2(2.0f * std::clamp(focal, -1.0f, 1.0f))); // x4 .. x1/4
     return t * t * (3.0f - 2.0f * t);
+}
+
+float focalRingFraction(float focal) {
+    // smoothstep(t') = 0.5 at t' = 0.5, and t' = t^k.
+    const float k = std::exp2(2.0f * std::clamp(focal, -1.0f, 1.0f));
+    return 1.0f - std::pow(0.5f, 1.0f / k);
 }
 
 void brushVertices(const Mesh& mesh, const BVH& bvh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) {
@@ -320,7 +327,7 @@ void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& 
     // Weighted area normal and centre of the brush region.
     const AreaSums sums = areaSums(verts_.size(), [&](size_t i, AreaSums& acc) {
         const uint32_t v = verts_[i];
-        float w = brushFalloff(glm::distance(pos[v], p.center), p.radius);
+        float w = brushFalloff(glm::distance(pos[v], p.center), p.radius, p.focal);
         acc.normal += nrm[v] * w;
         acc.center += pos[v] * w;
         acc.weight += w;
@@ -354,7 +361,7 @@ void Sculptor::dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& 
         const glm::vec3& x = pos[v];
         const glm::vec3 o = x - p.center;
         const float f = useAlpha ? p.alpha->sample(glm::dot(o, right) / r, glm::dot(o, up) / r)
-                                 : brushFalloff(glm::length(o), r);
+                                 : brushFalloff(glm::length(o), r, p.focal);
         glm::vec3 d(0.0f);
 
         switch (type) {
@@ -639,7 +646,7 @@ void Sculptor::beginGrab(Mesh& mesh, BVH& bvh, const DabParams& p, Symmetry sym)
         glm::vec3 c = p.center * m;
         brushVertices(mesh, bvh, c, p.radius, verts_);
         for (uint32_t v : verts_) {
-            float w = brushFalloff(glm::distance(mesh.positions[v], c), p.radius) *
+            float w = brushFalloff(glm::distance(mesh.positions[v], c), p.radius, p.focal) *
                       std::clamp(p.strength * 2.0f, 0.0f, 1.0f);
             if (w <= 0.0f) continue;
             grabVerts_.push_back(v);

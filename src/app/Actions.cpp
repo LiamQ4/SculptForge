@@ -198,6 +198,15 @@ bool ActionRegistry::handleKey(SDL_Keycode key, SDL_Keymod mods) {
     return true;
 }
 
+void ActionRegistry::setDefaultShortcut(std::string_view id, std::string chord) {
+    for (auto& a : actions_)
+        if (a.id == id && a.shortcut != chord) {
+            a.shortcut = std::move(chord);
+            ++revision_;
+            return;
+        }
+}
+
 std::string ActionRegistry::shortcutText(std::string_view id) const {
     for (const auto& [oid, chord] : overrides_)
         if (oid == id) return chord;

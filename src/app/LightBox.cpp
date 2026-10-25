@@ -993,10 +993,8 @@ void App::initLightBox() {
         [] { openPicker(Picker::Material, ImVec2(-1, -1)); });
     add("ui.size_popup", "Draw Size at cursor", ICON_LC_CIRCLE, "Draw", "S",
         "A Draw Size slider under the cursor: drag it, or type a number and press Enter.",
-        [this] { PickerUi::sizePopup(*this, false); });
-    add("ui.strength_popup", "Strength at cursor", ICON_LC_CIRCLE_DOT, "Draw", "I",
-        "A Strength slider under the cursor: drag it, or type a number and press Enter.",
-        [this] { PickerUi::sizePopup(*this, true); });
+        [this] { PickerUi::sizePopup(*this, PickerUi::Slider::DrawSize); });
+    // U / I / O (Z Intensity, RGB Intensity, Focal Shift) are in Input.cpp.
     add("file.quicksave", "QuickSave", ICON_LC_SAVE, "File", "",
         "Save a timestamped copy of the whole scene to the QuickSave folder of your library (the last 10 are kept). "
         "Your project file is not changed. Find them in the LightBox QuickSave tab.",
@@ -1019,7 +1017,6 @@ bool App::lightBoxKey(SDL_Keycode key, SDL_Keymod mod) {
                      : key == SDLK_B   ? "ui.picker.brush"
                      : key == SDLK_M   ? "ui.picker.material"
                      : key == SDLK_S   ? "ui.size_popup"
-                     : key == SDLK_I   ? "ui.strength_popup"
                                        : nullptr;
     const Action* a = id ? actions_.find(id) : nullptr;
     if (!a || !a->run) return false;

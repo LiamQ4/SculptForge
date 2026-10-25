@@ -190,6 +190,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelProject.cpp
     src/app/PanelSubTools.cpp
     src/app/Tablet.cpp
+    src/app/Input.cpp
     src/render/GL.cpp
     src/render/Camera.cpp
     src/render/Clusters.cpp

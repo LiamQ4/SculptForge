@@ -1197,9 +1197,7 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
             ui::SliderInside("##drawsize", &radiusPx_, 2.0f, 800.0f, "Draw Size %.0f", ImGuiSliderFlags_Logarithmic);
             ui::HelpText("Draw Size", "S", "Brush radius in screen pixels. [ and ] change it by 10%; Ctrl+click to type.", "Draw");
         } else {
-            ui::SliderInside("##strength", &strength_, 0.01f, 1.0f, "Strength %.2f");
-            ui::HelpText("Strength", "I", "How strongly each dab changes the surface (ZBrush Z Intensity); Ctrl+click to type.",
-                         "Draw");
+            drawZIntensitySlider("##strength");
         }
         ImGui::PopStyleVar();
     } else if (item == "widget.points") {

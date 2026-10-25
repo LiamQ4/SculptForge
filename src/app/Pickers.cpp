@@ -80,8 +80,9 @@ struct State {
     // Material hover preview: the material to go back to.
     bool previewing = false;
     int savedMatcap = -1;
-    // Draw Size / Strength at the cursor.
-    int slider = -1; // 0 = size, 1 = strength
+    // Draw Size / Z Intensity / RGB Intensity / Focal Shift at the cursor.
+    int slider = -1; // PickerUi::Slider, -1 = closed
+    bool sliderSmooth = false; // Z Intensity of the Smooth brush (Shift was held)
     ImVec2 sliderAt{0, 0};
     int sliderFrame = -1;
     std::string sliderTyped;
@@ -854,9 +855,10 @@ void openBrushPickerForShelf(ImVec2 anchor) {
 
 bool pickerOpen() { return st().open || st().slider >= 0; }
 
-void PickerUi::sizePopup(App&, bool strength) {
+void PickerUi::sizePopup(App& app, Slider which) {
     State& s = st();
-    s.slider = strength ? 1 : 0;
+    s.slider = int(which);
+    s.sliderSmooth = app.activeBrush() == BrushType::Smooth;
     s.sliderAt = ImGui::GetIO().MousePos;
     s.sliderFrame = ImGui::GetFrameCount();
     s.sliderTyped.clear();
@@ -934,10 +936,40 @@ void drawPickers(App& app) {
         s.previewing = false;
     }
 
-    // Draw Size (S) / Strength (I) at the cursor.
+    // Draw Size (S), Z Intensity (U), RGB Intensity (I) and Focal Shift (O) at the cursor.
     if (s.slider >= 0) {
         ImGui::SetNextFrameWantCaptureKeyboard(true);
-        const bool size = s.slider == 0;
+        const auto which = PickerUi::Slider(s.slider);
+        // The value as shown: Draw Size in pixels, the intensities 0-100 and Focal Shift -100..100, as in ZBrush.
+        struct Def {
+            const char* name;
+            const char* key;
+            const char* help;
+            float* value;
+            float lo, hi, shownScale;
+        };
+        float* z = s.sliderSmooth ? &app.smoothStrength_ : &app.strength_;
+        const Def d = which == PickerUi::Slider::DrawSize
+                          ? Def{"Draw Size", "S",
+                                "Brush radius in screen pixels. Drag, or type a number and press Enter. [ and ] also "
+                                "change it.",
+                                &app.radiusPx_, 2.0f, 800.0f, 1.0f}
+                      : which == PickerUi::Slider::ZIntensity
+                          ? Def{s.sliderSmooth ? "Smooth Z Intensity" : "Z Intensity", "U",
+                                s.sliderSmooth ? "How strongly Smooth works (it keeps its own value, as in ZBrush: hold "
+                                                 "Shift and press U to set it). Type a number and press Enter."
+                                               : "How strongly the brush changes the surface (1-100). Drag, or type a "
+                                                 "number and press Enter.",
+                                z, 0.01f, 1.0f, 100.0f}
+                      : which == PickerUi::Slider::RgbIntensity
+                          ? Def{"RGB Intensity", "I",
+                                "How strongly painting colours the surface (1-100). Drag, or type a number and press "
+                                "Enter.",
+                                &app.rgbIntensity_, 0.01f, 1.0f, 100.0f}
+                          : Def{"Focal Shift", "O",
+                                "The brush falloff: below 0 a broad, hard tip, above 0 a soft point (-100..100). The "
+                                "inner ring of the cursor shows it.",
+                                &app.focalShift_, -1.0f, 1.0f, 100.0f};
         const float w = 200.0f * app.uiScale_;
         ImGui::SetNextWindowPos(ImVec2(s.sliderAt.x - w * 0.5f, s.sliderAt.y + 14.0f), ImGuiCond_Appearing);
         if (s.sliderFrame == ImGui::GetFrameCount()) ImGui::SetNextWindowFocus();
@@ -945,10 +977,10 @@ void drawPickers(App& app) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
         ImGui::PushStyleColor(ImGuiCol_WindowBg, kPanelBg);
         bool close = false;
-        if (ImGui::Begin(size ? "Draw Size##cursor" : "Strength##cursor", nullptr,
+        if (ImGui::Begin((std::string(d.name) + "##cursor").c_str(), nullptr,
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                              ImGuiWindowFlags_AlwaysAutoResize)) {
-            const bool first = ImGui::GetFrameCount() < s.sliderFrame + 2; // the S / I key itself
+            const bool first = ImGui::GetFrameCount() < s.sliderFrame + 2; // the S / U / I / O key itself
             // Typing a number sets it (Enter applies, Esc cancels); dragging the slider works too.
             if (!first) {
                 for (int k = 0; k <= 9; ++k)
@@ -957,14 +989,19 @@ void drawPickers(App& app) {
                         s.sliderTyped += char('0' + k);
                 if (ImGui::IsKeyPressed(ImGuiKey_Period, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal, false))
                     s.sliderTyped += '.';
+                if ((ImGui::IsKeyPressed(ImGuiKey_Minus, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract, false)) &&
+                    s.sliderTyped.empty() && d.lo < 0.0f)
+                    s.sliderTyped += '-';
                 if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !s.sliderTyped.empty()) s.sliderTyped.pop_back();
                 if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
                     if (!s.sliderTyped.empty()) {
-                        const float v = std::strtof(s.sliderTyped.c_str(), nullptr);
-                        if (size)
-                            app.radiusPx_ = std::clamp(v, 2.0f, 800.0f);
-                        else
-                            app.strength_ = std::clamp(v > 1.0f ? v / 100.0f : v, 0.01f, 1.0f);
+                        float v = std::strtof(s.sliderTyped.c_str(), nullptr);
+                        // Intensities: 0-100 as in ZBrush (a fraction up to 1 still works).
+                        if (which == PickerUi::Slider::ZIntensity || which == PickerUi::Slider::RgbIntensity)
+                            v = v > 1.0f ? v / 100.0f : v;
+                        else if (which == PickerUi::Slider::FocalShift)
+                            v /= 100.0f;
+                        *d.value = std::clamp(v, d.lo, d.hi);
                     }
                     close = true;
                 }
@@ -973,19 +1010,18 @@ void drawPickers(App& app) {
             ImGui::SetNextItemWidth(w);
             char fmt[64];
             if (!s.sliderTyped.empty())
-                std::snprintf(fmt, sizeof fmt, "%s %s_", size ? "Draw Size" : "Strength", s.sliderTyped.c_str());
+                std::snprintf(fmt, sizeof fmt, "%s %s_", d.name, s.sliderTyped.c_str());
             else
-                std::snprintf(fmt, sizeof fmt, "%s", size ? "Draw Size %.0f" : "Strength %.2f");
-            if (size)
-                ImGui::SliderFloat("##cursorvalue", &app.radiusPx_, 2.0f, 800.0f, fmt, ImGuiSliderFlags_Logarithmic);
-            else
-                ImGui::SliderFloat("##cursorvalue", &app.strength_, 0.01f, 1.0f, fmt);
-            ImGui::LogText(size ? "Draw Size %.0f" : "Strength %.2f", size ? app.radiusPx_ : app.strength_);
-            ui::HelpText(
-                size ? "Draw Size" : "Strength", size ? "S" : "I",
-                size ? "Brush radius in screen pixels. Drag, or type a number and press Enter. [ and ] also change it."
-                     : "How strongly the brush works (0.01-1). Drag, or type a number and press Enter.",
-                "Draw");
+                std::snprintf(fmt, sizeof fmt, "%s %%.0f", d.name);
+            if (which == PickerUi::Slider::DrawSize) {
+                ImGui::SliderFloat("##cursorvalue", d.value, d.lo, d.hi, fmt, ImGuiSliderFlags_Logarithmic);
+            } else {
+                float shown = *d.value * d.shownScale;
+                if (ImGui::SliderFloat("##cursorvalue", &shown, d.lo * d.shownScale, d.hi * d.shownScale, fmt))
+                    *d.value = std::clamp(shown / d.shownScale, d.lo, d.hi);
+            }
+            ImGui::LogText("%s %.0f", d.name, double(*d.value * d.shownScale));
+            ui::HelpText(d.name, d.key, d.help, "Draw");
             if (ImGui::IsItemActive())
                 s.sliderWasActive = true;
             else if (s.sliderWasActive)

@@ -29,6 +29,7 @@ struct UiPrefs {
     bool alphabeticalPalettes = false; // strict A-Z palette bar like ZBrush (default: File, Edit first)
     int cameraNotch = 0;        // keep the UI out of a laptop's camera notch: 0 automatic, 1 always, 2 never
     bool turntable = false;     // rotation: false = free, about the screen axes (ZBrush); true = turntable (Y up)
+    int inputStyle = 0;         // Preferences > Input: 0 ZBrush, 1 SculptForge (1-0 brushes, I = Z Intensity...)
     TabletSettings tablet;      // Preferences > Tablet: pressure curve, eraser, pen buttons
     // Preferences > Performance (PanelPerformance.cpp).
     int antialiasing = 4;       // samples per pixel in the 3D view: 1 (off), 2, 4 or 8

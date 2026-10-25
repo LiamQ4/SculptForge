@@ -656,7 +656,7 @@ size_t TexturePainter::dab(Mesh& mesh, const BVH& bvh, const DabParams& p, const
                 const glm::vec3 N = normals ? N0 * b.x + N1 * b.y + N2 * b.z : faceN;
                 if (glm::dot(N, viewDir) > 0.0f) return;
                 const float f = useAlpha ? p.alpha->sample(glm::dot(o, aRight) / r, glm::dot(o, aUp) / r)
-                                         : brushFalloff(std::sqrt(d2), r);
+                                         : brushFalloff(std::sqrt(d2), r, p.focal);
                 const float wgt = f * s * (1.0f - std::clamp(m0 * b.x + m1 * b.y + m2 * b.z, 0.0f, 1.0f));
                 if (wgt <= 0.0f) return;
                 const uint32_t ti2 = uint32_t(y / kTextureTile) * uint32_t(tilesX_) + uint32_t(x / kTextureTile);

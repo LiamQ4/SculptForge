@@ -109,6 +109,9 @@ click "##Eraser"
 click "Erase mask##Eraser"
 expect_text Erase mask
 key escape
+# (The mouse paints the mask: the pen leaves first, or its proximity would keep the mouse's moves out, and a
+# Ctrl+click that never moves blurs the mask instead of painting it.)
+pen_out
 hold ctrl
 stroke 0.2 0.5 0.8 0.5
 hold none

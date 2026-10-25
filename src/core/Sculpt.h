@@ -39,6 +39,7 @@ struct DabParams {
     glm::vec3 strokeDelta{0.0f}; // world-space movement since the previous dab (recipe, SnakeHook, Nudge, DamStandard)
     const BrushAlpha* alpha = nullptr;   // stamp shaping the falloff (null/empty = round)
     glm::vec3 alphaUp{0.0f, 1.0f, 0.0f}; // world direction of the alpha's top edge (screen up, or rotated)
+    float focal = 0.0f;                  // ZBrush Focal Shift, -1..1 (see brushFalloff); recipes keep their own tip
 };
 
 struct Symmetry {
@@ -57,8 +58,12 @@ inline float vertexInfluence(const Mesh& mesh, uint32_t v) {
 }
 // Vertices within `radius` of `center` that a brush may touch (fully hidden ones excluded).
 void brushVertices(const Mesh& mesh, const BVH& bvh, const glm::vec3& center, float radius, std::vector<uint32_t>& out);
-// Smoothstep brush falloff: 1 at the centre, 0 at `radius`.
-float brushFalloff(float dist, float radius);
+// Smoothstep brush falloff: 1 at the centre, 0 at `radius`. `focal` is ZBrush's Focal Shift (-1..1): below 0
+// the full-strength centre widens (a harder, broader tip), above 0 it narrows to a softer point; 0 is the plain
+// smoothstep, unchanged.
+float brushFalloff(float dist, float radius, float focal = 0.0f);
+// Where brushFalloff drops to one half, as a fraction of the radius (the brush cursor's inner ring).
+float focalRingFraction(float focal);
 
 // Where brush time goes (core/Benchmark.h, Help > Performance): milliseconds summed over dabs since the
 // counters were last zeroed. kernel = finding the vertices and moving / masking / painting them.

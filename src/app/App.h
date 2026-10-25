@@ -98,13 +98,14 @@ public:
     void queueFile(FileAction action, std::string path);
 
 private:
-    enum class Drag { None, Stroke, Orbit, Pan, Zoom, MaskCanvas, SubToolClick, Select, Gizmo };
+    enum class Drag { None, Stroke, Orbit, Pan, Zoom, Roll, MaskCanvas, SubToolClick, Select, Gizmo };
 
     void handleEvent(const SDL_Event& e);
     void onMouseDown(float x, float y, Uint8 button);
     void onMouseMove(float x, float y, float dx, float dy, bool fromPen);
     void onMouseUp();
     void orbitBy(float dx, float dy); // a rotation drag: free or turntable (Preferences), Shift snaps
+    void rollBy(float x, float y, float dx, float dy); // Shift+click, release Shift, drag: turn about the view axis
     void onKey(SDL_Keycode key, SDL_Keymod mod);
 
     bool pick(float x, float y, RayHit& hit) const; // the active SubTool (what brushes work on)
@@ -305,6 +306,7 @@ private:
     void maskCanvasRelease();
     bool maskSelectMouseDown(float x, float y, SDL_Keymod mod); // true if it took the click
     void maskSelectMouseUp();
+    void maskClickRelease(); // Ctrl+click on the model without dragging: blur the mask (Ctrl+Alt: sharpen)
     bool strokeMask_ = false; // the current stroke edits the mask
     float maskStrength_ = 1.0f;
     int maskIterations_ = 1;
@@ -704,7 +706,7 @@ private:
     friend void drawStrokeGrid(App&, GridMode);
     void initLightBox();   // end of init(): library folders, thumbnail cache, actions, project thumbnails
     void drawLightBoxUi(); // every frame from drawUi: thumbnails, the LightBox, pickers, size / strength pop-ups
-    // The LightBox / picker shortcuts (, B M S I) until the action registry dispatches keys.
+    // The LightBox / picker shortcuts (, B M S) until the action registry dispatches keys.
     bool lightBoxKey(SDL_Keycode key, SDL_Keymod mod);
     void quickSave();                  // file.quicksave: a timestamped project in <library>/QuickSave
     LibraryRoots library_;
@@ -854,6 +856,45 @@ private:
         float move[3] = {0, 0, 0}, rotate[3] = {0, 0, 0}, scale = 100.0f;
     } gizmo_;
     // ---- end Gizmo 3D ----
+    // ---- ZBrush feel (Input.cpp, docs/zbrush-parity.md) ----
+    // Preferences > Input (the ZBrush or SculptForge key style), the Space QuickMenu, the intensities and Focal
+    // Shift (U / I / O), ZBrush's mask and polygroup keys, Shift-constrained straight strokes and the
+    // Shift+click, release Shift, drag roll.
+    void registerInputActions();
+    void applyInputStyle(); // the style's default shortcuts (1-0 brushes or 9 QuickSave; I = RGB or Z Intensity)
+    bool zbrushStyle() const { return uiPrefs_.inputStyle == 0; }
+    void drawInputSection(); // Preferences > Input
+    // Z Intensity (0-100 on screen): Smooth's own while Shift is held or Smooth is the brush, as in ZBrush.
+    void drawZIntensitySlider(const char* id);
+    void openQuickMenu();
+    void quickMenuKeyUp();   // Space released: a hold closes the menu, a tap leaves it open
+    void drawQuickMenu();
+    void groupMasked();      // Ctrl+W
+    // Straight strokes: Shift pressed after a stroke started constrains it to a line from where Shift went down,
+    // snapped to 45 degree steps on screen. Returns the point to draw towards.
+    glm::vec2 constrainStroke(float x, float y);
+    float smoothStrength_ = 0.5f; // Smooth's own Z Intensity (Shift+stroke, or the Smooth brush)
+    float rgbIntensity_ = 1.0f;   // paint strength (ZBrush RGB Intensity, 100 by default)
+    float focalShift_ = 0.0f;     // -1..1 (ZBrush Focal Shift -100..100)
+    struct QuickMenu {
+        bool open = false;
+        ImVec2 at{0, 0};
+        double openedAt = 0.0;  // seconds (a short press is a tap)
+        bool keyHeld = false;   // Space is still down
+        bool untilLeave = false; // Space let go over the menu: it closes when the pointer leaves it
+        int openedFrame = -1;
+    } quickMenu_;
+    struct StraightStroke {
+        bool active = false;   // Shift went down mid-stroke
+        bool shiftAtStart = false; // the stroke began with Shift (it smooths; Shift isn't a constraint then)
+        glm::vec2 origin{0.0f};
+    } straight_;
+    bool rollPending_ = false; // Shift+press on the background: let go of Shift before moving to roll the view
+    float rollStartX_ = 0.0f, rollStartY_ = 0.0f;
+    glm::vec2 lastDabScreen_{0.0f}; // window pixels of the last dab (UI tests: last_dab_x / last_dab_y)
+    bool maskClickPending_ = false; // Ctrl+press on the model: a click blurs (Alt: sharpens), a drag paints
+    float maskClickX_ = 0.0f, maskClickY_ = 0.0f;
+    // ---- end ZBrush feel ----
     // ---- Tablet (Tablet.cpp, core/Tablet.h, docs/tablet.md) ----
     // SDL turns pen tip contact into left mouse button events (SDL_PEN_MOUSEID); the pen's own events
     // add pressure, tilt, the eraser end and the side buttons, which are mapped in Preferences > Tablet.

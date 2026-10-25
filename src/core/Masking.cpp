@@ -187,7 +187,7 @@ void Sculptor::dabMask(Mesh& mesh, const BVH& bvh, const DabParams& p, Symmetry 
                 const uint32_t v = verts_[i];
                 weights_[i] = -1.0f; // unchanged
                 if (p.frontFacesOnly && glm::dot(mesh.normals[v], viewDir) > 0.0f) continue;
-                const float a = s * brushFalloff(glm::distance(mesh.positions[v], center), p.radius);
+                const float a = s * brushFalloff(glm::distance(mesh.positions[v], center), p.radius, p.focal);
                 if (a <= 0.0f) continue;
                 const float m = p.invert ? mask[v] * (1.0f - a) : mask[v] + (1.0f - mask[v]) * a;
                 if (m != mask[v]) weights_[i] = m;
