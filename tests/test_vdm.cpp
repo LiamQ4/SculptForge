@@ -149,7 +149,7 @@ TEST(vdm_exr_round_trip) {
 
 TEST(vdm_sfvdm_round_trip_and_damaged_files) {
     VectorDisplacement v = leaningLump(40);
-    v.name = "Lümp \"two\"";
+    v.name = "L\xc3\xbcmp \"two\""; // UTF-8 and quotes
     const std::string path = tempPath("sculptforge_vdm_round.sfvdm");
     std::string err;
     CHECK(writeVdmFile(path, v, err));
