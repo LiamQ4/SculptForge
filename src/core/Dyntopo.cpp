@@ -108,7 +108,7 @@ float dyntopoEdgeLength(const DyntopoSettings& s, float radius, float diagonal) 
 }
 
 std::string dyntopoBlocker(const Mesh& mesh) {
-    if (mesh.multires || mesh.implicitAdjacency())
+    if (mesh.multires)
         return "Dynamic topology needs a mesh without subdivision levels: delete the lower (or higher) levels first";
     if (mesh.triangleCount() == 0) return "The mesh has no triangles";
     return {};
@@ -211,12 +211,10 @@ void DynamicTopology::killVertex(uint32_t v) {
     mesh_->setVertexTriangles(v, {});
     mesh_->setNeighbors(v, {});
     for (size_t k = 0; k < mirrorMaps_.size(); ++k) {
-        auto it = mirrorMaps_[k].find(v);
-        if (it == mirrorMaps_[k].end()) continue;
-        const uint32_t w = it->second;
-        mirrorMaps_[k].erase(it);
-        auto back = mirrorMaps_[k].find(w);
-        if (back != mirrorMaps_[k].end() && back->second == v) mirrorMaps_[k].erase(back);
+        const uint32_t w = mirrorOf(k, v);
+        if (w == kNone) continue;
+        if (mirrorOf(k, w) == v) mirrorMaps_[k].stamp[w] = 0;
+        mirrorMaps_[k].stamp[v] = 0;
     }
 }
 
@@ -384,7 +382,7 @@ void DynamicTopology::compact() {
         if (!a.empty()) a.resize(nt);
     });
     bvh_->resizeTriangles(nt);
-    deadT_.assign(nt, 0);
+    deadT_.resize(nt); // (every slot below nt is live again)
     freeT_.clear();
 
     std::sort(freeV_.begin(), freeV_.end());
@@ -401,7 +399,7 @@ void DynamicTopology::compact() {
         if (!a.empty()) a.resize(nv);
     });
     for (size_t i = nv; i < before; ++i) m.removeLastVertexSlot();
-    deadV_.assign(nv, 0);
+    deadV_.resize(nv);
     freeV_.clear();
 }
 
@@ -531,59 +529,83 @@ glm::vec3 DynamicTopology::faceNormalAt(uint32_t v) const {
 // ---------------------------------------------------------------------------
 
 uint32_t DynamicTopology::mirrorOf(size_t k, uint32_t v) const {
-    const auto it = mirrorMaps_[k].find(v);
-    return it == mirrorMaps_[k].end() ? kNone : it->second;
+    const MirrorMap& map = mirrorMaps_[k];
+    return v < map.to.size() && map.stamp[v] == mirrorStamp_ ? map.to[v] : kNone;
 }
 
 void DynamicTopology::setMirror(size_t k, uint32_t v, uint32_t w) {
-    mirrorMaps_[k][v] = w;
-    mirrorMaps_[k][w] = v;
+    MirrorMap& map = mirrorMaps_[k];
+    const size_t need = size_t(std::max(v, w)) + 1;
+    if (map.to.size() < need) {
+        map.to.resize(need + need / 4, kNone);
+        map.stamp.resize(need + need / 4, 0);
+    }
+    map.to[v] = w;
+    map.stamp[v] = mirrorStamp_;
+    map.to[w] = v;
+    map.stamp[w] = mirrorStamp_;
 }
 
 // Pairs each vertex with the vertex at its mirror image (within eps_), for every mirror; only pairs that
-// find each other both ways count.
+// find each other both ways count. The match is loose because overlapping mirrored dabs near the plane don't
+// move both sides exactly alike, but vertices are rarely closer than half an edge.
 void DynamicTopology::matchMirrors(const std::vector<uint32_t>& verts) {
     const Mesh& m = *mesh_;
-    const float cell = std::max(eps_ * 4.0f, 1e-12f);
-    auto key = [cell](const glm::vec3& p) {
-        const glm::ivec3 q = glm::ivec3(glm::floor(p / cell));
-        return (uint64_t(uint32_t(q.x) & 0x1FFFFF) << 42) | (uint64_t(uint32_t(q.y) & 0x1FFFFF) << 21) |
-               uint64_t(uint32_t(q.z) & 0x1FFFFF);
+    // A grid of cells twice the tolerance (an open-addressing table of the occupied cells): a point's nearest
+    // vertex within the tolerance is in one of the 2 x 2 x 2 cells around it.
+    const float cell = std::max(eps_ * 2.0f, 1e-12f);
+    auto cellOf = [cell](const glm::vec3& p) { return glm::ivec3(glm::floor(p / cell)); };
+    auto keyOf = [](const glm::ivec3& q) {
+        return (uint64_t(uint32_t(q.x) & 0x1FFFFF) << 42) | (uint64_t(uint32_t(q.y) & 0x1FFFFF) << 21) | uint64_t(uint32_t(q.z) & 0x1FFFFF);
     };
-    std::unordered_multimap<uint64_t, uint32_t> grid;
-    grid.reserve(verts.size() * 2);
-    for (uint32_t v : verts) grid.emplace(key(m.positions[v]), v);
+    // Each occupied cell's first vertex in the table, the rest chained through gridNext_.
+    size_t slots = 16;
+    while (slots < verts.size() * 2) slots *= 2;
+    gridKeys_.assign(slots, ~uint64_t(0));
+    gridHead_.resize(slots);
+    gridNext_.resize(verts.size());
+    auto slotOf = [&](uint64_t key) {
+        size_t h = size_t((key * 0x9E3779B97F4A7C15ull) >> 20) & (slots - 1);
+        while (gridKeys_[h] != ~uint64_t(0) && gridKeys_[h] != key) h = (h + 1) & (slots - 1);
+        return h;
+    };
+    for (uint32_t i = 0; i < verts.size(); ++i) {
+        const uint64_t key = keyOf(cellOf(m.positions[verts[i]]));
+        const size_t h = slotOf(key);
+        gridNext_[i] = gridKeys_[h] == key ? gridHead_[h] : kNone;
+        gridKeys_[h] = key;
+        gridHead_[h] = i;
+    }
     auto nearest = [&](const glm::vec3& p) {
         uint32_t best = kNone;
         float bestD = eps_ * eps_;
-        const glm::ivec3 q = glm::ivec3(glm::floor(p / cell));
-        for (int dz = -1; dz <= 1; ++dz)
-            for (int dy = -1; dy <= 1; ++dy)
-                for (int dx = -1; dx <= 1; ++dx) {
-                    const glm::ivec3 c = q + glm::ivec3(dx, dy, dz);
-                    const uint64_t k = (uint64_t(uint32_t(c.x) & 0x1FFFFF) << 42) | (uint64_t(uint32_t(c.y) & 0x1FFFFF) << 21) |
-                                       uint64_t(uint32_t(c.z) & 0x1FFFFF);
-                    auto [b, e] = grid.equal_range(k);
-                    for (auto it = b; it != e; ++it) {
-                        const glm::vec3 d = m.positions[it->second] - p;
-                        const float dd = glm::dot(d, d);
-                        if (dd <= bestD && (best == kNone || dd < bestD || it->second < best)) {
-                            bestD = dd;
-                            best = it->second;
-                        }
-                    }
+        const glm::vec3 f = p / cell;
+        const glm::ivec3 q = glm::ivec3(glm::floor(f));
+        const glm::ivec3 step(f.x - float(q.x) < 0.5f ? -1 : 1, f.y - float(q.y) < 0.5f ? -1 : 1, f.z - float(q.z) < 0.5f ? -1 : 1);
+        for (int c = 0; c < 8; ++c) {
+            const glm::ivec3 at = q + glm::ivec3(c & 1 ? step.x : 0, c & 2 ? step.y : 0, c & 4 ? step.z : 0);
+            const uint64_t key = keyOf(at);
+            const size_t h = slotOf(key);
+            if (gridKeys_[h] != key) continue;
+            for (uint32_t i = gridHead_[h]; i != kNone; i = gridNext_[i]) {
+                const uint32_t w = verts[i];
+                const glm::vec3 d = m.positions[w] - p;
+                const float dd = glm::dot(d, d);
+                if (dd < bestD || (dd == bestD && best != kNone && w < best)) {
+                    bestD = dd;
+                    best = w;
                 }
+            }
+        }
         return best;
     };
     for (size_t k = 0; k < mirrorSigns_.size(); ++k) {
-        auto& map = mirrorMaps_[k];
-        map.clear();
         const glm::vec3 s = mirrorSigns_[k];
         for (uint32_t v : verts) {
+            if (mirrorOf(k, v) != kNone) continue; // (its partner found it first)
             const uint32_t w = nearest(m.positions[v] * s);
-            if (w == kNone) continue;
-            if (nearest(m.positions[w] * s) != v) continue;
-            map[v] = w;
+            if (w == kNone || nearest(m.positions[w] * s) != v) continue;
+            setMirror(k, v, w);
         }
     }
 }
@@ -800,7 +822,8 @@ bool DynamicTopology::canCollapse(uint32_t keep, uint32_t drop, const glm::vec3&
         if (opposite[i] == kNone) return false;
     }
     if (n == 2 && opposite[0] == opposite[1]) return false;
-    std::vector<uint32_t> rk, rd;
+    std::vector<uint32_t>& rk = ringA_;
+    std::vector<uint32_t>& rd = ringB_;
     ring(keep, rk);
     ring(drop, rd);
     // Link condition: the ends share exactly the neighbours across the edge's triangles (else the surface
@@ -814,7 +837,7 @@ bool DynamicTopology::canCollapse(uint32_t keep, uint32_t drop, const glm::vec3&
     if (common != size_t(n)) return false;
     // Nobody left with fewer than three neighbours (no flat double triangles).
     if (rk.size() + rd.size() - size_t(n) - 2 < 3) return false;
-    std::vector<uint32_t> ro;
+    std::vector<uint32_t>& ro = ringC_;
     for (int i = 0; i < n; ++i) {
         ring(opposite[i], ro);
         if (ro.size() <= 3) return false;
@@ -855,7 +878,8 @@ void DynamicTopology::collapse(uint32_t keep, uint32_t drop, const glm::vec3& p)
     const int n = edgeTriangles(keep, drop, tris);
     for (int i = 0; i < n && i < 2; ++i) killTriangle(tris[i]);
     const IndexRing around = m.vertexTriangles(drop);
-    std::vector<uint32_t> list(around.begin(), around.end());
+    std::vector<uint32_t>& list = ringA_;
+    list.assign(around.begin(), around.end());
     for (uint32_t t : list) {
         glm::uvec3 tri = m.triangles[t];
         for (int c = 0; c < 3; ++c)
@@ -944,7 +968,7 @@ bool DynamicTopology::flipGain(uint32_t a, uint32_t b, uint32_t& c, uint32_t& d)
     if (c == kNone || d == kNone || c == d) return false;
     uint32_t tmp[4];
     if (edgeTriangles(c, d, tmp) > 0) return false;
-    std::vector<uint32_t> r;
+    std::vector<uint32_t>& r = ringC_;
     auto valence = [&](uint32_t v, int& target) {
         ring(v, r);
         target = boundaryVertex(v) ? 4 : 6;
@@ -1038,7 +1062,7 @@ void DynamicTopology::flipPass() {
 void DynamicTopology::relaxPass() {
     Mesh& m = *mesh_;
     std::vector<std::pair<uint32_t, glm::vec3>> moves;
-    std::vector<uint32_t> r;
+    std::vector<uint32_t>& r = ringC_;
     uint32_t other[2];
     const float r2 = radius_ * radius_;
     for (uint32_t v : changedV_) {
@@ -1068,13 +1092,28 @@ void DynamicTopology::relaxPass() {
 }
 
 void DynamicTopology::gatherRegion() {
+    auto t0 = std::chrono::steady_clock::now();
+    auto tick = [&](int i) {
+        const auto now = std::chrono::steady_clock::now();
+        gatherMs[i] += std::chrono::duration<double, std::milli>(now - t0).count();
+        t0 = now;
+    };
     bvh_->queryTriangles(*mesh_, center_, radius_, regionTris_);
+    tick(0);
     if (mirrorSigns_.empty()) return;
     // Every vertex of the triangles under each mirror image of the brush, to pair up.
-    std::vector<uint32_t> verts, tris;
+    std::vector<uint32_t>& verts = regionVerts_;
+    std::vector<uint32_t> tris;
+    verts.clear();
+    if (seen_.size() < mesh_->vertexCount()) seen_.resize(mesh_->vertexCount() + mesh_->vertexCount() / 4, 0);
     auto addCorners = [&](const std::vector<uint32_t>& ts) {
         for (uint32_t t : ts)
-            for (int c = 0; c < 3; ++c) verts.push_back(mesh_->triangles[t][c]);
+            for (int c = 0; c < 3; ++c) {
+                const uint32_t v = mesh_->triangles[t][c];
+                if (seen_[v] == mirrorStamp_) continue;
+                seen_[v] = mirrorStamp_;
+                verts.push_back(v);
+            }
     };
     addCorners(regionTris_);
     // (A margin: the mirror images of the corners found here must be among those found there, though
@@ -1084,9 +1123,25 @@ void DynamicTopology::gatherRegion() {
         bvh_->queryTriangles(*mesh_, center_ * s, reach, tris);
         addCorners(tris);
     }
-    std::sort(verts.begin(), verts.end());
-    verts.erase(std::unique(verts.begin(), verts.end()), verts.end());
+    tick(1);
+    tick(2);
+    // Matched within a third of the edge length (the target, or the mesh's own where it is finer, so the
+    // search grid's cells hold a vertex or two however fine the mesh is).
+    std::vector<float> lengths;
+    const size_t stride = std::max<size_t>(1, regionTris_.size() / 1024);
+    for (size_t i = 0; i < regionTris_.size(); i += stride) {
+        const glm::uvec3& tri = mesh_->triangles[regionTris_[i]];
+        lengths.push_back(glm::distance(mesh_->positions[tri.x], mesh_->positions[tri.y]));
+    }
+    float typical = target_;
+    if (!lengths.empty()) {
+        std::nth_element(lengths.begin(), lengths.begin() + std::ptrdiff_t(lengths.size() / 2), lengths.end());
+        typical = std::min(typical, lengths[lengths.size() / 2]);
+    }
+    eps_ = std::max(typical * 0.3f, 1e-7f);
+    tick(3);
     matchMirrors(verts);
+    tick(4);
 }
 
 bool DynamicTopology::remesh(Mesh& mesh, BVH& bvh, const glm::vec3& center, float radius, float edgeLength,
@@ -1097,6 +1152,8 @@ bool DynamicTopology::remesh(Mesh& mesh, BVH& bvh, const glm::vec3& center, floa
     if (!dyntopoBlocker(mesh).empty() || !(edgeLength > 0.0f) || !(radius > 0.0f)) return false;
     if (mesh_ && mesh_ != &mesh) return false; // (another mesh mid-stroke)
     if (!mesh_) {
+        // A former subdivision level (its levels deleted) may still derive its adjacency from them: store it.
+        if (mesh.implicitAdjacency()) mesh.rebuildTopology();
         if (!mesh.beginDynamicAdjacency()) return false;
         mesh_ = &mesh;
         bvh_ = &bvh;
@@ -1119,25 +1176,37 @@ bool DynamicTopology::remesh(Mesh& mesh, BVH& bvh, const glm::vec3& center, floa
     target_ = edgeLength;
     splitLen2_ = (edgeLength * 4.0f / 3.0f) * (edgeLength * 4.0f / 3.0f);
     collapseLen2_ = (edgeLength * 0.6f) * (edgeLength * 0.6f);
-    // Mirror images are matched loosely: overlapping mirrored dabs near the plane don't move both sides
-    // exactly alike, but vertices are rarely closer than half an edge.
-    eps_ = std::max(edgeLength * 0.3f, 1e-7f);
     mirrorSigns_.assign(mirrors.size() > 1 ? mirrors.begin() + 1 : mirrors.end(), mirrors.end());
     mirrorMaps_.resize(mirrorSigns_.size());
-    for (auto& map : mirrorMaps_) map.clear();
+    if (++mirrorStamp_ == 0) { // (wrapped: forget every old entry)
+        for (MirrorMap& map : mirrorMaps_) std::fill(map.stamp.begin(), map.stamp.end(), 0);
+        mirrorStamp_ = 1;
+    }
     ops_ = 0;
     maxOps_ = 6000; // (bounds a dab's time: a big brush over fine triangles coarsens them over several dabs)
 
+    auto lap = std::chrono::steady_clock::now();
+    auto phase = [&](int i) {
+        const auto now = std::chrono::steady_clock::now();
+        phaseMs[i] += std::chrono::duration<double, std::milli>(now - lap).count();
+        lap = now;
+    };
     gatherRegion();
+    phase(0);
     if (regionTris_.empty()) return false;
     splitPass();
     bvh.refitChanged(mesh);
     bvh.queryTriangles(mesh, center_, radius_, regionTris_);
+    phase(1);
     collapsePass();
+    phase(2);
     flipPass();
+    phase(3);
     relaxPass();
+    phase(4);
     const bool changed = !changedV_.empty() || !changedT_.empty();
     compact();
+    phase(5);
 
     // Rings and normals of everything that changed, the BVH's boxes, and what the renderer must patch.
     const uint32_t nv = uint32_t(mesh.vertexCount());
@@ -1167,6 +1236,7 @@ bool DynamicTopology::remesh(Mesh& mesh, BVH& bvh, const glm::vec3& center, floa
     bvh.refitChanged(mesh);
     mesh.changedTriangles.insert(mesh.changedTriangles.end(), changedT_.begin(), changedT_.end());
     changedT_.clear();
+    phase(6);
     lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - clock).count();
     return changed;
 }
@@ -1185,7 +1255,12 @@ std::unique_ptr<TopologyUndo> DynamicTopology::finish(Mesh& mesh, BVH& bvh) {
     std::vector<uint8_t>().swap(deadV_);
     std::vector<uint8_t>().swap(deadT_);
     std::vector<uint8_t>().swap(changedVFlag_);
-    for (auto& map : mirrorMaps_) map.clear();
+    std::vector<MirrorMap>().swap(mirrorMaps_);
+    std::vector<uint64_t>().swap(gridKeys_);
+    std::vector<uint32_t>().swap(gridHead_);
+    std::vector<uint32_t>().swap(gridNext_);
+    std::vector<uint32_t>().swap(seen_);
+    std::vector<uint32_t>().swap(regionVerts_);
     if (undo->vertexSlots.empty() && undo->triangleSlots.empty() && undo->uvs.empty()) return nullptr;
     return undo;
 }

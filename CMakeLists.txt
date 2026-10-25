@@ -34,6 +34,7 @@ add_library(sculptforge_core STATIC
   src/core/Benchmark.cpp
   src/core/Sculpt.cpp
   src/core/Dyntopo.cpp
+  src/core/DyntopoCommands.cpp
   src/core/Undo.cpp
   src/core/Primitives.cpp
   src/core/Document.cpp

@@ -847,6 +847,8 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
     playingLayer_ = -1;
     clearLods();
     beginPaintStroke();
+    if (doc_.sculptor.dyntopo.enabled && strokeSculpt_ && !dyntopoBlocker(doc_.mesh).empty())
+        status_ = "Dynamic is on, but this SubTool has subdivision levels: sculpting without remeshing";
     lastX_ = x;
     lastY_ = y;
     residual_ = 0.0f;
@@ -1019,6 +1021,8 @@ void App::endStroke() {
     perf_.strokeFrames = 0;
     UndoRecord r = doc_.sculptor.endStroke();
     finishPaintStroke(r);
+    if (r.topology && !r.topology->uvs.empty())
+        status_ = "Dynamic topology removed the UVs of the remeshed SubTool (Undo brings them back)";
     if (!r.empty()) {
         doc_.undo.push(std::move(r));
         doc_.modified = true;

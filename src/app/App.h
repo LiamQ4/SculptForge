@@ -115,6 +115,10 @@ private:
     void strokeTo(float x, float y);
     void dabAt(float x, float y, float pressure = -1.0f); // pressure < 0: strokePressure()
     void endStroke();
+    // Dynamic topology (ZBrush's Sculptris Pro, core/Dyntopo.h): turns it on or off (not on a mesh with
+    // subdivision levels), saying so in the status bar; the Detail slider.
+    void setDynamic(bool on);
+    void drawDetailSlider(const char* id);
 
     void runCommand(const std::string& name, const Args& args = {});
     void openFileDialog();

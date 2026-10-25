@@ -175,6 +175,32 @@ private:
         size_t vertexCapacity = 0;
         std::vector<uint64_t> blockHash; // per UploadOrder block: hashes of its packed positions, and the rest
         size_t bytes[8] = {}; // GPU sizes: vertices, indices, lines, colours, mask, groups, prims, uvs + tangents
+
+        // Dynamic topology (Mesh::changedTriangles, core/Dyntopo.h): the clusters whose triangles changed since
+        // the layout was built, and blocks of triangles added past its end, are drawn from patches instead (the
+        // layout skips them): each holds a cluster's current triangles with copies of their vertices, in a fixed
+        // part of the patch buffers. A full upload starts over without patches.
+        struct Patch {
+            uint32_t key = 0;  // layout cluster, or kTailPatch + block of triangles past layoutTriangles
+            uint32_t part = 0; // its part of the patch buffers
+            uint32_t indices = 0, lines = 0; // drawn
+            std::vector<uint32_t> verts;     // the mesh vertex of each local index
+            std::vector<uint16_t> local;     // triangles (local indices), while stale
+            std::vector<uint32_t> groups;    // their polygroups, while stale
+            ClusterBounds bounds;
+            bool stale = true;    // triangles changed: rebuild and upload everything
+            bool uploaded = false;
+        };
+        std::vector<Patch> patches;
+        std::vector<uint32_t> clusterPatch, tailPatch; // patch per layout cluster / per block past the layout (kNone)
+        std::vector<uint32_t> chunkCluster;           // per layout chunk of triangles: its cluster
+        uint32_t layoutTriangles = 0;
+        GLuint patchVao = 0, patchLineVao = 0, patchVertices = 0, patchIndices = 0, patchLines = 0, patchColors = 0,
+               patchMask = 0, patchGroupData = 0, patchGroupTexture = 0;
+        size_t patchParts = 0; // parts the patch buffers have room for
+        bool patchColorsOn = false, patchMaskOn = false, patchLinesOn = false;
+        PositionGrid patchGrid; // the grid the patches' vertices were packed with
+        size_t patchBytes = 0;
     };
     MeshSlot& slot(uint32_t id); // created on first use
     static void freeSlot(MeshSlot& s);
@@ -190,6 +216,15 @@ private:
     // building the layout).
     void uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs, bool indicesDone = false);
     void uploadIndices(MeshSlot& s, const Mesh& mesh);
+    // Dynamic topology patches: notePatches marks what Mesh::changedTriangles touched, preparePatches rebuilds
+    // the stale ones on the CPU (each false when a full upload is due instead: too many, or a patch too big),
+    // uploadPatches sends them and every patch vertex the mesh marked dirty, drawPatches draws them.
+    bool notePatches(MeshSlot& s, const Mesh& mesh);
+    bool preparePatches(MeshSlot& s, const Mesh& mesh, bool wireframe);
+    void uploadPatches(MeshSlot& s, const Mesh& mesh, bool wireframe);
+    static void resetPatches(MeshSlot& s);
+    std::vector<uint32_t> patchLocal_, patchStamp_; // preparePatches: mesh vertex -> local index (this stamp)
+    uint32_t patchStampValue_ = 0;
     std::vector<std::pair<uint32_t, uint32_t>> dirtyRuns_; // scratch for sync: UploadOrder::dirtyRuns
     std::vector<uint8_t> staging_;                         // scratch for sync: gathered vertex data
     std::vector<uint8_t> blockChanged_, blockMoved_;      // scratch for uploadVertices, per block
@@ -200,6 +235,7 @@ private:
     void cull(const MeshSlot& s, const CullView& view, bool proxy = false);
     void drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings);
     enum class Part { Triangles, Lines, Proxy };
+    void drawPatches(const MeshSlot& s, GLenum mode, Part part, GLint primBaseLocation);
     void drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clusters, GLenum mode, Part part, GLint primBaseLocation);
     std::vector<uint32_t> proxyClusters_;
     std::vector<GLsizei> drawCounts_;

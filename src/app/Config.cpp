@@ -51,6 +51,7 @@ Json toJson(const UiPrefs& p) {
     j.set("antialiasing", double(p.antialiasing));
     j.set("fastNavigation", p.fastNavigation);
     j.set("multithreading", p.multithreading);
+    j.set("dyntopoConstantDetail", p.dyntopoConstantDetail);
     return j;
 }
 
@@ -74,6 +75,7 @@ void fromJson(const Json& j, UiPrefs& p) {
     p.antialiasing = aa >= 8 ? 8 : aa >= 4 ? 4 : aa >= 2 ? 2 : 1;
     p.fastNavigation = j["fastNavigation"].asBool(p.fastNavigation);
     p.multithreading = j["multithreading"].asBool(p.multithreading);
+    p.dyntopoConstantDetail = j["dyntopoConstantDetail"].asBool(p.dyntopoConstantDetail);
 }
 
 namespace {
@@ -428,6 +430,7 @@ bool App::readUiConfig(const std::string& path, std::string& err) {
     fromJson(j["prefs"], uiPrefs_);
     applyPerformancePrefs();
     applyInputStyle();
+    doc_.sculptor.dyntopo.constantDetail = uiPrefs_.dyntopoConstantDetail;
     return true;
 }
 

@@ -147,6 +147,8 @@ struct StrokeStats {
     double verts = 0, uploaded = 0, runs = 0, kernel = 0, normals = 0, bvh = 0, pick = 0, upload = 0, total = 0;
     double endStroke = 0, undo = 0, redo = 0;
     size_t undoBytes = 0;
+    double remesh = 0;     // dynamic topology
+    size_t triangles = 0;  // after the stroke
 };
 
 StrokeStats runStroke(Document& doc, const BenchBrush& b, int dabs, const BenchGpu* gpu, UploadOrder& order) {
@@ -206,6 +208,8 @@ StrokeStats runStroke(Document& doc, const BenchBrush& b, int dabs, const BenchG
     st.kernel = sc.timings.kernelMs;
     st.normals = sc.timings.normalsMs;
     st.bvh = sc.timings.bvhMs;
+    st.remesh = sc.timings.remeshMs;
+    st.triangles = m.triangleCount();
     st.verts = double(sc.timings.vertices) / double(std::max(st.dabs, 1)); // per step (both mirrors)
     st.uploaded /= double(std::max(st.dabs, 1));
     st.runs /= double(std::max(st.dabs, 1));
@@ -247,6 +251,9 @@ bool parseBenchArg(int argc, char** argv, int& i, BenchCommandLine& cl) {
     } else if (a == "--bench-view") {
         cl.options.viewOnly = true;
         cl.options.projectRoundTrip = false;
+    } else if (a == "--bench-dyntopo") {
+        cl.options.dyntopo = true;
+        cl.options.projectRoundTrip = false;
     } else if (a == "--bench-out") {
         cl.outPath = next();
     } else {
@@ -282,7 +289,86 @@ int runBenchCommandLine(BenchCommandLine cl, const std::string& heading, const B
     return 0;
 }
 
+namespace {
+
+// Dynamic topology (core/Dyntopo.h): strokes that remesh as they go, on spheres without subdivision levels
+// (Sculptris Pro works on such meshes only). Each row starts from the same sphere.
+std::string runDyntopoBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
+    auto log = [&](const std::string& s) {
+        if (o.log) o.log(s);
+    };
+    std::ostringstream md;
+    md << "Threads: " << ThreadPool::shared().threads();
+    if (gpu && !gpu->description.empty()) md << ", GPU: " << gpu->description;
+    md << ". Dynamic topology on (relative detail), X symmetry (two dabs per step), " << o.dabsPerStroke
+       << " dabs per stroke on a unit sphere without subdivision levels. Times in milliseconds.\n\n";
+    struct Row {
+        BenchBrush brush;
+        float detail;
+    };
+    const std::vector<Row> rows = {
+        {{"Standard, Detail 50%", Kind::Brush, BrushType::Standard}, 0.5f},
+        {{"Standard, Detail 100%", Kind::Brush, BrushType::Standard}, 1.0f},
+        {{"Snake Hook, Detail 50%", Kind::Brush, BrushType::SnakeHook}, 0.5f},
+        {{"Clay Buildup, Detail 75%", Kind::Brush, BrushType::ClayBuildup}, 0.75f},
+        {{"Smooth (simplifies), Detail 50%", Kind::Brush, BrushType::Smooth}, 0.5f},
+        {{"Standard (large, r 0.4), Detail 50%", Kind::Brush, BrushType::Standard, 0.4f}, 0.5f},
+    };
+    for (double sizeM : o.sizesMillions) {
+        const size_t target = size_t(sizeM * 1e6);
+        log("Building a " + millions(double(target)) + " triangle sphere...");
+        Document doc;
+        doc.mesh = makeBenchSphere(target);
+        doc.mesh.multires.reset(); // (as after Delete Lower)
+        doc.mesh.rebuildTopology();
+        doc.bvh.build(doc.mesh);
+        Mesh& m = doc.mesh;
+        const double nt = double(m.triangleCount()), nv = double(m.vertexCount());
+        if (gpu && gpu->upload) gpu->upload(m);
+        UploadOrder order;
+        order.build(m);
+        md << "### " << millions(nt) << " triangles (" << millions(nv) << " vertices, no subdivision levels)\n\n";
+        md << "| Stroke | remesh | kernel | normals | BVH | " << (gpu ? "GPU upload | " : "")
+           << "**dab total** | triangles after | stroke end | undo | redo | undo step |\n";
+        md << "|---|---:|---:|---:|---:|" << (gpu ? "---:|" : "") << "---:|---:|---:|---:|---:|---:|\n";
+        for (const Row& row : rows) {
+            if (!o.brushFilter.empty() && row.brush.name.find(o.brushFilter) == std::string::npos) continue;
+            log("  " + row.brush.name);
+            doc.sculptor.dyntopo.enabled = true;
+            doc.sculptor.dyntopo.detail = row.detail;
+            for (double& x : doc.sculptor.dynamicTopology().phaseMs) x = 0;
+            const StrokeStats s = runStroke(doc, row.brush, o.dabsPerStroke, gpu, order);
+            doc.sculptor.dyntopo.enabled = false;
+            {
+                std::string ph = "    phases:";
+                for (double x : doc.sculptor.dynamicTopology().phaseMs) ph += " " + fmt("%.1f", x);
+                ph += " gather:";
+                for (double& x : doc.sculptor.dynamicTopology().gatherMs) { ph += " " + fmt("%.1f", x); x = 0; }
+                ph += " ops " + std::to_string(doc.sculptor.dynamicTopology().stats.splits) + "/" + std::to_string(doc.sculptor.dynamicTopology().stats.collapses) + "/" + std::to_string(doc.sculptor.dynamicTopology().stats.flips);
+                log(ph);
+                doc.sculptor.dynamicTopology().stats = {};
+            }
+            const double d = std::max(s.dabs, 1);
+            md << "| " << row.brush.name << " | " << fmt("%.2f", s.remesh / d) << " | " << fmt("%.2f", s.kernel / d) << " | "
+               << fmt("%.2f", s.normals / d) << " | " << fmt("%.2f", s.bvh / d) << " | ";
+            if (gpu) md << fmt("%.2f", s.upload / d) << " | ";
+            md << "**" << fmt("%.2f", s.total / d) << "** | " << millions(double(s.triangles)) << " | " << fmt("%.1f", s.endStroke)
+               << " | " << fmt("%.1f", s.undo) << " | " << fmt("%.1f", s.redo) << " | " << fmt("%.2f MB", double(s.undoBytes) / 1e6)
+               << " |\n";
+            doc.undo.undo(m, doc.bvh); // back to the sphere for the next row
+            if (gpu && gpu->upload) gpu->upload(m);
+            order.build(m);
+        }
+        md << "\n";
+        if (o.partial) o.partial(md.str());
+    }
+    return md.str();
+}
+
+} // namespace
+
 std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
+    if (o.dyntopo) return runDyntopoBenchmark(o, gpu);
     auto log = [&](const std::string& s) {
         if (o.log) o.log(s);
     };

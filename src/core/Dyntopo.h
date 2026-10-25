@@ -30,7 +30,6 @@
 #include <memory>
 #include <span>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -49,6 +48,12 @@ float dyntopoEdgeLength(const DyntopoSettings& s, float radius, float diagonal);
 
 // Why `mesh` can't be remeshed by dynamic topology ("" when it can).
 std::string dyntopoBlocker(const Mesh& mesh);
+// "Dynamic topology on: Detail 50 (follows the brush size)".
+std::string dyntopoSummary(const DyntopoSettings& s);
+
+class CommandRegistry;
+// dyntopo: on / off, Detail, constant detail (core/DyntopoCommands.cpp).
+void registerDyntopoCommands(CommandRegistry& registry);
 
 // Per-vertex and per-triangle values of a mesh at some slots (arrays the mesh doesn't have stay empty).
 struct TopologyVertexValues {
@@ -108,6 +113,8 @@ public:
 
     DyntopoStats stats;   // since the last reset
     double lastMs = 0.0;  // the last remesh's time
+    double phaseMs[8] = {}; // TEMP
+    double gatherMs[8] = {}; // TEMP
 
 private:
     struct Edge {
@@ -176,7 +183,15 @@ private:
     glm::vec3 center_{0.0f};
     float radius_ = 0.0f, target_ = 0.0f, splitLen2_ = 0.0f, collapseLen2_ = 0.0f, eps_ = 0.0f;
     std::vector<glm::vec3> mirrorSigns_; // without the identity
-    std::vector<std::unordered_map<uint32_t, uint32_t>> mirrorMaps_;
+    // Per mirror: each vertex's image (valid where stamp == mirrorStamp_, so a new remesh forgets them all).
+    struct MirrorMap {
+        std::vector<uint32_t> to, stamp;
+    };
+    std::vector<MirrorMap> mirrorMaps_;
+    uint32_t mirrorStamp_ = 0;
+    std::vector<uint64_t> gridKeys_; // matchMirrors' search grid
+    std::vector<uint32_t> gridHead_, gridNext_;
+    std::vector<uint32_t> seen_, regionVerts_; // gatherRegion: vertices listed this remesh (seen_ == mirrorStamp_)
     std::vector<uint8_t> deadV_, deadT_;
     std::vector<uint32_t> freeV_, freeT_;
     std::vector<uint32_t> changedV_, changedT_, regionTris_;
@@ -186,7 +201,7 @@ private:
     std::vector<uint32_t> recordedNow_;
     mutable bool orbitIncomplete_ = false; // the last orbit() missed a mirror image
     size_t ops_ = 0, maxOps_ = 0;
-    mutable std::vector<uint32_t> scratch_, scratch2_;
+    mutable std::vector<uint32_t> scratch_, scratch2_, ringA_, ringB_, ringC_;
 };
 
 } // namespace sf

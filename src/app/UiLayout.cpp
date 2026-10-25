@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "app/UiLayout.h"
 
+#include <algorithm>
+
 namespace sf {
 
 namespace {
@@ -30,6 +32,7 @@ UiLayout standardLayout() {
                   "tool.rotate",       "sep",           "draw.sculpt",          "draw.paint",          "sep",
                   "draw.zadd",         "draw.zsub",     "draw.rgb",             "draw.paint_vertex",   "draw.paint_texture",   "sep",                 "widget.draw_size",
                   "widget.strength",   "row",           "ui.brush_lab",         "draw.front_faces",    "sep",
+                  "draw.dynamic",      "widget.dyntopo_detail", "sep",
                   "transform.symmetry_x",   "transform.symmetry_y", "transform.symmetry_z",    "sep",                 "draw.pressure_strength",
                   "draw.pressure_size", "widget.points"};
     l.leftShelf = {"widget.tile.brush", "widget.tile.stroke", "widget.tile.alpha", "widget.tile.material", "widget.color"};
@@ -88,6 +91,12 @@ bool fromJson(const Json& j, UiLayout& l, std::string& error) {
     readStrings(j["rightTray"], out.rightTray);
     readStrings(j["openSubpalettes"], out.openSubpalettes);
     readStrings(j["topShelf"], out.topShelf);
+    // Version 2 (0.8) added Dynamic and its Detail slider: put them into stored top shelves, before symmetry.
+    if (int(j["version"].asNumber(1)) < 2 && j["topShelf"].isArray() &&
+        std::find(out.topShelf.begin(), out.topShelf.end(), "draw.dynamic") == out.topShelf.end()) {
+        const auto at = std::find(out.topShelf.begin(), out.topShelf.end(), "transform.symmetry_x");
+        out.topShelf.insert(at, {"draw.dynamic", "widget.dyntopo_detail", "sep"});
+    }
     readStrings(j["leftShelf"], out.leftShelf);
     readStrings(j["rightShelf"], out.rightShelf);
     readStrings(j["bottomShelf"], out.bottomShelf);

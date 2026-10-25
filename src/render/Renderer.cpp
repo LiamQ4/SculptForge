@@ -623,6 +623,13 @@ void Renderer::freeSlot(MeshSlot& s) {
     gl::DeleteVertexArrays(1, &s.vao);
     gl::DeleteVertexArrays(1, &s.lineVao);
     gl::DeleteVertexArrays(1, &s.proxyVao);
+    if (s.patchVao) {
+        for (GLuint* b : {&s.patchVertices, &s.patchIndices, &s.patchLines, &s.patchColors, &s.patchMask, &s.patchGroupData})
+            gl::DeleteBuffers(1, b);
+        gl::DeleteTextures(1, &s.patchGroupTexture);
+        gl::DeleteVertexArrays(1, &s.patchVao);
+        gl::DeleteVertexArrays(1, &s.patchLineVao);
+    }
     s = MeshSlot();
 }
 
@@ -630,6 +637,7 @@ size_t Renderer::gpuBytes() const {
     size_t total = 0;
     for (const MeshSlot& s : slots_) {
         for (size_t b : s.bytes) total += b;
+        total += s.patchBytes;
         if (s.proxyAllocated) total += (s.order.triangleCount() / 4) * 3 * sizeof(uint16_t);
         if (s.paintTexture) total += size_t(s.textureW) * size_t(s.textureH) * 4 * 4 / 3; // with mipmaps
     }
@@ -903,6 +911,7 @@ void Renderer::uploadVertices(MeshSlot& s, const Mesh& mesh, bool full) {
     const std::span<const uint32_t> order = s.order.fromGpu();
     std::atomic<bool> outside{false};
     const bool normals = mesh.normals.size() == mesh.vertexCount();
+    const uint32_t nv = uint32_t(mesh.vertexCount());
     // Per block, hashes of what it last sent (positions; normals and curvature): a block a dab marked but didn't
     // change (paint, mask) isn't sent again, and a cluster whose positions didn't move keeps its bounds and proxy.
     s.blockHash.resize(nb * 2, 0);
@@ -915,9 +924,10 @@ void Renderer::uploadVertices(MeshSlot& s, const Mesh& mesh, bool full) {
         uint64_t hp = 0, hn = 0;
         for (uint32_t i = b; i < e; ++i) {
             const uint32_t v = order[i];
-            PackedVertex pv; // packed here and stored once: `out` may be mapped GPU memory, slow to read back
-            inside &= packVertex(s.grid, mesh.positions[v], normals ? mesh.normals[v] : glm::vec3(0.0f, 0.0f, 1.0f),
-                                 curvatureAt(mesh, v), pv);
+            PackedVertex pv{}; // packed here and stored once: `out` may be mapped GPU memory, slow to read back
+            if (v < nv) // (else a vertex dynamic topology removed, which only patched clusters named)
+                inside &= packVertex(s.grid, mesh.positions[v], normals ? mesh.normals[v] : glm::vec3(0.0f, 0.0f, 1.0f),
+                                     curvatureAt(mesh, v), pv);
             out[i - b] = pv;
             hp = (hp ^ (uint64_t(pv.pos[0]) | uint64_t(pv.pos[1]) << 32)) * 0x100000001B3ull + i;
             hn = (hn ^ pv.normal) * 0x100000001B3ull + i;
@@ -974,7 +984,8 @@ void Renderer::updateBounds(MeshSlot& s, const Mesh& mesh, bool all, bool comput
     poolFor(cullScratch_.size(), [&](size_t i0, size_t i1) {
         for (size_t i = i0; i < i1; ++i) {
             const uint32_t c = cullScratch_[i];
-            s.bounds[c] = clusterBounds(mesh, s.order, c);
+            const bool patched = c < s.clusterPatch.size() && s.clusterPatch[c] != ~0u; // (drawn by its patch)
+            s.bounds[c] = patched ? ClusterBounds() : clusterBounds(mesh, s.order, c);
         }
     }, 1, 2);
     s.box = AABB();
@@ -1009,6 +1020,10 @@ void Renderer::uploadIndices(MeshSlot& s, const Mesh& mesh) {
                 const size_t first = s.order.firstTriangle(c);
                 const uint32_t count = s.order.clusterTriangles(c);
                 uint16_t* out = staging.data() + (first - t0) * 3;
+                if (c < s.clusterPatch.size() && s.clusterPatch[c] != ~0u) { // drawn by its patch
+                    s.drawCount[c] = 0;
+                    continue;
+                }
                 if (!hidden) {
                     s.order.localTriangles(mesh, c, out);
                     s.drawCount[c] = GLsizei(count * 3);
@@ -1075,6 +1090,7 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs, bool ind
     if (!drawnTris.empty()) poolFor(nc, [&](size_t c0, size_t c1) {
         for (size_t c = c0; c < c1; ++c) {
             uint32_t* out = drawnTris.data() + s.primBase[c];
+            if (s.drawCount[c] == 0) continue; // (nothing drawn: hidden, or drawn by a patch)
             for (uint32_t i = 0; i < s.order.clusterTriangles(uint32_t(c)); ++i) {
                 const uint32_t t = s.order.triangle(uint32_t(c), i);
                 if (!hidden || !mesh.hidden[t]) *out++ = t;
@@ -1148,6 +1164,7 @@ void Renderer::buildLines(MeshSlot& s, const Mesh& mesh) {
     poolFor(nc, [&](size_t c0, size_t c1) {
         thread_local std::vector<uint16_t> local;
         for (size_t c = c0; c < c1; ++c) {
+            if (c < s.clusterPatch.size() && s.clusterPatch[c] != ~0u) continue; // drawn by its patch
             const uint32_t count = s.order.clusterTriangles(uint32_t(c));
             local.resize(size_t(count) * 3);
             s.order.localTriangles(mesh, uint32_t(c), local.data());
@@ -1202,8 +1219,13 @@ void Renderer::buildProxies(MeshSlot& s, const Mesh& mesh) {
     s.proxyCount.resize(nc, 0);
     s.proxyBounds.resize(nc);
     cullScratch_.clear();
-    for (uint32_t c = 0; c < nc; ++c)
+    for (uint32_t c = 0; c < nc; ++c) {
+        if (c < s.clusterPatch.size() && s.clusterPatch[c] != ~0u) { // drawn by its patch
+            s.proxyStale[c] = 0;
+            s.proxyCount[c] = 0;
+        }
         if (s.proxyStale[c]) cullScratch_.push_back(c);
+    }
     if (cullScratch_.empty()) return;
     if (!s.proxyAllocated) {
         gl::BindVertexArray(s.proxyVao);
@@ -1232,13 +1254,328 @@ void Renderer::buildProxies(MeshSlot& s, const Mesh& mesh) {
     gl::BindVertexArray(0);
 }
 
+// ---------------------------------------------------------------------------
+// Dynamic topology patches (MeshSlot::patches)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr uint32_t kPatchTriangles = UploadOrder::kClusterTriangles; // per part: a cluster's worth
+constexpr uint32_t kPatchVertices = 3 * kPatchTriangles;            // (local indices stay 16-bit)
+constexpr uint32_t kPatchLineIndices = 6 * kPatchTriangles;         // 2 per edge, 3 edges per triangle at most
+constexpr uint32_t kTailPatch = 0x80000000u;
+constexpr uint32_t kNoPatch = ~0u;
+
+} // namespace
+
+void Renderer::resetPatches(MeshSlot& s) {
+    s.patches.clear();
+    s.clusterPatch.clear();
+    s.tailPatch.clear();
+}
+
+bool Renderer::notePatches(MeshSlot& s, const Mesh& mesh) {
+    const size_t nc = s.order.clusters().size();
+    if (s.clusterPatch.size() != nc) s.clusterPatch.assign(nc, kNoPatch);
+    if (s.chunkCluster.empty() && s.layoutTriangles > 0) { // which cluster each chunk of the layout went to
+        s.chunkCluster.assign((size_t(s.layoutTriangles) + UploadOrder::kChunkTriangles - 1) >> UploadOrder::kChunkShift, 0);
+        for (uint32_t c = 0; c < nc; ++c)
+            for (uint32_t i = 0; i < s.order.clusterTriangles(c); i += UploadOrder::kChunkTriangles)
+                s.chunkCluster[s.order.triangle(c, i) >> UploadOrder::kChunkShift] = c;
+    }
+    // More than this many and a full upload (a fresh layout) is cheaper to keep drawing.
+    const size_t limit = std::max<size_t>(64, nc / 4);
+    for (uint32_t t : mesh.changedTriangles) {
+        uint32_t* slotOfPatch;
+        uint32_t key;
+        if (t < s.layoutTriangles) {
+            const uint32_t chunk = t >> UploadOrder::kChunkShift;
+            if (chunk >= s.chunkCluster.size()) return false;
+            key = s.chunkCluster[chunk];
+            slotOfPatch = &s.clusterPatch[key];
+        } else {
+            const uint32_t block = (t - s.layoutTriangles) / kPatchTriangles;
+            if (block >= s.tailPatch.size()) s.tailPatch.resize(size_t(block) + 1, kNoPatch);
+            key = kTailPatch + block;
+            slotOfPatch = &s.tailPatch[block];
+        }
+        if (*slotOfPatch == kNoPatch) {
+            if (s.patches.size() >= limit) return false;
+            *slotOfPatch = uint32_t(s.patches.size());
+            MeshSlot::Patch& p = s.patches.emplace_back();
+            p.key = key;
+            p.part = uint32_t(s.patches.size() - 1);
+            if (key < kTailPatch) { // the layout no longer draws this cluster
+                s.drawnTriangles -= std::min<size_t>(s.drawnTriangles, size_t(s.drawCount[key]) / 3);
+                s.drawCount[key] = 0;
+                if (key < s.lineCount.size()) s.lineCount[key] = 0;
+                if (key < s.proxyCount.size()) s.proxyCount[key] = 0;
+                if (key < s.bounds.size()) s.bounds[key] = ClusterBounds();
+            }
+        }
+        s.patches[*slotOfPatch].stale = true;
+    }
+    return true;
+}
+
+bool Renderer::preparePatches(MeshSlot& s, const Mesh& mesh, bool wireframe) {
+    const uint32_t nt = uint32_t(mesh.triangleCount()), nv = uint32_t(mesh.vertexCount());
+    if (patchLocal_.size() < nv) {
+        patchLocal_.resize(nv + nv / 4);
+        patchStamp_.resize(nv + nv / 4, 0);
+    }
+    if (wireframe && !s.patchLinesOn)
+        for (MeshSlot::Patch& p : s.patches) p.stale = true; // (their edges weren't built)
+    const bool hidden = mesh.hidden.size() == nt && nt > 0;
+    const bool groups = mesh.polygroups.size() == nt && nt > 0;
+    for (MeshSlot::Patch& p : s.patches) {
+        if (!p.stale) continue;
+        if (++patchStampValue_ == 0) {
+            std::fill(patchStamp_.begin(), patchStamp_.end(), 0);
+            patchStampValue_ = 1;
+        }
+        p.verts.clear();
+        p.local.clear();
+        p.groups.clear();
+        auto add = [&](uint32_t t) {
+            if (t >= nt || (hidden && mesh.hidden[t])) return;
+            const glm::uvec3& tri = mesh.triangles[t];
+            for (int c = 0; c < 3; ++c) {
+                const uint32_t v = tri[c];
+                if (patchStamp_[v] != patchStampValue_) {
+                    patchStamp_[v] = patchStampValue_;
+                    patchLocal_[v] = uint32_t(p.verts.size());
+                    p.verts.push_back(v);
+                }
+                p.local.push_back(uint16_t(std::min<uint32_t>(patchLocal_[v], 0xFFFF)));
+            }
+            if (groups) p.groups.push_back(mesh.polygroups[t]);
+        };
+        if (p.key < kTailPatch) {
+            for (uint32_t i = 0; i < s.order.clusterTriangles(p.key); ++i) add(s.order.triangle(p.key, i));
+        } else {
+            const uint32_t first = s.layoutTriangles + (p.key - kTailPatch) * kPatchTriangles;
+            for (uint32_t t = first; t < first + kPatchTriangles && t < nt; ++t) add(t);
+        }
+        if (p.verts.size() > kPatchVertices) return false; // scattered triangles: time for a fresh layout
+    }
+    return true;
+}
+
+void Renderer::uploadPatches(MeshSlot& s, const Mesh& mesh, bool wireframe) {
+    if (s.patches.empty()) return;
+    const uint32_t nv = uint32_t(mesh.vertexCount());
+    const bool colors = nv > 0 && mesh.colors.size() == nv, mask = nv > 0 && mesh.mask.size() == nv;
+    const bool normals = mesh.normals.size() == nv;
+    bool all = s.patchGrid.step != s.grid.step || s.patchGrid.origin != s.grid.origin || colors != s.patchColorsOn ||
+               mask != s.patchMaskOn;
+    if (!s.patchVao) {
+        gl::GenVertexArrays(1, &s.patchVao);
+        gl::GenVertexArrays(1, &s.patchLineVao);
+        for (GLuint* b : {&s.patchVertices, &s.patchIndices, &s.patchLines, &s.patchColors, &s.patchMask, &s.patchGroupData})
+            gl::GenBuffers(1, b);
+        gl::GenTextures(1, &s.patchGroupTexture);
+        for (GLuint vao : {s.patchVao, s.patchLineVao}) {
+            gl::BindVertexArray(vao);
+            gl::BindBuffer(GL_ARRAY_BUFFER, s.patchVertices);
+            gl::EnableVertexAttribArray(0);
+            gl::VertexAttribIPointer(0, 2, GL_UNSIGNED_INT, sizeof(PackedVertex), nullptr);
+            if (vao == s.patchLineVao) {
+                gl::BindBuffer(GL_ELEMENT_ARRAY_BUFFER, s.patchLines);
+                continue;
+            }
+            gl::EnableVertexAttribArray(1);
+            gl::VertexAttribIPointer(1, 1, GL_UNSIGNED_INT, sizeof(PackedVertex), reinterpret_cast<const void*>(2 * sizeof(uint32_t)));
+            gl::BindBuffer(GL_ARRAY_BUFFER, s.patchColors);
+            gl::VertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, 4, nullptr);
+            gl::BindBuffer(GL_ARRAY_BUFFER, s.patchMask);
+            gl::VertexAttribPointer(3, 1, GL_UNSIGNED_BYTE, GL_TRUE, 1, nullptr);
+            gl::BindBuffer(GL_ELEMENT_ARRAY_BUFFER, s.patchIndices);
+        }
+        gl::BindVertexArray(0);
+    }
+    if (s.patches.size() > s.patchParts) { // room for more parts: new buffers, everything sent again
+        s.patchParts = std::max<size_t>({s.patches.size(), s.patchParts * 2, 8});
+        const size_t parts = s.patchParts;
+        auto alloc = [](GLenum target, GLuint buffer, size_t bytes) {
+            gl::BindBuffer(target, buffer);
+            gl::BufferData(target, GLsizeiptr(bytes), nullptr, GL_DYNAMIC_DRAW);
+        };
+        alloc(GL_ARRAY_BUFFER, s.patchVertices, parts * kPatchVertices * sizeof(PackedVertex));
+        alloc(GL_ARRAY_BUFFER, s.patchColors, parts * kPatchVertices * sizeof(uint32_t));
+        alloc(GL_ARRAY_BUFFER, s.patchMask, parts * kPatchVertices);
+        alloc(GL_TEXTURE_BUFFER, s.patchGroupData, parts * kPatchTriangles * sizeof(uint32_t));
+        gl::BindBuffer(GL_TEXTURE_BUFFER, 0);
+        gl::BindTexture(GL_TEXTURE_BUFFER, s.patchGroupTexture);
+        gl::TexBuffer(GL_TEXTURE_BUFFER, GL_R32UI, s.patchGroupData);
+        gl::BindTexture(GL_TEXTURE_BUFFER, 0);
+        gl::BindVertexArray(s.patchVao);
+        gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(parts * kPatchTriangles * 3 * sizeof(uint16_t)), nullptr, GL_DYNAMIC_DRAW);
+        gl::BindVertexArray(s.patchLineVao);
+        gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(parts * kPatchLineIndices * sizeof(uint16_t)), nullptr, GL_DYNAMIC_DRAW);
+        gl::BindVertexArray(0);
+        s.patchBytes = parts * (kPatchVertices * (sizeof(PackedVertex) + 5) + kPatchTriangles * (3 * 2 + 4) + kPatchLineIndices * 2);
+        for (MeshSlot::Patch& p : s.patches) p.uploaded = false;
+        all = true;
+    }
+    if (colors != s.patchColorsOn || mask != s.patchMaskOn) {
+        gl::BindVertexArray(s.patchVao);
+        if (colors) gl::EnableVertexAttribArray(2);
+        else gl::DisableVertexAttribArray(2);
+        if (mask) gl::EnableVertexAttribArray(3);
+        else gl::DisableVertexAttribArray(3);
+        gl::BindVertexArray(0);
+        s.patchColorsOn = colors;
+        s.patchMaskOn = mask;
+    }
+    std::vector<PackedVertex> packed;
+    std::vector<uint32_t> packedColors;
+    std::vector<uint8_t> packedMask;
+    std::vector<uint16_t> lines;
+    std::vector<uint64_t> edges;
+    bool outside = false;
+    const bool anyDirty = mesh.dirtyBegin < mesh.dirtyEnd;
+    for (MeshSlot::Patch& p : s.patches) {
+        const bool topology = p.stale || !p.uploaded;
+        bool verts = topology || all;
+        if (!verts && anyDirty)
+            for (uint32_t v : p.verts)
+                if (mesh.vertexDirty(v)) {
+                    verts = true;
+                    break;
+                }
+        if (topology) {
+            if (p.stale) {
+                p.indices = uint32_t(p.local.size());
+                // The wireframe: each edge of the patch once, quad diagonals left out as the layout does.
+                p.lines = 0;
+                if (wireframe) {
+                    edges.clear();
+                    const uint32_t nt = uint32_t(mesh.triangleCount());
+                    size_t k = 0;
+                    auto addEdges = [&](uint32_t t) {
+                        if (t >= nt || mesh.triangleHidden(t)) return;
+                        const int diagonal = hiddenDiagonal(mesh, t);
+                        for (int e = 0; e < 3; ++e) {
+                            const uint64_t a = p.local[k + size_t(e)], b = p.local[k + size_t((e + 1) % 3)];
+                            if (e != diagonal) edges.push_back(std::min(a, b) << 16 | std::max(a, b));
+                        }
+                        k += 3;
+                    };
+                    if (p.key < kTailPatch) {
+                        for (uint32_t i = 0; i < s.order.clusterTriangles(p.key); ++i) addEdges(s.order.triangle(p.key, i));
+                    } else {
+                        const uint32_t first = s.layoutTriangles + (p.key - kTailPatch) * kPatchTriangles;
+                        for (uint32_t t = first; t < first + kPatchTriangles && t < nt; ++t) addEdges(t);
+                    }
+                    std::sort(edges.begin(), edges.end());
+                    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+                    lines.clear();
+                    for (uint64_t e : edges) {
+                        lines.push_back(uint16_t(e >> 16));
+                        lines.push_back(uint16_t(e & 0xFFFF));
+                    }
+                    p.lines = uint32_t(std::min<size_t>(lines.size(), kPatchLineIndices));
+                }
+            }
+            gl::BindVertexArray(s.patchVao);
+            if (!p.local.empty())
+                gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(size_t(p.part) * kPatchTriangles * 3 * sizeof(uint16_t)),
+                                  GLsizeiptr(p.local.size() * sizeof(uint16_t)), p.local.data());
+            if (wireframe && p.lines > 0) {
+                gl::BindVertexArray(s.patchLineVao);
+                gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(size_t(p.part) * kPatchLineIndices * sizeof(uint16_t)),
+                                  GLsizeiptr(size_t(p.lines) * sizeof(uint16_t)), lines.data());
+            }
+            gl::BindVertexArray(0);
+            if (!p.groups.empty()) {
+                gl::BindBuffer(GL_TEXTURE_BUFFER, s.patchGroupData);
+                gl::BufferSubData(GL_TEXTURE_BUFFER, GLintptr(size_t(p.part) * kPatchTriangles * sizeof(uint32_t)),
+                                  GLsizeiptr(p.groups.size() * sizeof(uint32_t)), p.groups.data());
+                gl::BindBuffer(GL_TEXTURE_BUFFER, 0);
+            }
+            if (p.stale) {
+                std::vector<uint16_t>().swap(p.local);
+                std::vector<uint32_t>().swap(p.groups);
+            }
+            p.stale = false;
+            p.uploaded = true;
+        }
+        if (!verts || p.verts.empty()) continue;
+        const size_t n = p.verts.size();
+        packed.resize(n);
+        glm::vec3 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
+        for (size_t i = 0; i < n; ++i) {
+            const uint32_t v = p.verts[i];
+            const glm::vec3& pos = mesh.positions[v];
+            outside |= !packVertex(s.grid, pos, normals ? mesh.normals[v] : glm::vec3(0.0f, 0.0f, 1.0f), curvatureAt(mesh, v), packed[i]);
+            lo = glm::min(lo, pos);
+            hi = glm::max(hi, pos);
+        }
+        p.bounds = ClusterBounds();
+        p.bounds.center = (lo + hi) * 0.5f;
+        p.bounds.radius = glm::length(hi - lo) * 0.5f;
+        gl::BindBuffer(GL_ARRAY_BUFFER, s.patchVertices);
+        gl::BufferSubData(GL_ARRAY_BUFFER, GLintptr(size_t(p.part) * kPatchVertices * sizeof(PackedVertex)), GLsizeiptr(n * sizeof(PackedVertex)),
+                          packed.data());
+        if (colors) {
+            packedColors.resize(n);
+            for (size_t i = 0; i < n; ++i) packedColors[i] = packColor(mesh.colors[p.verts[i]]);
+            gl::BindBuffer(GL_ARRAY_BUFFER, s.patchColors);
+            gl::BufferSubData(GL_ARRAY_BUFFER, GLintptr(size_t(p.part) * kPatchVertices * sizeof(uint32_t)), GLsizeiptr(n * sizeof(uint32_t)),
+                              packedColors.data());
+        }
+        if (mask) {
+            packedMask.resize(n);
+            for (size_t i = 0; i < n; ++i) packedMask[i] = packMask(mesh.mask[p.verts[i]]);
+            gl::BindBuffer(GL_ARRAY_BUFFER, s.patchMask);
+            gl::BufferSubData(GL_ARRAY_BUFFER, GLintptr(size_t(p.part) * kPatchVertices), GLsizeiptr(n), packedMask.data());
+        }
+    }
+    gl::BindBuffer(GL_ARRAY_BUFFER, 0);
+    s.patchGrid = s.grid;
+    s.patchLinesOn = wireframe;
+    if (outside) s.fresh = true; // a vertex left the position grid: a full upload (with a new grid) next time
+    // The totals the culling and drawing use: the drawn triangles, the closed mesh's volume, its box.
+    size_t drawn = 0;
+    for (size_t c = 0; c < s.drawCount.size(); ++c) drawn += size_t(s.drawCount[c]) / 3;
+    for (const MeshSlot::Patch& p : s.patches) {
+        drawn += p.indices / 3;
+        if (p.bounds.radius >= 0.0f) {
+            s.box.expand(p.bounds.center - glm::vec3(p.bounds.radius));
+            s.box.expand(p.bounds.center + glm::vec3(p.bounds.radius));
+        }
+    }
+    s.drawnTriangles = drawn;
+}
+
+void Renderer::drawPatches(const MeshSlot& s, GLenum mode, Part part, GLint primBaseLocation) {
+    for (const MeshSlot::Patch& p : s.patches) {
+        const uint32_t count = part == Part::Lines ? p.lines : p.indices;
+        if (count == 0 || !insideFrustum(frameCull_, p.bounds)) continue;
+        if (primBaseLocation >= 0) gl::Uniform1i(primBaseLocation, GLint(p.part * kPatchTriangles));
+        const size_t first = part == Part::Lines ? size_t(p.part) * kPatchLineIndices : size_t(p.part) * kPatchTriangles * 3;
+        gl::DrawElementsBaseVertex(mode, GLsizei(count), GL_UNSIGNED_SHORT, reinterpret_cast<const void*>(first * sizeof(uint16_t)),
+                                   GLint(p.part * kPatchVertices));
+        if (part != Part::Lines) lastDrawn_ += count / 3;
+    }
+    if (primBaseLocation >= 0) gl::Uniform1i(primBaseLocation, -1);
+}
+
 void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, bool wireframe) {
     const size_t nv = mesh.vertexCount();
     if (normalMap && (!normalMap->rgb || !normalMap->tangents || normalMap->tangents->size() != mesh.uvs.size() ||
                       !mesh.hasUvs() || normalMap->rgb->size() != size_t(normalMap->width) * size_t(normalMap->height) * 3))
         normalMap = nullptr; // made for another mesh
     const bool wantUvs = hasTexture(mesh) || normalMap;
-    const bool full = s.fresh || mesh.topologyDirty || nv != s.vertexCapacity;
+    // Dynamic topology changes topology a little at a time: patches (notePatches) instead of a full upload,
+    // until there are too many of them.
+    const bool patched = !s.patches.empty() || !mesh.changedTriangles.empty();
+    bool full = s.fresh || mesh.topologyDirty || (nv != s.vertexCapacity && !patched) || (patched && wantUvs);
+    if (!full && !mesh.changedTriangles.empty() && !notePatches(s, mesh)) full = true;
+    if (!full && !s.patches.empty() && mesh.facesDirty)
+        for (MeshSlot::Patch& p : s.patches) p.stale = true; // (groups or hidden triangles changed)
+    if (!full && !s.patches.empty() && !preparePatches(s, mesh, wireframe)) full = true;
     // The GPU keeps the vertices in the slot's cluster layout (core/UploadOrder.h), so a dab re-sends a few
     // short ranges holding what it changed, gathered from the mesh arrays.
     bool indicesDone = false;
@@ -1270,7 +1607,10 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
             }
             s.drawCount[c] = GLsizei(drawn * 3);
         };
+        resetPatches(s);
         s.order.build(mesh, write);
+        s.layoutTriangles = uint32_t(nt);
+        std::vector<uint32_t>().swap(s.chunkCluster); // (made when patches first need it)
         indicesDone = indices && gl::UnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
         gl::BindVertexArray(0);
         s.grid = PositionGrid::around(meshBounds(mesh));
@@ -1343,14 +1683,17 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
         uploaded = present;
         bytes = present ? ns * elementSize : 0;
     };
-    syncAttribute(s.colorBuffer, 2, s.hasColors, gatherWith<uint32_t>(order, [&](uint32_t v) { return packColor(mesh.colors[v]); }),
+    // (A slot may name a vertex dynamic topology removed since the layout was made: only patched clusters use it.)
+    syncAttribute(s.colorBuffer, 2, s.hasColors,
+                  gatherWith<uint32_t>(order, [&](uint32_t v) { return v < nv ? packColor(mesh.colors[v]) : 0u; }),
                   sizeof(uint32_t), nv > 0 && mesh.colors.size() == nv, s.bytes[3]);
-    syncAttribute(s.maskBuffer, 3, s.hasMask, gatherWith<uint8_t>(order, [&](uint32_t v) { return packMask(mesh.mask[v]); }),
+    syncAttribute(s.maskBuffer, 3, s.hasMask, gatherWith<uint8_t>(order, [&](uint32_t v) { return v < nv ? packMask(mesh.mask[v]) : uint8_t(0); }),
                   sizeof(uint8_t), nv > 0 && mesh.mask.size() == nv, s.bytes[4]);
     // Scratch only: don't keep a big upload's staging copy around.
     if (staging_.capacity() > (size_t(1) << 22)) std::vector<uint8_t>().swap(staging_);
     gl::BindBuffer(GL_ARRAY_BUFFER, 0);
     s.fresh = false;
+    uploadPatches(s, mesh, wireframe); // (may ask for a full upload next time)
     mesh.clearDirty();
 }
 
@@ -1676,6 +2019,14 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
             gl::Uniform3fv(gl::GetUniformLocation(wireProgram_, "uGridOrigin"), 1, glm::value_ptr(s->grid.origin));
             gl::Uniform1f(gl::GetUniformLocation(wireProgram_, "uGridStep"), s->grid.step);
             cull(*s, frameCull_);
+            if (!s->patches.empty() && s->patchVao) { // dynamic topology's patches
+                const bool lines = s->patchLinesOn;
+                gl::Uniform1f(gl::GetUniformLocation(wireProgram_, "uAlpha"), lines ? 0.5775f : 0.35f);
+                if (!lines) gl::PolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                gl::BindVertexArray(lines ? s->patchLineVao : s->patchVao);
+                drawPatches(*s, lines ? GL_LINES : GL_TRIANGLES, lines ? Part::Lines : Part::Triangles, -1);
+                if (!lines) gl::PolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            }
             if (s->linesValid) {
                 gl::Uniform1f(gl::GetUniformLocation(wireProgram_, "uAlpha"), 0.5775f); // 1 - (1 - 0.35)^2
                 gl::BindVertexArray(s->lineVao);
@@ -1708,15 +2059,23 @@ void Renderer::cull(const MeshSlot& s, const CullView& frame, bool proxy) {
     v.backfaces = s.closed && s.volume > 0.0 && !s.anyHidden && s.box.valid() &&
                   (e.x < s.box.min.x || e.y < s.box.min.y || e.z < s.box.min.z || e.x > s.box.max.x || e.y > s.box.max.y ||
                    e.z > s.box.max.z);
+    auto reachesNear = [&](const ClusterBounds& b) {
+        if (b.radius < 0.0f) return false;
+        const float z = glm::dot(b.center - e, v.forward);
+        return z - b.radius < v.nearDistance * 1.01f && z + b.radius > 0.0f;
+    };
     if (v.backfaces)
-        for (const ClusterBounds& b : s.bounds) {
-            if (b.radius < 0.0f) continue;
-            const float z = glm::dot(b.center - e, v.forward);
-            if (z - b.radius < v.nearDistance * 1.01f && z + b.radius > 0.0f) {
+        for (const ClusterBounds& b : s.bounds)
+            if (reachesNear(b)) {
                 v.backfaces = false;
                 break;
             }
-        }
+    if (v.backfaces)
+        for (const MeshSlot::Patch& p : s.patches)
+            if (reachesNear(p.bounds)) {
+                v.backfaces = false;
+                break;
+            }
     cullBackfaces_ = v.backfaces;
     const size_t nc = std::min(s.bounds.size(), s.drawCount.size());
     for (uint32_t c = 0; c < nc; ++c) {
@@ -1834,6 +2193,18 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, const RenderSettings& se
     // The back faces left in clusters along the silhouette: the GPU skips them too when they can't show.
     if (cullBackfaces_) gl::Enable(GL_CULL_FACE);
     drawClusters(s, drawClusters_, GL_TRIANGLES, Part::Triangles, perTriangle ? p->primBase : -1);
+    if (!s.patches.empty() && s.patchVao) { // dynamic topology: what changed since the layout (in full while moving)
+        gl::BindVertexArray(s.patchVao);
+        if (!s.patchColorsOn) gl::VertexAttrib4f(2, 1.0f, 1.0f, 1.0f, 1.0f);
+        if (!s.patchMaskOn) gl::VertexAttrib1f(3, 0.0f);
+        if (perTriangle) {
+            gl::ActiveTexture(GL_TEXTURE1);
+            gl::BindTexture(GL_TEXTURE_BUFFER, s.hasGroups ? s.patchGroupTexture : 0);
+            gl::ActiveTexture(GL_TEXTURE0);
+        }
+        drawPatches(s, GL_TRIANGLES, Part::Triangles, perTriangle ? p->primBase : -1);
+        gl::BindVertexArray(s.vao);
+    }
     if (!proxyClusters_.empty()) {
         gl::BindVertexArray(s.proxyVao);
         if (!s.hasColors) gl::VertexAttrib4f(2, 1.0f, 1.0f, 1.0f, 1.0f);

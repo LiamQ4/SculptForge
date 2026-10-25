@@ -7,6 +7,7 @@
 #include "core/BrushAlpha.h"
 #include "core/BrushLibrary.h"
 #include "core/Decimate.h"
+#include "core/Dyntopo.h"
 #include "core/EnginePresets.h"
 #include "core/ImageTo3D.h"
 #include "core/Masking.h"
@@ -767,6 +768,7 @@ CommandRegistry::CommandRegistry() {
     registerPolygroupCommands(*this);
     registerSubToolCommands(*this);
     registerSubdivCommands(*this); // subdiv_* (core/MultiresCommands.cpp)
+    registerDyntopoCommands(*this); // dyntopo (core/DyntopoCommands.cpp)
     registerTransformCommands(*this); // transform (core/MeshTransform.h)
     registerPerformanceCommands(*this); // perf_info, set_multithreading (core/Benchmark.cpp)
     registerPaintCommands(*this); // core/Polypaint.cpp

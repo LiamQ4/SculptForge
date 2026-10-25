@@ -188,6 +188,19 @@ void App::drawPalette_Draw() {
     segmented(*this, {"draw.sculpt", "draw.paint"});
     segmented(*this, {"draw.zadd", "draw.zsub"});
     actionRow(*this, {"draw.rgb", "draw.front_faces"});
+    ImGui::SeparatorText("Dynamic topology");
+    actionRow(*this, {"draw.dynamic"});
+    ImGui::SetNextItemWidth(-1);
+    drawDetailSlider("##dyntopo_detail_palette");
+    if (ImGui::Checkbox("Constant detail", &uiPrefs_.dyntopoConstantDetail))
+        doc_.sculptor.dyntopo.constantDetail = uiPrefs_.dyntopoConstantDetail;
+    ui::HelpText("Constant detail", nullptr,
+                 "Off (the default): the triangle size follows the brush size on screen, as in Sculptris Pro. On: one "
+                 "size for the whole mesh, set by Detail. A preference (Store Config keeps it).",
+                 "Draw > Dynamic topology");
+    if (doc_.sculptor.dyntopo.enabled && !dyntopoBlocker(doc_.mesh).empty())
+        hint("This SubTool has subdivision levels, so strokes don't remesh it: delete the lower (or higher) levels "
+             "first.");
     ImGui::SeparatorText("Tablet");
     ImGui::Checkbox("Pressure > strength", &pressureStrength_);
     ui::HelpAction(*this, "draw.pressure_strength");

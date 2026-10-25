@@ -307,6 +307,13 @@ void App::registerShellActions() {
     flag("draw.rgb", "Rgb", nullptr, "Draw", "", &paintRgb_, "Sculpt brushes also paint the colour (ZBrush Rgb with Zadd).");
     flag("draw.front_faces", "Front", nullptr, "Brush", "", &frontFacesOnly_,
          "Front faces only: brushes leave the far side of thin parts alone.");
+    add({"draw.dynamic", "Dynamic", nullptr,
+         "Dynamic topology (ZBrush's Sculptris Pro): brushes add triangles where they need detail and remove them "
+         "where they don't, so you can pull out horns or fingers without stretching. Detail sets how small the "
+         "triangles get; zoom in or shrink the brush for finer ones. Needs a mesh without subdivision levels; quads "
+         "under the brush become triangles and UVs are dropped (Undo brings them back).",
+         "Draw", "", "dyntopo", [this] { setDynamic(!doc_.sculptor.dyntopo.enabled); },
+         [this] { return doc_.sculptor.dyntopo.enabled; }, nullptr});
     // Masking and visibility selection shapes (Tool > Masking, Tool > Visibility), named as in ZBrush.
     auto shape = [this](std::string id, std::string label, std::string palette, SelectShape* target, SelectShape value,
                         std::string description) {
@@ -1163,6 +1170,7 @@ bool App::shelfItemShown(const std::string& item) const {
     if (layout_.customize) return true;
     if (item == "view.splats") return !doc_.splats.empty(); // only when there's a capture
     if (item == "draw.paint_vertex" || item == "draw.paint_texture") return hasTexture(doc_.mesh); // paint target
+    if (item == "widget.dyntopo_detail") return doc_.sculptor.dyntopo.enabled; // with Dynamic on
     return true;
 }
 
@@ -1199,6 +1207,11 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
         } else {
             drawZIntensitySlider("##strength");
         }
+        ImGui::PopStyleVar();
+    } else if (item == "widget.dyntopo_detail") {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f * s, (rowH - ImGui::GetFontSize()) * 0.5f));
+        ImGui::SetNextItemWidth((vertical ? 180.0f : 120.0f) * s);
+        drawDetailSlider("##dyntopo_detail");
         ImGui::PopStyleVar();
     } else if (item == "widget.points") {
         size_t total = 0;
@@ -1331,6 +1344,30 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
         ui::UiItemDragSource(*this, item.c_str(), item.c_str());
     }
     ImGui::PopID();
+}
+
+void App::setDynamic(bool on) {
+    if (on) {
+        const std::string why = dyntopoBlocker(doc_.mesh);
+        if (!why.empty()) {
+            status_ = why;
+            return;
+        }
+    }
+    doc_.sculptor.dyntopo.enabled = on;
+    status_ = dyntopoSummary(doc_.sculptor.dyntopo);
+}
+
+void App::drawDetailSlider(const char* id) {
+    float detail = doc_.sculptor.dyntopo.detail * 100.0f;
+    if (ui::SliderInside(id, &detail, 0.0f, 100.0f, "Detail %.0f")) doc_.sculptor.dyntopo.detail = detail / 100.0f;
+    ui::HelpText("Detail", nullptr,
+                 doc_.sculptor.dyntopo.constantDetail
+                     ? "Dynamic topology: how small the triangles get, one size for the whole mesh (0 coarse, 100 fine; "
+                       "Constant detail is on in the Draw palette). Ctrl+click to type."
+                     : "Dynamic topology: how small the triangles get, relative to the brush (0 coarse, 100 fine). Zoom "
+                       "in or shrink the brush for finer triangles, as in Sculptris Pro. Ctrl+click to type.",
+                 "Draw");
 }
 
 void App::finishShelfDrag() {

@@ -35,6 +35,9 @@ struct UiPrefs {
     int antialiasing = 4;       // samples per pixel in the 3D view: 1 (off), 2, 4 or 8
     bool fastNavigation = true; // big scenes draw without antialiasing while the view moves
     bool multithreading = true; // brushes, normals and BVH updates on every core (off: one thread)
+    // Dynamic topology (Draw palette): false = the detail follows the brush size on screen (Sculptris Pro);
+    // true = one detail size for the whole mesh.
+    bool dyntopoConstantDetail = false;
 };
 
 Json toJson(const UiPrefs& prefs);

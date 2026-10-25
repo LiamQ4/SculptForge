@@ -43,6 +43,7 @@ void usage() {
         "  --bench-brushes TEXT     Only the benchmark brushes whose name contains TEXT (e.g. large)\n"
         "  --bench-no-project       Skip the project save / open (it needs twice the memory)\n"
         "  --bench-view             Benchmark only what the viewport costs (uploads, orbit)\n"
+        "  --bench-dyntopo          Benchmark dynamic topology strokes (e.g. --bench-sizes 0.25,1,4)\n"
         "  --bench-out FILE         Write the benchmark report (Markdown) to FILE");
 }
 

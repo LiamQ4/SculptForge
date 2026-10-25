@@ -231,6 +231,8 @@ void App::storeProjectSettings() {
     brush.set("pressure_strength", pressureStrength_);
     brush.set("pressure_size", pressureSize_);
     brush.set("paint_color", vec3Json(doc_.paintColor));
+    brush.set("dynamic", doc_.sculptor.dyntopo.enabled); // dynamic topology (core/Dyntopo.h)
+    brush.set("dynamic_detail", double(doc_.sculptor.dyntopo.detail));
     s.set("brush", std::move(brush));
 
     Json sym = Json::object();
@@ -297,6 +299,9 @@ void App::applyProjectSettings() {
         readBool(b, "pressure_strength", pressureStrength_);
         readVec3(b["paint_color"], doc_.paintColor);
         readBool(b, "pressure_size", pressureSize_);
+        readBool(b, "dynamic", doc_.sculptor.dyntopo.enabled);
+        readFloat(b, "dynamic_detail", doc_.sculptor.dyntopo.detail);
+        doc_.sculptor.dyntopo.detail = std::clamp(doc_.sculptor.dyntopo.detail, 0.0f, 1.0f);
     }
     if (const Json& sym = s["symmetry"]; sym.isObject()) {
         readBool(sym, "x", symmetry_.x);

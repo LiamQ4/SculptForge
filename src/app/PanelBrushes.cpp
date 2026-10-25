@@ -109,8 +109,15 @@ void App::snakeHookTo(float x, float y) {
     }
 }
 
-// DragRect: undo the previous stamp and press a new one sized and rotated by the drag.
+// DragRect: undo the previous stamp and press a new one sized and rotated by the drag (without remeshing:
+// restoreStroke puts positions back, not topology).
 void App::dragRectTo(float x, float y) {
+    struct NoRemesh {
+        DyntopoSettings& s;
+        bool was = s.enabled;
+        ~NoRemesh() { s.enabled = was; }
+    } noRemesh{doc_.sculptor.dyntopo};
+    noRemesh.s.enabled = false;
     doc_.sculptor.restoreStroke(doc_.mesh, doc_.bvh);
     const glm::vec2 drag = glm::vec2(x, y) - dragAnchor_;
     const float len = glm::length(drag);
