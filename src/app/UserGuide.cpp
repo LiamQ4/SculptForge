@@ -426,6 +426,7 @@ std::string UserGuide::chapterFor(const std::string& palette, const std::string&
                                                                                                          : "sculpting.md";
     if (starts("Draw") || starts("Stroke") || starts("Alpha")) return "sculpting.md";
     if (starts("Color") || starts("Material")) return "polypaint.md";
+    if (starts("File > Blender")) return "blender.md";
     if (starts("File > Export") || idStarts("file.export") || actionId == "file.send_unreal" || actionId == "file.save_splats" ||
         starts("File > GoZ"))
         return "exporting.md";

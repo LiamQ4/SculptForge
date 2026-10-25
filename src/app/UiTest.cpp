@@ -28,6 +28,8 @@
 //   run COMMANDS             sculptforge-cli commands, e.g. run new_sphere subdivisions=4
 //   drop FILE                as if FILE were dropped onto the window (relative to the script's folder)
 //   env NAME VALUE           set an environment variable; $SCRIPT_DIR is the script's folder
+//   copy SRC DST             copy a file or folder (SRC relative to the script's folder, DST to the working
+//                            directory), e.g. to stage what another program would write (the Blender bridge)
 //   wait SECONDS / wait_idle [TIMEOUT] (AI requests, thumbnails, update checks and other background jobs) / wait_for LABEL [TIMEOUT]
 //   expect LABEL / expect_not LABEL
 //   expect_text TEXT / expect_no_text TEXT   any text drawn this frame contains TEXT
@@ -758,6 +760,17 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
         if (file.is_relative()) file = std::filesystem::path(std::u8string(scriptDir_.begin(), scriptDir_.end())) / file;
         const auto u8 = file.lexically_normal().u8string();
         run([this, path = std::string(u8.begin(), u8.end())] { app_.openPathConfirmed(path); });
+    } else if (verb == "copy") {
+        if (!need(2)) return false;
+        namespace fs = std::filesystem;
+        fs::path src(std::u8string(w[1].begin(), w[1].end())), dst(std::u8string(w[2].begin(), w[2].end()));
+        if (src.is_relative()) src = fs::path(std::u8string(scriptDir_.begin(), scriptDir_.end())) / src;
+        run([src, dst] {
+            std::error_code ec;
+            if (dst.has_parent_path()) fs::create_directories(dst.parent_path(), ec);
+            fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+            if (ec) SDL_Log("copy %s: %s", src.string().c_str(), ec.message().c_str());
+        });
     } else if (verb == "env") {
         if (!need(2)) return false;
         std::string value = restOf(lineText_, 2);

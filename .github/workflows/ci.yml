@@ -71,6 +71,36 @@ jobs:
           path: build/ui-shots
           if-no-files-found: ignore
 
+  # The Blender add-on inside Blender itself (the bpy wheel is Blender as a Python module), against
+  # sculptforge-cli: the oldest supported Blender (4.2 LTS, Python 3.11) and the newest.
+  blender-addon:
+    name: Blender add-on (bpy ${{ matrix.bpy }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { bpy: '4.2.0', python: '3.11' }
+          - { bpy: '5.2.3', python: '3.13' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: sudo ./packaging/linux/install-build-deps.sh
+      - name: bpy and numpy
+        run: python -m pip install "bpy==${{ matrix.bpy }}" numpy
+      - name: Build sculptforge-cli
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF -DSCULPTFORGE_BUILD_APP=OFF
+          cmake --build build --target sculptforge-cli --parallel 4
+      - name: Add-on round trip in Blender
+        run: python tests/blender/test_in_blender.py -- --cli build/sculptforge-cli
+      - name: Add-on exchange code and package
+        run: |
+          python tests/blender/test_exchange.py --cli build/sculptforge-cli
+          python addons/blender/build_addon.py --check --out build/blender-addon
+
   # VFX Reference Platform (vfxplatform.com): GCC 14.2 with glibc 2.28 (CY2026, EL8)
   # or glibc 2.34 (CY2027, EL9), C++20, Python 3.13.
   vfx-platform:

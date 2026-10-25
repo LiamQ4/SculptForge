@@ -242,6 +242,18 @@ void App::initActions() {
     add("file.send_unreal", "Send to Unreal", "File > Export", "Ctrl+U", [this] { sendToUnreal(); }, ICON_LC_SEND, nullptr,
         nullptr, [this] { return !pendingUnreal_.valid(); },
         "Export a game-ready FBX and import it into the running Unreal Editor (Python remote execution).");
+    // Blender bridge (PanelBlender.cpp, addons/blender).
+    add("file.send_blender", "Send to Blender", "File > Blender", nullptr, [this] {
+            runCommand("blender_send");
+            blenderLastBeatNs_ = 0; // beat now: the add-on must see this SculptForge as running when Blender sends next
+        },
+        ICON_LC_SEND, "blender_send", nullptr, nullptr,
+        "Send the visible SubTools back to Blender (the SculptForge add-on): objects that came from Blender update "
+        "in place, keeping their transform, materials and modifiers; new SubTools become new objects.");
+    add("file.receive_blender", "Receive from Blender", "File > Blender", nullptr, [this] { receiveFromBlender(); },
+        nullptr, "blender_receive", nullptr, nullptr,
+        "Load what Blender last sent with the add-on's Send to SculptForge. Each object updates its SubTool (undoable) "
+        "or becomes a new one; this happens by itself while Receive automatically is on.");
     add("brush.paste", "Paste brush", "Brush", "Ctrl+V", [this] { pasteBrush(); }, ICON_LC_CLIPBOARD_PASTE, nullptr, nullptr,
         nullptr, "Add the brush on the clipboard: a brush code someone shared, or the text of a .sfbrush file.");
     add("brush.size_down", "Smaller brush", "Draw", "[", [this] { radiusPx_ = std::max(2.0f, radiusPx_ / 1.1f); }, nullptr,

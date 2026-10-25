@@ -31,6 +31,14 @@ side.
 
 See [Sculpting and brushes](sculpting.md), [Masking](masking.md) and [Keyboard and mouse](shortcuts.md).
 
+### Works with Blender
+
+Keep Blender for your scene and sculpt in SculptForge: the new **SculptForge Bridge** add-on for Blender 4.2 and
+newer sends the selected objects to SculptForge with one click (starting it if needed), and **File > Blender >
+Send to Blender** sends them back. The objects update in place, keeping their transform, materials and
+modifiers; quads, UVs, colours, the mask and face sets (polygroups) come across both ways. See
+[Working with Blender](blender.md).
+
 ## Version 0.6
 
 Performance: half the memory, a view that turns twice as fast, quicker brushes on huge meshes, and SculptForge

@@ -228,6 +228,7 @@ void App::drawPalette_File() {
     menuAction(*this, "file.save_splats");
     ImGui::Separator();
     drawGozMenu();
+    drawBlenderMenu(); // the Blender bridge (PanelBlender.cpp)
     ImGui::Separator();
     menuAction(*this, "file.quit");
 }

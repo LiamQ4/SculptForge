@@ -89,6 +89,8 @@ add_library(sculptforge_core STATIC
   src/io/Zip.cpp
   src/io/GozIO.cpp
   src/io/GozCommands.cpp
+  src/io/BlenderBridge.cpp
+  src/io/BlenderCommands.cpp
   src/io/StlIO.cpp
 )
 target_include_directories(sculptforge_core PUBLIC src PRIVATE third_party/stb third_party/ufbx third_party/xatlas third_party/mikktspace)
@@ -187,6 +189,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelRetopo.cpp
     src/app/PanelPerformance.cpp
     src/app/PanelGoz.cpp
+    src/app/PanelBlender.cpp
     src/app/PanelProject.cpp
     src/app/PanelSubTools.cpp
     src/app/Tablet.cpp
@@ -358,6 +361,15 @@ if(SCULPTFORGE_BUILD_PYTHON)
   endif()
 endif()
 
+# --- Blender add-on (addons/blender): `cmake --build build --target blender_addon` writes its zips ---
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_custom_target(blender_addon
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/addons/blender/build_addon.py --check
+            --version ${PROJECT_VERSION} --out ${CMAKE_CURRENT_BINARY_DIR}/blender-addon
+    COMMENT "Packaging the Blender add-on (sculptforge_bridge-${PROJECT_VERSION}.zip)")
+endif()
+
 # --- Tests ---
 if(SCULPTFORGE_BUILD_TESTS)
   # tests/test_main.cpp plus every tests/test_*.cpp (add a file to add tests; see tests/TestHarness.h).
@@ -402,6 +414,24 @@ if(SCULPTFORGE_BUILD_TESTS)
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/brush-gallery/repo --check --cli ${SCULPTFORGE_CLI_RUNNER})
     # The user guide (docs/guide): every link, anchor and image resolves, only characters the app's font has,
     # and the website pages build.
+    # The Blender add-on's exchange code (addons/blender) against sculptforge-cli: a round trip through the
+    # bridge is the identity (needs numpy, which Blender bundles).
+    execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy" RESULT_VARIABLE SCULPTFORGE_NO_NUMPY OUTPUT_QUIET ERROR_QUIET)
+    if(SCULPTFORGE_NO_NUMPY EQUAL 0)
+      add_test(NAME blender_exchange COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/blender/test_exchange.py
+                                           --cli ${SCULPTFORGE_CLI_RUNNER})
+    endif()
+    # The add-on's zips build and its manifest passes the checks Blender's validator makes.
+    add_test(NAME blender_addon_package COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/addons/blender/build_addon.py
+                                              --check --version ${PROJECT_VERSION} --out ${CMAKE_CURRENT_BINARY_DIR}/blender-addon)
+    # The add-on inside a real Blender, when one is installed (tests/blender/test_in_blender.py).
+    find_program(SCULPTFORGE_BLENDER blender)
+    if(SCULPTFORGE_BLENDER)
+      add_test(NAME blender_addon COMMAND ${SCULPTFORGE_BLENDER} -b --factory-startup -noaudio --python-exit-code 1
+                                        --python ${CMAKE_CURRENT_SOURCE_DIR}/tests/blender/test_in_blender.py
+                                        -- --cli ${SCULPTFORGE_CLI_RUNNER})
+      set_tests_properties(blender_addon PROPERTIES TIMEOUT 300)
+    endif()
     add_test(NAME guide_site COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/guide/build_site.py --check
                                      --out ${CMAKE_CURRENT_BINARY_DIR}/guide-site)
   endif()
