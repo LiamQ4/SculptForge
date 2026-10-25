@@ -340,6 +340,7 @@ int App::runUiTest(int w, int h, int fps) {
         pollBrushRequest();
         pollUnreal();
         pollGenerator();
+        pollBlender(); // (demo recordings leave the user's Blender bridge alone)
         pollAutoUv();
         pollBake();
         pollQRemesh();
@@ -497,7 +498,6 @@ int App::runRecording() {
         animateLayers(dt);
         pollBrushRequest();
         pollUnreal();
-        if (!options_.uiTest.empty()) pollBlender(); // (demos and recordings leave the user's bridge alone)
         pollAutoUv();
         pollBake();
         pollQRemesh();
