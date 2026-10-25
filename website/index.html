@@ -42,8 +42,8 @@
     <section class="hero">
       <div class="wrap hero-grid">
         <div class="hero-copy">
-          <a class="new-badge" href="#whats-new"><span>New in 0.6</span>
-            Half the memory, twice the frame rate →</a>
+          <a class="new-badge" href="#whats-new"><span>New in 0.7</span>
+            ZBrush's keys, and a Blender bridge →</a>
           <p class="eyebrow">The free, open-source alternative to ZBrush</p>
           <h1><span class="nowrap">Sculpt it.</span> <span class="nowrap">Forge it.</span><br><span class="accent">Ship it.</span></h1>
           <p class="lede">Digital sculpting for <strong>VFX, animation and game studios</strong> on Linux, macOS and
@@ -92,12 +92,29 @@
 
     <section id="whats-new" class="section alt">
       <div class="wrap">
-        <h2>What's new in 0.6</h2>
-        <p class="section-lede">Performance: about half the memory, a view that turns twice as fast and quicker
-          brushes on huge meshes, measured with the benchmark anyone can run. <a href="https://github.com/islandmed/SculptForge/blob/main/docs/performance.md">Figures</a> ·
-          <a href="guide/whats-new.html">Everything that changed</a> ·
+        <h2>What's new in 0.7</h2>
+        <p class="section-lede">Your ZBrush hands just work, and SculptForge now sits next to Blender instead of
+          replacing it. <a href="guide/whats-new.html">Everything that changed</a> ·
           <a href="https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md">changelog</a></p>
         <div class="grid">
+          <article class="card">
+            <h3>ZBrush's keys by default <small>new in 0.7</small></h3>
+            <p>S, U, I and O open Draw Size, Z Intensity, RGB Intensity and Focal Shift under the cursor, Space
+              opens the QuickMenu, and B C B, B D S, B M V pick brushes as in ZBrush.
+              <a href="guide/coming-from-zbrush.html">Coming from ZBrush</a></p>
+          </article>
+          <article class="card">
+            <h3>Works with Blender <small>new in 0.7</small></h3>
+            <p>A free add-on sends the selected objects to SculptForge in one click, and one click sends them back
+              into the same objects with transforms, UVs, colours, mask and face sets.
+              <a href="guide/blender.html">How it works</a></p>
+          </article>
+          <article class="card">
+            <h3>ZBrush's gestures <small>new in 0.7</small></h3>
+            <p>Ctrl+click blurs the mask and Ctrl+Alt+click sharpens it, Shift mid-stroke draws a straight line,
+              Focal Shift shapes the falloff, and Smooth keeps its own strength. The old keys are one setting
+              away.</p>
+          </article>
           <article class="card">
             <h3>Half the memory <small>new in 0.6</small></h3>
             <p>A 33 million triangle sculpt with all its subdivision levels fits in 3.4 GB instead of 5.6, and
@@ -168,16 +185,6 @@
             <p>Models from ZBrush, OBJ, FBX or USD keep their quads in the wireframe and on export. Subdivide makes
               quads, and voxel remesh gives an even quad grid.</p>
           </article>
-          <article class="card">
-            <h3>A material made for sculpting</h3>
-            <p>The new Sculpt default: plain clay under a strong key light with deep crease shading, so every
-              stroke reads clearly.</p>
-          </article>
-          <article class="card">
-            <h3>One-click downloads</h3>
-            <p>Download buttons get the newest build directly, and one command installs or updates SculptForge
-              on Windows, macOS or Linux.</p>
-          </article>
         </div>
       </div>
     </section>
@@ -207,6 +214,13 @@
             <h3>Polypaint, layers and MatCaps</h3>
             <p>Paint colour straight onto the sculpt in layers with blend modes, tint the cavities, and judge forms
               under the Sculpt, Red Wax, Clay, Skin, Bronze, Chrome or White materials.</p>
+          </article>
+          <article class="card" id="blender">
+            <h3>Works with Blender</h3>
+            <p>Keep Blender for the scene and sculpt here: the free add-on sends the selected objects to SculptForge
+              in one click, and one click sends them back into the same objects, with transforms, materials and
+              modifiers kept. <a href="https://github.com/islandmed/SculptForge/releases/latest/download/sculptforge_bridge.zip">Get
+              the add-on</a> · <a href="guide/blender.html">how it works</a></p>
           </article>
           <article class="card">
             <h3>Works with ZBrush</h3>
@@ -409,7 +423,7 @@ rez-env sculptforge -- sculptforge troll.usda \
     <section id="download" class="section alt">
       <div class="wrap">
         <h2>Download</h2>
-        <p class="section-lede">Version 0.6.0. All builds come from the
+        <p class="section-lede">Version 0.7.0. All builds come from the
           <a href="https://github.com/islandmed/SculptForge/releases/latest">latest GitHub release</a>, with
           SHA-256 checksums.</p>
         <div class="downloads">
@@ -423,6 +437,8 @@ rez-env sculptforge -- sculptforge troll.usda \
             <strong>Fedora / RHEL 9+</strong><span>.rpm · x86_64 (ARM64: see all downloads)</span></a>
           <a class="dl" href="https://github.com/islandmed/SculptForge/releases/latest/download/SculptForge-linux-x86_64.AppImage">
             <strong>Any Linux</strong><span>AppImage · x86_64, runs anywhere</span></a>
+          <a class="dl" href="https://github.com/islandmed/SculptForge/releases/latest/download/sculptforge_bridge.zip">
+            <strong>Blender add-on</strong><span>Blender 4.2+ · send to SculptForge and back</span></a>
           <div class="dl static">
             <strong>Arch Linux</strong><span><code>yay -S sculptforge</code></span></div>
           <a class="dl vfx-dl" href="https://github.com/islandmed/SculptForge/releases/latest">
