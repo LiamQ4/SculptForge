@@ -142,6 +142,23 @@ def main():
           "Box: material and modifier kept")
     check("Extra" in bpy.data.objects, "the new SubTool is a new object")
 
+    # Sending and receiving work from Sculpt, Edit and Vertex Paint Mode (Edit Mode keeps UVs in its edit mesh):
+    # the add-on switches to Object Mode for the transfer and back.
+    for mode in ("SCULPT", "EDIT", "VERTEX_PAINT"):
+        bpy.ops.object.select_all(action="DESELECT")
+        monkey = bpy.data.objects["Suzanne"]
+        monkey.select_set(True)
+        bpy.context.view_layer.objects.active = monkey
+        start = arr(monkey.data.vertices, "co", 3)
+        bpy.ops.object.mode_set(mode=mode)
+        check(bpy.ops.sculptforge.send() == {"FINISHED"}, mode + ": send")
+        sculptforge(["blender_receive", 'stroke points="0,0,-3 0.3,0.3,-3" radius=0.5 strength=1', "blender_send"])
+        check(bpy.ops.sculptforge.receive() == {"FINISHED"}, mode + ": receive: " + bridge.state.message)
+        check(monkey.mode == mode, mode + ": back in that mode (now %s)" % monkey.mode)
+        bpy.ops.object.mode_set(mode="OBJECT")
+        moved = np.abs(arr(monkey.data.vertices, "co", 3) - start).max()
+        check(moved > 1e-3, mode + ": the sculpt arrived (moved %.3f)" % moved)
+
     # Apply modifiers: the result is sent, and the modifier is turned off when it comes back.
     bridge.prefs().modifiers = "APPLY"
     bpy.ops.object.select_all(action="DESELECT")

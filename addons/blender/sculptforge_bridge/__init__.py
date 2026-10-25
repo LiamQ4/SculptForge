@@ -21,6 +21,7 @@ bl_info = {  # legacy add-on install (Blender 4.2+ reads blender_manifest.toml i
     "category": "Import-Export",
 }
 
+import contextlib
 import os
 import time
 import traceback
@@ -244,28 +245,34 @@ def _set_mode(context, mode):
         bpy.ops.object.mode_set(mode=mode)
 
 
+@contextlib.contextmanager
+def _object_mode(context, objects):
+    """Object Mode while the block runs when any of `objects` is in another mode (Edit Mode keeps the mesh's data
+    in its edit mesh; Sculpt Mode in its sculpt session), then the previous mode again. Raises RuntimeError when
+    Blender won't switch."""
+    active = context.view_layer.objects.active
+    previous = context.mode
+    switched = any(o is not None and o.mode != "OBJECT" for o in objects)
+    if switched:
+        _set_mode(context, "OBJECT")
+    try:
+        yield
+    finally:
+        if switched and previous in _MODE_SET and context.mode != previous and active is not None and \
+                active.name in bpy.data.objects:
+            try:
+                _set_mode(context, _MODE_SET[previous])
+            except RuntimeError:
+                pass
+
+
 # --------------------------------------------------------------------------------------------------
 # Send and receive
 # --------------------------------------------------------------------------------------------------
 
 
-def send(context):
-    """Writes the selected meshes for SculptForge and starts it if needed. Returns (level, message)."""
-    p = prefs(context)
-    root = exchange_root(p)
-    objects = [o for o in context.selected_objects if o.type == "MESH"]
-    if not objects and context.active_object is not None and context.active_object.type == "MESH":
-        objects = [context.active_object]
-    if not objects:
-        return "ERROR", "Select one or more mesh objects to send"
-    if context.mode == "EDIT_MESH":
-        for obj in objects:
-            obj.update_from_editmode()
-    apply = p is not None and p.modifiers == "APPLY"
-    folder = exchange.outbox(root)
-    first = not os.path.isdir(folder)
-    os.makedirs(folder, exist_ok=True)
-    prefix = exchange.next_file_prefix(folder)
+def _write_objects(context, objects, folder, prefix, apply):
+    """The objects' .GoZ files in `folder`; returns their manifest entries."""
     depsgraph = context.evaluated_depsgraph_get() if apply else None
     entries = []
     for k, obj in enumerate(objects):
@@ -287,6 +294,28 @@ def send(context):
         file = "%s%03d.GoZ" % (prefix, k)
         exchange.write_goz(os.path.join(folder, file), obj.name, **arrays)
         entries.append({"name": obj.name, "file": file, "matrix_world": [list(row) for row in obj.matrix_world]})
+    return entries
+
+
+def send(context):
+    """Writes the selected meshes for SculptForge and starts it if needed. Returns (level, message)."""
+    p = prefs(context)
+    root = exchange_root(p)
+    objects = [o for o in context.selected_objects if o.type == "MESH"]
+    if not objects and context.active_object is not None and context.active_object.type == "MESH":
+        objects = [context.active_object]
+    if not objects:
+        return "ERROR", "Select one or more mesh objects to send"
+    apply = p is not None and p.modifiers == "APPLY"
+    folder = exchange.outbox(root)
+    first = not os.path.isdir(folder)
+    os.makedirs(folder, exist_ok=True)
+    prefix = exchange.next_file_prefix(folder)
+    try:
+        with _object_mode(context, objects):
+            entries = _write_objects(context, objects, folder, prefix, apply)
+    except RuntimeError as e:
+        return "ERROR", "Leave %s to send to SculptForge (%s)" % (context.mode.replace("_", " ").title(), e)
     if not entries:
         return "ERROR", "The selected meshes have no faces"
     exchange.write_manifest(folder, entries, bpy.app.version_string)
@@ -330,37 +359,27 @@ def receive(context):
         obj = bpy.data.objects.get(name)
         return obj if obj is not None and obj.type == "MESH" and obj.library is None else None
 
-    # Meshes change in Object Mode; come back to the mode we were in.
-    active = context.view_layer.objects.active
-    previous = context.mode
-    if any(t is not None and t.mode != "OBJECT" for t in (target(n) for n, _ in meshes)):
-        try:
-            _set_mode(context, "OBJECT")
-        except RuntimeError as e:
-            return "ERROR", "Leave %s to receive from SculptForge (%s)" % (previous.replace("_", " ").title(), e)
     counts = {"updated": 0, "rebuilt": 0, "new": 0}
     disabled = 0
+    previous = context.mode
     try:
-        for name, g in meshes:
-            obj = target(name)
-            if obj is None:
-                new_object(context, name, g)
-                counts["new"] += 1
-                continue
-            counts[update_object(obj, g)] += 1
-            applied = obj.get(APPLIED_KEY)
-            if applied is not None:  # those modifiers are in the mesh now
-                for m in obj.modifiers:
-                    if m.name in applied and m.show_viewport:
-                        m.show_viewport = m.show_render = False
-                        disabled += 1
-                del obj[APPLIED_KEY]
-    finally:
-        if previous in _MODE_SET and context.mode != previous and active is not None and active.name in bpy.data.objects:
-            try:
-                _set_mode(context, _MODE_SET[previous])
-            except RuntimeError:
-                pass
+        with _object_mode(context, [target(n) for n, _ in meshes]):  # back to the previous mode afterwards
+            for name, g in meshes:
+                obj = target(name)
+                if obj is None:
+                    new_object(context, name, g)
+                    counts["new"] += 1
+                    continue
+                counts[update_object(obj, g)] += 1
+                applied = obj.get(APPLIED_KEY)
+                if applied is not None:  # those modifiers are in the mesh now
+                    for m in obj.modifiers:
+                        if m.name in applied and m.show_viewport:
+                            m.show_viewport = m.show_render = False
+                            disabled += 1
+                    del obj[APPLIED_KEY]
+    except RuntimeError as e:
+        return "ERROR", "Leave %s to receive from SculptForge (%s)" % (previous.replace("_", " ").title(), e)
     parts = []
     if counts["updated"]:
         parts.append("%d updated" % counts["updated"])
