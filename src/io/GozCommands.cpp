@@ -36,13 +36,12 @@ std::string sendName(const Document& doc, const Args& a) {
     return name;
 }
 
-// The GoZ name of SubTool `i` (active or not).
+} // namespace
+
 std::string& subtoolGozName(Document& doc, int i) {
     return i == doc.activeSubtool ? doc.gozName : doc.subtools[size_t(i)].gozName;
 }
 
-// Visible SubTools with triangles, as the GoZ objects to write: the name each came from ZBrush with,
-// else its SubTool name. `indices` receives the SubTool of each object.
 std::vector<MeshObjectRef> gozObjects(Document& doc, std::vector<int>& indices) {
     std::vector<MeshObjectRef> out;
     for (int i = 0; i < doc.subtoolCount(); ++i) {
@@ -54,7 +53,36 @@ std::vector<MeshObjectRef> gozObjects(Document& doc, std::vector<int>& indices) 
     return out;
 }
 
-} // namespace
+// Each object updates the SubTool with its GoZ name (undoable), or the single SubTool of a fresh scene, or
+// becomes a new SubTool. The active SubTool stays selected.
+void receiveObjects(Document& doc, std::vector<MeshObject>& objects, const std::string& undoLabel, bool renameFresh) {
+    const int original = doc.activeSubtool; // new SubTools go to the end, so this index stays valid
+    auto findGoz = [&](const std::string& name) {
+        for (int i = 0; i < doc.subtoolCount(); ++i)
+            if (!name.empty() && subtoolGozName(doc, i) == name) return i;
+        return -1;
+    };
+    for (size_t k = 0; k < objects.size(); ++k) {
+        MeshObject& obj = objects[k];
+        int target = findGoz(obj.name);
+        // The first object sent into a fresh scene (one SubTool, not from ZBrush or Blender) replaces it.
+        const bool fresh = target < 0 && k == 0 && doc.subtoolCount() == 1 && doc.gozName.empty();
+        if (fresh) target = 0;
+        if (target < 0) {
+            const int i = doc.addSubtool(std::move(obj.mesh), obj.name, false);
+            subtoolGozName(doc, i) = obj.name;
+            continue;
+        }
+        doc.selectSubtool(target);
+        if (doc.mesh.triangleCount()) doc.replaceMeshUndoable(std::move(obj.mesh), undoLabel);
+        else doc.replaceActiveMesh(std::move(obj.mesh));
+        doc.gozName = obj.name;
+        if (fresh && (renameFresh || objects.size() > 1)) doc.activeSubtoolInfo().name = doc.uniqueSubtoolName(obj.name);
+    }
+    doc.selectSubtool(original);
+    doc.path.clear();
+    doc.modified = true;
+}
 
 void registerGozCommands(CommandRegistry& reg) {
     using T = ParamSpec::Type;
@@ -154,32 +182,7 @@ void registerGozCommands(CommandRegistry& reg) {
                  std::vector<MeshObject> objects;
                  std::string msg;
                  if (!gozReceive(argString(a, "folder"), objects, msg)) return {false, msg};
-                 const int original = doc.activeSubtool; // new SubTools go to the end, so this index stays valid
-                 auto findGoz = [&](const std::string& name) {
-                     for (int i = 0; i < doc.subtoolCount(); ++i)
-                         if (!name.empty() && subtoolGozName(doc, i) == name) return i;
-                     return -1;
-                 };
-                 for (size_t k = 0; k < objects.size(); ++k) {
-                     MeshObject& obj = objects[k];
-                     int target = findGoz(obj.name);
-                     // The first object sent into a fresh scene (one SubTool, not from ZBrush) replaces it.
-                     const bool fresh = target < 0 && k == 0 && doc.subtoolCount() == 1 && doc.gozName.empty();
-                     if (fresh) target = 0;
-                     if (target < 0) {
-                         const int i = doc.addSubtool(std::move(obj.mesh), obj.name, false);
-                         subtoolGozName(doc, i) = obj.name;
-                         continue;
-                     }
-                     doc.selectSubtool(target);
-                     if (doc.mesh.triangleCount()) doc.replaceMeshUndoable(std::move(obj.mesh), "Receive from ZBrush");
-                     else doc.replaceActiveMesh(std::move(obj.mesh));
-                     doc.gozName = obj.name;
-                     if (fresh && objects.size() > 1) doc.activeSubtoolInfo().name = doc.uniqueSubtoolName(obj.name);
-                 }
-                 doc.selectSubtool(original);
-                 doc.path.clear();
-                 doc.modified = true;
+                 receiveObjects(doc, objects, "Receive from ZBrush", false);
                  return {true, msg};
              }});
 

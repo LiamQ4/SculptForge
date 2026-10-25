@@ -1003,7 +1003,8 @@ void App::initLightBox() {
         [this] { quickSave(); });
 
     // ZBrush opens the LightBox at startup on the Project tab (never in tests, renders or recordings).
-    if (uiPrefs_.lightboxAtStartup && interactive() && options_.uiTest.empty() && options_.openPath.empty())
+    if (uiPrefs_.lightboxAtStartup && interactive() && options_.uiTest.empty() && options_.openPath.empty() &&
+        !options_.blender)
         lightbox_.show(LibraryTab::Project);
 }
 

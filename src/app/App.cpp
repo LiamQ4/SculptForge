@@ -19,6 +19,7 @@
 #include "core/ImageTo3D.h"
 #include "core/Project.h"
 #include "core/Script.h"
+#include "io/BlenderBridge.h"
 #include "render/GL.h"
 
 #include <imgui.h>
@@ -264,6 +265,8 @@ bool App::init(const AppOptions& options) {
 
 void App::shutdown() {
     flushBrushEdits();
+    if (blenderInitialised_) writeBridgeHeartbeat(blenderExchangeRoot(), true); // the add-on starts a new one
+
     if (refTexture_) gl::DeleteTextures(1, &refTexture_);
     gallery_.reset(); // its preview textures need the GL context
     thumbs_.clear();
@@ -494,6 +497,7 @@ int App::runRecording() {
         animateLayers(dt);
         pollBrushRequest();
         pollUnreal();
+        if (!options_.uiTest.empty()) pollBlender(); // (demos and recordings leave the user's bridge alone)
         pollAutoUv();
         pollBake();
         pollQRemesh();
@@ -560,6 +564,7 @@ int App::run() {
         pollGenerator();
         pollUnreal();
         pollGoz();
+        pollBlender();
         pollAutoUv();
         pollBake();
         pollQRemesh();

@@ -47,6 +47,7 @@ namespace sf {
 
 struct AppOptions {
     std::string openPath;   // model or image to open at start
+    bool blender = false;   // started by the Blender add-on: load what it sent (--blender)
     std::string script;     // commands to run after start-up (same language as sculptforge-cli)
     std::string renderPath; // headless: render a PNG and exit
     int width = 1024, height = 1024;
@@ -511,6 +512,15 @@ private:
     long long gozListTime_ = 0;   // last seen modification time of the object list
     Uint64 gozLastPollNs_ = 0;
     bool gozInitialised_ = false;
+    // Blender bridge (PanelBlender.cpp, io/BlenderBridge.h): the add-on's exchange folder, polled once a second.
+    void drawBlenderMenu();
+    void pollBlender();
+    void receiveFromBlender();
+    bool blenderInitialised_ = false;
+    bool blenderAutoReceive_ = true;   // load whatever Blender sends while SculptForge runs
+    long long blenderInboxTime_ = 0;   // last seen modification time of to_sculptforge/manifest.json
+    int64_t blenderSeenRevision_ = -1; // revision last loaded (or present at start, which is not loaded)
+    Uint64 blenderLastPollNs_ = 0, blenderLastBeatNs_ = 0;
     // Projects, unsaved-changes safety, recent files and autosave (PanelProject.cpp).
     bool interactive() const; // false for --render, --record and demos: never prompt
     void initProject();       // end of init(): recent files, autosave restore offer

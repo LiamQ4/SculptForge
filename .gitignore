@@ -10,3 +10,4 @@ imgui.ini
 .DS_Store
 *.user
 Testing/
+__pycache__/

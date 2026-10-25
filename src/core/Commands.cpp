@@ -24,6 +24,7 @@
 #include "core/Voxel.h"
 #include "io/FbxIO.h"
 #include "io/GltfIO.h"
+#include "io/BlenderCommands.h"
 #include "io/GozCommands.h"
 #include "io/GozIO.h"
 #include "io/ObjIO.h"
@@ -770,6 +771,7 @@ CommandRegistry::CommandRegistry() {
     registerPerformanceCommands(*this); // perf_info, set_multithreading (core/Benchmark.cpp)
     registerPaintCommands(*this); // core/Polypaint.cpp
     registerGozCommands(*this); // goz_import/export/send/receive, export_stl (io/GozCommands.cpp)
+    registerBlenderCommands(*this); // blender_send/receive (io/BlenderCommands.cpp)
     registerBakeCommands(*this); // bake (core/Bake.cpp)
     registerProjectCommands(*this); // keep last (core/Project.cpp)
 }
