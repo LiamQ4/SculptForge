@@ -394,12 +394,12 @@ void BVH::editLeaf(uint32_t leaf) {
     ++editsSinceBuild_;
 }
 
-void BVH::insertTriangle(const Mesh& mesh, uint32_t t, uint32_t near) {
+void BVH::insertTriangle(const Mesh& mesh, uint32_t t, uint32_t nearby) {
     if (nodes_.empty()) {
         nodes_.push_back(Node{AABB{}, kNoLeaf, 0, 0});
         leafBits_.resize(nodes_.size());
     }
-    uint32_t leaf = near < triLeaf_.size() ? triLeaf_[near] : kNoLeaf;
+    uint32_t leaf = nearby < triLeaf_.size() ? triLeaf_[nearby] : kNoLeaf;
     if (leaf == kNoLeaf) { // down the tree towards the triangle's centroid
         const glm::uvec3& tri = mesh.triangles[t];
         const glm::vec3 c = (mesh.positions[tri.x] + mesh.positions[tri.y] + mesh.positions[tri.z]) / 3.0f;

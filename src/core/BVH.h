@@ -44,10 +44,10 @@ public:
 
     // Dynamic topology (core/Dyntopo.h): a few triangles at a time added, removed or renumbered without a
     // rebuild. insertTriangle puts triangle t (a new last index, or one removeTriangle freed) in the leaf of
-    // triangle `near` (or, if that isn't in the tree, the leaf its centroid falls in); refitChanged() then
+    // triangle `nearby` (or, if that isn't in the tree, the leaf its centroid falls in); refitChanged() then
     // recomputes the boxes of every leaf edited since the last call (growing ancestors, as refit does) and
     // splits leaves that grew too big. Boxes only grow, so after many edits rebuild when degraded() says so.
-    void insertTriangle(const Mesh& mesh, uint32_t t, uint32_t near);
+    void insertTriangle(const Mesh& mesh, uint32_t t, uint32_t nearby);
     void removeTriangle(uint32_t t);
     // Triangle `from` is now numbered `to` (a free index); a freed last index can then be dropped with resizeTriangles.
     void renumberTriangle(uint32_t from, uint32_t to);
