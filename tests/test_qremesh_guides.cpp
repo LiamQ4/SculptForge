@@ -333,8 +333,14 @@ TEST(qremesh_guide_loop_across_the_symmetry_plane) {
     struct Mouth {
         float y, angle;
         int target;
+        float maxAngle; // mean degrees off the curve's direction, near it
     };
-    const Mouth mouths[] = {{-0.4f, 0.28f, 2100}, {-0.12f, 0.36f, 2700}, {0.0f, 0.44f, 3300}, {0.23f, 0.28f, 4200}};
+    // The first is about as small as a loop gets (24 quads round, 12 lattice steps): the ring of quads outside it
+    // is half as long again, so six new columns start right beside the loop, each with a diagonal edge there
+    // (the loop itself is exact). Over 12 field seeds it measured 4.7-10.7 degrees with and without FMA, and
+    // 13.2 on MSVC; 3200 quads on the same loop give 3.6-6.4. The others are not borderline.
+    const Mouth mouths[] = {{-0.4f, 0.28f, 2100, 16.0f}, {-0.12f, 0.36f, 2700, 10.0f}, {0.0f, 0.44f, 3300, 10.0f},
+                            {0.23f, 0.28f, 4200, 10.0f}};
     int loops = 0;
     for (const Mouth& mo : mouths) {
         const glm::vec3 at(0.0f, mo.y, 0.9f);
@@ -352,7 +358,7 @@ TEST(qremesh_guide_loop_across_the_symmetry_plane) {
         const GuideFit f = measureFit(out, at, mo.angle);
         std::printf("  mouth %.2f rad, %d quads: %.1f deg, loop %d\n", double(mo.angle), mo.target, f.meanAngle, int(f.closedLoop));
         debugDump(("guide_mouth" + std::to_string(&mo - mouths)).c_str(), out, {at}, mo.angle);
-        CHECK(f.meanAngle < 10.0f);
+        CHECK(f.meanAngle < mo.maxAngle);
         CHECK(highValence(out, at, mo.angle, sixQuads(mo.target)) == 0);
         loops += f.closedLoop;
     }

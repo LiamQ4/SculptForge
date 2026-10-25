@@ -121,7 +121,8 @@ Good to know:
   status line says so: draw it again.
 - A loop gets an even number of quads around it, so it closes cleanly. Two guides closer together than about a
   quad compete for the same loop; draw them further apart or raise **Target Polygons**. A very small loop, about
-  20 quads round or fewer, may not close: raise **Target Polygons**.
+  25 quads round or fewer, may not close, and the edges just outside it bend to fit the extra quads the next
+  ring needs: raise **Target Polygons**.
 - **Curves Strength** doesn't change the loop on the curve, only how far around it the other edges turn to
   follow. Lower it when guides are close to each other or to the symmetry plane.
 
