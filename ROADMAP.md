@@ -134,10 +134,14 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
   Smooth's own Z Intensity, ZBrush brush letters, mask and visibility gestures); the 0.6 keys as a preference
 - ✅ Blender bridge: the SculptForge Bridge add-on for Blender 4.2+, objects update in place with transforms,
   UVs, colours, mask and face sets
-- 📋 Next: dynamic topology (✅ in v0.8), mmap project open, an HD Geometry equivalent
+- 📋 Next: mmap project open, an HD Geometry equivalent
 
-## v0.8 (in development)
+## Done in v0.8 — dynamic topology, VDM, guides
 
+- ✅ Dynamic topology (Sculptris Pro): the Dynamic toggle and Detail, mirrored remeshing with symmetry, small undo
+  steps, under 15 ms per dab at 1M triangles
+- ✅ QRemesh Guides: draw the edge loops QRemesh follows
+- ✅ Sculpt layers on every subdivision level (record at the top, step, divide, delete levels)
 - ✅ Vector displacement brushes: the VDM brush (DragRect / DragDot), built-in Horn / Ear Curl / Scales /
   Nostril, Create VDM from a VDM plane, Blender-compatible OpenEXR in and out
 - ✅ Blender add-on: ZBrush-style keys in Sculpt Mode (a preference)

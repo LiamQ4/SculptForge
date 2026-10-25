@@ -6,6 +6,11 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-25
+
+Dynamic topology (Sculptris Pro), vector displacement brushes, QRemesh Guides, sculpt layers on every
+subdivision level, and ZBrush-style keys in Blender's Sculpt Mode.
+
 ### Dynamic topology (ZBrush's Sculptris Pro)
 Guide chapter docs/guide/dynamic-topology.md.
 - **Dynamic** on the top shelf (and in the Draw palette): every brush except Move, masking and painting remeshes
@@ -656,7 +661,8 @@ First public release.
 - Rez package (`packaging/rez`).
 - Headless thumbnail/turntable rendering and scripted demo recording.
 
-[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/islandmed/SculptForge/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/islandmed/SculptForge/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/islandmed/SculptForge/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/islandmed/SculptForge/compare/v0.4.2...v0.5.0

@@ -63,11 +63,11 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models over with GoZ (`.GoZ` files
 keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 
-> **Status: early release (v0.7).** The core sculpting, pipeline and AI features work and are tested on every
-> commit. Version 0.7 follows ZBrush's keys and gestures by default (S / U / I / O, the Space QuickMenu, Focal
-> Shift, ZBrush's brush letters and mask keys) and adds a Blender bridge add-on; 0.6 halved the memory and made the
-> view twice as fast on huge meshes; 0.5 added subdivision levels, QRemesh retopology, map baking and the Gizmo
-> 3D (see the [changelog](CHANGELOG.md)). Dynamic topology is still on the [roadmap](ROADMAP.md).
+> **Status: early release (v0.8).** The core sculpting, pipeline and AI features work and are tested on every
+> commit. Version 0.8 adds dynamic topology (Sculptris Pro style: brushes add triangles where they need them),
+> vector displacement brushes, QRemesh Guides and sculpt layers on every subdivision level; 0.7 follows ZBrush's
+> keys and gestures by default and adds a Blender bridge add-on; 0.6 halved the memory and made the view twice as
+> fast on huge meshes (see the [changelog](CHANGELOG.md)).
 
 ## Features
 

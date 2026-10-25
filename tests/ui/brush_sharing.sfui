@@ -71,11 +71,14 @@ expect_value user_brushes == 2
 
 # Gallery installs are tagged; the tooltip says where a brush lives.
 run brush_install source=gallery code=sfbrush1:eyJuYW1lIjoiU2hhcmVkIE1vc3MiLCJkZXNjcmlwdGlvbiI6IiIsImRpcmVjdGlvbiI6Im5vcm1hbCIsImRlcHRoIjowLjIsInBsYW5lIjoibm9uZSIsInBsYW5lQW1vdW50IjowLjUsInBpbmNoIjowLCJkcmFnIjowLCJzbW9vdGgiOjAsImhhcmRuZXNzIjowLCJ0aXBTaGFycG5lc3MiOjAsInBhdHRlcm4iOiJub2lzZSIsInBhdHRlcm5TY2FsZSI6MC4yLCJwYXR0ZXJuQW1vdW50IjowLjUsInNwYWNpbmciOjAuMTUsImppdHRlciI6MCwicHJlc3N1cmVDdXJ2ZSI6MSwiZnJvbnRGYWNlc09ubHkiOmZhbHNlLCJjYXZpdHlNYXNrIjowfQ
+# (The tray's brush grid is taller than the tray now: filter it to the mosses.)
+type "##brushfilter" Moss
+wait 0.2
 expect_text Shared Moss [gallery]
-wait 0.2    # the list scrolls the new brush into view
 hover "Shared Moss"
 expect_text From the community gallery
 shot gallery-tooltip
+type "##brushfilter" Wrinkle
 
 # Built-in brushes can't be deleted; refining one saves the artist's version, tagged "yours".
 right_click "Wrinkle"
