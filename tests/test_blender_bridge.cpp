@@ -85,15 +85,18 @@ TEST(blender_manifest_parse_and_write) {
     // Refused: other JSON, newer versions, files outside the folder, broken matrices.
     CHECK(!parseBridgeManifest("{\"format\": \"other\"}", back, err));
     CHECK(!parseBridgeManifest("not json", back, err));
-    CHECK(!parseBridgeManifest(R"({"format": "sculptforge-bridge", "version": 2, "objects": []})", back, err));
+    // (Raw strings stay out of CHECK: MSVC can't stringize them inside a macro argument.)
+    const std::string newer = R"({"format": "sculptforge-bridge", "version": 2, "objects": []})";
+    CHECK(!parseBridgeManifest(newer, back, err));
     CHECK(err.find("newer") != std::string::npos);
-    for (const char* bad : {"../x.GoZ", "a/b.GoZ", "c:\\\\x.GoZ", ".."})
-        CHECK(!parseBridgeManifest(std::string(R"({"format": "sculptforge-bridge", "objects": [{"name": "x", "file": ")") +
-                                       bad + "\"}]}",
-                                   back, err));
-    CHECK(!parseBridgeManifest(
-        R"({"format": "sculptforge-bridge", "objects": [{"name": "x", "file": "a.GoZ", "matrix_world": [[1, 0, 0]]}]})", back,
-        err));
+    const std::string badStart = R"({"format": "sculptforge-bridge", "objects": [{"name": "x", "file": ")";
+    for (const char* bad : {"../x.GoZ", "a/b.GoZ", "c:\\\\x.GoZ", ".."}) {
+        const std::string text = badStart + bad + "\"}]}";
+        CHECK(!parseBridgeManifest(text, back, err));
+    }
+    const std::string badMatrix =
+        R"({"format": "sculptforge-bridge", "objects": [{"name": "x", "file": "a.GoZ", "matrix_world": [[1, 0, 0]]}]})";
+    CHECK(!parseBridgeManifest(badMatrix, back, err));
 }
 
 TEST(blender_axes) {
