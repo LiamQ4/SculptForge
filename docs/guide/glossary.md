@@ -56,13 +56,14 @@ for what is planned.
 | Spotlight | Not yet |
 | Preferences > Performance, Preferences > Mem | **Preferences > Performance**: Antialiasing, Fast Navigation, Multithreading, the last stroke's cost and memory. See [Performance](performance.md) |
 | Store Config | **Store Config**, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> (**Preferences > Config**) |
-| Stroke (Dots, DragRect, Spray) | **Stroke** types Dots, DragRect, Spray, LazyMouse (<kbd>L</kbd> toggles LazyMouse) |
+| Stroke (Dots, DragRect, DragDot, Spray) | **Stroke** types Dots, DragRect, DragDot, Spray, LazyMouse (<kbd>L</kbd> toggles LazyMouse) |
 | SubTool | **SubTool**: same idea, <kbd>Alt</kbd>+click to select. See [SubTools](subtools.md) |
 | Texture Map, New From Polypaint | **Tool > Texture Map**: **New Texture** (1K-8K) and paint straight into it, or **Polypaint > Texture**. See [Texture painting](texture-painting.md) |
 | Texture palette | Not yet as a palette of texture images. **Tool > Texture Map > Import Texture** loads an image onto the UVs |
 | Transpose, Gizmo 3D (Move W, Scale E, Rotate R) | **Gizmo 3D**: same keys, arrows, rings and boxes; masked parts stay, Falloff softens the joint. See [Gizmo 3D](gizmo.md) |
 | Transpose All | **All SubTools** in the Gizmo 3D panel. See [Gizmo 3D](gizmo.md#all-subtools) |
 | UV Master (Unwrap) | **Tool > Texture Map > Auto UV** (`uv_auto`). UVs that come in with a model are kept. Seams and UV editing not yet. See [Texture painting](texture-painting.md) |
+| VDM brush, 3D alpha, Create VDM brush from the VDM plane | The **VDM** brush and **Brush > Vector Displacement**: built-in maps, **Load VDM...** (EXR), **New VDM Plane**, **Create VDM**, **Export EXR...**. See [Vector displacement brushes](sculpting.md#vector-displacement-brushes) |
 | Zadd / Zsub | **Zadd** / **Zsub** on the top shelf; <kbd>Alt</kbd> flips for one stroke |
 | ZPlugin | No in-app plugin system yet. Automate with the Python module, `sculptforge-cli` and MCP ([Scripting](scripting.md)) |
 | ZRemesher | **Tool > Geometry > QRemesh** (`qremesh`): Target Polygons, Half / Same / Double, Adaptive Size, Keep Groups, Use Polypaint, symmetry. No curve guides yet. See [Quad retopology](retopology.md) |

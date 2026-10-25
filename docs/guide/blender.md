@@ -84,6 +84,65 @@ In SculptForge's **File > Blender**:
 
 The add-on's preferences add the path of SculptForge and the exchange folder (below).
 
+## ZBrush-style keys in Sculpt Mode
+
+Sculpting in Blender too? Turn on **ZBrush-style keys in Sculpt Mode** in the add-on's preferences (**Edit >
+Preferences > Add-ons > SculptForge Bridge**) and Blender's Sculpt Mode answers to ZBrush's keys where Blender
+has the same thing. Turning it off removes them again, and Blender's own keys are back; so does disabling the
+add-on. The preferences list every key while it's on.
+
+| ZBrush key | In Blender's Sculpt Mode |
+|---|---|
+| <kbd>S</kbd> / <kbd>U</kbd> / <kbd>O</kbd> | Draw Size / Z Intensity (Strength) / Focal Shift (Hardness), dragged at the cursor |
+| <kbd>Space</kbd> | Blender's Sculpt quick menu at the cursor (brush, size, strength) |
+| <kbd>B</kbd> | The brush list by ZBrush name (Standard, DamStandard, Clay, ClayBuildup, Move, SnakeHook...): type a few letters, <kbd>Enter</kbd> picks |
+| <kbd>Alt</kbd>+drag | Zsub: the brush digs in |
+| <kbd>Ctrl</kbd>+drag / <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+drag | Mask / unmask, drawn as a lasso |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd>+drag | Show only what's inside / hide what's inside |
+| <kbd>Ctrl</kbd>+<kbd>W</kbd> | Group the masked part as a face set and clear the mask (with nothing masked: the visible part) |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>D</kbd> / <kbd>Shift</kbd>+<kbd>D</kbd> | Divide (a Multires level) / SDiv up / SDiv down (never adds a level) |
+| <kbd>X</kbd> | Symmetry X |
+| <kbd>Shift</kbd>+<kbd>F</kbd> | PolyFrame (the wireframe overlay) |
+| <kbd>F</kbd> / <kbd>P</kbd> | Frame the model / perspective on and off |
+| <kbd>L</kbd> | LazyMouse (Blender: Stabilize Stroke) |
+| <kbd>W</kbd> / <kbd>E</kbd> / <kbd>R</kbd> | Move / Scale / Rotate |
+| <kbd>Shift</kbd>+drag | Smooth (Blender already does this) |
+
+The ZBrush brushes map to Blender's closest: Standard = Draw, DamStandard = Draw Sharp, ClayBuildup = Clay
+Strips, Move = Grab, Move Elastic = Elastic Grab, TrimDynamic = Trim (Scrape in Blender 4.2), Crease = Crease
+Sharp, MaskPen = Mask.
+
+What Blender has no key for, or can't do the ZBrush way:
+
+- <kbd>I</kbd> (RGB Intensity): Blender's sculpt brushes don't paint.
+- <kbd>Ctrl</kbd>+drag on the model doesn't paint the mask with a round brush: Blender can't switch to the Mask
+  brush for one stroke, so it draws a mask lasso (pick the Mask brush with <kbd>B</kbd> to paint it).
+- Dragging on the empty background doesn't rotate: a keymap can't tell the model from the background. Use the
+  middle mouse button, or Blender's *Emulate 3 Button Mouse*.
+- <kbd>Ctrl</kbd>+click on the background (invert or clear the mask) and <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click
+  (show all): use <kbd>Ctrl</kbd>+<kbd>I</kbd>, <kbd>Alt</kbd>+<kbd>M</kbd> and <kbd>Alt</kbd>+<kbd>H</kbd>.
+- <kbd>B</kbd> then two letters: a Blender menu takes one key at a time, so <kbd>B</kbd> opens the list and the
+  letters filter it.
+- <kbd>Alt</kbd>+click a SubTool: Blender's objects aren't SubTools (<kbd>Alt</kbd>+<kbd>Q</kbd> switches the object
+  you sculpt).
+- Stroke types (DragRect, Spray...): each Blender brush sets its stroke method in its Stroke panel.
+
+These keys take Blender's place while they're on: <kbd>F</kbd> no longer sets the radius (that's <kbd>S</kbd>),
+<kbd>B</kbd> no longer draws a box mask, <kbd>Ctrl</kbd>+drag no longer inverts the brush (that's <kbd>Alt</kbd>),
+and <kbd>Space</kbd> no longer plays the animation in Sculpt Mode.
+
+## Vector displacement maps
+
+SculptForge's VDM brushes and Blender's use the same maps (see
+[Vector displacement brushes](sculpting.md#vector-displacement-brushes)):
+
+- **From Blender**: a map baked with Blender's *VDM Brush Baker* loads with **Brush > Vector Displacement > Load
+  VDM...** as it is.
+- **To Blender**: **Export EXR...** writes the VDM brush's map. In Blender, in Sculpt Mode with a Draw brush:
+  in the brush's **Texture** panel add a new image texture and open the EXR (set its Color Space to
+  **Non-Color**), set **Mapping** to **Area Plane**, turn on **Vector Displacement**, then set the stroke method
+  to **Anchored** and Strength to 1. Drag on the model to stamp it.
+
 ## How it works
 
 The two programs share a folder in your user data: `~/.local/share/SculptForge/SculptForge/blender` on Linux,

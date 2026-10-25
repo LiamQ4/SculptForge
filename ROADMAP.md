@@ -136,6 +136,12 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
   UVs, colours, mask and face sets
 - 📋 Next: dynamic topology, mmap project open, an HD Geometry equivalent
 
+## v0.8 (in development)
+
+- ✅ Vector displacement brushes: the VDM brush (DragRect / DragDot), built-in Horn / Ear Curl / Scales /
+  Nostril, Create VDM from a VDM plane, Blender-compatible OpenEXR in and out
+- ✅ Blender add-on: ZBrush-style keys in Sculpt Mode (a preference)
+
 ## Phase 3 — AI assistant, beyond brushes
 
 - 📋 Chat assistant that drives any SculptForge command (tool calling over the existing registry)

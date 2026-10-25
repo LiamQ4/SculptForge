@@ -192,6 +192,7 @@ shelf, which opens the stroke picker, or from the **Stroke** palette.
 |---|---|---|
 | **Dots** | Even dabs along the path: the classic brush stroke (default). | None; spacing comes from the brush. |
 | **DragRect** | Click and drag one stamp: the drag length sets its size and its direction the rotation. Great with alphas. | None |
+| **DragDot** | Click and drag one stamp of the brush's Draw Size: it slides over the surface under the cursor and lands where you let go. Great for VDMs. | None |
 | **Spray** | Scattered dabs of random size, strength and rotation, for organic texture. | **Scatter** (0 to 2, default 1): how far dabs land from the cursor, as a fraction of the brush size. |
 | **LazyMouse** | The brush trails the cursor on a string, for smooth, steady lines. | **Lazy radius** (1 to 300 px, default 40): longer is steadier. |
 
@@ -202,11 +203,13 @@ Notes:
 
 - With **DragRect**, the stamp is placed where you first click. While you drag, it is redrawn at the new size
   and angle, and it is committed when you release.
-- Mask strokes (<kbd>Ctrl</kbd>) always use dots, even when DragRect is selected.
+- With **DragDot**, the stamp appears under the cursor at once and follows it while you drag; the mesh under it
+  goes back to how it was as it moves on.
+- Mask strokes (<kbd>Ctrl</kbd>) always use dots, even when DragRect or DragDot is selected.
 - Custom brushes set their own dab spacing and can add jitter (see [Brush Lab](brush-lab.md)).
 
-> **ZBrush:** DragRect, Spray and LazyMouse match ZBrush's DragRect, Spray and LazyMouse. Freehand and Dots
-> are the same thing here. DragDot, Roll and curve strokes are not available yet.
+> **ZBrush:** DragRect, DragDot, Spray and LazyMouse match ZBrush's. Freehand and Dots are the same thing here.
+> Roll and curve strokes are not available yet.
 
 ## Alphas
 
@@ -237,6 +240,87 @@ From a script: `brush_set_alpha name=square`, or `brush_set_alpha path=bark.png 
 > **ZBrush:** there is no alpha library browser with hundreds of alphas yet, and alpha options such as
 > MidValue, Rf (radial fade) or tiling are not available. Any grayscale image works, including alphas you
 > already have as PNG.
+
+## Vector displacement brushes
+
+A vector displacement brush (ZBrush's VDM brushes, Blender's "VDM brushes") stamps a whole 3D shape in one
+click: a horn, an ear, a cluster of scales, a nostril. An alpha can only push the surface up or down; a vector
+displacement map (VDM) moves every point of the stamp in any direction, so the shape can lean over, curl and
+overhang, as nothing made with a height ever can.
+
+![Horns, an ear curl, scales and two nostrils, one stamp each, and Brush > Vector Displacement](images/vdm-brushes.jpg)
+
+### Stamp a VDM
+
+1. Open the **Brush** palette and its **Vector Displacement** section, and click a map: **Horn**, **Ear Curl**,
+   **Scales** or **Nostril**. The **VDM** brush becomes the brush and the stroke becomes **DragRect**. (While the
+   VDM brush is the brush, the Alpha tile on the left shelf shows its map, and the alpha picker lists the maps
+   first. The VDM brush is also in the brush picker: <kbd>B</kbd> <kbd>V</kbd> <kbd>D</kbd>.)
+2. Click on the model where the stamp should sit and drag: the drag's length sets the size and its direction
+   points the top of the map, so a horn leans the way you drag. Let go to keep it.
+
+- **DragDot** stamps at the Draw Size instead and slides the stamp under the cursor until you let go.
+- **Z Intensity 50** (the default) presses the map at its own shape; 100 doubles it, lower values flatten it.
+- **Alt** digs the shape in: the sideways motion stays and the height flips (a horn becomes a curved hole, a
+  nostril a bump). Blender's VDM brushes invert the same way.
+- **Symmetry** mirrors the stamp exactly (the mirrored horn leans the mirrored way), the **mask** holds it back,
+  and each stamp is one undo step. Sculpt layers record it like any stroke.
+- The **Dots** stroke works too: each dab adds the shape again, for rows of studs or scales.
+
+> **Tip:** a VDM moves points sideways, so it needs points to move: on a coarse mesh the shape breaks up into
+> spikes. Divide first (the model above has 330 000 triangles), and stamp at the highest
+> [subdivision level](subdivision-levels.md); stepping down and back up keeps the stamp. Use Front faces only
+> on thin parts so the stamp doesn't reach through to the other side.
+
+### Make your own VDM
+
+1. In **Brush > Vector Displacement**, click **New VDM Plane**. A flat 2 x 2 grid appears as a new SubTool,
+   seen from the top, with its border masked (so the stamp blends into any surface); the other SubTools are
+   hidden. **Plane Res** sets how many quads it has (256 by default).
+2. Sculpt the shape with any brush: overhangs are welcome (Move, SnakeHook, Inflate). Divide the plane for finer
+   detail. Keep the border flat.
+3. Type a name, choose the **Map Size** (256 pixels holds most shapes, 512 fine detail) and click **Create VDM**.
+   The new map is saved in your brush library, shows in the list and becomes the VDM brush's map.
+4. Show your model again in the [SubTool](subtools.md) palette (its eye) and stamp away.
+
+The top of the screen when you look at the plane from the top is the top of the map: the side a DragRect drag
+points to. The plane's UVs record where each point started, so what Create VDM captures is how far each point
+moved, sideways and up.
+
+### Load and export maps (Blender, ZBrush)
+
+**Load VDM...** reads an OpenEXR (16- or 32-bit, any compression) or a `.sfvdm`; dropping an `.exr` on the window
+does the same. A loaded EXR is kept in your brush library as a `.sfvdm`, so it's there next time. **Export
+EXR...** writes the brush's map as a 32-bit float EXR. Right-click a map you made or loaded to delete it.
+
+Maps use the convention of Blender's **VDM Brush Baker** and its Draw brush with *Vector Displacement*:
+
+| Channel | Means |
+|---|---|
+| R | X: toward the stamp's right |
+| G | Y: toward the stamp's top (the image's top row; the drag direction of DragRect) |
+| B | Z: out of the surface |
+| Units | brush radii: (0, 0, 0.5) lifts the surface by half the radius; the map covers the brush's square |
+
+So maps from Blender's VDM Brush Baker load as they are, and exported maps work in Blender: add an image texture
+with the EXR (Color Space: Non-Color) to a Draw brush, set the texture's **Mapping** to **Area Plane**, turn on
+**Vector Displacement** in the brush's Texture panel, and use the **Anchored** stroke at Strength 1 (see
+[Working with Blender](blender.md#vector-displacement-maps)). Blender's brush touches only the round area of the
+brush, so the corners of a map are cut off there; in SculptForge the whole square stamps.
+
+ZBrush keeps its VDMs inside brushes (as 3D alphas) and doesn't export them as EXR by itself; maps made with
+**Tool > Vector Displacement Map** or third-party exporters use axes set by ZBrush's *Vector Displacement Flip*
+options. If a map from ZBrush stamps lying on its side, load it again with **Swap Y/Z**; if it is mirrored or leans
+the wrong way, with **Flip X** or **Flip Y** (**Flip Z** for a map that digs in where it should rise). **Scale**
+multiplies a map made in other units.
+
+From a script: `vdm_set name=horn` or `vdm_set path=ear.exr swap_yz=true`, `vdm_stamp point=0,0.5,0 radius=0.3
+angle=30`, `vdm_new_plane`, `vdm_capture name="My horn" exr=horn.exr`, `vdm_export path=horn.exr`, `vdm_list`,
+`vdm_delete name="My horn"`.
+
+> **ZBrush:** the VDM brush works like ZBrush's VDM brushes with DragRect or DragDot. Not available yet:
+> several VDMs in one brush (ZBrush's *Create Multiple Alpha Brush*), MidValue and the alpha options for 3D
+> alphas, and reading ZBrush's own brush files.
 
 ## Symmetry
 
