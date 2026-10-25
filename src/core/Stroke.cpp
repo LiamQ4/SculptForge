@@ -11,6 +11,7 @@ const char* strokeTypeName(StrokeType type) {
     switch (type) {
     case StrokeType::Dots: return "Dots";
     case StrokeType::DragRect: return "DragRect";
+    case StrokeType::DragDot: return "DragDot";
     case StrokeType::Spray: return "Spray";
     case StrokeType::LazyMouse: return "LazyMouse";
     default: return "?";

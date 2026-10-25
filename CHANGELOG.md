@@ -27,6 +27,44 @@ Guide chapter docs/guide/dynamic-topology.md.
 - Benchmark: `--bench-dyntopo` (docs/performance.md). On an M1 Pro, a medium dab on a 1M-triangle sphere takes
   9-13 ms including the GPU update.
 
+### Vector displacement brushes
+Guide: docs/guide/sculpting.md, "Vector displacement brushes".
+- **VDM brush** (new brush type): one DragRect stamps a whole 3D shape with overhangs. Each point under the
+  stamp moves by its texel's vector in the brush's tangent frame (Z = the surface's area normal, Y = the drag
+  direction, X = right), scaled by the radius and Z Intensity (50 = the map's own size, 100 = twice). Alt digs
+  in (X, Y kept, Z flipped, as Blender). Symmetry mirrors the stamp exactly (the mirrored pass flips the frame's
+  handedness); mask, Front faces only, sculpt layers and undo as every brush. Works with subdivision levels.
+- **DragDot stroke**: one stamp of the Draw Size that slides under the cursor until release (any brush).
+- **Built-in maps** (procedural, CC0): Horn, Ear Curl, Scales, Nostril.
+- **Brush > Vector Displacement**: the maps with thumbnails, Load VDM (OpenEXR 16/32-bit, any compression, or
+  .sfvdm; dropping an .exr loads it too) with Swap Y/Z, Flip X/Y/Z and Scale for maps from other apps, New VDM
+  Plane, Create VDM, Export EXR. While the VDM brush is the brush, the Alpha tile and picker show the maps, and
+  the stroke switches to DragRect (the previous stroke comes back with the next brush).
+- **Create VDM from a plane** (ZBrush's VDM plane, Blender's VDM Brush Baker): a 2 x 2 VDM plane with UVs and
+  a masked border as a new SubTool (the others hidden, top view); Create VDM rasterizes each point's offset
+  through the UVs into a map saved in the brush library (Divide keeps the UVs).
+- **Blender's convention**, checked against the VDM Brush Baker's source and in Blender 4.2 and 5.2: RGB = XYZ in
+  brush radii over the brush's square, first scanline = top. Exported EXRs read in Blender with the same vectors
+  the same way up; Blender's 32-bit ZIP/PIZ and 16-bit EXRs load unchanged.
+- **Library**: VDMs live as `.sfvdm` (header, name, float32 XYZ) next to the `.sfbrush` files, user over studio
+  over built-in by name; project settings remember the brush's map by name.
+- Commands: `vdm_set`, `vdm_list`, `vdm_export`, `vdm_new_plane`, `vdm_capture`, `vdm_stamp`, `vdm_delete`; the
+  `stroke` command and Python/MCP stamp the brush's map too. OpenEXR via vendored tinyexr 1.0.13 (BSD-3), built on
+  stb's zlib (no new dependency).
+
+### Blender add-on: ZBrush-style keys in Sculpt Mode
+Guide: docs/guide/blender.md, "ZBrush-style keys in Sculpt Mode".
+- Add-on preference **ZBrush-style keys in Sculpt Mode** (off by default): S / U / O radial Draw Size,
+  Strength and Hardness (Focal Shift); Space the Sculpt context menu; B a brush list by ZBrush name (type to
+  filter; Blender 4.3+ brush assets, 4.2 brush tools); Alt+drag Zsub; Ctrl(+Alt)+drag mask / unmask lasso;
+  Ctrl+Shift(+Alt)+drag show only / hide inside; Ctrl+W group masked and clear the mask (else group visible);
+  Ctrl+D Divide (Multires), D / Shift+D SDiv up / down; X symmetry; Shift+F wireframe; F frame; P perspective;
+  L Stabilize Stroke; W / E / R move / scale / rotate. Turning it off (or disabling the add-on) removes them.
+  The preferences and the guide list the ZBrush keys Blender has no equivalent for.
+- tests/blender/test_in_blender.py checks every key's operator and settings, the data paths (Blender 4.2's
+  unified paint settings vs 5's per-mode ones), the brush picks, SDiv and Divide, on/off, and the VDM EXR
+  round trips; run in real Blender 4.2.23 and 5.2.3.
+
 ## [0.7.0] - 2026-10-25
 
 ZBrush's keys and gestures by default, and a bridge to Blender.

@@ -562,6 +562,7 @@ CommandRegistry::CommandRegistry() {
          }});
     registerBrushLibraryCommands(*this); // brush_install, brush_code, brush_delete, ... (BrushLibrary.cpp)
     registerBrushCommands(*this); // brush_set_alpha (BrushAlpha.cpp)
+    registerVdmCommands(*this);   // vdm_set, vdm_capture, vdm_stamp, ... (Vdm.cpp)
     registerRetopoCommands(*this); // qremesh, project_all (RetopoCommands.cpp)
 
     add({"stroke",

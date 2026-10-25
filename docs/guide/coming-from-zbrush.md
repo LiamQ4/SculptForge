@@ -38,6 +38,10 @@ keys and gestures by default; where it has habits of its own, they are kept as a
   **PolyFrame** on <kbd>Shift</kbd>+<kbd>F</kbd>; **QuickSave** on <kbd>9</kbd>. See [SubTools](subtools.md) and
   [Subdivision levels](subdivision-levels.md).
 - **GoZ.** Send models to and from ZBrush. See [Exporting, Unreal and ZBrush](exporting.md#exchange-models-with-zbrush-goz).
+- **VDM brushes** with DragRect and DragDot, and your own made from a VDM plane. See
+  [Vector displacement brushes](sculpting.md#vector-displacement-brushes).
+- **Sculpting in Blender too?** The Blender add-on can give Blender's Sculpt Mode ZBrush's keys. See
+  [Working with Blender](blender.md#zbrush-style-keys-in-sculpt-mode).
 
 ## What's different
 

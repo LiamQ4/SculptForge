@@ -275,6 +275,8 @@ void App::registerShellActions() {
         "Trim Dynamic: shaves away everything above a plane.",
         "Raises the surface to one fixed height per stroke; overlaps never stack.",
         "Slides the surface sideways along the stroke.",
+        "Vector displacement: one DragRect stamps a whole shape with overhangs (horn, ear curl, scales, nostril, or "
+        "your own from a VDM plane). Pick the map under Brush > Vector Displacement.",
     };
     static_assert(std::size(kBrushHelp) == size_t(BrushType::Count));
     for (int i = 0; i < int(BrushType::Count); ++i) {
@@ -1497,6 +1499,11 @@ void App::drawStrokeTile(const char* id, ImVec2 size) {
         dl->AddLine(at(0.3f, 0.66f), at(0.7f, 0.34f), col, 1.5f * s);
         dl->AddTriangleFilled(at(0.7f, 0.34f), at(0.6f, 0.36f), at(0.67f, 0.44f), col);
         break;
+    case StrokeType::DragDot: // one dot slid along a path
+        dl->AddCircleFilled(at(0.66f, 0.38f), 6.0f * s, col);
+        dl->AddLine(at(0.24f, 0.70f), at(0.58f, 0.44f), IM_COL32(235, 235, 235, 120), 1.2f * s);
+        dl->AddCircle(at(0.24f, 0.70f), 4.0f * s, IM_COL32(235, 235, 235, 120), 0, 1.2f * s);
+        break;
     case StrokeType::Spray: {
         uint32_t seed = 7;
         for (int i = 0; i < 26; ++i) {
@@ -1524,13 +1531,22 @@ void App::drawStrokeTile(const char* id, ImVec2 size) {
     default: break;
     }
     if (clicked) openPicker(Picker::Stroke, ImVec2(ImGui::GetItemRectMax().x + 4.0f * s, ImGui::GetItemRectMin().y));
-    ui::HelpText("Stroke", nullptr, "How dabs follow the cursor: Dots, DragRect, Spray or LazyMouse. Click to choose.",
+    ui::HelpText("Stroke", nullptr, "How dabs follow the cursor: Dots, DragRect, DragDot, Spray or LazyMouse. Click to choose.",
                  "Left shelf");
 }
 
 void App::drawAlphaTile(const char* id, ImVec2 size) {
     const float s = uiScale_;
     ImVec2 a, b;
+    if (vdmBrushActive() && doc_.brushVdm) { // the VDM brush's 3D alpha (ZBrush shows VDMs in the alpha slot)
+        const bool clicked = tileFrame(id, size, fontSmall_, doc_.brushVdm->name, s, a, b);
+        if (ImTextureID tex = thumbs_.vdm(doc_.brushVdm))
+            ImGui::GetWindowDrawList()->AddImageRounded(tex, ImVec2(a.x + 2 * s, a.y + 2 * s), ImVec2(b.x - 2 * s, b.y - 2 * s),
+                                                        ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, 4.0f * s);
+        if (clicked) openPicker(Picker::Alpha, ImVec2(ImGui::GetItemRectMax().x + 4.0f * s, ImGui::GetItemRectMin().y));
+        ui::HelpText("VDM", nullptr, "The VDM brush's vector displacement map. Click to pick another.", "Left shelf");
+        return;
+    }
     const bool clicked = tileFrame(id, size, fontSmall_, doc_.brushAlpha.name, s, a, b);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImTextureID tex = thumbs_.alpha(doc_.brushAlpha);

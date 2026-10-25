@@ -114,3 +114,33 @@ extension: `blender_manifest.toml` at the root) and `sculptforge_bridge-X.Y.Z-le
 folder for **Add-ons > Install from Disk**), with fixed timestamps. CMake: `--target blender_addon`; ctest
 `blender_addon_package` runs the checks. The release workflow attaches both, plus `sculptforge_bridge.zip`
 (version-less, for the website's link).
+
+## ZBrush-style keys in Sculpt Mode
+
+`addons/blender/sculptforge_bridge/zbrush_keys.py`: the add-on preference `zbrush_keys` adds items to the add-on
+keyconfig's "Sculpt" keymap (`key_table()`) and removes exactly those again (`disable()`, also on unregister).
+Add-on keymap items take priority over Blender's own while they exist. Things that differ between versions,
+found by running real Blender 4.2.23 and 5.2.3 headless:
+
+- The radial controls' unified size / strength are `tool_settings.unified_paint_settings` in 4.2 and per mode,
+  `tool_settings.sculpt.unified_paint_settings`, in 5 (`_unified_path()`).
+- Brushes: 4.3+ activates Essentials brush assets (`brush.asset_activate`); 4.2 sets the `builtin_brush.*` tool,
+  which needs a 3D View, so without one (scripts) it assigns the brush with that `sculpt_tool`.
+- `hasattr(bpy.ops.x, "y")` is always true; check operators with `get_rna_type()` and versions with
+  `bpy.app.version`.
+- `paint.hide_show`'s `area` items are `'OUTSIDE'` and `'Inside'` (sic): enum settings are matched ignoring case.
+- `object.subdivision_set` doesn't add Multires in 5.2's Sculpt Mode, so Ctrl+D is our own operator
+  (`multires_subdivide`).
+- Headless Blender has no sculpt PBVH: `paint.mask_flood_fill` (used by Ctrl+W) crashes there, so the test only
+  checks that operator's poll.
+
+`tests/blender/test_in_blender.py` checks every item's operator and settings, the data paths in Sculpt Mode, the
+brush picks, SDiv/Divide and that turning the preference off or disabling the add-on leaves Blender's keymap as it
+was. It also checks vector displacement maps both ways (see core/Vdm.h): SculptForge's exported EXR read by
+Blender equals its .sfvdm row for row (Blender's pixels start at the bottom), and Blender's 32-bit ZIP / PIZ and
+16-bit EXRs load in SculptForge unchanged.
+
+To run it here (an M1 under Asahi Linux, x86-64 Blender under FEX): the official Linux tarballs run headless as
+`muvm -- blender -b --factory-startup -noaudio --python-exit-code 1 --python tests/blender/test_in_blender.py --
+--cli build/sculptforge-cli` (redirect the output to a file: muvm doesn't pass it through). The GUI doesn't start
+there (no GL on the x86 side).

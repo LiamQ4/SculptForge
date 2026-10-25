@@ -15,6 +15,21 @@ it doesn't: pull a sphere into horns or fingers without stretching, block in fro
 detail**, one size for the whole mesh. Symmetry makes mirrored triangles, borders and masks are kept, and each
 stroke is one small undo step. See [Dynamic topology](dynamic-topology.md).
 
+### Vector displacement brushes
+
+One drag stamps a whole shape, overhangs and all: the new **VDM** brush presses a vector displacement map, so a
+horn can lean over, an ear can curl and scales can overlap, which no alpha can do. Four maps come with it (Horn,
+Ear Curl, Scales, Nostril); make your own by sculpting on a **VDM Plane** and clicking **Create VDM**, or load the
+EXRs Blender's VDM Brush Baker makes (and export yours for Blender). The new **DragDot** stroke slides a stamp
+into place. See [Vector displacement brushes](sculpting.md#vector-displacement-brushes).
+
+### ZBrush keys in Blender's Sculpt Mode
+
+The Blender add-on has a new preference, **ZBrush-style keys in Sculpt Mode**: S, U and O for Draw Size,
+Strength and Focal Shift, B for the brushes by their ZBrush names, Space for the quick menu, Alt to dig in,
+Ctrl to mask, Ctrl+Shift to hide, D and Shift+D for subdivision levels, and more. See
+[Working with Blender](blender.md#zbrush-style-keys-in-sculpt-mode).
+
 ## Version 0.7
 
 ZBrush's keys and gestures by default, and a bridge that sends models between Blender and SculptForge.

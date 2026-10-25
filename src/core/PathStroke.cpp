@@ -139,6 +139,7 @@ int strokePath(Document& doc, const BrushRecipe* recipe, BrushType type, const P
     base.frontFacesOnly = recipe && recipe->frontFacesOnly;
     base.alpha = &doc.brushAlpha;
     base.alphaUp = up;
+    base.vdm = doc.brushVdm.get();
 
     int dabs = 0;
     if (type == BrushType::Move && !recipe) {

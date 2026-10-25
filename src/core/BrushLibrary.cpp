@@ -4,6 +4,7 @@
 
 #include "core/Commands.h"
 #include "core/Document.h"
+#include "core/Vdm.h"
 
 #include <algorithm>
 #include <cctype>
@@ -408,6 +409,7 @@ std::vector<std::string> loadBrushLibrary(Document& doc, const BrushLibraryPaths
         }
     }
     doc.activeBrush = active.empty() ? -1 : findBrush(doc, active);
+    loadVdmLibrary(doc, paths, messages); // the VDM brush's maps (.sfvdm) live in the same folders (Vdm.cpp)
     return messages;
 }
 

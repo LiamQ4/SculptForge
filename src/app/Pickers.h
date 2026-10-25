@@ -31,6 +31,9 @@ void drawBrushGrid(App& app, GridMode mode);
 void drawAlphaGrid(App& app, GridMode mode);
 void drawMaterialGrid(App& app, GridMode mode);
 void drawStrokeGrid(App& app, GridMode mode);
+// The VDM brush's maps (built-in and library), reused by Brush > Vector Displacement; picking one makes the VDM
+// brush the brush. The Alpha picker shows them first while the VDM brush is the brush.
+void drawVdmGrid(App& app, GridMode mode);
 
 // One brush of the picker, the LightBox Brush tab and the shelves.
 struct BrushItem {

@@ -233,6 +233,7 @@ void App::storeProjectSettings() {
     brush.set("paint_color", vec3Json(doc_.paintColor));
     brush.set("dynamic", doc_.sculptor.dyntopo.enabled); // dynamic topology (core/Dyntopo.h)
     brush.set("dynamic_detail", double(doc_.sculptor.dyntopo.detail));
+    brush.set("vdm", doc_.brushVdm ? doc_.brushVdm->name : std::string()); // by name: the map stays in the library
     s.set("brush", std::move(brush));
 
     Json sym = Json::object();
@@ -302,6 +303,8 @@ void App::applyProjectSettings() {
         readBool(b, "dynamic", doc_.sculptor.dyntopo.enabled);
         readFloat(b, "dynamic_detail", doc_.sculptor.dyntopo.detail);
         doc_.sculptor.dyntopo.detail = std::clamp(doc_.sculptor.dyntopo.detail, 0.0f, 1.0f);
+        if (const int vdm = b["vdm"].isString() ? findVdm(doc_, b["vdm"].asString()) : -1; vdm >= 0)
+            doc_.brushVdm = doc_.vdms[size_t(vdm)];
     }
     if (const Json& sym = s["symmetry"]; sym.isObject()) {
         readBool(sym, "x", symmetry_.x);
@@ -363,7 +366,7 @@ void App::openPathConfirmed(const std::string& path) {
     // Images go to the Image to 3D panel and brushes into the library: no scene change.
     std::string ext = fsPath(path).extension().string();
     for (auto& c : ext) c = char(std::tolower(static_cast<unsigned char>(c)));
-    if (Image::isImagePath(path) || ext == ".sfbrush") openPath(path);
+    if (Image::isImagePath(path) || ext == ".sfbrush" || ext == ".exr" || ext == ".sfvdm") openPath(path);
     else confirmDiscard([this, path] { openPath(path); });
 }
 

@@ -15,6 +15,7 @@
 namespace sf {
 
 struct BrushAlpha;
+struct VectorDisplacement;
 
 enum class BrushType {
     Standard, Clay, Smooth, Move, Inflate, Crease, Flatten, Pinch,
@@ -24,6 +25,7 @@ enum class BrushType {
     Trim,        // Trim Dynamic: a plane cuts away everything above it
     Layer,       // raises to one fixed height per stroke (overlaps never stack)
     Nudge,       // slides the surface sideways along the stroke
+    Vdm,         // vector displacement: stamps DabParams::vdm (a horn, an ear...) with overhangs (core/Vdm.h)
     Count
 };
 
@@ -41,6 +43,7 @@ struct DabParams {
     const BrushAlpha* alpha = nullptr;   // stamp shaping the falloff (null/empty = round)
     glm::vec3 alphaUp{0.0f, 1.0f, 0.0f}; // world direction of the alpha's top edge (screen up, or rotated)
     float focal = 0.0f;                  // ZBrush Focal Shift, -1..1 (see brushFalloff); recipes keep their own tip
+    const VectorDisplacement* vdm = nullptr; // the Vdm brush's map (null = the built-in Horn); top edge = alphaUp
 };
 
 struct Symmetry {
@@ -122,6 +125,8 @@ public:
 private:
     void dabSingle(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p);
     void dabRecipeSingle(Mesh& mesh, BVH& bvh, const BrushRecipe& r, const DabParams& p);
+    // The Vdm brush (defined in Vdm.cpp); `handedness` -1 for a mirrored pass, so the stamp mirrors exactly.
+    void dabVdmSingle(Mesh& mesh, BVH& bvh, const DabParams& p, float handedness);
     void finishDab(Mesh& mesh, BVH& bvh, std::chrono::steady_clock::time_point clock);
     void updateDabNormals(Mesh& mesh);
     void touch(Mesh& mesh, uint32_t v);

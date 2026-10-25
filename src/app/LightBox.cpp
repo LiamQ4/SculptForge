@@ -983,7 +983,7 @@ void App::initLightBox() {
         "(B S T = Standard).",
         [] { openPicker(Picker::Brush, ImVec2(-1, -1)); });
     add("ui.picker.stroke", "Stroke picker", ICON_LC_SPLINE, "Stroke", "",
-        "Pop up the stroke types: Dots, DragRect, Spray and LazyMouse.",
+        "Pop up the stroke types: Dots, DragRect, DragDot, Spray and LazyMouse.",
         [] { openPicker(Picker::Stroke, ImVec2(-1, -1)); });
     add("ui.picker.alpha", "Alpha picker", ICON_LC_CIRCLE_DASHED, "Alpha", "",
         "Pop up the brush alphas: built-in stamps and images from your library.",
