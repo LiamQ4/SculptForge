@@ -714,6 +714,7 @@ bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error, bool wor
 // A SubTool read from a project, before it joins the document.
 struct LoadedSubtool {
     std::string name, gozName;
+    std::vector<QRemeshGuide> qremeshGuides;
     bool visible = true;
     int activeLayer = -1;
     Mesh mesh;
@@ -772,6 +773,8 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
             st.set("subdiv", writeSubdiv(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
         const std::string& gozName = active ? doc.gozName : s.gozName;
         if (!gozName.empty()) st.set("goz_name", gozName);
+        const std::vector<QRemeshGuide>& guides = active ? doc.qremeshGuides : s.qremeshGuides;
+        if (!guides.empty()) st.set("qremesh_guides", qremeshGuidesToJson(guides)); // (no format change: optional)
         subtools.push(std::move(st));
     }
     manifest.set("subtools", std::move(subtools));
@@ -878,6 +881,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
             if (s.name.empty()) s.name = "SubTool";
             s.visible = sj["visible"].asBool(true);
             s.gozName = sj["goz_name"].asString();
+            s.qremeshGuides = qremeshGuidesFromJson(sj["qremesh_guides"]);
             if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error, false, false)) return false;
             // The BVH builds (on the pool) while the levels and topology load (off it), then the normals.
             s.startBvh();
@@ -927,6 +931,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     doc.setMesh(std::move(subtools[0].mesh), subtools[0].name, built);
     doc.activeLayer = validLayer(subtools[0].activeLayer, doc.mesh);
     doc.gozName = subtools[0].gozName;
+    doc.qremeshGuides = std::move(subtools[0].qremeshGuides);
     doc.subtools[0].visible = subtools[0].visible;
     for (size_t i = 1; i < subtools.size(); ++i) {
         BVH* builtI = subtools[i].finishBvh();
@@ -935,6 +940,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
         s.visible = subtools[i].visible;
         s.activeLayer = validLayer(subtools[i].activeLayer, s.mesh);
         s.gozName = subtools[i].gozName;
+        s.qremeshGuides = std::move(subtools[i].qremeshGuides);
     }
     doc.selectSubtool(activeSubtool);
     doc.splats = std::move(splats);

@@ -70,6 +70,7 @@ struct QRemeshStats {
     float asymmetry = 0.0f;      // the model's mirror mismatch about that plane, in mean quad edges
     size_t pieces = 0;           // separate pieces of the source (small ones are remeshed on their own)
     size_t guides = 0;           // QRemesh Guides used
+    size_t guidesSkipped = 0;    // guides left out: mostly off the surface (the SubTool moved since)
     double seconds = 0;
 };
 

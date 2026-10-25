@@ -53,6 +53,15 @@ std::vector<std::pair<uint32_t, uint32_t>> faceEdges(const Mesh& m) {
     return {edges.begin(), edges.end()};
 }
 
+// Vertices with 7 or more edges (fans, stars): a defect in a quad mesh.
+size_t highValence(const Mesh& m) {
+    std::map<uint32_t, int> deg;
+    for (auto [a, b] : faceEdges(m)) ++deg[a], ++deg[b];
+    size_t n = 0;
+    for (auto [v, d] : deg) n += d >= 7;
+    return n;
+}
+
 struct GuideFit {
     float meanAngle = 90.0f; // degrees, edges near the curve against its tangent (0 = along or across it)
     size_t nearEdges = 0;
@@ -129,11 +138,62 @@ GuideFit measureFit(const Mesh& m, glm::vec3 c, float angle) {
             size_t d1 = 0, d2 = 0, d3 = 0;
             for (uint32_t x : comp) (loop[x].size() == 1 ? d1 : loop[x].size() == 2 ? d2 : d3)++;
             std::printf("    component %zu vertices: degree 1 %zu, 2 %zu, 3+ %zu, gap %.0f\n", comp.size(), d1, d2, d3, gap);
+            if (comp.size() > 10)
+                for (uint32_t x : comp) {
+                    if (loop[x].size() == 2) continue;
+                    glm::vec3 t;
+                    float phi;
+                    const float d = onCircle(m.positions[x], t, phi);
+                    std::printf("      v%u deg %zu at %.0f deg, %.2f edges off; all edges:", x, loop[x].size(), phi * 180.0f / kPi, d / edge);
+                    for (auto [a, b] : edges) {
+                        if (a != x && b != x) continue;
+                        const uint32_t y = a == x ? b : a;
+                        glm::vec3 ty;
+                        float py;
+                        const float dy = onCircle(m.positions[y], ty, py);
+                        const glm::vec3 dd = glm::normalize(m.positions[y] - m.positions[x]);
+                        std::printf(" [v%u %.2f off, %.0f deg to tangent, len %.2f]", y, dy / edge,
+                                    std::acos(std::clamp(std::abs(glm::dot(dd, t)), 0.0f, 1.0f)) * 180.0f / kPi,
+                                    glm::length(m.positions[y] - m.positions[x]) / edge);
+                    }
+                    std::printf("\n");
+                }
         }
         if (gap < fit.loopGap) fit.loopGap = gap;
         if (cycle && gap < 30.0f) fit.closedLoop = true;
     }
     return fit;
+}
+
+// SF_GUIDE_DEBUG=dir: saves `m` as dir/name.obj with the faces just outside each circle that have an edge on it
+// in polygroup 1 (a clean band when the loop is clean), for renders with --polygroups --wireframe.
+void debugDump(const char* name, const Mesh& m, std::vector<glm::vec3> eyes, float angle) {
+    const char* dir = std::getenv("SF_GUIDE_DEBUG");
+    if (!dir) return;
+    Mesh copy = m;
+    copy.ensurePolygroups();
+    const float edge = std::sqrt(4.0f * kPi / float(std::max<size_t>(m.quadCount(), 1)));
+    for (uint32_t t = 0; t < copy.triangleCount(); ++t) {
+        glm::uvec4 f;
+        const uint32_t u = copy.quadPartnerAt(t);
+        const int n = copy.exportFace(u == Mesh::kNoQuad ? t : std::min(t, u), f);
+        copy.polygroups[t] = 0;
+        for (const glm::vec3& eye : eyes) {
+            const glm::vec3 c = glm::normalize(eye);
+            int on = 0;
+            glm::vec3 centre(0.0f);
+            for (int k = 0; k < n; ++k) {
+                const glm::vec3 p = glm::normalize(copy.positions[f[k]]);
+                centre += p;
+                // distance from the circle along the sphere, roughly
+                on += std::abs(std::acos(std::clamp(glm::dot(p, c), -1.0f, 1.0f)) - angle) < 0.2f * edge;
+            }
+            const bool outside = std::acos(std::clamp(glm::dot(glm::normalize(centre), c), -1.0f, 1.0f)) > angle;
+            if (on >= 2 && outside) copy.polygroups[t] = 1;
+        }
+    }
+    std::string err;
+    saveObj(std::string(dir) + "/" + name + ".obj", copy, err);
 }
 
 QRemeshGuide guideFrom(const std::vector<glm::vec3>& points, bool closed) {
@@ -148,51 +208,250 @@ QRemeshGuide guideFrom(const std::vector<glm::vec3>& points, bool closed) {
 } // namespace
 
 TEST(qremesh_guide_loop_round_an_eye) {
+    // Six eyes of different sizes and places (off every axis, so the plain field has no reason to circle them).
     const Mesh sphere = makeIcosphere(6);
-    const glm::vec3 eye(0.35f, 0.3f, 0.88f); // off every axis, so the plain field has no reason to circle it
-    const float angle = 0.42f;                // about 24 degrees
-    const std::vector<glm::vec3> circle = circleOnSphere(eye, angle, 240);
+    struct Eye {
+        glm::vec3 at;
+        float angle; // angular radius, radians
+        int target;
+    };
+    const Eye eyes[] = {{{0.35f, 0.3f, 0.88f}, 0.42f, 3000}, {{-0.5f, 0.2f, 0.7f}, 0.3f, 4000},
+                        {{0.1f, -0.6f, 0.6f}, 0.55f, 2000}, {{0.7f, 0.5f, -0.3f}, 0.35f, 5000},
+                        {{-0.2f, 0.9f, 0.3f}, 0.6f, 1500}, {{0.4f, -0.3f, -0.85f}, 0.25f, 3500}};
+    int loops = 0;
+    for (const Eye& e : eyes) {
+        QRemeshOptions o;
+        o.targetQuads = e.target;
+        o.adaptive = 0.0f;
+        Mesh plain, guided;
+        std::string err;
+        CHECK(qremesh(sphere, o, plain, err));
+        o.guides = {guideFrom(circleOnSphere(e.at, e.angle, 240), true)};
+        QRemeshStats st;
+        CHECK(qremesh(sphere, o, guided, err, {}, &st));
+        CHECK(st.guides == 1);
+        const TopologyReport topo = topologyReport(guided);
+        CHECK(topo.manifold() && topo.boundaryEdges == 0 && topo.quadFraction() >= 0.95f);
+        CHECK(std::abs(double(st.quads) / e.target - 1.0) < 0.1);
+        const GuideFit a = measureFit(plain, e.at, e.angle), b = measureFit(guided, e.at, e.angle);
+        std::printf("  eye %.2f rad, %d quads: without guide %.1f deg (%zu edges, loop %d), with %.1f deg (%zu edges, loop %d)\n",
+                    double(e.angle), e.target, a.meanAngle, a.nearEdges, int(a.closedLoop), b.meanAngle, b.nearEdges,
+                    int(b.closedLoop));
+        CHECK(b.meanAngle < 0.5f * a.meanAngle);
+        CHECK(b.meanAngle < 8.0f);
+        CHECK(!a.closedLoop);
+        loops += b.closedLoop;
+        CHECK(highValence(guided) == 0);
+        debugDump(("guide_eye" + std::to_string(&e - eyes)).c_str(), guided, {e.at}, e.angle);
+        if (&e == &eyes[0]) {
+            debugDump("guide_plain", plain, {e.at}, e.angle);
+            debugDump("guide_guided", guided, {e.at}, e.angle);
+            // Deterministic.
+            Mesh again;
+            CHECK(qremesh(sphere, o, again, err));
+            CHECK(again.positions == guided.positions && again.triangles == guided.triangles);
+        }
+    }
+    std::printf("  %d of 6 loops closed\n", loops);
+    CHECK(loops == 6);
+}
+
+TEST(qremesh_guide_open_curve_turns_the_flow) {
+    // An open arc (a third of a tilted circle): the edges along it follow it.
+    const Mesh sphere = makeIcosphere(6);
+    const glm::vec3 axis(0.6f, 0.7f, -0.3f);
+    const float angle = 1.2f;
+    std::vector<glm::vec3> arc = circleOnSphere(axis, angle, 300);
+    arc.resize(100);
     QRemeshOptions o;
-    o.targetQuads = 3000;
+    o.targetQuads = 2500;
     o.adaptive = 0.0f;
     Mesh plain, guided;
     std::string err;
     CHECK(qremesh(sphere, o, plain, err));
-    o.guides = {guideFrom(circle, true)};
-    QRemeshStats st;
-    CHECK(qremesh(sphere, o, guided, err, {}, &st));
-    CHECK(st.guides == 1);
-    const TopologyReport topo = topologyReport(guided);
-    CHECK(topo.manifold() && topo.boundaryEdges == 0 && topo.quadFraction() >= 0.95f);
-    CHECK(st.quads > 2500 && st.quads < 3500);
-    if (const char* dir = std::getenv("SF_GUIDE_DEBUG")) {
-        // Faces the circle passes through in their own polygroup, for --polygroups renders.
-        for (Mesh* m : {&plain, &guided}) {
-            Mesh copy = *m;
-            copy.ensurePolygroups();
-            for (uint32_t t = 0; t < copy.triangleCount(); ++t) {
-                const glm::uvec3 tri = copy.triangles[t];
-                float lo = 1e9f, hi = -1e9f;
-                for (int k = 0; k < 3; ++k) {
-                    const float d = glm::dot(glm::normalize(copy.positions[tri[k]]), glm::normalize(eye)) - std::cos(angle);
-                    lo = std::min(lo, d), hi = std::max(hi, d);
-                }
-                copy.polygroups[t] = lo <= 0.0f && hi >= 0.0f ? 1u : 0u;
-            }
-            saveObj(std::string(dir) + (m == &plain ? "/guide_plain.obj" : "/guide_guided.obj"), copy, err);
+    o.guides = {guideFrom(arc, false)};
+    CHECK(qremesh(sphere, o, guided, err));
+    CHECK(topologyReport(guided).manifold());
+    // Measure on the arc's part of the circle only: the rest of the circle isn't guided.
+    auto fitOnArc = [&](const Mesh& m) {
+        Mesh part = m;
+        const glm::vec3 c = glm::normalize(axis);
+        const glm::vec3 u = glm::normalize(glm::cross(c, glm::vec3(0, 1, 0))), v = glm::cross(c, u);
+        for (uint32_t t = 0; t < part.triangleCount(); ++t) {
+            const glm::vec3 p = glm::normalize(part.positions[part.triangles[t].x]);
+            float phi = std::atan2(glm::dot(p, v), glm::dot(p, u));
+            if (phi < 0.0f) phi += 2.0f * kPi;
+            if (phi < 0.25f || phi > 2.0f * kPi / 3.0f - 0.25f) part.triangles[t] = {0, 0, 0}; // off the arc
         }
+        return measureFit(part, axis, angle);
+    };
+    const GuideFit a = fitOnArc(plain), b = fitOnArc(guided);
+    std::printf("  arc: without %.1f deg (%zu edges), with %.1f deg (%zu edges)\n", a.meanAngle, a.nearEdges, b.meanAngle,
+                b.nearEdges);
+    CHECK(b.meanAngle < 0.6f * a.meanAngle);
+    CHECK(b.meanAngle < 10.0f);
+}
+
+TEST(qremesh_guide_with_symmetry_loops_both_sides) {
+    // One loop drawn on the +X side; QRemesh with X symmetry puts a loop round both "eyes".
+    const Mesh sphere = makeIcosphere(6);
+    const glm::vec3 eye(0.45f, 0.25f, 0.86f), mirrored(-0.45f, 0.25f, 0.86f);
+    const float angle = 0.36f;
+    QRemeshOptions o;
+    o.targetQuads = 3000;
+    o.adaptive = 0.0f;
+    o.symmetryAxis = 0;
+    o.guides = {guideFrom(circleOnSphere(eye, angle, 240), true)};
+    Mesh out;
+    std::string err;
+    QRemeshStats st;
+    CHECK(qremesh(sphere, o, out, err, {}, &st));
+    CHECK(st.symmetryUsed && st.guides == 1);
+    const TopologyReport topo = topologyReport(out);
+    CHECK(topo.manifold() && topo.boundaryEdges == 0);
+    debugDump("guide_symmetric", out, {eye, mirrored}, angle);
+    const GuideFit right = measureFit(out, eye, angle), left = measureFit(out, mirrored, angle);
+    std::printf("  symmetric: right %.1f deg loop %d, left %.1f deg loop %d\n", right.meanAngle, int(right.closedLoop),
+                left.meanAngle, int(left.closedLoop));
+    CHECK(right.closedLoop && left.closedLoop);
+    CHECK(right.meanAngle < 8.0f && left.meanAngle < 8.0f);
+}
+
+TEST(qremesh_guide_drawing_and_commands) {
+    CommandRegistry reg;
+    Document doc;
+    reg.execute(doc, "new_sphere", {{"subdivisions", 5.0}});
+    // A loop seen from the front, mirrored across X: two guides, one stroke.
+    std::string pts;
+    for (int i = 0; i <= 24; ++i) {
+        const float a = 2.0f * kPi * float(i) / 24.0f;
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "%s%.4f,%.4f,2", i ? " " : "", 0.45 + 0.2 * std::cos(a), 0.2 + 0.2 * std::sin(a));
+        pts += buf;
     }
-    const GuideFit a = measureFit(plain, eye, angle), b = measureFit(guided, eye, angle);
-    std::printf("  without guide: %.1f deg mean over %zu edges, loop %d (gap %.0f deg)\n", a.meanAngle, a.nearEdges,
-                int(a.closedLoop), a.loopGap);
-    std::printf("  with guide:    %.1f deg mean over %zu edges, loop %d (gap %.0f deg), %zu quads\n", b.meanAngle,
-                b.nearEdges, int(b.closedLoop), b.loopGap, st.quads);
-    CHECK(b.meanAngle < 0.5f * a.meanAngle);
-    CHECK(b.meanAngle < 8.0f);
-    CHECK(b.closedLoop);
-    CHECK(!a.closedLoop);
-    // Deterministic.
-    Mesh again;
-    CHECK(qremesh(sphere, o, again, err));
-    CHECK(again.positions == guided.positions && again.triangles == guided.triangles);
+    CommandResult r = reg.execute(doc, "qremesh_guide", {{"points", pts}, {"view", std::string("0,0,-1")},
+                                                          {"symmetry", std::string("x")}});
+    CHECK(r.ok);
+    std::printf("  %s\n", r.message.c_str());
+    CHECK(doc.qremeshGuides.size() == 2);
+    CHECK(doc.qremeshGuides[0].closed && doc.qremeshGuides[1].closed);
+    CHECK(doc.qremeshGuides[0].stroke == doc.qremeshGuides[1].stroke);
+    for (const glm::vec3& p : doc.qremeshGuides[0].points) CHECK(std::abs(glm::length(p) - 1.0f) < 0.01f); // on the sphere
+    CHECK(doc.qremeshGuides[0].points[0].x > 0.0f && doc.qremeshGuides[1].points[0].x < 0.0f);
+    CHECK(doc.modified);
+    // An open curve, not mirrored; a loop across the middle mirrored onto itself is kept once.
+    CHECK(reg.execute(doc, "qremesh_guide", {{"points", std::string("-0.5,-0.4,2 0,-0.5,2 0.5,-0.4,2")},
+                                             {"view", std::string("0,0,-1")}}).ok);
+    CHECK(doc.qremeshGuides.size() == 3 && !doc.qremeshGuides[2].closed);
+    CHECK(reg.execute(doc, "qremesh_guide", {{"points", std::string("-0.3,0.6,2 0,0.65,2 0.3,0.6,2")},
+                                             {"view", std::string("0,0,-1")}, {"symmetry", std::string("x")}}).ok);
+    CHECK(doc.qremeshGuides.size() == 4);
+    CHECK(reg.execute(doc, "qremesh_guides_info").message.find("4 QRemesh guides (2 loops)") != std::string::npos);
+    // Too short, or off the model.
+    CHECK(!reg.execute(doc, "qremesh_guide", {{"points", std::string("0,0,2 0.001,0,2")}, {"view", std::string("0,0,-1")}}).ok);
+    CHECK(!reg.execute(doc, "qremesh_guide", {{"points", std::string("5,5,2 6,5,2")}, {"view", std::string("0,0,-1")}}).ok);
+    CHECK(!reg.execute(doc, "qremesh_guide", {{"points", std::string("0,0,2 0.5,0,2")}, {"symmetry", std::string("w")}}).ok);
+    // Delete Last takes a stroke (with its mirror), Clear the rest.
+    CHECK(reg.execute(doc, "qremesh_guide_delete_last").ok);
+    CHECK(doc.qremeshGuides.size() == 3);
+    CHECK(reg.execute(doc, "qremesh_guide_delete_last").ok);
+    CHECK(doc.qremeshGuides.size() == 2);
+    CHECK(reg.execute(doc, "qremesh_guides_clear").ok);
+    CHECK(doc.qremeshGuides.empty());
+    CHECK(!reg.execute(doc, "qremesh_guide_delete_last").ok);
+    CHECK(!reg.execute(doc, "qremesh_guides_clear").ok);
+}
+
+TEST(qremesh_guide_command_subtools_and_projects) {
+    CommandRegistry reg;
+    Document doc;
+    reg.execute(doc, "new_sphere", {{"subdivisions", 5.0}});
+    CHECK(reg.execute(doc, "qremesh_guide", {{"points", std::string("0.2,0,2 0.4,0.2,2 0.6,0,2 0.4,-0.2,2 0.2,0,2")},
+                                             {"view", std::string("0,0,-1")}}).ok);
+    const std::vector<QRemeshGuide> drawn = doc.qremeshGuides;
+    // Per SubTool: a new SubTool has none, going back brings them back.
+    CHECK(reg.execute(doc, "subtool_append", {{"type", std::string("cube")}}).ok);
+    CHECK(doc.subtoolCount() == 2 && doc.activeSubtool == 1);
+    CHECK(doc.qremeshGuides.empty());
+    doc.selectSubtool(0);
+    CHECK(doc.qremeshGuides.size() == drawn.size() && doc.qremeshGuides[0].points == drawn[0].points);
+
+    // Projects keep them, per SubTool, exactly.
+    const std::string path = (std::filesystem::temp_directory_path() / "sf_test_guides.sfproj").string();
+    std::string err;
+    doc.selectSubtool(1);
+    CHECK(saveProject(path, doc, err)); // the guided SubTool inactive while saving
+    Document loaded;
+    CHECK(loadProject(path, loaded, err));
+    std::filesystem::remove(path);
+    CHECK(loaded.activeSubtool == 1 && loaded.qremeshGuides.empty());
+    loaded.selectSubtool(0);
+    CHECK(loaded.qremeshGuides.size() == 1);
+    CHECK(loaded.qremeshGuides[0].closed == drawn[0].closed && loaded.qremeshGuides[0].stroke == drawn[0].stroke);
+    CHECK(loaded.qremeshGuides[0].points.size() == drawn[0].points.size());
+    float worst = 0.0f;
+    for (size_t i = 0; i < drawn[0].points.size(); ++i)
+        worst = std::max(worst, glm::length(loaded.qremeshGuides[0].points[i] - drawn[0].points[i]));
+    CHECK(worst < 1e-5f);
+    // Bad JSON entries are skipped.
+    Json bad;
+    CHECK(Json::parse("[{\"points\":[1,2]},{\"points\":\"x\"},{\"closed\":true,\"points\":[0,0,1,0,1,0,1,0,0]}]", bad, err));
+    const auto parsed = qremeshGuidesFromJson(bad);
+    CHECK(parsed.size() == 1 && parsed[0].closed && parsed[0].points.size() == 3);
+
+    // The qremesh command follows them, keeps them for the original, and can ignore them.
+    doc.selectSubtool(0);
+    CommandResult r = reg.execute(doc, "qremesh", {{"target", 1500.0}, {"keep_original", true}});
+    CHECK(r.ok);
+    std::printf("  %s\n", r.message.c_str());
+    CHECK(r.message.find("followed 1 guide") != std::string::npos);
+    CHECK(doc.qremeshGuides.size() == 1);
+    CHECK(doc.subtools[size_t(doc.activeSubtool + 1)].qremeshGuides.size() == 1);
+    r = reg.execute(doc, "qremesh", {{"target", 1500.0}, {"guides", false}});
+    CHECK(r.ok && r.message.find("guide") == std::string::npos);
+    // Guides left behind by a move are ignored, with a note.
+    for (glm::vec3& p : doc.qremeshGuides[0].points) p += glm::vec3(5.0f, 0.0f, 0.0f);
+    r = reg.execute(doc, "qremesh", {{"target", 1500.0}});
+    CHECK(r.ok && r.message.find("off the surface") != std::string::npos);
+}
+
+// SF_GUIDE_SWEEP=1: closed-loop rate, mean angle and fans over many eyes, sizes and targets, with and without
+// symmetry (for tuning).
+TEST(qremesh_guide_sweep) {
+    if (!std::getenv("SF_GUIDE_SWEEP")) return;
+    const Mesh sphere = makeIcosphere(6);
+    int loops = 0, runs = 0;
+    size_t fans = 0, fansPlain = 0;
+    double angleSum = 0.0;
+    uint32_t seed = 7;
+    auto rnd = [&] {
+        seed = seed * 1664525u + 1013904223u;
+        return float(seed >> 8) / float(1u << 24);
+    };
+    for (int i = 0; i < 32; ++i) {
+        const bool sym = i >= 16;
+        glm::vec3 eye = glm::normalize(glm::vec3(rnd() - 0.5f, rnd() - 0.5f, rnd() - 0.5f));
+        const float angle = 0.25f + 0.4f * rnd();
+        if (sym) eye = glm::normalize(glm::vec3(std::sin(angle) + 0.05f + 0.4f * rnd(), 0.6f * (rnd() - 0.5f), 0.8f));
+        QRemeshOptions o;
+        o.targetQuads = 1000 + int(4000 * rnd());
+        o.adaptive = 0.0f;
+        o.symmetryAxis = sym ? 0 : -1;
+        Mesh plain, out;
+        std::string err;
+        if (!qremesh(sphere, o, plain, err)) continue;
+        o.guides = {guideFrom(circleOnSphere(eye, angle, 240), true)};
+        if (!qremesh(sphere, o, out, err)) continue;
+        const GuideFit f = measureFit(out, eye, angle);
+        const GuideFit g = sym ? measureFit(out, eye * glm::vec3(-1, 1, 1), angle) : f;
+        ++runs;
+        loops += f.closedLoop && g.closedLoop;
+        angleSum += f.meanAngle;
+        const size_t hv = highValence(out), hp = highValence(plain);
+        fans += hv, fansPlain += hp;
+        std::printf("  %2d%s: target %d, angle %.2f: %.1f deg, loop %d%d, fans %zu (plain %zu)\n", i, sym ? " sym" : "    ",
+                    o.targetQuads, angle, f.meanAngle, int(f.closedLoop), int(g.closedLoop), hv, hp);
+    }
+    std::printf("  sweep: %d / %d closed loops, mean %.1f deg, %zu fans (plain %zu)\n", loops, runs,
+                angleSum / std::max(runs, 1), fans, fansPlain);
 }
