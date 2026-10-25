@@ -17,6 +17,8 @@
 //  5. The quads are relaxed and snapped back onto the sculpt; the target count is met by adjusting the
 //     lattice size and extracting again.
 //
+// QRemesh Guides (curves drawn on the surface) constrain the fields the same way: a lattice line along each
+// curve, and the orientation turned towards it over a falloff (core/QRemeshGuides.h).
 // Keep Groups constrains the fields to the polygroup borders, so edge loops run along them (and the result
 // keeps the groups). Symmetry remeshes one half (cut at the plane) and mirrors it, welded on the seam; the plane
 // is the model's own (found from it, so a model away from the origin works), and a model that isn't
@@ -26,6 +28,7 @@
 #pragma once
 
 #include "core/Mesh.h"
+#include "core/QRemeshGuides.h"
 
 #include <functional>
 #include <string>
@@ -49,6 +52,11 @@ struct QRemeshOptions {
     float symmetryCenter = 0.0f;
     int smoothIterations = 6;
     uint32_t seed = 1;       // the field's random start (the result is deterministic for a seed)
+    // QRemesh Guides (core/QRemeshGuides.h), in the source's space: an edge loop runs along each curve and the
+    // edge flow turns to follow it. guideStrength (ZBrush's Curves Strength, 0..1): how far around a curve the
+    // flow follows it (0 = only the loop on the curve itself, 1 = about six quads to each side).
+    std::vector<QRemeshGuide> guides;
+    float guideStrength = 0.5f;
 };
 
 struct QRemeshStats {
@@ -61,6 +69,8 @@ struct QRemeshStats {
     float symmetryCenter = 0.0f; // the plane used (with symmetryUsed)
     float asymmetry = 0.0f;      // the model's mirror mismatch about that plane, in mean quad edges
     size_t pieces = 0;           // separate pieces of the source (small ones are remeshed on their own)
+    size_t guides = 0;           // QRemesh Guides used
+    size_t guidesSkipped = 0;    // guides left out: mostly off the surface (the SubTool moved since)
     double seconds = 0;
 };
 

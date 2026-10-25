@@ -13,6 +13,8 @@ weighting, playing and exporting layers.
 - Layers belong to a [SubTool](subtools.md): each SubTool has its own list of layers.
 - A weight of 0 turns a layer off, 1 shows it as sculpted. Scripts can also set negative weights or weights
   above 1 to exaggerate a shape.
+- Layers work on every [subdivision level](subdivision-levels.md), like ZBrush's 3D Layers: see
+  [Layers and subdivision levels](#layers-and-subdivision-levels).
 - Layers survive [subdividing](geometry.md#subdivide), [decimating](geometry.md#decimate) and
   [LOD chains](geometry.md#lod-chains). A [voxel remesh](geometry.md#voxel-remesh) bakes them into the surface
   (the layers are gone afterwards).
@@ -59,6 +61,33 @@ Weights are saved with the project and used by exports that keep weights (USD wr
 Click **X** next to the layer. Its offsets are removed from the mesh and the base mesh becomes the active target.
 Deleting a layer is undoable.
 
+## Layers and subdivision levels
+
+With [subdivision levels](subdivision-levels.md) a layer works the way ZBrush's 3D Layers do: record it at the
+top level for the fine detail of an expression, and it stays with the SubTool whatever level you work on.
+
+- **Each layer has its own detail on every level.** Step down with **Lower Res** (<kbd>Shift</kbd>+<kbd>D</kbd>)
+  and a lower level shows the broad part of the layer, exactly as it would show the same strokes made in the base.
+  Step back up and the layer is there as you recorded it, to the last vertex.
+- **Weights are shared by all levels.** Turn a layer off (weight 0) or blend it at a low level and the top shows
+  the same when you go back up; the slider and **Play** work at every level.
+- **Sculpt into a layer at any level.** At a low level a stroke into a layer makes a broad change that the
+  higher levels follow smoothly; the detail recorded above it stays. A layer added at a low level shows on every
+  level above it too.
+- **Reshape the base at a low level** (or turn it with the [Gizmo 3D](gizmo.md)) and each layer's detail rides on
+  the new shape: its offsets turn with the surface instead of pointing the old way.
+- **Divide** carries the layers to the new level. **Reconstruct Subdiv** keeps them, exact at the top. **Del Lower**
+  and **Del Higher** keep the current level's layers as they are.
+- **Deleting a layer** removes it from every level. Undo steps back through strokes, level changes and divisions
+  with their layers.
+- **Projects** keep every level's layers. **Exports** write the current level with its layers as blend shapes, so
+  export from the top for the game mesh; `subdiv_export path=face_low.glb level=1` writes the base cage with its
+  blend shapes instead.
+
+The tools that rebuild the mesh (Voxel Remesh, QRemesh, Decimate, Subdivide) work on the current level and drop
+the levels, as described in [Subdivision levels](subdivision-levels.md); Voxel Remesh and QRemesh bake the layers
+into the surface.
+
 ## Export blend shapes
 
 | Format | What layers become |
@@ -74,8 +103,9 @@ Deleting a layer is undoable.
 Importing works the other way: glTF morph targets and FBX or USD blend shapes open as sculpt layers. See
 [Exporting](exporting.md).
 
-> **ZBrush:** Layers here are close to ZBrush's sculpt layers with the slider used as a morph. There is no
-> record/eye toggle per layer, no layer folders and no per-layer mask yet.
+> **ZBrush:** Layers here are close to ZBrush's 3D Layers with the slider used as a morph, and they follow
+> subdivision levels the same way. Selecting a layer is its REC; a weight of 0 is its eye. There are no layer
+> folders and no per-layer mask yet.
 
 ## Scripting
 

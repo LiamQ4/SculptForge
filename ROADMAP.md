@@ -111,7 +111,7 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
 
 - ✅ Multiresolution subdivision levels (step up and down, keep detail, reconstruct)
 - ✅ ZRemesher-class quad retopology (QRemesh: target count, Adaptive Size, Keep Groups, polypaint density,
-  symmetry) plus ProjectAll detail transfer (v0.5); 📋 curve guides
+  symmetry) plus ProjectAll detail transfer (v0.5); ✅ curve guides (QRemesh Guides, v0.8)
 - ✅ Automatic UV unwrapping (Auto UV, xatlas) and texture painting on UV maps (v0.4.2)
 - ✅ Normal / displacement / AO / cavity / colour map baking with MikkTSpace tangents and a viewport preview (v0.5)
 - ✅ Performance at 20-100M polygons, multithreaded brushes, fast undo (benchmark, partial GPU uploads, Fast

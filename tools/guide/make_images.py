@@ -153,14 +153,33 @@ def dyntopo(shots: pathlib.Path):
     return save(img, "dynamic-topology", 1000)
 
 
+def qremesh_guides(shots: pathlib.Path):
+    box = (440, 290, 880, 720)
+    names = [("guides-without", "QRemesh"), ("guides-drawn", "QRemesh Guides drawn"), ("guides-with", "QRemesh with guides")]
+    panels = [Image.open(shots / f"{n}.png").convert("RGB").crop(box) for n, _ in names]
+    w, h = panels[0].size
+    img = Image.new("RGB", (w * 3 + 24, h), (20, 20, 22))
+    d = ImageDraw.Draw(img)
+    for i, (p, (_, text)) in enumerate(zip(panels, names)):
+        img.paste(p, (i * (w + 12), 0))
+        label(d, (i * (w + 12) + w // 2, 16), text, 20, "mt")
+    return save(img, "qremesh-guides", 1200)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("shots", type=pathlib.Path, help="folder with the screenshots (--ui-out of shots.sfui)")
     ap.add_argument("--preview", type=pathlib.Path, help="also write a contact sheet of every image here")
+    ap.add_argument("--only", action="append", help="make only this image (repeatable), e.g. --only qremesh-guides")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
-    made = [overview(args.shots), remesh(args.shots), subdivision(args.shots), dyntopo(args.shots)]
+    composed = {"interface-overview": overview, "remesh": remesh, "subdivision-levels": subdivision,
+                "qremesh-guides": qremesh_guides, "dynamic-topology": dyntopo}
+    wanted = lambda name: not args.only or name in args.only
+    made = [make(args.shots) for name, make in composed.items() if wanted(name)]
     for name, (shot, box, width) in CROPS.items():
+        if not wanted(name):
+            continue
         src = args.shots / f"{shot}.png"
         if not src.exists():
             print(f"missing screenshot {src}", file=sys.stderr)

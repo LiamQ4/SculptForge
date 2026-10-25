@@ -305,6 +305,8 @@ std::string BrushItem::id() const {
         return "recipe:" + name;
     case Kind::File:
         return "file:" + path;
+    case Kind::Guides:
+        return "qremesh_guides";
     }
     return {};
 }
@@ -319,6 +321,8 @@ std::string brushActionId(const BrushItem& item) {
         return "brush.recipe." + item.name;
     case BrushItem::Kind::File:
         return "brush.file." + item.path;
+    case BrushItem::Kind::Guides:
+        return "brush.qremesh_guides";
     }
     return {};
 }
@@ -377,6 +381,12 @@ std::vector<BrushItem> PickerUi::brushItems(App& app, bool libraryFiles) {
     paint.name = "Paint";
     paint.description = brushTypeDescription(kPaintBrush);
     items.push_back(std::move(paint));
+    BrushItem guides;
+    guides.kind = BrushItem::Kind::Guides;
+    guides.name = "QRemesh Guides";
+    guides.description = "ZBrush's ZRemesher Guides: draw curves on the model for QRemesh's edge loops to follow (a curve "
+                         "that ends where it started makes a loop). Alt+click a curve to delete it.";
+    items.push_back(std::move(guides));
     for (int i = 0; i < int(app.doc_.brushes.size()); ++i) {
         const BrushRecipe& r = app.doc_.brushes[size_t(i)];
         BrushItem b;
@@ -430,18 +440,21 @@ std::vector<BrushItem> PickerUi::brushItems(App& app, bool libraryFiles) {
 bool PickerUi::isActive(const App& app, const BrushItem& item) {
     switch (item.kind) {
     case BrushItem::Kind::Type:
-        return !app.paintMode_ && app.doc_.activeBrush < 0 && int(app.brush_) == item.index;
+        return !app.paintMode_ && !app.guidesMode_ && app.doc_.activeBrush < 0 && int(app.brush_) == item.index;
     case BrushItem::Kind::Paint:
-        return app.paintMode_;
+        return app.paintMode_ && !app.guidesMode_;
     case BrushItem::Kind::Recipe:
-        return !app.paintMode_ && app.doc_.activeBrush == item.index;
+        return !app.paintMode_ && !app.guidesMode_ && app.doc_.activeBrush == item.index;
     case BrushItem::Kind::File:
         return false;
+    case BrushItem::Kind::Guides:
+        return app.guidesMode_;
     }
     return false;
 }
 
 void PickerUi::select(App& app, const BrushItem& item) {
+    if (item.kind != BrushItem::Kind::Guides) app.guidesMode_ = false;
     switch (item.kind) {
     case BrushItem::Kind::Type:
         app.brush_ = BrushType(item.index);
@@ -463,6 +476,9 @@ void PickerUi::select(App& app, const BrushItem& item) {
         app.runCommand("brush_load", {{"path", item.path}});
         if (app.lastCommandOk_) app.paintMode_ = false;
         break;
+    case BrushItem::Kind::Guides:
+        app.setGuidesMode(true);
+        return;
     }
 }
 
@@ -477,6 +493,7 @@ ImTextureID PickerUi::thumbnail(App& app, const BrushItem& item) {
                    ? app.thumbs_.recipe(app.doc_.brushes[size_t(item.index)])
                    : ImTextureID(0);
     case BrushItem::Kind::File:
+    case BrushItem::Kind::Guides:
         return ImTextureID(0);
     }
     return ImTextureID(0);
@@ -586,13 +603,16 @@ void drawBrushGrid(App& app, GridMode mode) {
             if (idx == i) badge[0] = char(std::toupper(static_cast<unsigned char>(c)));
         const std::string id = b.name + "##" + section + std::to_string(i);
         const ImTextureID tex = PickerUi::thumbnail(app, b);
-        const char* glyph = b.kind == BrushItem::Kind::Paint ? ICON_LC_PAINTBRUSH : ICON_LC_BRUSH;
+        const char* glyph = b.kind == BrushItem::Kind::Paint    ? ICON_LC_PAINTBRUSH
+                            : b.kind == BrushItem::Kind::Guides ? ICON_LC_SPLINE
+                                                                : ICON_LC_BRUSH;
         const bool picked = AssetTile(id.c_str(), tex, glyph, b.name, tile, PickerUi::isActive(app, b),
                                       badge[0] ? badge : nullptr, b.kind == BrushItem::Kind::File);
         std::string footer = b.kind == BrushItem::Kind::Recipe
                                  ? brushOriginText(app.doc_.brushes[size_t(b.index)])
-                             : b.kind == BrushItem::Kind::File ? "Library file - pick to load it"
-                                                               : "Built-in brush";
+                             : b.kind == BrushItem::Kind::File   ? "Library file - pick to load it"
+                             : b.kind == BrushItem::Kind::Guides ? "Tool > Geometry > QRemesh"
+                                                                 : "Built-in brush";
         quickInfo(tex, glyph, b.name, b.description, footer);
         ui::HelpText(b.name.c_str(), nullptr, b.description.c_str(), "Brush");
         if (ImGui::BeginPopupContextItem()) {
@@ -660,7 +680,9 @@ void drawBrushGrid(App& app, GridMode mode) {
     };
     const Section sections[] = {
         {"Built-in",
-         [](const BrushItem& b) { return b.kind == BrushItem::Kind::Type || b.kind == BrushItem::Kind::Paint; }},
+         [](const BrushItem& b) {
+             return b.kind == BrushItem::Kind::Type || b.kind == BrushItem::Kind::Paint || b.kind == BrushItem::Kind::Guides;
+         }},
         {"Custom", [](const BrushItem& b) { return b.kind == BrushItem::Kind::Recipe; }},
         {"Library", [](const BrushItem& b) { return b.kind == BrushItem::Kind::File; }},
     };
@@ -911,7 +933,9 @@ void drawPickers(App& app) {
     // Remember what was picked recently, from anywhere (picker, shelf, keys, scripts).
     {
         BrushItem active;
-        if (app.paintMode_)
+        if (app.guidesMode_)
+            active.kind = BrushItem::Kind::Guides;
+        else if (app.paintMode_)
             active.kind = BrushItem::Kind::Paint;
         else if (app.doc_.activeBrush >= 0 && app.doc_.activeBrush < int(app.doc_.brushes.size())) {
             active.kind = BrushItem::Kind::Recipe;

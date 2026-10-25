@@ -292,8 +292,9 @@ void App::registerShellActions() {
             brush_ = type;
             doc_.activeBrush = -1;
             paintMode_ = false;
+            guidesMode_ = false; // leaves the QRemesh Guides brush
         };
-        a.checked = [this, type] { return brush_ == type && doc_.activeBrush < 0 && !paintMode_; };
+        a.checked = [this, type] { return brush_ == type && doc_.activeBrush < 0 && !paintMode_ && !guidesMode_; };
         add(std::move(a));
     }
     add({"draw.sculpt", "Sculpt", nullptr,
@@ -1456,16 +1457,19 @@ bool tileFrame(const char* id, ImVec2 size, ImFont* font, const std::string& cap
 void App::drawBrushTile(const char* id, ImVec2 size) {
     const float s = uiScale_;
     const BrushRecipe* recipe = activeRecipe();
-    const std::string name = paintMode_ ? "Paint" : recipe ? recipe->name : brushName(brush_);
+    const std::string name = guidesMode_ ? "QRemesh Guides" : paintMode_ ? "Paint" : recipe ? recipe->name : brushName(brush_);
     ImVec2 a, b;
     const bool clicked = tileFrame(id, size, fontSmall_, name, s, a, b);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImTextureID tex = paintMode_ ? ImTextureID(0) : recipe ? thumbs_.recipe(*recipe) : thumbs_.brush(int(brush_));
+    ImTextureID tex = paintMode_ || guidesMode_ ? ImTextureID(0) : recipe ? thumbs_.recipe(*recipe) : thumbs_.brush(int(brush_));
     const ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
     const float r = (b.x - a.x) * 0.36f;
     if (tex) {
         dl->AddImageRounded(tex, ImVec2(a.x + 2 * s, a.y + 2 * s), ImVec2(b.x - 2 * s, b.y - 2 * s), ImVec2(0, 0), ImVec2(1, 1),
                             IM_COL32_WHITE, 4.0f * s);
+    } else if (guidesMode_) { // QRemesh Guides (PanelRetopo.cpp)
+        dl->AddCircleFilled(c, r, theme::u32(theme::tile), 32);
+        centredText(dl, fontIcons_, a, b, IM_COL32(255, 196, 64, 255), ICON_LC_SPLINE);
     } else if (paintMode_) {
         const glm::vec3 pc = linearToSrgb(doc_.paintColor);
         dl->AddCircleFilled(c, r, theme::u32(ImVec4(pc.x, pc.y, pc.z, 1.0f)), 32);

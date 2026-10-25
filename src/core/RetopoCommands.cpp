@@ -34,6 +34,7 @@ std::string applyQRemesh(Document& doc, Mesh result, bool keepOriginal, const QR
         const int at = doc.activeSubtool + 1;
         doc.addSubtool(doc.mesh, active.name + " Original", false, at);
         doc.subtools[size_t(at)].visible = false;
+        doc.subtools[size_t(at)].qremeshGuides = doc.qremeshGuides; // to remesh it again with them
     }
     doc.replaceMeshUndoable(std::move(result), "QRemesh");
     const size_t faces = st.quads + st.triangles;
@@ -49,6 +50,10 @@ std::string applyQRemesh(Document& doc, Mesh result, bool keepOriginal, const QR
             std::snprintf(s, sizeof s, "; mirrored across %c", axis);
         sym = s;
     }
+    if (st.guides) sym += "; followed " + std::to_string(st.guides) + (st.guides == 1 ? " guide" : " guides");
+    if (st.guidesSkipped)
+        sym += "; " + std::to_string(st.guidesSkipped) + (st.guidesSkipped == 1 ? " guide is" : " guides are") +
+               " off the surface and were ignored (draw them again after moving the SubTool)";
     char buf[512];
     std::snprintf(buf, sizeof buf, "QRemesh: %zu quads%s from %zu triangles (%.0f%% quads%s) in %.1f s%s%s", st.quads,
                   st.triangles ? (" + " + std::to_string(st.triangles) + " triangles").c_str() : "", before,
@@ -81,7 +86,12 @@ void registerRetopoCommands(CommandRegistry& reg) {
               {"smooth", T::Number, "Relaxation passes on the surface (0-30). Default 6.", false},
               {"seed", T::Number, "Random start of the direction field (results are repeatable per seed).", false},
               {"keep_texture", T::Bool, "Keep a painted texture: Auto UV the result and project the texture onto it. "
-                                        "Default true.", false}},
+                                        "Default true.", false},
+              {"guides", T::Bool, "Follow the SubTool's QRemesh Guides (curves drawn with qremesh_guide): an edge loop "
+                                  "runs along each. Default true.", false},
+              {"curves_strength", T::Number, "Curves Strength 0-100: how far around each guide the edge flow follows "
+                                             "it (0 = just the loop on the curve, 100 = about six quads to each side). "
+                                             "Default 50.", false}},
              [](Document& doc, const Args& a) -> CommandResult {
                  if (doc.mesh.triangleCount() == 0) return {false, "QRemesh: the SubTool is empty"};
                  QRemeshOptions o;
@@ -97,6 +107,8 @@ void registerRetopoCommands(CommandRegistry& reg) {
                  }
                  o.smoothIterations = int(std::clamp(argNumber(a, "smooth", 6), 0.0, 30.0));
                  o.seed = uint32_t(std::max(0.0, argNumber(a, "seed", 1)));
+                 if (argBool(a, "guides", true)) o.guides = doc.qremeshGuides;
+                 o.guideStrength = float(std::clamp(argNumber(a, "curves_strength", 50.0), 0.0, 100.0) / 100.0);
                  Mesh out;
                  std::string err;
                  QRemeshStats st;

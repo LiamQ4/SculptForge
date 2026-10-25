@@ -99,7 +99,7 @@ public:
     void queueFile(FileAction action, std::string path);
 
 private:
-    enum class Drag { None, Stroke, Orbit, Pan, Zoom, Roll, MaskCanvas, SubToolClick, Select, Gizmo };
+    enum class Drag { None, Stroke, Orbit, Pan, Zoom, Roll, MaskCanvas, SubToolClick, Select, Gizmo, Guide };
 
     void handleEvent(const SDL_Event& e);
     void onMouseDown(float x, float y, Uint8 button);
@@ -519,6 +519,28 @@ private:
         int projectBlur = 0;
         bool projectMean = false, projectGeometry = true, projectPolypaint = true;
     } retopo_;
+    // QRemesh Guides (PanelRetopo.cpp, core/QRemeshGuides.h): the "QRemesh Guides" brush draws curves on the
+    // surface for QRemesh to follow. It is a mode beside the brushes: picking any brush (or the Gizmo) leaves it.
+    void setGuidesMode(bool on);
+    void syncGuidesMode();                                    // leaves the mode when another brush was picked
+    bool guideMouseDown(float x, float y, SDL_Keymod mod);    // true if it took the click
+    void guideDragTo(float x, float y);
+    void guideRelease();
+    void drawQRemeshGuides();                                 // the curves over the model, and the one being drawn
+    void drawQRemeshGuideControls();                          // Geometry > QRemesh > Guides
+    int guideAt(float x, float y) const;                      // the guide drawn under the cursor, or -1
+    bool guidesMode_ = false;
+    struct GuidesFrom { // the brush picked when the mode started
+        BrushType brush = BrushType::Standard;
+        int recipe = -1;
+        bool paint = false;
+    } guidesFrom_;
+    std::vector<glm::vec3> guidePath_; // the curve being drawn (points on the surface)
+    float guidePathLast_[2] = {0.0f, 0.0f};
+    float curvesStrength_ = 50.0f;     // Curves Strength 0-100 (QRemeshOptions::guideStrength x 100)
+    // Which guide points face the camera (drawn solid; the others faint), cached per view and guide set.
+    std::vector<std::vector<uint8_t>> guideVisible_;
+    uint64_t guideVisibleKey_ = 0;
     const BrushRecipe* strokeRecipe() const; // recipe the current stroke sculpts with (none for Smooth / paint only)
     // ZBrush GoZ bridge and GoZ/STL files (PanelGoz.cpp).
     void drawGozMenu();

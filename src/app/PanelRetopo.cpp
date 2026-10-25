@@ -4,7 +4,8 @@
 // Geometry > QRemesh and SubTool > Project: ZBrush's ZRemesher and ProjectAll. QRemesh (core/QRemesh.h) runs
 // on a worker thread with a progress bar and Cancel, then replaces the SubTool as one undo step (optionally
 // keeping the original as a hidden SubTool below it). ProjectAll (core/Projection.h) is quick, so it runs
-// as the project_all command. The console shows both as script lines.
+// as the project_all command. The console shows both as script lines. The QRemesh Guides brush (ZBrush's
+// ZRemesher Guides, core/QRemeshGuides.h) draws the curves QRemesh follows.
 #include "app/App.h"
 #include "app/Demo.h"
 #include "app/Ui.h"
@@ -12,7 +13,11 @@
 #include "core/TextureTransfer.h"
 #include "core/Voxel.h"
 
+#include <IconsLucide.h>
+
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <thread>
 
 namespace sf {
@@ -26,6 +31,15 @@ constexpr const char* kProjectPath = "Tool > SubTool > Project";
 size_t faceCount(const Mesh& m) { return m.triangleCount() - m.quadCount(); }
 
 int symmetryAxis(const Symmetry& s) { return s.y && !s.x ? 1 : s.z && !s.x && !s.y ? 2 : 0; }
+
+bool ctrlHeld(SDL_Keymod mod) { return (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0; }
+
+// Distance from p to the segment ab, on screen.
+float segmentDistance(ImVec2 p, ImVec2 a, ImVec2 b) {
+    const float dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+    const float t = l2 > 0.0f ? std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / l2, 0.0f, 1.0f) : 0.0f;
+    return std::hypot(a.x + dx * t - p.x, a.y + dy * t - p.y);
+}
 
 } // namespace
 
@@ -48,6 +62,26 @@ void App::registerRetopoUiActions() {
         "edge loops follow the forms, close to Target Polygons. Runs in the background (Cancel stops it); undoable. "
         "Then divide it and use SubTool > Project > ProjectAll to bring the detail back.",
         "qremesh");
+    {
+        Action a;
+        a.id = "brush.qremesh_guides";
+        a.label = "QRemesh Guides";
+        a.icon = ICON_LC_SPLINE;
+        a.palette = kQRemeshPath;
+        a.run = [this] { setGuidesMode(!guidesMode_); };
+        a.checked = [this] { return guidesMode_; };
+        a.description = "The QRemesh Guides brush (ZBrush's ZRemesher Guides): drag on the model to draw a curve for "
+                        "QRemesh's edge loops to follow, around an eye, the mouth or a joint. A curve that ends where "
+                        "it started becomes a loop. Symmetry mirrors it; Alt+click a curve to delete it. Pick any "
+                        "brush to sculpt again.";
+        actions_.add(std::move(a));
+    }
+    add("geometry.qremesh_guides_delete_last", "Delete Last", kQRemeshPath,
+        [this] { runCommand("qremesh_guide_delete_last"); }, [this] { return !doc_.qremeshGuides.empty(); },
+        "Delete the last QRemesh guide curve drawn (with its mirror copies).", "qremesh_guide_delete_last");
+    add("geometry.qremesh_guides_clear", "Clear", kQRemeshPath, [this] { runCommand("qremesh_guides_clear"); },
+        [this] { return !doc_.qremeshGuides.empty(); }, "Delete every QRemesh guide curve of this SubTool.",
+        "qremesh_guides_clear");
     add("subtool.project_all", "ProjectAll", kProjectPath, [this] {
             runCommand("project_all", {{"distance", double(retopo_.projectDist)}, {"mean", retopo_.projectMean},
                                        {"blur", double(retopo_.projectBlur)}, {"geometry", retopo_.projectGeometry},
@@ -74,6 +108,8 @@ void App::startQRemesh() {
     o.detectEdges = retopo_.detectEdges;
     o.usePolypaint = retopo_.usePolypaint;
     o.symmetryAxis = retopo_.symmetry ? symmetryAxis(symmetry_) : -1;
+    o.guides = doc_.qremeshGuides;
+    o.guideStrength = std::clamp(curvesStrength_, 0.0f, 100.0f) / 100.0f;
 
     auto job = std::make_unique<QRemeshJob>();
     job->progress = std::make_shared<std::atomic<float>>(0.0f);
@@ -90,6 +126,7 @@ void App::startQRemesh() {
     if (o.usePolypaint) job->args["use_polypaint"] = true;
     if (o.symmetryAxis >= 0) job->args["symmetry"] = std::string(1, char('x' + o.symmetryAxis));
     if (job->keepOriginal) job->args["keep_original"] = true;
+    if (!o.guides.empty() && std::abs(curvesStrength_ - 50.0f) > 0.01f) job->args["curves_strength"] = double(curvesStrength_);
     const bool keepTexture = keepTexture_;
     if (!keepTexture && hasTexture(doc_.mesh)) job->args["keep_texture"] = false;
     job->textureNote = std::make_shared<std::string>();
@@ -303,6 +340,235 @@ void App::drawQRemeshContents() {
         ImGui::SameLine(half + style.ItemSpacing.x);
         drawKeepTextureCheckbox("Keep Texture##qremesh", kQRemeshPath);
     }
+    drawQRemeshGuideControls();
+}
+
+// ---------------------------------------------------------------------------
+// QRemesh Guides
+// ---------------------------------------------------------------------------
+
+void App::drawQRemeshGuideControls() {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float full = ImGui::GetContentRegionAvail().x;
+    const float half = (full - style.ItemSpacing.x) * 0.5f;
+    ImGui::SeparatorText("Guides");
+    ui::ActionButton(*this, "brush.qremesh_guides", ImVec2(half, 0));
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    size_t loops = 0;
+    for (const QRemeshGuide& g : doc_.qremeshGuides) loops += g.closed;
+    if (doc_.qremeshGuides.empty()) ImGui::TextDisabled("no curves");
+    else ImGui::TextDisabled("%zu curves (%zu loops)", doc_.qremeshGuides.size(), loops);
+    ui::ActionButton(*this, "geometry.qremesh_guides_delete_last", ImVec2(half, 0));
+    ImGui::SameLine();
+    ui::ActionButton(*this, "geometry.qremesh_guides_clear", ImVec2(-1, 0));
+    ImGui::SetNextItemWidth(-1);
+    ui::SliderInside("##qcurves", &curvesStrength_, 0.0f, 100.0f, "Curves Strength %.0f");
+    ui::HelpText("Curves Strength", nullptr,
+                 "How far around each guide curve the edge flow follows it: 0 = only the edge loop on the curve, 100 = "
+                 "about six quads to each side (ZBrush's Curves Strength). The loop on the curve is always made.",
+                 kQRemeshPath);
+}
+
+void App::setGuidesMode(bool on) {
+    if (drag_ == Drag::Guide) return;
+    guidesMode_ = on;
+    guidePath_.clear();
+    if (on) {
+        guidesFrom_ = {brush_, doc_.activeBrush, paintMode_};
+        if (gizmoActive()) setGizmoMode(GizmoMode::Off);
+        status_ = "QRemesh Guides: drag on the model to draw a curve for QRemesh to follow (end where you started for a "
+                  "loop); Alt+click a curve deletes it";
+    } else {
+        status_ = "Draw";
+    }
+}
+
+void App::syncGuidesMode() {
+    // Picking a brush (picker, shelf, keys, LightBox), Paint or the Gizmo leaves the guides brush.
+    if (guidesMode_ && drag_ != Drag::Guide &&
+        (brush_ != guidesFrom_.brush || doc_.activeBrush != guidesFrom_.recipe || paintMode_ != guidesFrom_.paint ||
+         gizmoActive()))
+        setGuidesMode(false);
+}
+
+int App::guideAt(float x, float y) const {
+    int best = -1;
+    float bestD = 10.0f * uiScale_;
+    for (size_t g = 0; g < doc_.qremeshGuides.size(); ++g) {
+        const QRemeshGuide& guide = doc_.qremeshGuides[g];
+        const size_t n = guide.points.size();
+        ImVec2 prev;
+        bool havePrev = false;
+        for (size_t i = 0; i <= n; ++i) {
+            if (i == n && !guide.closed) break;
+            ImVec2 p;
+            if (!gizmoProject(guide.points[i % n], p)) {
+                havePrev = false;
+                continue;
+            }
+            if (havePrev) {
+                const float d = segmentDistance(ImVec2(x, y), prev, p);
+                if (d < bestD) bestD = d, best = int(g);
+            }
+            prev = p;
+            havePrev = true;
+        }
+    }
+    return best;
+}
+
+bool App::guideMouseDown(float x, float y, SDL_Keymod mod) {
+    if (!guidesMode_ || ctrlHeld(mod) || (mod & SDL_KMOD_SHIFT)) return false; // Ctrl masks, Shift smooths as usual
+    if (mod & SDL_KMOD_ALT) { // delete the curve under the cursor (and its mirror copies)
+        const int g = guideAt(x, y);
+        if (g < 0) return false;
+        const uint32_t stroke = doc_.qremeshGuides[size_t(g)].stroke;
+        auto& guides = doc_.qremeshGuides;
+        guides.erase(std::remove_if(guides.begin(), guides.end(), [&](const QRemeshGuide& q) { return q.stroke == stroke; }),
+                     guides.end());
+        doc_.modified = true;
+        status_ = "QRemesh guide deleted; " + std::to_string(guides.size()) + " left";
+        return true;
+    }
+    RayHit hit;
+    if (previewLod_ >= 0 || !pick(x, y, hit)) return false; // the background navigates
+    guidePath_ = {hit.position};
+    guidePathLast_[0] = x;
+    guidePathLast_[1] = y;
+    drag_ = Drag::Guide;
+    return true;
+}
+
+void App::guideDragTo(float x, float y) {
+    if (std::hypot(x - guidePathLast_[0], y - guidePathLast_[1]) < 2.0f * uiScale_) return;
+    RayHit hit;
+    if (!pick(x, y, hit)) return; // off the model: the curve continues where it comes back
+    guidePath_.push_back(hit.position);
+    guidePathLast_[0] = x;
+    guidePathLast_[1] = y;
+}
+
+void App::guideRelease() {
+    std::vector<glm::vec3> path = std::move(guidePath_);
+    guidePath_.clear();
+    doc_.syncBvh();
+    const int added = path.size() >= 2 ? addQRemeshGuide(doc_.qremeshGuides, doc_.mesh, doc_.bvh, path, symmetry_) : 0;
+    if (added == 0) {
+        status_ = "QRemesh Guides: the curve is too short (drag across the model)";
+        return;
+    }
+    doc_.modified = true;
+    const QRemeshGuide& g = doc_.qremeshGuides[doc_.qremeshGuides.size() - size_t(added)];
+    status_ = std::string("QRemesh guide added (") + (g.closed ? "a loop" : "a curve") + (added > 1 ? ", mirrored" : "") +
+              "); " + std::to_string(doc_.qremeshGuides.size()) + " curves. Run QRemesh to use them";
+}
+
+void App::drawQRemeshGuides() {
+    syncGuidesMode();
+    const std::vector<QRemeshGuide>& guides = doc_.qremeshGuides;
+    if ((guides.empty() && guidePath_.empty()) || !doc_.activeSubtoolInfo().visible) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList(); // under the panels, over the model
+    const CanvasRect cr = canvasRect();
+    dl->PushClipRect(ImVec2(cr.x, cr.y), ImVec2(cr.x + cr.w, cr.y + cr.h), true);
+    const float s = uiScale_;
+
+    // Which points the model hides: a ray from the eye to each one (refreshed when the view or the guides change;
+    // at most ~2000 rays a frame, the points between them follow their neighbours).
+    {
+        const glm::mat4 vp = camera_.projection() * camera_.view();
+        uint64_t key = 1469598103934665603ull;
+        auto mix = [&](const void* data, size_t bytes) {
+            const auto* b = static_cast<const unsigned char*>(data);
+            for (size_t i = 0; i < bytes; ++i) key = (key ^ b[i]) * 1099511628211ull;
+        };
+        mix(&vp, sizeof vp);
+        mix(&cr, sizeof cr);
+        const uint64_t rev = doc_.undo.revision(), sub = doc_.activeSubtoolInfo().id;
+        mix(&rev, sizeof rev);
+        mix(&sub, sizeof sub);
+        size_t points = 0;
+        for (const QRemeshGuide& g : guides) {
+            points += g.points.size();
+            if (!g.points.empty()) mix(&g.points.back(), sizeof(glm::vec3));
+        }
+        mix(&points, sizeof points);
+        if (key != guideVisibleKey_ || guideVisible_.size() != guides.size()) {
+            guideVisibleKey_ = key;
+            guideVisible_.assign(guides.size(), {});
+            doc_.syncBvh();
+            const float eps = 0.01f * glm::length(doc_.mesh.bounds().extent());
+            const size_t stride = std::max<size_t>(1, points / 2000);
+            for (size_t g = 0; g < guides.size(); ++g) {
+                const auto& pts = guides[g].points;
+                auto& vis = guideVisible_[g];
+                vis.assign(pts.size(), 1);
+                for (size_t i = 0; i < pts.size(); i += stride) {
+                    ImVec2 sp;
+                    if (!gizmoProject(pts[i], sp)) {
+                        vis[i] = 0;
+                        continue;
+                    }
+                    glm::vec3 origin, dir;
+                    canvasRay(sp.x, sp.y, origin, dir);
+                    const float t = glm::dot(pts[i] - origin, dir) / std::max(glm::dot(dir, dir), 1e-20f);
+                    RayHit hit;
+                    vis[i] = !doc_.bvh.raycast(doc_.mesh, origin, dir, hit) || hit.t > t - eps / std::sqrt(glm::dot(dir, dir));
+                }
+                for (size_t i = 0; i < pts.size(); ++i)
+                    if (i % stride) vis[i] = vis[i - i % stride];
+            }
+        }
+    }
+
+    const ImVec2 mouse(mouseX_, mouseY_);
+    const bool altHover = guidesMode_ && drag_ == Drag::None && (inputMods() & SDL_KMOD_ALT) &&
+                          !ImGui::GetIO().WantCaptureMouse && cr.contains(mouse.x, mouse.y);
+    const int doomed = altHover ? guideAt(mouse.x, mouse.y) : -1;
+    const uint32_t doomedStroke = doomed >= 0 ? guides[size_t(doomed)].stroke : 0;
+    for (size_t g = 0; g < guides.size(); ++g) {
+        const QRemeshGuide& guide = guides[g];
+        const size_t n = guide.points.size();
+        const bool dead = doomed >= 0 && guide.stroke == doomedStroke;
+        // Solid while the brush is picked; thin and faint otherwise, so the edge loop QRemesh put there shows.
+        const ImU32 front = dead ? IM_COL32(255, 90, 80, 255) : IM_COL32(255, 196, 64, guidesMode_ ? 255 : 110);
+        const ImU32 back = dead ? IM_COL32(255, 90, 80, 70) : IM_COL32(255, 196, 64, guidesMode_ ? 55 : 30);
+        const float width = guidesMode_ ? 2.5f : 1.25f;
+        ImVec2 prev;
+        bool havePrev = false, prevVis = false;
+        for (size_t i = 0; i <= n; ++i) {
+            if (i == n && !guide.closed) break;
+            ImVec2 p;
+            if (!gizmoProject(guide.points[i % n], p)) {
+                havePrev = false;
+                continue;
+            }
+            const bool vis = guideVisible_[g][i % n] != 0;
+            if (havePrev) {
+                const bool both = vis && prevVis;
+                dl->AddLine(prev, p, both ? front : back, (both ? width : 1.25f) * s);
+            }
+            prev = p;
+            prevVis = vis;
+            havePrev = true;
+        }
+    }
+    // The curve being drawn, with its mirror images.
+    if (drag_ == Drag::Guide && guidePath_.size() >= 2)
+        for (const glm::vec3& m : Sculptor::mirrors(symmetry_)) {
+            const bool own = m == glm::vec3(1.0f);
+            for (size_t i = 1; i < guidePath_.size(); ++i) {
+                ImVec2 a, b;
+                if (gizmoProject(guidePath_[i - 1] * m, a) && gizmoProject(guidePath_[i] * m, b))
+                    dl->AddLine(a, b, own ? IM_COL32(255, 230, 140, 255) : IM_COL32(255, 230, 140, 120), (own ? 2.5f : 1.5f) * s);
+            }
+        }
+    // The guides brush's cursor: a small ring with a dot.
+    if (guidesMode_ && !ImGui::GetIO().WantCaptureMouse && cr.contains(mouse.x, mouse.y)) {
+        dl->AddCircle(mouse, 7.0f * s, IM_COL32(255, 196, 64, 230), 20, 1.5f * s);
+        dl->AddCircleFilled(mouse, 1.8f * s, IM_COL32(255, 196, 64, 255));
+    }
+    dl->PopClipRect();
 }
 
 void App::drawProjectContents() {

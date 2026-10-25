@@ -25,6 +25,7 @@
 //                            keep: leave the button down (a shot mid-drag), then `release`
 //   gizmo_hover HANDLE       move the mouse onto a Gizmo 3D handle (it lights up, for screenshots)
 //   orbit DX DY              right-drag on the background, in pixels (with the held modifiers)
+//   camera YAW PITCH         set the view's angles in degrees (0 0 = the front view), e.g. for guide screenshots
 //   run COMMANDS             sculptforge-cli commands, e.g. run new_sphere subdivisions=4
 //   drop FILE                as if FILE were dropped onto the window (relative to the script's folder)
 //   env NAME VALUE           set an environment variable; $SCRIPT_DIR is the script's folder
@@ -64,6 +65,8 @@
 //                            texture_painted (texels of the texture composite that aren't white),
 //                            texture_mean_r / texture_mean_g / texture_mean_b (mean composite, sRGB 0-255),
 //                            auto_uv_running, qremesh_running (QRemesh working in the background),
+//                            qremesh_guides (guide curves on the active SubTool), qremesh_guide_loops (closed ones),
+//                            guides_mode (1 while the QRemesh Guides brush is picked),
 //                            quads (quad pairs in the active SubTool), quad_percent (quads among its polygons)
 //                            sdiv (the current subdivision level, 1 = base; 0 without levels), sdiv_levels (0 = none)
 //                            antialiasing (Preferences > Performance: 1, 2, 4, 8), view_samples (what the interactive
@@ -257,6 +260,13 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "auto_uv_running") return app_.autoUv_ ? 1.0 : 0.0;
     if (const double v = app_.bakeTestValue(name); !std::isnan(v)) return v;
     if (name == "qremesh_running") return app_.qremesh_ ? 1.0 : 0.0;
+    if (name == "qremesh_guides") return double(app_.doc_.qremeshGuides.size());
+    if (name == "qremesh_guide_loops") {
+        size_t n = 0;
+        for (const QRemeshGuide& g : app_.doc_.qremeshGuides) n += g.closed;
+        return double(n);
+    }
+    if (name == "guides_mode") return app_.guidesMode_ ? 1.0 : 0.0;
     if (name == "quads") return double(m.quadCount());
     if (name == "quad_percent")
         return m.triangleCount() ? 100.0 * double(m.quadCount()) / double(m.triangleCount() - m.quadCount()) : 0.0;
@@ -762,6 +772,14 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
     } else if (verb == "orbit") {
         if (!need(2)) return false;
         orbit(num(1, 0), num(2, 0), 0.4f);
+    } else if (verb == "camera") {
+        if (!need(2)) return false;
+        run([this, yaw = num(1, 0), pitch = num(2, 0)] {
+            app_.camera_.yaw = glm::radians(float(yaw));
+            app_.camera_.pitch = glm::radians(float(pitch));
+            app_.camera_.roll = 0.0f;
+        });
+        wait(0.1f);
     } else if (verb == "drop") {
         if (!need(1)) return false;
         auto file = std::filesystem::path(std::u8string(w[1].begin(), w[1].end()));

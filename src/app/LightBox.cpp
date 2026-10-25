@@ -222,6 +222,8 @@ void LightBox::rootEntries(App& app, std::vector<AssetEntry>& out) {
             case BrushItem::Kind::File:
                 e.kind = AssetKind::BrushFile;
                 break;
+            case BrushItem::Kind::Guides: // a tool, not a brush file: only in the pickers
+                continue;
             }
             out.push_back(std::move(e));
         }

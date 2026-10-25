@@ -70,6 +70,7 @@ add_library(sculptforge_core STATIC
   src/core/TextureTransfer.cpp
   src/core/SurfaceQuery.cpp
   src/core/QRemesh.cpp
+  src/core/QRemeshGuides.cpp
   src/core/Projection.cpp
   src/core/RetopoCommands.cpp
   third_party/xatlas/xatlas.cpp

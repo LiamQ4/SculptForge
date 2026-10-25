@@ -282,6 +282,15 @@ struct Level {
     std::vector<vec3> cdir, cpos;
     std::vector<uint8_t> boundary;  // on an open edge of the mesh
     std::vector<vec3> color;        // polypaint (usePolypaint only)
+    // QRemesh Guides: how strongly (0..1) the orientation turns to the nearest curve's direction gdir (empty
+    // without guides).
+    std::vector<float> gw;
+    std::vector<vec3> gdir;
+    // Line constraints on a closed guide (empty without closed guides): which (-1: none), where along it, and
+    // whether cpos is pinned as a lattice corner (pinClosedGuides).
+    std::vector<int32_t> gid;
+    std::vector<float> garc;
+    std::vector<uint8_t> cfix;
     // Fields.
     std::vector<vec3> Q, O;
     std::vector<float> S;
@@ -481,6 +490,149 @@ Level buildFinest(const WorkMesh& m, bool keepGroups, float sharpCos, std::vecto
     return l;
 }
 
+// --- QRemesh Guides --------------------------------------------------------------------------------------
+
+// A closed guide: its points (in order), the arc length at each, and how many lattice steps go round it.
+struct ClosedGuide {
+    std::vector<vec3> points;
+    std::vector<float> arc; // arc[i]: length from points[0] to points[i]
+    float length = 0.0f;
+    SegmentBVH bvh;
+    float steps = 0.0f;     // set by closedGuideSize
+
+    vec3 at(float s) const { // the point at arc length s (wrapping round)
+        s = std::fmod(s, length);
+        if (s < 0.0f) s += length;
+        const size_t i = size_t(std::upper_bound(arc.begin(), arc.end(), s) - arc.begin()) - 1;
+        const size_t j = (i + 1) % points.size();
+        const float len = (j ? arc[j] : length) - arc[i];
+        return glm::mix(points[i], points[j], len > 0.0f ? (s - arc[i]) / len : 0.0f);
+    }
+};
+
+// QRemesh Guides on the finest level: vertices on a curve (within about half an edge of it) get a line
+// constraint along it, so the lattice puts a line, and the result an edge loop, there; vertices within `radius`
+// turn their orientation towards the curve's direction with a weight falling off from 1 on the curve. Vertices
+// with a constraint already (open edges, borders, hard edges) keep theirs. The curves' segments are added to
+// `guideSegs`, so relaxation keeps the loop's vertices on the curve. Line vertices on a closed guide remember
+// which (Level::gid) and where along it (Level::garc), for pinClosedGuides.
+void applyGuides(Level& l, const std::vector<QRemeshGuide>& guides, float radius,
+                 std::vector<std::pair<vec3, vec3>>& guideSegs, std::vector<ClosedGuide>& closed) {
+    std::vector<vec3> a, b, ta, tb; // segments and the curve's tangent at each end
+    std::vector<int32_t> segClosed; // per segment: its closed guide, or -1
+    std::vector<float> segArc;      // arc length at the segment's start (closed guides)
+    closed.clear();
+    for (const QRemeshGuide& g : guides) {
+        const size_t n = g.points.size();
+        if (n < 2) continue;
+        auto tangent = [&](size_t i) {
+            const size_t prev = i > 0 ? i - 1 : g.closed ? n - 1 : 0, next = i + 1 < n ? i + 1 : g.closed ? 0 : n - 1;
+            return safeNormalize(g.points[next] - g.points[prev], vec3(0.0f));
+        };
+        const bool loop = g.closed && n > 2;
+        ClosedGuide c;
+        const size_t segs = loop ? n : n - 1;
+        for (size_t i = 0; i < segs; ++i) {
+            const size_t j = (i + 1) % n;
+            a.push_back(g.points[i]);
+            b.push_back(g.points[j]);
+            ta.push_back(tangent(i));
+            tb.push_back(tangent(j));
+            guideSegs.push_back({g.points[i], g.points[j]});
+            segClosed.push_back(loop ? int32_t(closed.size()) : -1);
+            segArc.push_back(c.length);
+            if (loop) {
+                c.points.push_back(g.points[i]);
+                c.arc.push_back(c.length);
+                c.length += glm::length(g.points[j] - g.points[i]);
+            }
+        }
+        if (loop) {
+            c.bvh.build(std::vector<vec3>(a.end() - long(segs), a.end()), std::vector<vec3>(b.end() - long(segs), b.end()));
+            closed.push_back(std::move(c));
+        }
+    }
+    if (a.empty()) return;
+    SegmentBVH bvh;
+    bvh.build(a, b);
+    const size_t nv = l.size();
+    l.gw.assign(nv, 0.0f);
+    l.gdir.assign(nv, vec3(0.0f));
+    if (!closed.empty()) {
+        l.gid.assign(nv, -1);
+        l.garc.assign(nv, 0.0f);
+    }
+    parallelFor(nv, [&](size_t b0, size_t e0) {
+        for (size_t v = b0; v < e0; ++v) {
+            SurfaceHit hit;
+            if (!bvh.closestPoint(l.V[v], radius, hit)) continue;
+            vec3 t = ta[hit.prim] * hit.bary.x + tb[hit.prim] * hit.bary.y;
+            if (glm::dot(t, ta[hit.prim]) < 0.0f) t = ta[hit.prim];
+            const vec3 n = l.N[v];
+            t -= n * glm::dot(n, t);
+            if (glm::length(t) < 1e-6f) continue;
+            t = glm::normalize(t);
+            const float f = 1.0f - hit.distance / radius;
+            l.gw[v] = f * f;
+            l.gdir[v] = t;
+            if (l.ctype[v] != kFree) continue;
+            float edge = 0.0f;
+            for (uint32_t k = l.off[v]; k < l.off[v + 1]; ++k) edge += glm::length(l.V[l.adj[k]] - l.V[v]);
+            const uint32_t deg = l.off[v + 1] - l.off[v];
+            if (deg && hit.distance < 0.6f * edge / float(deg)) {
+                l.ctype[v] = kLine;
+                l.cdir[v] = t;
+                l.cpos[v] = hit.position;
+                if (const int32_t c = segClosed[hit.prim]; c >= 0) {
+                    l.gid[v] = c;
+                    l.garc[v] = segArc[hit.prim] + hit.bary.y * glm::length(b[hit.prim] - a[hit.prim]);
+                }
+            }
+        }
+    });
+}
+
+// A loop's lattice closes up only when its length is a whole number of lattice steps; otherwise the position
+// field slips somewhere along it (a kink in the edge loop). Picks that number for each closed guide from the
+// mean size on it, and scales the size field to fit, blended out over `reach`.
+void closedGuideSize(const Level& L, std::vector<float>& S, std::vector<ClosedGuide>& closed, float reach) {
+    for (ClosedGuide& c : closed) {
+        double sum = 0.0;
+        size_t cnt = 0;
+        std::vector<std::pair<uint32_t, float>> near; // (vertex, distance)
+        for (uint32_t v = 0; v < L.size(); ++v) {
+            SurfaceHit hit;
+            if (!c.bvh.closestPoint(L.V[v], reach, hit)) continue;
+            near.push_back({v, hit.distance});
+            if (hit.distance < 0.25f * reach) sum += S[v], ++cnt;
+        }
+        c.steps = 0.0f;
+        if (!cnt) continue;
+        const float s = float(sum / double(cnt));
+        c.steps = std::max(4.0f, std::round(c.length / s));
+        const float f = c.length / (c.steps * s);
+        for (auto [v, d] : near) {
+            const float w = d < 0.25f * reach ? 1.0f : 1.0f - (d - 0.25f * reach) / (0.75f * reach);
+            S[v] *= 1.0f + (f - 1.0f) * w;
+        }
+    }
+}
+
+// Puts lattice corners at `steps` even places round each closed guide: every line vertex on it is pinned to the
+// one nearest along the curve, so the corners round the loop agree with each other and it closes up cleanly.
+void pinClosedGuides(Level& l, const std::vector<ClosedGuide>& closed) {
+    if (l.gid.empty()) return;
+    l.cfix.assign(l.size(), 0);
+    for (uint32_t v = 0; v < l.size(); ++v) {
+        if (l.gid[v] < 0 || l.ctype[v] != kLine) continue;
+        const ClosedGuide& c = closed[size_t(l.gid[v])];
+        if (c.steps <= 0.0f) continue;
+        const float step = c.length / c.steps;
+        l.cpos[v] = c.at(std::round(l.garc[v] / step) * step);
+        l.cfix[v] = 1;
+    }
+}
+
 // The next coarser level: greedy matching of neighbours with similar normals (Instant Meshes' ordering).
 bool downsample(Level& f, Level& c) {
     const size_t n = f.size();
@@ -502,6 +654,7 @@ bool downsample(Level& f, Level& c) {
     std::vector<uint32_t>& up = f.up;
     up.assign(n, kNone);
     const bool colors = !f.color.empty();
+    const bool guided = !f.gw.empty();
     auto addVertex = [&](uint32_t i) {
         up[i] = uint32_t(c.V.size());
         c.V.push_back(f.V[i]);
@@ -512,6 +665,8 @@ bool downsample(Level& f, Level& c) {
         c.cpos.push_back(f.cpos[i]);
         c.boundary.push_back(f.boundary[i]);
         if (colors) c.color.push_back(f.color[i]);
+        if (guided) c.gw.push_back(f.gw[i]), c.gdir.push_back(f.gdir[i]);
+        if (!f.gid.empty()) c.gid.push_back(f.gid[i]), c.garc.push_back(f.garc[i]);
     };
     for (const Entry& e : entries) {
         if (up[e.i] != kNone || up[e.j] != kNone) continue;
@@ -528,8 +683,10 @@ bool downsample(Level& f, Level& c) {
             c.ctype[v] = f.ctype[e.j];
             c.cdir[v] = f.cdir[e.j];
             c.cpos[v] = f.cpos[e.j];
+            if (!f.gid.empty()) c.gid[v] = f.gid[e.j], c.garc[v] = f.garc[e.j];
         }
         c.boundary[v] |= f.boundary[e.j];
+        if (guided && f.gw[e.j] > c.gw[v]) c.gw[v] = f.gw[e.j], c.gdir[v] = f.gdir[e.j]; // the stronger pull
     }
     for (uint32_t i = 0; i < n; ++i)
         if (up[i] == kNone) addVertex(i);
@@ -612,6 +769,14 @@ void smoothOrientations(Level& l, int iterations) {
                         if (len > 1e-20f) sum /= len;
                     }
                     if (glm::length(sum) < 0.5f) sum = l.Q[i];
+                    if (!l.gw.empty() && l.gw[i] > 0.0f) { // turn towards the guide's direction
+                        const vec3 g = l.gdir[i] - n * glm::dot(n, l.gdir[i]);
+                        if (glm::length(g) > 1e-6f) {
+                            const vec3 a = alignTo(sum, n, glm::normalize(g), n);
+                            const vec3 m = glm::mix(sum, a, l.gw[i]);
+                            sum = safeNormalize(m - n * glm::dot(n, m), sum);
+                        }
+                    }
                     applyOrientationConstraint(l, i, sum);
                     l.Q[i] = sum;
                 }
@@ -620,6 +785,8 @@ void smoothOrientations(Level& l, int iterations) {
 
 void applyPositionConstraint(const Level& l, uint32_t i, const vec3& q, vec3& o) {
     if (l.ctype[i] == kPoint) {
+        o = l.cpos[i] - l.N[i] * glm::dot(l.N[i], l.cpos[i] - l.V[i]);
+    } else if (l.ctype[i] == kLine && !l.cfix.empty() && l.cfix[i]) { // a pinned corner on a closed guide
         o = l.cpos[i] - l.N[i] * glm::dot(l.N[i], l.cpos[i] - l.V[i]);
     } else if (l.ctype[i] == kLine) {
         const vec3 perp = glm::cross(l.N[i], l.cdir[i]); // across the line, in the tangent plane
@@ -1083,6 +1250,7 @@ struct Snapper {
     const SegmentBVH* borders = nullptr;  // polygroup borders (Keep Groups) and hard edges
     const SegmentBVH* corners = nullptr;  // where several of those meet (as zero-length segments)
     float reach = 1.0f;
+    const SegmentBVH* guides = nullptr;   // QRemesh Guides: only the loops' own vertices snap to them
 };
 
 // Tangential relaxation on the source surface; vertices on open edges stay on the source's open edges, those
@@ -1115,9 +1283,14 @@ void relax(QuadMesh& q, const Snapper& snap, int iterations, float edge, const Q
             normal = vec3(0.0f);
             return hit.position;
         }
-        if (open[v] == 1 && snap.borders && snap.borders->closestPoint(p, snap.reach, hit)) {
-            normal = vec3(0.0f);
-            return hit.position;
+        if (open[v] == 1) {
+            SurfaceHit g;
+            const bool onBorder = snap.borders && snap.borders->closestPoint(p, snap.reach, hit);
+            const bool onGuide = snap.guides && snap.guides->closestPoint(p, onBorder ? hit.distance : snap.reach, g);
+            if (onBorder || onGuide) {
+                normal = vec3(0.0f);
+                return onGuide ? g.position : hit.position;
+            }
         }
         if (snap.surface->closestPoint(p, snap.reach, hit)) {
             normal = snap.surface->faceNormal(hit.prim);
@@ -1131,10 +1304,12 @@ void relax(QuadMesh& q, const Snapper& snap, int iterations, float edge, const Q
         for (size_t v = b; v < e; ++v) q.P[v] = project(uint32_t(v), q.P[v], normal[v]);
     });
     // Polygroup-border vertices: within a fifth of an edge of a border.
-    if (snap.borders && !snap.borders->empty())
+    // Vertices on a guide's loop are the ones extracted on it (features): a vertex merely near a guide stays free.
+    if (snap.borders || snap.guides)
         for (uint32_t v = 0; v < nv; ++v) {
             SurfaceHit hit;
-            if (open[v] == 0 && (q.feature[v] || snap.borders->closestPoint(q.P[v], 0.2f * edge, hit))) open[v] = 1;
+            if (open[v] == 0 && (q.feature[v] || (snap.borders && snap.borders->closestPoint(q.P[v], 0.2f * edge, hit))))
+                open[v] = 1;
         }
     // Corners of the source (a box's, a thin slab's) each pin their nearest quad vertex, so they stay sharp.
     std::vector<uint8_t> pinned(nv, 0);
@@ -1283,8 +1458,8 @@ struct PieceResult {
 
 // The field-aligned remesh of one connected piece to about `wantQuads` quads. False on cancel.
 bool remeshPiece(WorkMesh work, int axis, double wantQuads, const QRemeshOptions& opt, float diag,
-                 const std::function<bool(float)>& report, const std::function<void(const char*)>& mark,
-                 PieceResult& res) {
+                 const std::vector<QRemeshGuide>& guides, const std::function<bool(float)>& report,
+                 const std::function<void(const char*)>& mark, PieceResult& res) {
     static const bool timing = std::getenv("SF_QREMESH_TIMING") != nullptr;
     const QRemeshProgress progress = [&](float f) { return report(f); };
     double area = 0.0;
@@ -1302,13 +1477,21 @@ bool remeshPiece(WorkMesh work, int axis, double wantQuads, const QRemeshOptions
     mark("surface bvh");
     if (!report(0.05f)) return false;
 
-    std::vector<std::pair<vec3, vec3>> boundarySegs, borderSegs;
+    std::vector<std::pair<vec3, vec3>> boundarySegs, borderSegs, guideSegs;
     std::vector<uint8_t> boundaryIsCut;
     work = refineLongEdges(std::move(work), 1.5f * wantEdge, std::max<size_t>(4'000'000, work.T.size()));
     std::vector<Level> levels;
+    std::vector<ClosedGuide> closedGuides;
     const float sharpCos = opt.detectEdges ? std::cos(glm::radians(50.0f)) : 2.0f;
     mark("refine");
     levels.push_back(buildFinest(work, opt.keepGroups, sharpCos, boundarySegs, boundaryIsCut, borderSegs, axis));
+    if (!guides.empty()) {
+        // The flow follows a curve over 0.5 (Curves Strength 0) to 6 quads (1) to each side; a quad is half the
+        // lattice spacing (each extracted face splits into four).
+        const float strength = std::clamp(opt.guideStrength, 0.0f, 1.0f);
+        applyGuides(levels[0], guides, spacing * (0.25f + 2.75f * strength), guideSegs, closedGuides);
+        mark("guides");
+    }
     mark("finest level");
     if (!report(0.10f)) return false;
     // Hierarchy down to a few vertices; fields are solved from the top to the finest level dense enough.
@@ -1423,6 +1606,10 @@ bool remeshPiece(WorkMesh work, int axis, double wantQuads, const QRemeshOptions
         const float c = float(std::sqrt(want / faces)) * (sp / spacing);
         L.S.resize(L.size());
         for (uint32_t i = 0; i < L.size(); ++i) L.S[i] = c * rel[i];
+        if (!closedGuides.empty()) {
+            closedGuideSize(L, L.S, closedGuides, 2.0f * c);
+            for (size_t li = base; li < levels.size(); ++li) pinClosedGuides(levels[li], closedGuides);
+        }
         for (size_t li = base + 1; li < levels.size(); ++li) {
             const Level& f = levels[li - 1];
             Level& cl = levels[li];
@@ -1477,7 +1664,7 @@ bool remeshPiece(WorkMesh work, int axis, double wantQuads, const QRemeshOptions
     if (!report(0.85f)) return false;
 
     // Snap to the sculpt and relax.
-    SegmentBVH boundaryBvh, borderBvh, cornerBvh;
+    SegmentBVH boundaryBvh, borderBvh, cornerBvh, guideBvh;
     {
         std::vector<vec3> c;
         for (uint32_t i = 0; i < levels[0].size(); ++i)
@@ -1489,9 +1676,12 @@ bool remeshPiece(WorkMesh work, int axis, double wantQuads, const QRemeshOptions
         a.clear(), b.clear();
         for (auto& s : borderSegs) a.push_back(s.first), b.push_back(s.second);
         borderBvh.build(std::move(a), std::move(b));
+        a.clear(), b.clear();
+        for (auto& s : guideSegs) a.push_back(s.first), b.push_back(s.second);
+        guideBvh.build(std::move(a), std::move(b));
     }
     Snapper snap{&surface, boundaryBvh.empty() ? nullptr : &boundaryBvh, borderBvh.empty() ? nullptr : &borderBvh,
-                 cornerBvh.empty() ? nullptr : &cornerBvh, spacing * 4.0f + 1e-3f * diag};
+                 cornerBvh.empty() ? nullptr : &cornerBvh, spacing * 4.0f + 1e-3f * diag, guideBvh.empty() ? nullptr : &guideBvh};
     bool cancelled = false;
     relax(qm, snap, std::max(opt.smoothIterations, 0), sp * 0.5f, progress, 0.85f, 0.95f, cancelled);
     if (cancelled) return false;
@@ -1609,6 +1799,47 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
         }
     }
 
+    // QRemesh Guides in the working frame: snapped onto the sculpt as it is now (it may have changed since they
+    // were drawn) and, with symmetry, mirrored, so a curve drawn on either side guides both.
+    // A guide mostly off the surface (the SubTool was moved after it was drawn) is left out.
+    std::vector<QRemeshGuide> guides;
+    if (!opt.guides.empty()) buildFull();
+    for (const QRemeshGuide& g : opt.guides) {
+        QRemeshGuide s = g;
+        size_t on = 0;
+        for (vec3& p : s.points) {
+            SurfaceHit hit;
+            if (full.closestPoint(p, 0.05f * diag, hit)) p = hit.position, ++on;
+            if (axis >= 0) p[axis] -= center;
+        }
+        if (s.points.size() >= 2 && on * 2 > s.points.size()) guides.push_back(std::move(s));
+        else ++st.guidesSkipped;
+    }
+    st.guides = guides.size();
+    if (!guides.empty()) {
+        if (axis >= 0) {
+            // A curve that is its own mirror image (a loop round the mouth, across the middle) isn't doubled:
+            // the two copies would pin different corners on the same loop.
+            const size_t n = guides.size();
+            for (size_t i = 0; i < n; ++i) {
+                QRemeshGuide m = guides[i];
+                for (vec3& p : m.points) p[axis] = -p[axis];
+                std::vector<vec3> a, b;
+                for (size_t k = 0; k + 1 < guides[i].points.size(); ++k)
+                    a.push_back(guides[i].points[k]), b.push_back(guides[i].points[k + 1]);
+                if (guides[i].closed) a.push_back(guides[i].points.back()), b.push_back(guides[i].points.front());
+                SegmentBVH self;
+                self.build(std::move(a), std::move(b));
+                double off = 0.0;
+                for (const vec3& p : m.points) {
+                    SurfaceHit hit;
+                    off += self.closestPoint(p, 0.05f * diag, hit) ? hit.distance : 0.05f * diag;
+                }
+                if (off / double(m.points.size()) > 0.004 * diag) guides.push_back(std::move(m));
+            }
+        }
+    }
+
     // Small separate pieces (eyes, teeth, rivets: fewer than ~100 quads by their area) are remeshed on their
     // own with a few dozen quads at least, so they don't vanish between the lattice corners of the big ones;
     // the rest share one field (and the target, by curvature, as before).
@@ -1689,7 +1920,7 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
         // A piece the lattice misses is tried again finer, then kept as it is (its own triangles).
         for (int attempt = 0; attempt < 3 && r.mesh.quads.empty(); ++attempt) {
             r = PieceResult{};
-            if (!remeshPiece(parts[i], axis, budget[i] * std::pow(2.5, attempt), opt, diag, pieceReport, mark, r)) {
+            if (!remeshPiece(parts[i], axis, budget[i] * std::pow(2.5, attempt), opt, diag, guides, pieceReport, mark, r)) {
                 error = "QRemesh cancelled";
                 return false;
             }
