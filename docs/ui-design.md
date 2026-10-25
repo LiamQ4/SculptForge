@@ -189,12 +189,13 @@ Row 1:
 Row 2:
 - `[AI Brush]` (toggles the Brush Lab window)
 - `[Front]` (front faces only)
+- `[Dynamic]` dynamic topology (`act:draw.dynamic`, ZBrush's Sculptris Pro) and `Detail 50` slider (w 120; contextual: only while Dynamic is on)
 - `[X][Y][Z]` symmetry (`X` toggles X)
 - `[Pressure>Str] [Pressure>Size]`
 - right-aligned `5.1k / 10.2k` (ActivePoints / TotalPoints analogue: visible vs total tris)
 
 **Contextual controls.** A shelf button that only applies in some situations (the Vertex / Texture paint target
-needs a texture, Splats needs a capture) is *hidden* while it doesn't apply, rather than shown greyed out, so the
+needs a texture, Splats needs a capture, Detail needs Dynamic on) is *hidden* while it doesn't apply, rather than shown greyed out, so the
 shelves don't fill with dead buttons. Customize mode shows them all so they can be moved or removed. Palette
 entries stay visible and disabled (with the reason in Ctrl help), because palettes are where users look things up.
 

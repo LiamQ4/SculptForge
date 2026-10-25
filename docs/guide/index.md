@@ -31,30 +31,31 @@ You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<
 13. [Texture painting](texture-painting.md)
 14. [Sculpt layers and blend shapes](layers.md)
 15. [Subdivision levels](subdivision-levels.md)
-16. [Moving, rotating and posing (Gizmo 3D)](gizmo.md)
-17. [Subdivide, remesh, decimate and LODs](geometry.md)
-18. [Quad retopology and detail projection](retopology.md)
+16. [Dynamic topology](dynamic-topology.md)
+17. [Moving, rotating and posing (Gizmo 3D)](gizmo.md)
+18. [Subdivide, remesh, decimate and LODs](geometry.md)
+19. [Quad retopology and detail projection](retopology.md)
 
 ## AI and capture
 
-19. [Image and text to 3D](generate-3d.md)
-20. [Gaussian splats](splats.md)
+20. [Image and text to 3D](generate-3d.md)
+21. [Gaussian splats](splats.md)
 
 ## Files and pipelines
 
-21. [Baking normal and displacement maps](baking.md)
-22. [Exporting, Unreal and ZBrush](exporting.md)
-23. [Working with Blender](blender.md)
-24. [Projects, autosave and QuickSave](projects.md)
-25. [Scripting and automation](scripting.md)
-26. [SculptForge for studios](studios.md)
+22. [Baking normal and displacement maps](baking.md)
+23. [Exporting, Unreal and ZBrush](exporting.md)
+24. [Working with Blender](blender.md)
+25. [Projects, autosave and QuickSave](projects.md)
+26. [Scripting and automation](scripting.md)
+27. [SculptForge for studios](studios.md)
 
 ## Reference
 
-27. [Keyboard and mouse](shortcuts.md)
-28. [Performance and big meshes](performance.md)
-29. [Troubleshooting and FAQ](troubleshooting.md)
-30. [Glossary](glossary.md)
+28. [Keyboard and mouse](shortcuts.md)
+29. [Performance and big meshes](performance.md)
+30. [Troubleshooting and FAQ](troubleshooting.md)
+31. [Glossary](glossary.md)
 
 ## Getting help
 

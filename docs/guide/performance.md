@@ -69,6 +69,15 @@ setting is also in the <kbd>F3</kbd> command palette (type "antialiasing", "fast
 - **Undo** keeps only what each stroke changed, so a stroke on a 33 million triangle mesh undoes in a few tens of
   milliseconds, and the history holds many such strokes within its 1 GB.
 
+## Dynamic topology
+
+[Dynamic topology](dynamic-topology.md) only works where the brush is, so its speed depends on how many
+triangles the brush covers rather than on the size of the mesh: on an M1 Pro a medium dab takes 4 to 12
+milliseconds on a one-million-triangle sphere. It gets slower when a big brush (or a low Detail) has to merge
+many small triangles at once; it then spreads the work over several dabs. Undoing a stroke rebuilds the mesh's
+connections, which takes about a tenth of a second per million triangles. `sculptforge --bench --bench-dyntopo`
+measures it on your machine.
+
 ## Measuring your own machine
 
 `sculptforge --bench` builds a sphere at 4, 16 and 32 million triangles and measures every brush, undo,

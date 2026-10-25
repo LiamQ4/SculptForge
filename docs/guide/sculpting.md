@@ -322,4 +322,5 @@ Points are projected onto the surface along `view` (default `0,0,-1`, the front 
 - [Masking](masking.md): protect areas from every brush
 - [Polypaint and materials](polypaint.md): Paint brush, Rgb and colour
 - [Sculpt layers and blend shapes](layers.md): sculpt into a layer you can dial in and out
+- [Dynamic topology](dynamic-topology.md): brushes that add triangles where they need them (Sculptris Pro)
 - [Keyboard and mouse reference](shortcuts.md)

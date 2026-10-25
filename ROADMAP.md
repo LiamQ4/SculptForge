@@ -84,7 +84,7 @@ rendering/animation (use Blender).
   group per SubTool), USD and GoZ; multi-object files open as SubTools
 - ✅ UI tests: `.sfui` scripts drive the real app (clicks, typing, strokes) with screenshots, in CI
 - ✅ Multiresolution: subdivision levels you can step up/down while keeping detail (v0.5)
-- 📋 Dynamic topology (local remeshing under the brush)
+- ✅ Dynamic topology (local remeshing under the brush, Sculptris Pro style) (v0.8)
 - ✅ Alphas (round, square, noise or any grayscale image) and stroke types (dots, drag-rect, spray, lazy mouse)
 - ✅ MaskLasso / MaskRect and SelectLasso (v0.4); 📋 stencils, MaskCurve
 - ✅ More brushes: Clay Buildup, Dam Standard, Snake Hook, Trim (dynamic), Layer, Nudge
@@ -134,7 +134,7 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
   Smooth's own Z Intensity, ZBrush brush letters, mask and visibility gestures); the 0.6 keys as a preference
 - ✅ Blender bridge: the SculptForge Bridge add-on for Blender 4.2+, objects update in place with transforms,
   UVs, colours, mask and face sets
-- 📋 Next: dynamic topology, mmap project open, an HD Geometry equivalent
+- 📋 Next: dynamic topology (✅ in v0.8), mmap project open, an HD Geometry equivalent
 
 ## Phase 3 — AI assistant, beyond brushes
 

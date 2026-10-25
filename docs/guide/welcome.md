@@ -48,7 +48,7 @@ the GPL covers the program, not your models.
 SculptForge is young (version 0.7; see [What's new](whats-new.md)). Some things ZBrush artists rely on are
 still on the roadmap:
 
-- Dynamic topology (Sculptris Pro style) and QRemesh curve guides.
+- QRemesh curve guides.
 - UV editing (seams, relax) and UDIM tiles.
 - Booleans and stencils.
 

@@ -6,6 +6,27 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### Dynamic topology (ZBrush's Sculptris Pro)
+Guide chapter docs/guide/dynamic-topology.md.
+- **Dynamic** on the top shelf (and in the Draw palette): every brush except Move, masking and painting remeshes
+  the surface under it each dab: splits long edges (on the curve the normals describe), collapses short ones,
+  flips for even valences and relaxes the new vertices, only inside the brush.
+- **Detail** slider (0-100): the target edge length relative to the brush radius (Sculptris Pro), or with the
+  **Constant detail** preference one size for the whole mesh. Smooth remeshes towards twice the size, so it
+  simplifies.
+- Keeps the mesh manifold with no degenerate or flipped triangles; boundaries, polygroup borders and the
+  symmetry plane only slide along themselves; fully masked and hidden parts are left alone. X/Y/Z symmetry
+  remeshes mirror images together, so the topology is mirrored too.
+- Carries mask, polypaint, paint layers, polygroups and sculpt layer offsets; quads under the brush become
+  triangles; UVs are dropped (Undo restores them). Meshes with subdivision levels are refused, as in ZBrush.
+- Undo keeps only the vertex and triangle slots the stroke touched. The BVH (incremental inserts, removals,
+  leaf splits), the adjacency (editable per vertex during a stroke) and the GPU (per-cluster patches instead
+  of a full upload) follow each dab.
+- `dyntopo` command (enabled, detail, constant) for the console, CLI, MCP and Python; Dynamic and Detail are
+  saved with project settings; stored UI layouts get the new top-shelf items on load.
+- Benchmark: `--bench-dyntopo` (docs/performance.md). On an M1 Pro, a medium dab on a 1M-triangle sphere takes
+  4-12 ms including the GPU update.
+
 ## [0.7.0] - 2026-10-25
 
 ZBrush's keys and gestures by default, and a bridge to Blender.

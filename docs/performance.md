@@ -12,6 +12,81 @@ sculptforge-cli --bench ...                     # the same without the GPU (CI, 
 Machine for all figures: Apple M1 Pro (8 performance + 2 efficiency cores, 32 GB unified memory, 30 GB usable
 under Asahi Linux), integrated GPU, Mesa 26.1 (OpenGL 4.6). How the benchmark works is described under v0.5 below.
 
+## v0.8: dynamic topology (feat/dyntopo)
+
+```
+sculptforge --bench --bench-dyntopo --bench-sizes 0.25,1,4
+```
+
+Spheres without subdivision levels (Sculptris Pro works on such meshes only), dynamic topology on with relative
+detail, strokes with X symmetry. Each row starts from the same sphere. "remesh" is the dynamic topology work of a
+dab (gathering the area, matching mirror images, splits, collapses, flips, relaxing, filling the freed slots,
+rings and normals of what changed, BVH edits); "GPU upload" sends the clusters whose triangles changed as patches
+(render/Renderer.h) instead of a full upload. "undo" rebuilds the adjacency, normals and BVH of the whole mesh.
+
+What to read from it:
+
+- **The brief's target, a dab on a 1M-triangle mesh under 15 ms with a medium brush (radius 0.12), holds: 7 to
+  12 ms** with the GPU update. A very large brush (radius 0.4) is 24 ms.
+- The cost follows the work under the brush, not the mesh size: the 4M sphere is four times finer than the 1M
+  one, so at the same Detail the brush merges four times as many edges per dab (Standard, Detail 50%: about
+  2,000 collapses per dab at 4M against 500 at 1M). A dab does at most 6,000 operations; a big brush over very
+  fine triangles coarsens them over several dabs.
+- Undo memory is what the stroke touched: 5 MB for a 40-dab stroke at 1M.
+- Undo and redo take a full rebuild (85-95 ms at 1M, 350 ms at 4M); see Known limits.
+
+Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8. Dynamic topology on (relative detail), X symmetry (two dabs per step), 40 dabs per stroke on a unit sphere without subdivision levels. Times in milliseconds.
+
+#### 249k triangles (124k vertices, no subdivision levels)
+
+| Stroke | remesh | kernel | normals | BVH | GPU upload | **dab total** | triangles after | stroke end | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard, Detail 50% | 0.76 | 0.04 | 0.03 | 0.01 | 0.70 | **1.56** | 246k | 1.2 | 46.4 | 47.6 | 0.52 MB |
+| Standard, Detail 100% | 9.69 | 0.25 | 0.28 | 0.11 | 2.11 | **12.46** | 322k | 29.1 | 49.1 | 40.1 | 0.79 MB |
+| Snake Hook, Detail 50% | 3.80 | 0.05 | 0.05 | 0.02 | 1.19 | **5.13** | 253k | 41.8 | 48.4 | 51.9 | 0.58 MB |
+| Clay Buildup, Detail 75% | 4.31 | 0.16 | 0.17 | 0.06 | 1.37 | **6.09** | 267k | 22.0 | 49.8 | 32.3 | 0.47 MB |
+| Smooth (simplifies), Detail 50% | 1.15 | 0.02 | 0.02 | 0.01 | 1.41 | **2.62** | 240k | 1.1 | 46.9 | 45.3 | 1.35 MB |
+| Standard (large, r 0.4), Detail 50% | 3.51 | 0.09 | 0.07 | 0.04 | 2.79 | **6.54** | 215k | 36.7 | 48.5 | 43.9 | 4.05 MB |
+
+#### 995k triangles (498k vertices, no subdivision levels)
+
+| Stroke | remesh | kernel | normals | BVH | GPU upload | **dab total** | triangles after | stroke end | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard, Detail 50% | 3.72 | 0.06 | 0.05 | 0.03 | 4.02 | **7.93** | 960k | 5.6 | 85.2 | 80.3 | 5.14 MB |
+| Standard, Detail 100% | 8.70 | 0.26 | 0.30 | 0.11 | 2.69 | **12.11** | 1.0M | 4.5 | 95.0 | 89.5 | 1.46 MB |
+| Snake Hook, Detail 50% | 6.21 | 0.07 | 0.06 | 0.03 | 4.16 | **10.59** | 970k | 4.3 | 93.9 | 86.3 | 4.54 MB |
+| Clay Buildup, Detail 75% | 4.11 | 0.23 | 0.23 | 0.09 | 2.14 | **6.87** | 982k | 4.2 | 89.6 | 84.5 | 2.47 MB |
+| Smooth (simplifies), Detail 50% | 3.99 | 0.06 | 0.04 | 0.02 | 3.95 | **8.11** | 957k | 4.6 | 92.1 | 83.4 | 5.43 MB |
+| Standard (large, r 0.4), Detail 50% | 13.20 | 0.26 | 0.23 | 0.15 | 9.95 | **23.93** | 856k | 66.2 | 89.5 | 80.0 | 16.59 MB |
+
+#### 4.0M triangles (2.0M vertices, no subdivision levels)
+
+| Stroke | remesh | kernel | normals | BVH | GPU upload | **dab total** | triangles after | stroke end | undo | redo | undo step |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard, Detail 50% | 13.12 | 0.16 | 0.12 | 0.07 | 9.98 | **23.63** | 3.8M | 24.4 | 340.7 | 312.4 | 22.47 MB |
+| Standard, Detail 100% | 11.40 | 0.37 | 0.40 | 0.18 | 5.59 | **18.12** | 3.9M | 22.3 | 347.4 | 318.6 | 12.97 MB |
+| Snake Hook, Detail 50% | 12.82 | 0.16 | 0.13 | 0.07 | 10.20 | **23.53** | 3.9M | 22.8 | 324.7 | 319.3 | 18.89 MB |
+| Clay Buildup, Detail 75% | 16.49 | 0.84 | 0.84 | 0.37 | 9.96 | **28.73** | 4.0M | 23.1 | 352.7 | 334.6 | 12.60 MB |
+| Smooth (simplifies), Detail 50% | 15.30 | 0.30 | 0.22 | 0.09 | 9.27 | **25.36** | 3.9M | 22.9 | 335.3 | 329.8 | 18.26 MB |
+| Standard (large, r 0.4), Detail 50% | 70.27 | 1.83 | 1.67 | 1.00 | 41.69 | **117.29** | 3.6M | 288.3 | 349.2 | 352.6 | 51.90 MB |
+
+### 33M benchmark unchanged
+
+Dynamic topology touches hot paths (Mesh::neighbors / vertexTriangles, BVH traversal, the renderer's vertex
+gather), so the regular benchmark was run at 33M against main at ffb3747 built the same way, alternating the
+two builds: memory is identical (3070 MB RSS, 37 / 17.1 / 29 B per triangle for mesh / BVH / levels, 14.8 B on
+the GPU) and every brush, Lower / Higher Res, project and orbit time is within run-to-run noise (for example
+Standard 7.60 / 7.54 ms, Clay 7.31-7.50 / 7.35-7.53 ms, Fast Navigation 3.4-3.7 / 3.3-3.6 ms; base / feat/dyntopo).
+
+### Known limits
+
+- Undo / redo of a dynamic-topology stroke rebuilds topology, normals and BVH for the whole mesh and re-uploads
+  it (about 0.1 s per million triangles). Making it incremental like the dabs is possible (the record lists the
+  changed slots) but not done.
+- The GPU patches redraw whole 4,096-triangle clusters; when more than a quarter of the clusters are patched the
+  next frame does a full upload (about 50 ms at 4M). A stroke's end packs the adjacency (a few ms at 1M) and
+  rebuilds the BVH when edits have worn it down (up to 70 ms at 1M with a large brush).
+
 ## v0.6
 
 v0.6 is three pieces of work merged together: less memory per triangle (feat/mem), faster brushes on huge

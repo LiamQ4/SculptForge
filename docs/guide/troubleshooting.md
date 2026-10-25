@@ -207,8 +207,8 @@ No. They are proprietary and undocumented. Use GoZ, or export OBJ or FBX from ZB
 **Does it have subdivision levels, DynaMesh, ZRemesher or UVs?**
 Voxel remesh works like DynaMesh, **QRemesh** like ZRemesher (with **ProjectAll** to bring the detail back; see
 [Quad retopology](retopology.md)), **Auto UV** unwraps any model, and Divide adds subdivision levels you can
-step up and down (see [Subdivision levels](subdivision-levels.md)). Dynamic topology is not there yet; it is on
-the roadmap.
+step up and down (see [Subdivision levels](subdivision-levels.md)). **Dynamic** on the top shelf is dynamic
+topology, like Sculptris Pro (see [Dynamic topology](dynamic-topology.md)).
 
 **Is it really free? Can I sell what I make?**
 Yes and yes. SculptForge is GPL-3.0-or-later free software; the licence covers the program, not your models.

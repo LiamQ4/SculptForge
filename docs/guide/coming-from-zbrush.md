@@ -49,7 +49,7 @@ keys and gestures by default; where it has habits of its own, they are kept as a
 | Stroke replay (<kbd>1</kbd>, <kbd>2</kbd>, <kbd>3</kbd>) | Not yet | |
 | <kbd>N</kbd> lists the SubTools | The SubTool sub-palette in the right tray | |
 | DynaMesh, ZRemesher | **Voxel Remesh** and **QRemesh** in **Tool > Geometry** | See [Geometry](geometry.md) and [Retopology](retopology.md) |
-| Sculptris Pro | Not yet | |
+| Sculptris Pro | **Dynamic** on the top shelf, with its **Detail** slider | See [Dynamic topology](dynamic-topology.md) |
 | Open edges hold their shape when smoothed | Smooth pulls an open border in a little with each pass | Mask the border first when it matters |
 | Values 0-100 everywhere | The same for Z Intensity, RGB Intensity and Focal Shift; Draw Size is the radius in pixels | |
 

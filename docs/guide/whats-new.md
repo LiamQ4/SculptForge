@@ -5,6 +5,16 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Next version (in development)
+
+### Dynamic topology (Sculptris Pro)
+
+Turn on **Dynamic** on the top shelf and the brush adds triangles where it needs detail and removes them where
+it doesn't: pull a sphere into horns or fingers without stretching, block in from a ball without remeshing.
+**Detail** sets how small the triangles get, relative to the brush (zoom in for finer ones) or, with **Constant
+detail**, one size for the whole mesh. Symmetry makes mirrored triangles, borders and masks are kept, and each
+stroke is one small undo step. See [Dynamic topology](dynamic-topology.md).
+
 ## Version 0.7
 
 ZBrush's keys and gestures by default, and a bridge that sends models between Blender and SculptForge.

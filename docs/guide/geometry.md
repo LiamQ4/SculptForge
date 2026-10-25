@@ -53,7 +53,8 @@ multiplies the triangle count by four and rounds off the shape slightly, like ZB
 
 > **Note:** Subdivide replaces the mesh with a denser one and drops any [subdivision levels](subdivision-levels.md):
 > it subdivides the level you are on, which becomes the new base, and the status line says so (undo brings the
-> levels back). Voxel Remesh, Decimate and QRemesh do the same. Dynamic topology is on the roadmap.
+> levels back). Voxel Remesh, Decimate and QRemesh do the same. To add triangles only where you sculpt, use
+> [Dynamic topology](dynamic-topology.md).
 
 > **Tip:** The title strip shows the vertex and triangle counts of the whole scene. A few million triangles sculpt
 > smoothly on a recent GPU; go up a level only when you need finer detail.

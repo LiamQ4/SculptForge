@@ -48,7 +48,7 @@ for what is planned.
 | QuickSave | **QuickSave** in the title strip; the last 10 are kept. See [Projects](projects.md#quicksave) |
 | Rgb | **Rgb** on the top shelf (paint while sculpting) |
 | Rgb Intensity, Z Intensity, Focal Shift | Same names and keys: **RGB Intensity** (<kbd>I</kbd>), **Z Intensity** (<kbd>U</kbd>), **Focal Shift** (<kbd>O</kbd>) in the Draw palette and the QuickMenu |
-| Sculptris Pro, dynamic topology | Not yet |
+| Sculptris Pro, dynamic topology | **Dynamic** on the top shelf, with **Detail** (`dyntopo`). See [Dynamic topology](dynamic-topology.md) |
 | Reconstruct Subdiv | **Tool > Geometry > Reconstruct Subdiv** (`subdiv_reconstruct`) |
 | SDiv, Lower Res / Higher Res (Shift+D / D) | **Tool > Geometry**: the **SDiv** slider, **Lower Res** <kbd>Shift</kbd>+<kbd>D</kbd>, **Higher Res** <kbd>D</kbd> (`subdiv_level`). See [Subdivision levels](subdivision-levels.md) |
 | SelectLasso, SelectRect | **Tool > Visibility**: pick the shape, then <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag (add <kbd>Alt</kbd> to hide). See [Polygroups](polygroups.md) |
