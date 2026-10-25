@@ -175,6 +175,9 @@ def test_zbrush_keys():
         bpy.ops.sculptforge.zbrush_sdiv(step=1)
         bpy.ops.sculptforge.zbrush_sdiv(step=1)
         check(multires.sculpt_levels == 2 and multires.total_levels == 2, "D steps up to the top, adds nothing")
+    # Ctrl+W (sculptforge.zbrush_group) runs sculpt operators that need a viewport (mask_flood_fill crashes
+    # headless Blender): only its poll is checked here.
+    check(bpy.ops.sculptforge.zbrush_group.poll(), "Ctrl+W: Group is available in Sculpt Mode")
     bpy.ops.object.mode_set(mode="OBJECT")
     p.zbrush_keys = False
     check(len(addon_sculpt_items()) == before and not keys.enabled(), "ZBrush keys: turning it off removes them")

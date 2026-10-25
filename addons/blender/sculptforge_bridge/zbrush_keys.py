@@ -159,6 +159,31 @@ class SCULPTFORGE_OT_zbrush_divide(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class SCULPTFORGE_OT_zbrush_group(bpy.types.Operator):
+    bl_idname = "sculptforge.zbrush_group"
+    bl_label = "ZBrush Group"
+    bl_description = "Make the masked part a face set and clear the mask; with nothing masked, the visible part (ZBrush Ctrl+W)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == "SCULPT" and context.active_object is not None
+
+    def execute(self, context):
+        mask = context.active_object.data.attributes.get(".sculpt_mask")
+        values = [0.0] * (len(mask.data) if mask else 0)
+        if mask:
+            mask.data.foreach_get("value", values)
+        if any(v > 0.5 for v in values):
+            bpy.ops.sculpt.face_sets_create(mode="MASKED")
+            bpy.ops.paint.mask_flood_fill(mode="VALUE", value=0.0)
+            self.report({"INFO"}, "Grouped the masked part")
+        else:
+            bpy.ops.sculpt.face_sets_create(mode="VISIBLE")
+            self.report({"INFO"}, "Grouped the visible part")
+        return {"FINISHED"}
+
+
 class SCULPTFORGE_MT_zbrush_brushes(bpy.types.Menu):
     bl_idname = "SCULPTFORGE_MT_zbrush_brushes"
     bl_label = "ZBrush Brushes"
@@ -204,8 +229,8 @@ def key_table():
          "PRESS", {}),
         ("D", "SDiv up", SCULPTFORGE_OT_zbrush_sdiv.bl_idname, "D", False, False, False, "PRESS", {"step": 1}),
         ("Shift+D", "SDiv down", SCULPTFORGE_OT_zbrush_sdiv.bl_idname, "D", False, True, False, "PRESS", {"step": -1}),
-        ("Ctrl+W", "Group Visible (a face set)", "sculpt.face_sets_create", "W", True, False, False, "PRESS",
-         {"mode": "VISIBLE"}),
+        ("Ctrl+W", "Group Masked and clear the mask, or Group Visible (face sets)", SCULPTFORGE_OT_zbrush_group.bl_idname,
+         "W", True, False, False, "PRESS", {}),
         ("W / E / R", "Move / Scale / Rotate", "wm.tool_set_by_id", "W", False, False, False, "PRESS",
          {"name": "builtin.move"}),
         ("", "", "wm.tool_set_by_id", "E", False, False, False, "PRESS", {"name": "builtin.scale"}),
@@ -262,7 +287,7 @@ def disable():
 
 
 CLASSES = (SCULPTFORGE_OT_zbrush_brush, SCULPTFORGE_OT_zbrush_sdiv, SCULPTFORGE_OT_zbrush_divide,
-           SCULPTFORGE_MT_zbrush_brushes)
+           SCULPTFORGE_OT_zbrush_group, SCULPTFORGE_MT_zbrush_brushes)
 
 
 def register():
