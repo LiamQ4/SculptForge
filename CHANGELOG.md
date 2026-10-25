@@ -6,6 +6,10 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-25
+
+ZBrush's keys and gestures by default, and a bridge to Blender.
+
 ### ZBrush feel: ZBrush's keys and gestures by default
 Audit in docs/zbrush-parity.md (sources: Maxon's ZBrush shortcut sheet and documentation); guide chapter
 docs/guide/coming-from-zbrush.md.
@@ -563,7 +567,8 @@ First public release.
 - Rez package (`packaging/rez`).
 - Headless thumbnail/turntable rendering and scripted demo recording.
 
-[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/islandmed/SculptForge/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/islandmed/SculptForge/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/islandmed/SculptForge/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/islandmed/SculptForge/compare/v0.4.1...v0.4.2

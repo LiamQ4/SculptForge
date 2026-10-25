@@ -45,7 +45,7 @@ the GPL covers the program, not your models.
 
 ## What it doesn't do yet
 
-SculptForge is young (version 0.6; see [What's new](whats-new.md)). Some things ZBrush artists rely on are
+SculptForge is young (version 0.7; see [What's new](whats-new.md)). Some things ZBrush artists rely on are
 still on the roadmap:
 
 - Dynamic topology (Sculptris Pro style) and QRemesh curve guides.

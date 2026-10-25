@@ -127,8 +127,14 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
   20.6 -> 9.2 ms with 4x AA, 3.7 ms with Fast Navigation; GPU 46 -> 15 bytes per triangle)
 - ✅ Brushes: bitmap vertex sets, refits from the query, parallel undo recording (Mask / Paint about 2x)
 - ✅ Update notifications (once a day, nothing sent about the user, off for package managers)
-- 📋 Next: dynamic topology, a Blender bridge add-on, a ZBrush-feel pass from user feedback, mmap project open,
-  an HD Geometry equivalent
+
+## Done in v0.7 — ZBrush feel and Blender
+
+- ✅ ZBrush's keys and gestures by default (S / U / I / O sliders, Space QuickMenu, Focal Shift, RGB Intensity,
+  Smooth's own Z Intensity, ZBrush brush letters, mask and visibility gestures); the 0.6 keys as a preference
+- ✅ Blender bridge: the SculptForge Bridge add-on for Blender 4.2+, objects update in place with transforms,
+  UVs, colours, mask and face sets
+- 📋 Next: dynamic topology, mmap project open, an HD Geometry equivalent
 
 ## Phase 3 — AI assistant, beyond brushes
 
