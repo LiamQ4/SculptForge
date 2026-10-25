@@ -196,14 +196,28 @@ public:
     // The vertices sharing an edge with `v`, and the triangles around it, in ascending order.
     IndexRing neighbors(uint32_t v) const {
         if (implicit_) return implicitNeighbors(v);
-        return {adjList_.data() + adjOffsets_[v], adjList_.data() + adjOffsets_[v + 1]};
+        return {adjList_.data() + adjOffsets_[v], adjList_.data() + (adjEnds_.empty() ? adjOffsets_[v + 1] : adjEnds_[v])};
     }
     IndexRing vertexTriangles(uint32_t v) const {
         if (implicit_) return implicitTriangles(v);
-        return {vtList_.data() + vtOffsets_[v], vtList_.data() + vtOffsets_[v + 1]};
+        return {vtList_.data() + vtOffsets_[v], vtList_.data() + (vtEnds_.empty() ? vtOffsets_[v + 1] : vtEnds_[v])};
     }
     // True when the adjacency follows from the subdivision level this mesh is (see rebuildTopology).
     bool implicitAdjacency() const { return bool(implicit_); }
+
+    // Dynamic topology (core/Dyntopo.h): adjacency lists that can be rewritten one vertex at a time, so local
+    // remeshing under the brush doesn't rebuild the whole mesh's. Between begin and end each vertex's lists
+    // have their own capacity (a list that outgrows it moves to the end of the arrays); end packs them back
+    // into the usual form. rebuildTopology() also ends it. Not for meshes with implicit adjacency.
+    bool beginDynamicAdjacency();
+    void endDynamicAdjacency();
+    bool dynamicAdjacency() const { return !adjEnds_.empty(); }
+    // Replace vertex v's triangles / ring (ascending). v may be vertexCount() - 1 after addVertexSlot().
+    void setVertexTriangles(uint32_t v, std::span<const uint32_t> tris);
+    void setNeighbors(uint32_t v, std::span<const uint32_t> ring);
+    // Appends empty lists for a new last vertex, or drops the last vertex's (the caller sizes the vertex arrays).
+    void addVertexSlot();
+    void removeLastVertexSlot();
 
     AABB bounds() const;
     // Bytes this mesh holds (every array, topology included; not the shared texture or subdivision stack).
@@ -222,6 +236,10 @@ public:
     static constexpr uint32_t kDirtyBlockShift = 11, kDirtyBlock = 1u << kDirtyBlockShift; // 2048 vertices
     std::vector<uint8_t> dirtyBlocks;
     std::vector<uint64_t> dirtyBits;
+    // Dynamic topology (core/Dyntopo.h): triangle slots whose corners changed (in place, added, removed or
+    // renumbered, so possibly >= triangleCount()) since the last upload. A renderer can patch those instead of
+    // a full upload; topologyDirty still means everything. Cleared by clearDirty().
+    std::vector<uint32_t> changedTriangles;
 
     void markDirty(uint32_t v) {
         dirtyBegin = std::min(dirtyBegin, v);
@@ -253,6 +271,11 @@ private:
     std::vector<uint32_t> adjOffsets_, adjList_;
     std::vector<uint32_t> vtOffsets_, vtList_;
     std::shared_ptr<const ImplicitAdjacency> implicit_; // (core/Mesh.cpp)
+    // Dynamic adjacency (beginDynamicAdjacency): each list starts at its offset and ends at its end, with
+    // room up to offset + cap. Empty otherwise.
+    std::vector<uint32_t> adjEnds_, adjCaps_, vtEnds_, vtCaps_;
+    static void setList(std::vector<uint32_t>& offsets, std::vector<uint32_t>& ends, std::vector<uint32_t>& caps,
+                        std::vector<uint32_t>& list, uint32_t v, std::span<const uint32_t> values);
 
     // updateNormals: the vertices to update, as a set and as a list.
     IndexBits normalBits_;

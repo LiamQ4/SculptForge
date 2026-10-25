@@ -57,6 +57,10 @@ bool rayTriangle(const glm::vec3& o, const glm::vec3& d, const glm::vec3& a, con
 void BVH::build(const Mesh& mesh) {
     const size_t nt = mesh.triangleCount();
     nodes_.clear();
+    std::vector<uint32_t>().swap(leafCap_);
+    editedLeaves_.clear();
+    leafEdited_.clear();
+    unusedEntries_ = editsSinceBuild_ = 0;
     triIndices_.resize(nt);
     triLeaf_.assign(nt, 0);
     vertBits_.resize(mesh.vertexCount());
@@ -207,7 +211,7 @@ bool BVH::raycast(const Mesh& mesh, const glm::vec3& origin, const glm::vec3& di
                     found = true;
                 }
             }
-        } else {
+        } else if (n.first != kNoLeaf) { // (kNoLeaf: a leaf dynamic edits emptied)
             stack_.push_back(n.first);
             stack_.push_back(n.first + 1);
         }
@@ -243,7 +247,7 @@ void BVH::queryTriangles(const Mesh& mesh, const glm::vec3& center, float radius
                 b.expand(mesh.positions[t.z]);
                 if (sphereBox(b, center, r2)) out.push_back(triIndices_[i]);
             }
-        } else {
+        } else if (n.first != kNoLeaf) {
             stack_.push_back(n.first);
             stack_.push_back(n.first + 1);
         }
@@ -269,7 +273,7 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
         queryNext_.clear();
         for (uint32_t ni : tasks) {
             const Node& n = nodes_[ni];
-            if (n.count > 0) {
+            if (n.count > 0 || n.first == kNoLeaf) {
                 queryNext_.push_back(ni);
                 continue;
             }
@@ -287,7 +291,7 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
             const uint32_t ni = nodeStack.back();
             const Node& n = nodes_[ni];
             nodeStack.pop_back();
-            if (!sphereBox(n.box, center, r2)) continue;
+            if (!sphereBox(n.box, center, r2) || (n.count == 0 && n.first == kNoLeaf)) continue;
             if (n.count == 0) {
                 nodeStack.push_back(n.first);
                 nodeStack.push_back(n.first + 1);
@@ -376,9 +380,154 @@ void BVH::refitLeaves(const Mesh& mesh, std::span<const uint32_t> leaves) {
     }
 }
 
+void BVH::editLeaf(uint32_t leaf) {
+    if (leafCap_.size() < nodes_.size()) { // the first edit: every leaf full
+        const size_t from = leafCap_.size();
+        leafCap_.resize(nodes_.size());
+        for (size_t i = from; i < nodes_.size(); ++i) leafCap_[i] = nodes_[i].count;
+    }
+    if (leafEdited_.size() < nodes_.size()) leafEdited_.resize(nodes_.size(), 0);
+    if (!leafEdited_[leaf]) {
+        leafEdited_[leaf] = 1;
+        editedLeaves_.push_back(leaf);
+    }
+    ++editsSinceBuild_;
+}
+
+void BVH::insertTriangle(const Mesh& mesh, uint32_t t, uint32_t near) {
+    if (nodes_.empty()) {
+        nodes_.push_back(Node{AABB{}, kNoLeaf, 0, 0});
+        leafBits_.resize(nodes_.size());
+    }
+    uint32_t leaf = near < triLeaf_.size() ? triLeaf_[near] : kNoLeaf;
+    if (leaf == kNoLeaf) { // down the tree towards the triangle's centroid
+        const glm::uvec3& tri = mesh.triangles[t];
+        const glm::vec3 c = (mesh.positions[tri.x] + mesh.positions[tri.y] + mesh.positions[tri.z]) / 3.0f;
+        leaf = 0;
+        while (nodes_[leaf].count == 0 && nodes_[leaf].first != kNoLeaf) {
+            const Node& n = nodes_[leaf];
+            auto dist = [&](const AABB& b) {
+                if (!b.valid()) return std::numeric_limits<float>::max();
+                const glm::vec3 d = glm::max(glm::max(b.min - c, c - b.max), glm::vec3(0.0f));
+                return glm::dot(d, d);
+            };
+            leaf = dist(nodes_[n.first].box) <= dist(nodes_[n.first + 1].box) ? n.first : n.first + 1;
+        }
+    }
+    editLeaf(leaf);
+    Node& n = nodes_[leaf];
+    if (n.count == leafCap_[leaf]) { // full: move the leaf's entries to the end, with room to grow
+        const uint32_t cap = std::max(2 * n.count, kLeafSize);
+        const uint32_t first = uint32_t(triIndices_.size());
+        triIndices_.resize(triIndices_.size() + cap);
+        if (n.count > 0) std::copy_n(triIndices_.begin() + n.first, n.count, triIndices_.begin() + first);
+        unusedEntries_ += leafCap_[leaf];
+        n.first = first;
+        leafCap_[leaf] = cap;
+    }
+    triIndices_[n.first + n.count++] = t;
+    if (t >= triLeaf_.size()) triLeaf_.resize(size_t(t) + 1, kNoLeaf);
+    triLeaf_[t] = leaf;
+}
+
+void BVH::removeTriangle(uint32_t t) {
+    const uint32_t leaf = t < triLeaf_.size() ? triLeaf_[t] : kNoLeaf;
+    if (leaf == kNoLeaf) return;
+    editLeaf(leaf);
+    Node& n = nodes_[leaf];
+    for (uint32_t i = n.first; i < n.first + n.count; ++i)
+        if (triIndices_[i] == t) {
+            triIndices_[i] = triIndices_[n.first + n.count - 1];
+            --n.count;
+            break;
+        }
+    if (n.count == 0) { // an empty leaf is marked so traversals don't take it for an inner node
+        unusedEntries_ += leafCap_[leaf];
+        n.first = kNoLeaf;
+        leafCap_[leaf] = 0;
+    }
+    triLeaf_[t] = kNoLeaf;
+}
+
+void BVH::renumberTriangle(uint32_t from, uint32_t to) {
+    const uint32_t leaf = from < triLeaf_.size() ? triLeaf_[from] : kNoLeaf;
+    if (leaf == kNoLeaf) return;
+    const Node& n = nodes_[leaf];
+    for (uint32_t i = n.first; i < n.first + n.count; ++i)
+        if (triIndices_[i] == from) triIndices_[i] = to;
+    if (to >= triLeaf_.size()) triLeaf_.resize(size_t(to) + 1, kNoLeaf);
+    triLeaf_[to] = leaf;
+    triLeaf_[from] = kNoLeaf;
+}
+
+void BVH::resizeTriangles(size_t count) { triLeaf_.resize(count, kNoLeaf); }
+
+void BVH::touchTriangle(uint32_t t) {
+    if (t < triLeaf_.size() && triLeaf_[t] != kNoLeaf) editLeaf(triLeaf_[t]);
+}
+
+// Splits an overfull leaf at the median centroid along its longest axis: its two halves become new leaves
+// (appended, so children still follow their parents), each keeping its part of the leaf's room.
+void BVH::splitLeaf(const Mesh& mesh, uint32_t leaf) {
+    const uint32_t first = nodes_[leaf].first, count = nodes_[leaf].count;
+    auto centroid = [&](uint32_t t) {
+        const glm::uvec3& tri = mesh.triangles[t];
+        return mesh.positions[tri.x] + mesh.positions[tri.y] + mesh.positions[tri.z];
+    };
+    AABB cb;
+    for (uint32_t i = first; i < first + count; ++i) cb.expand(centroid(triIndices_[i]));
+    const glm::vec3 ext = cb.extent();
+    const int axis = ext.x > ext.y ? (ext.x > ext.z ? 0 : 2) : (ext.y > ext.z ? 1 : 2);
+    if (ext[axis] <= 0.0f) return;
+    const uint32_t mid = first + count / 2;
+    std::nth_element(triIndices_.begin() + first, triIndices_.begin() + mid, triIndices_.begin() + first + count,
+                     [&](uint32_t a, uint32_t b) { return centroid(a)[axis] < centroid(b)[axis]; });
+    const uint32_t left = uint32_t(nodes_.size()), cap = leafCap_[leaf];
+    nodes_.push_back(Node{AABB{}, first, mid - first, leaf});
+    nodes_.push_back(Node{AABB{}, mid, first + count - mid, leaf});
+    leafCap_.push_back(mid - first);
+    leafCap_.push_back(cap - (mid - first));
+    leafEdited_.resize(nodes_.size(), 0);
+    nodes_[leaf].first = left;
+    nodes_[leaf].count = 0;
+    leafCap_[leaf] = 0;
+    for (uint32_t c : {left, left + 1}) {
+        recomputeLeaf(mesh, nodes_[c]);
+        AABB box = nodes_[c].box;
+        for (uint32_t ni = c; ni != 0;) { // the ancestors hold it (as they held the leaf), but grow them anyway
+            ni = nodes_[ni].parent;
+            nodes_[ni].box.expand(box);
+            box = nodes_[ni].box;
+        }
+    }
+    leafBits_.resize(nodes_.size());
+}
+
+void BVH::refitChanged(const Mesh& mesh) {
+    constexpr uint32_t kMaxLeaf = 3 * kLeafSize;
+    scratchLeaves_.clear();
+    for (uint32_t leaf : editedLeaves_) {
+        leafEdited_[leaf] = 0;
+        if (nodes_[leaf].count > 0) recomputeLeaf(mesh, nodes_[leaf]);
+        else nodes_[leaf].box = AABB();
+        scratchLeaves_.push_back(leaf);
+    }
+    editedLeaves_.clear();
+    // (refitLeaves recomputes the boxes again: cheap for a few leaves, and it grows the ancestors.)
+    refitLeaves(mesh, scratchLeaves_);
+    for (uint32_t leaf : scratchLeaves_)
+        if (nodes_[leaf].count > kMaxLeaf) splitLeaf(mesh, leaf);
+}
+
+bool BVH::degraded() const {
+    // Rebuild once the edits rival the tree: boxes only grow, and moved leaves leave entries unused.
+    const size_t live = triLeaf_.size();
+    return unusedEntries_ > live / 2 + 1024 || editsSinceBuild_ > live + 4096;
+}
+
 size_t BVH::memoryBytes() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(v[0]); };
-    return bytes(nodes_) + bytes(triIndices_) + bytes(triLeaf_) + vertBits_.memoryBytes() + leafBits_.memoryBytes() +
+    return bytes(nodes_) + bytes(triIndices_) + bytes(triLeaf_) + bytes(leafCap_) + bytes(editedLeaves_) + bytes(leafEdited_) + vertBits_.memoryBytes() + leafBits_.memoryBytes() +
            bytes(queryLeaves_) + bytes(scratchLeaves_) + bytes(stack_);
 }
 
@@ -387,6 +536,8 @@ void BVH::refitAll(const Mesh& mesh) {
         Node& n = nodes_[i];
         if (n.count > 0) {
             recomputeLeaf(mesh, n);
+        } else if (n.first == kNoLeaf) {
+            n.box = AABB();
         } else {
             n.box = nodes_[n.first].box;
             n.box.expand(nodes_[n.first + 1].box);

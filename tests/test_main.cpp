@@ -5,11 +5,14 @@
 #include "TestHarness.h"
 
 #include <cstdio>
+#include <cstring>
 #include <exception>
 
-int main() {
+// sculptforge_tests [part]: only the tests whose name contains `part`.
+int main(int argc, char** argv) {
     using namespace sf::test;
     for (const auto& t : registry()) {
+        if (argc > 1 && !std::strstr(t.name, argv[1])) continue;
         std::printf("[ RUN] %s\n", t.name);
         std::fflush(stdout); // so a crash still shows which test was running
         int before = g_failures;

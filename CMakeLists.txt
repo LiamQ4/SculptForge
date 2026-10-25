@@ -33,6 +33,7 @@ add_library(sculptforge_core STATIC
   src/core/UploadOrder.cpp
   src/core/Benchmark.cpp
   src/core/Sculpt.cpp
+  src/core/Dyntopo.cpp
   src/core/Undo.cpp
   src/core/Primitives.cpp
   src/core/Document.cpp

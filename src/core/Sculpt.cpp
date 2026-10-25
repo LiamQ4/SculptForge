@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace sf {
 
@@ -204,8 +205,94 @@ bool Sculptor::beginStroke(const Mesh& mesh, std::string label, int layer) {
         colored_.assign(words, 0);
     }
     ++strokeId_;
+    strokeDiagonal_ = 0.0f;
     active_ = true;
     return true;
+}
+
+void Sculptor::remeshDab(Mesh& mesh, BVH& bvh, const DabParams& p, Symmetry sym, float scale) {
+    if (!dyntopo.enabled) return;
+    auto clock = std::chrono::steady_clock::now();
+    if (dyntopo.constantDetail && strokeDiagonal_ <= 0.0f) strokeDiagonal_ = glm::length(mesh.bounds().extent());
+    const float edge = dyntopoEdgeLength(dyntopo, p.radius, strokeDiagonal_) * scale;
+    const std::vector<glm::vec3> ms = mirrors(sym);
+    dynTopo_.remesh(mesh, bvh, p.center, p.radius, edge, ms);
+    // The stroke's per-vertex state follows: the remesher's record holds the stroke-start state of every slot it
+    // touched, so this stroke's own undo entries never name them; the Layer brush's heights move with their vertices.
+    const size_t words = (mesh.vertexCount() + 63) / 64;
+    if (touched_.size() < words) {
+        touched_.resize(words, 0);
+        masked_.resize(words, 0);
+        colored_.resize(words, 0);
+    }
+    for (uint32_t v : dynTopo_.recordedVertices()) {
+        if (size_t(v >> 6) >= touched_.size()) {
+            touched_.resize(size_t(v >> 6) + 1, 0);
+            masked_.resize(size_t(v >> 6) + 1, 0);
+            colored_.resize(size_t(v >> 6) + 1, 0);
+        }
+        const uint64_t bit = uint64_t(1) << (v & 63);
+        touched_[v >> 6] |= bit;
+        masked_[v >> 6] |= bit;
+        colored_[v >> 6] |= bit;
+    }
+    if (!layerStamp_.empty() && layerStamp_.size() != mesh.vertexCount()) {
+        const size_t nv = mesh.vertexCount();
+        for (const auto& [from, to] : dynTopo_.movedVertices())
+            if (from < layerStamp_.size() && to < layerStamp_.size()) {
+                layerStamp_[to] = layerStamp_[from];
+                layerDone_[to] = layerDone_[from];
+                layerDir_[to] = layerDir_[from];
+            }
+        layerStamp_.resize(nv, 0);
+        layerDone_.resize(nv, 0.0f);
+        layerDir_.resize(nv, glm::vec3(0.0f));
+    }
+    timings.remeshMs += lapMs(clock);
+}
+
+// This stroke's undo entries for slots the remesher recorded later hold their true stroke-start values (the
+// remesher's copies are from when it first touched them): they move into its record.
+void Sculptor::mergeTopologyUndo(TopologyUndo& topo, const Mesh& mesh) {
+    std::unordered_map<uint32_t, uint32_t> at; // slot -> index into the record's stored values
+    uint32_t k = 0;
+    for (uint32_t v : topo.vertexSlots)
+        if (v < topo.vertexCount) at.emplace(v, k++);
+    auto merge = [&](auto& channel, auto&& store) {
+        size_t out = 0;
+        for (size_t i = 0; i < channel.indices.size(); ++i) {
+            const auto it = at.find(channel.indices[i]);
+            if (it != at.end()) {
+                store(it->second, channel.values[i]);
+                continue;
+            }
+            channel.indices[out] = channel.indices[i];
+            channel.values[out++] = channel.values[i];
+        }
+        channel.indices.resize(out);
+        channel.values.resize(out);
+    };
+    TopologyVertexValues& tv = topo.vertices;
+    const int layer = record_.layer;
+    merge(record_.positions, [&](uint32_t i, const glm::vec3& value) {
+        std::vector<glm::vec3>& target = layer >= 0 && size_t(layer) < tv.deltas.size() ? tv.deltas[size_t(layer)]
+                                         : mesh.layers.empty()                           ? tv.positions
+                                                                                         : tv.base;
+        if (i < target.size()) target[i] = value;
+    });
+    merge(record_.mask, [&](uint32_t i, float value) {
+        if (i < tv.mask.size()) tv.mask[i] = value;
+    });
+    const int pl = record_.paintLayer;
+    merge(record_.colors, [&](uint32_t i, const glm::vec3& value) {
+        std::vector<glm::vec3>& target = mesh.paintLayers.empty() ? tv.colors
+                                         : pl < 0 || size_t(pl) >= tv.paintColors.size() ? tv.paintBase
+                                                                                         : tv.paintColors[size_t(pl)];
+        if (i < target.size()) target[i] = value;
+    });
+    merge(record_.paintAlpha, [&](uint32_t i, float value) {
+        if (pl >= 0 && size_t(pl) < tv.paintAlphas.size() && i < tv.paintAlphas[size_t(pl)].size()) tv.paintAlphas[size_t(pl)][i] = value;
+    });
 }
 
 void Sculptor::touch(Mesh& mesh, uint32_t v) {
@@ -287,6 +374,14 @@ void Sculptor::displaceAll(Mesh& mesh, std::span<const uint32_t> verts, std::spa
 }
 
 UndoRecord Sculptor::endStroke() {
+    if (dynTopo_.active()) {
+        Mesh& mesh = *dynTopo_.strokeMesh();
+        std::unique_ptr<TopologyUndo> topo = dynTopo_.finish(mesh, *dynTopo_.strokeBvh());
+        if (topo) {
+            mergeTopologyUndo(*topo, mesh);
+            record_.topology = std::move(topo);
+        }
+    }
     clearRecorded();
     active_ = false;
     grabVerts_.clear();
@@ -296,6 +391,7 @@ UndoRecord Sculptor::endStroke() {
 
 void Sculptor::dab(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p, Symmetry sym) {
     if (!active_) return;
+    if (type != BrushType::Move) remeshDab(mesh, bvh, p, sym, type == BrushType::Smooth ? 2.0f : 1.0f);
     dabVerts_.clear();
     for (const glm::vec3& m : mirrors(sym)) {
         DabParams mp = p;
@@ -493,6 +589,7 @@ void Sculptor::updateDabNormals(Mesh& mesh) {
 
 void Sculptor::dabRecipe(Mesh& mesh, BVH& bvh, const BrushRecipe& recipe, const DabParams& p, Symmetry sym) {
     if (!active_) return;
+    remeshDab(mesh, bvh, p, sym, 1.0f);
     DabParams base = p;
     base.pressure = std::pow(std::clamp(p.pressure, 0.0f, 1.0f), recipe.pressureCurve);
     base.frontFacesOnly = p.frontFacesOnly || recipe.frontFacesOnly;

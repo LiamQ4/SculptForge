@@ -3,7 +3,6 @@
 #pragma once
 
 #include "core/IndexBits.h"
-#include "core/IndexBits.h"
 #include "core/Mesh.h"
 
 #include <span>
@@ -43,6 +42,21 @@ public:
     // Recomputes every box (same tree) after most of the mesh moved, e.g. a whole SubTool transformed.
     void refitAll(const Mesh& mesh);
 
+    // Dynamic topology (core/Dyntopo.h): a few triangles at a time added, removed or renumbered without a
+    // rebuild. insertTriangle puts triangle t (a new last index, or one removeTriangle freed) in the leaf of
+    // triangle `near` (or, if that isn't in the tree, the leaf its centroid falls in); refitChanged() then
+    // recomputes the boxes of every leaf edited since the last call (growing ancestors, as refit does) and
+    // splits leaves that grew too big. Boxes only grow, so after many edits rebuild when degraded() says so.
+    void insertTriangle(const Mesh& mesh, uint32_t t, uint32_t near);
+    void removeTriangle(uint32_t t);
+    // Triangle `from` is now numbered `to` (a free index); a freed last index can then be dropped with resizeTriangles.
+    void renumberTriangle(uint32_t from, uint32_t to);
+    void resizeTriangles(size_t count);
+    // Marks the leaf holding t for refitChanged (its triangle moved).
+    void touchTriangle(uint32_t t);
+    void refitChanged(const Mesh& mesh);
+    bool degraded() const;
+
     size_t nodeCount() const { return nodes_.size(); }
     size_t memoryBytes() const;
 
@@ -60,6 +74,16 @@ private:
     std::vector<Node> nodes_;
     std::vector<uint32_t> triIndices_;
     std::vector<uint32_t> triLeaf_;
+
+    // Dynamic edits: per node the room its leaf has in triIndices_ (empty until the first edit), the leaves
+    // edited since refitChanged (each once, flagged in leafEdited_), and how many entries of triIndices_ are no
+    // longer used (leaves that moved to make room) or were added since the build.
+    std::vector<uint32_t> leafCap_, editedLeaves_;
+    std::vector<uint8_t> leafEdited_;
+    size_t unusedEntries_ = 0, editsSinceBuild_ = 0;
+    static constexpr uint32_t kNoLeaf = ~0u;
+    void editLeaf(uint32_t leaf);
+    void splitLeaf(const Mesh& mesh, uint32_t leaf);
 
     mutable IndexBits vertBits_;               // queryVertices: the vertices found so far
     mutable std::vector<uint32_t> queryLeaves_; // the leaves holding them, for refitQueried()

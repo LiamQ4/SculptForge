@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <tuple>
 #include <unordered_map>
 
 namespace sf {
@@ -174,6 +175,7 @@ void Mesh::sanitizeAttributes() {
 
 void Mesh::rebuildTopology() {
     sanitizeAttributes();
+    for (auto* v : {&adjEnds_, &adjCaps_, &vtEnds_, &vtCaps_}) std::vector<uint32_t>().swap(*v);
     const size_t nv = positions.size();
     finishTopology(); // (the normal set, normals and dirty bits first: they don't depend on the adjacency)
 
@@ -230,6 +232,85 @@ void Mesh::rebuildTopology() {
             std::copy(r.begin(), r.end(), adjList_.begin() + adjOffsets_[v]);
         }
     });
+}
+
+bool Mesh::beginDynamicAdjacency() {
+    const size_t nv = positions.size();
+    if (implicit_ || adjOffsets_.size() != nv + 1 || vtOffsets_.size() != nv + 1) return false;
+    if (dynamicAdjacency()) return true;
+    adjEnds_.assign(adjOffsets_.begin() + 1, adjOffsets_.end());
+    vtEnds_.assign(vtOffsets_.begin() + 1, vtOffsets_.end());
+    adjCaps_.resize(nv);
+    vtCaps_.resize(nv);
+    for (size_t v = 0; v < nv; ++v) {
+        adjCaps_[v] = adjOffsets_[v + 1] - adjOffsets_[v];
+        vtCaps_[v] = vtOffsets_[v + 1] - vtOffsets_[v];
+    }
+    return true;
+}
+
+void Mesh::endDynamicAdjacency() {
+    if (!dynamicAdjacency()) return;
+    const size_t nv = positions.size();
+    auto pack = [nv](std::vector<uint32_t>& offsets, std::vector<uint32_t>& ends, std::vector<uint32_t>& caps,
+                     std::vector<uint32_t>& list) {
+        std::vector<uint32_t> packed;
+        size_t total = 0;
+        for (size_t v = 0; v < nv; ++v) total += ends[v] - offsets[v];
+        packed.reserve(total);
+        for (size_t v = 0; v < nv; ++v) {
+            const uint32_t b = offsets[v], e = ends[v];
+            offsets[v] = uint32_t(packed.size());
+            packed.insert(packed.end(), list.begin() + b, list.begin() + e);
+        }
+        offsets.resize(nv + 1);
+        offsets[nv] = uint32_t(packed.size());
+        list.swap(packed);
+        std::vector<uint32_t>().swap(ends);
+        std::vector<uint32_t>().swap(caps);
+    };
+    pack(adjOffsets_, adjEnds_, adjCaps_, adjList_);
+    pack(vtOffsets_, vtEnds_, vtCaps_, vtList_);
+}
+
+void Mesh::setList(std::vector<uint32_t>& offsets, std::vector<uint32_t>& ends, std::vector<uint32_t>& caps,
+                   std::vector<uint32_t>& list, uint32_t v, std::span<const uint32_t> values) {
+    const uint32_t n = uint32_t(values.size());
+    if (n > caps[v]) { // no room: a new place at the end, with some to spare
+        const uint32_t cap = std::max(n + 2, n + n / 2);
+        offsets[v] = uint32_t(list.size());
+        caps[v] = cap;
+        list.resize(list.size() + cap);
+    }
+    std::copy(values.begin(), values.end(), list.begin() + offsets[v]);
+    ends[v] = offsets[v] + n;
+}
+
+void Mesh::setVertexTriangles(uint32_t v, std::span<const uint32_t> tris) {
+    setList(vtOffsets_, vtEnds_, vtCaps_, vtList_, v, tris);
+}
+
+void Mesh::setNeighbors(uint32_t v, std::span<const uint32_t> ring) {
+    setList(adjOffsets_, adjEnds_, adjCaps_, adjList_, v, ring);
+}
+
+void Mesh::addVertexSlot() {
+    // offsets[nv] is the spare last entry: it becomes the new vertex's (empty) list, and a new one follows.
+    for (auto [offsets, ends, caps, list] : {std::tie(adjOffsets_, adjEnds_, adjCaps_, adjList_),
+                                             std::tie(vtOffsets_, vtEnds_, vtCaps_, vtList_)}) {
+        offsets.back() = uint32_t(list.size());
+        offsets.push_back(uint32_t(list.size()));
+        ends.push_back(uint32_t(list.size()));
+        caps.push_back(0);
+    }
+}
+
+void Mesh::removeLastVertexSlot() {
+    for (auto [offsets, ends, caps] : {std::tie(adjOffsets_, adjEnds_, adjCaps_), std::tie(vtOffsets_, vtEnds_, vtCaps_)}) {
+        offsets.pop_back();
+        ends.pop_back();
+        caps.pop_back();
+    }
 }
 
 void Mesh::finishTopology() {
@@ -492,6 +573,7 @@ void Mesh::clearDirty() {
     dirtyEnd = 0;
     topologyDirty = false;
     facesDirty = false;
+    changedTriangles.clear();
 }
 
 void Mesh::recomputeAllNormals() {
@@ -626,7 +708,7 @@ size_t Mesh::memoryBytes() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(v[0]); };
     size_t n = bytes(positions) + bytes(normals) + bytes(triangles) + bytes(mask) + bytes(colors) + bytes(polygroups) +
                bytes(hidden) + bytes(uvs) + bytes(quadPartners) + bytes(base) + bytes(paintBase) + bytes(adjOffsets_) +
-               bytes(adjList_) + bytes(vtOffsets_) + bytes(vtList_) + normalBits_.memoryBytes() + bytes(scratchVerts_) + bytes(dirtyBlocks) + bytes(dirtyBits);
+               bytes(adjList_) + bytes(vtOffsets_) + bytes(vtList_) + bytes(adjEnds_) + bytes(adjCaps_) + bytes(vtEnds_) + bytes(vtCaps_) + normalBits_.memoryBytes() + bytes(scratchVerts_) + bytes(dirtyBlocks) + bytes(dirtyBits);
     for (const auto& l : layers) n += bytes(l.delta);
     for (const auto& l : paintLayers) n += bytes(l.color) + bytes(l.alpha);
     if (implicit_) n += implicit_->bytes(); // (the level topology itself is counted with the subdivision levels)

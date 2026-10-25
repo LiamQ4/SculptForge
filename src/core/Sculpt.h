@@ -4,6 +4,7 @@
 
 #include "core/BVH.h"
 #include "core/BrushRecipe.h"
+#include "core/Dyntopo.h"
 #include "core/Mesh.h"
 #include "core/Undo.h"
 
@@ -69,6 +70,7 @@ float focalRingFraction(float focal);
 // counters were last zeroed. kernel = finding the vertices and moving / masking / painting them.
 struct SculptTimings {
     double kernelMs = 0.0, normalsMs = 0.0, bvhMs = 0.0;
+    double remeshMs = 0.0; // dynamic topology (core/Dyntopo.h)
     uint64_t dabs = 0, vertices = 0;
 };
 // Milliseconds since `t`, which moves on to now (for SculptTimings).
@@ -105,6 +107,11 @@ public:
 
     SculptTimings timings;
 
+    // Dynamic topology (core/Dyntopo.h): while enabled, dab() and dabRecipe() remesh the surface under the
+    // brush first (Smooth towards twice the edge length, so it simplifies, as in ZBrush). Not the Move brush.
+    DyntopoSettings dyntopo;
+    DynamicTopology& dynamicTopology() { return dynTopo_; }
+
     // Mirror sign vectors for the enabled symmetry axes (always starts with (1,1,1)).
     static std::vector<glm::vec3> mirrors(Symmetry sym);
 
@@ -121,6 +128,12 @@ private:
     // The one place brushes move vertices: scales `d` by vertexInfluence().
     void displace(Mesh& mesh, uint32_t v, const glm::vec3& d);
     void displaceAll(Mesh& mesh, std::span<const uint32_t> verts, std::span<const glm::vec3> d);
+
+    // Dynamic topology: remeshes before a dab, and keeps the stroke's per-vertex state in step with it.
+    void remeshDab(Mesh& mesh, BVH& bvh, const DabParams& p, Symmetry sym, float scale);
+    void mergeTopologyUndo(TopologyUndo& topo, const Mesh& mesh);
+    DynamicTopology dynTopo_;
+    float strokeDiagonal_ = 0.0f;
 
     bool active_ = false;
     int layer_ = -1;
