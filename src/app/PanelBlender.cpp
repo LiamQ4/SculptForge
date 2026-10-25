@@ -52,7 +52,6 @@ void menuAction(App& app, const char* id) {
 void App::receiveFromBlender() {
     const std::string root = blenderExchangeRoot();
     if (!root.empty()) { // a manual receive counts as seen, so polling doesn't load it again
-        blenderInboxTime_ = bridgeFileTime(bridgeManifestPath(blenderInbox(root)));
         blenderSeenRevision_ = bridgeRevision(blenderInbox(root));
     }
     runCommand("blender_receive");
@@ -78,14 +77,12 @@ void App::pollBlender() {
     const std::string root = blenderExchangeRoot();
     if (root.empty()) return;
     const std::string inbox = blenderInbox(root);
-    const std::string manifest = bridgeManifestPath(inbox);
     if (!blenderInitialised_) {
         blenderInitialised_ = true;
         writeBridgeAppInfo(root, bridgeExecutable(), SCULPTFORGE_VERSION);
         // What was sent before this start is old news, unless the add-on started us to load it.
-        blenderInboxTime_ = bridgeFileTime(manifest);
         blenderSeenRevision_ = bridgeRevision(inbox);
-        if (options_.blender && blenderInboxTime_) receiveFromBlender();
+        if (options_.blender && blenderSeenRevision_ >= 0) receiveFromBlender();
     }
     // UI tests check every frame (their frames are simulated); the app once a second, and at once when a heartbeat
     // is due (at start, and after Send to Blender).
@@ -105,9 +102,8 @@ void App::pollBlender() {
         writeBridgeHeartbeat(root);
     }
     if (!blenderAutoReceive_ || doc_.sculptor.strokeActive()) return;
-    const long long t = bridgeFileTime(manifest);
-    if (t == 0 || t == blenderInboxTime_) return;
-    blenderInboxTime_ = t;
+    // The revision, not the file time: a copied or quickly rewritten file can keep its time (Windows copies keep
+    // it; FAT and network drives store it coarsely). The manifest is a few hundred bytes.
     const int64_t revision = bridgeRevision(inbox);
     if (revision >= 0 && revision != blenderSeenRevision_) receiveFromBlender();
 }

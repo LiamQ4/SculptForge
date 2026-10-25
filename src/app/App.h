@@ -520,7 +520,6 @@ private:
     void receiveFromBlender();
     bool blenderInitialised_ = false;
     bool blenderAutoReceive_ = true;   // load whatever Blender sends while SculptForge runs
-    long long blenderInboxTime_ = 0;   // last seen modification time of to_sculptforge/manifest.json
     int64_t blenderSeenRevision_ = -1; // revision last loaded (or present at start, which is not loaded)
     Uint64 blenderLastPollNs_ = 0, blenderLastBeatNs_ = 0;
     // Projects, unsaved-changes safety, recent files and autosave (PanelProject.cpp).

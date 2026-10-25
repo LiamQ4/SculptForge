@@ -40,7 +40,6 @@ FACE_SETS = ".sculpt_face_set"
 class _State:
     sent = False         # this session sent something: what SculptForge sends back loads by itself
     launched = 0.0       # when this session last started SculptForge (time.time())
-    inbox_time = 0       # last seen modification time of to_blender/manifest.json
     seen = -1            # revision last loaded (or present when the add-on started)
     message = ""         # last result, shown in the panel
 
@@ -350,7 +349,6 @@ def receive(context):
     if manifest is None:
         return "ERROR", "Nothing has been sent from SculptForge yet (File > Blender > Send to Blender)"
     state.seen = int(manifest.get("revision", 0))
-    state.inbox_time = exchange.file_time(exchange.manifest_path(folder))
     entries = manifest.get("objects", [])
     meshes = []
     for entry in entries:
@@ -411,10 +409,7 @@ def _poll_inbox():
         if p is None or not p.auto_receive or not state.sent:
             return 1.0
         folder = exchange.inbox(exchange_root(p))
-        t = exchange.file_time(exchange.manifest_path(folder))
-        if t == 0 or t == state.inbox_time:
-            return 1.0
-        state.inbox_time = t
+        # The revision, not the file time (copies and coarse file systems can keep the time); the file is tiny.
         rev = exchange.revision(folder)
         if rev < 0 or rev == state.seen:
             return 1.0
@@ -564,7 +559,6 @@ def register():
     # What SculptForge sent before Blender started is not loaded by itself (Receive loads it).
     folder = exchange.inbox(exchange_root())
     state.seen = exchange.revision(folder)
-    state.inbox_time = exchange.file_time(exchange.manifest_path(folder))
     if not bpy.app.timers.is_registered(_poll_inbox):
         bpy.app.timers.register(_poll_inbox, first_interval=1.0, persistent=True)
 

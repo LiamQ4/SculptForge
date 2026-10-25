@@ -59,8 +59,8 @@ Windows).
 ```
 
 - `revision` is the previous manifest's plus one. A reader loads a manifest whose revision differs from the one
-  it loaded last (not "greater": a deleted folder restarts at 1). It only parses the manifest when its
-  modification time changed.
+  it loaded last (not "greater": a deleted folder restarts at 1). It reads the revision once a
+  second rather than trusting file times (Windows copies keep them; FAT and network drives store them coarsely).
 - `name` is the exact Blender object name (UTF-8); the .GoZ's own name is GoB's ASCII escape of it. In SculptForge
   it is the SubTool's `gozName` (shared with GoZ; saved in projects), so the next send updates the same object.
 - `file` must be a plain file name in the same folder (`..`, `/`, `\` and `:` are refused).
