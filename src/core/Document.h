@@ -7,6 +7,7 @@
 #include "core/BrushRecipe.h"
 #include "core/Json.h"
 #include "core/Mesh.h"
+#include "core/QRemeshGuides.h"
 #include "core/Sculpt.h"
 #include "core/Splats.h"
 #include "core/Undo.h"
@@ -33,6 +34,7 @@ struct SubTool {
     std::string gozName;
     bool bvhDirty = false;
     uint64_t cleanRevision = 0;
+    std::vector<QRemeshGuide> qremeshGuides; // QRemesh Guides (core/QRemeshGuides.h)
 };
 
 // Everything that makes up the open scene: the mesh, its acceleration
@@ -64,6 +66,9 @@ struct Document {
     bool bvhDirty = false; // set after whole-mesh deformations (e.g. layer weights)
     // SubTool name of a mesh that came from ZBrush (GoZ), so sending it back updates that SubTool.
     std::string gozName;
+    // QRemesh Guides of the active SubTool: curves QRemesh's edge loops follow (core/QRemeshGuides.h). Not part
+    // of undo (Delete Last / Clear remove them); editing them sets `modified`.
+    std::vector<QRemeshGuide> qremeshGuides;
 
     void syncBvh() {
         if (bvhDirty) bvh.build(mesh);

@@ -24,6 +24,7 @@ void Document::setMesh(Mesh m, std::string name, BVH* built) {
     activeLayer = -1;
     bvhDirty = false;
     gozName.clear();
+    qremeshGuides.clear();
     subtools.clear();
     subtools.emplace_back();
     subtools.back().id = nextSubtoolId_++;
@@ -57,6 +58,7 @@ void Document::selectSubtool(int i) {
         std::swap(undo, s.undo);
         std::swap(activeLayer, s.activeLayer);
         std::swap(gozName, s.gozName);
+        std::swap(qremeshGuides, s.qremeshGuides);
         std::swap(bvhDirty, s.bvhDirty);
         std::swap(cleanRevision_, s.cleanRevision);
     };

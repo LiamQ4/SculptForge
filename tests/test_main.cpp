@@ -1,15 +1,20 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Runs every TEST registered by the tests/test_*.cpp files.
+// Runs every TEST registered by the tests/test_*.cpp files (with arguments: only the tests whose names contain
+// one of them, e.g. `sculptforge_tests qremesh_guide`).
 #include "TestHarness.h"
 
 #include <cstdio>
+#include <cstring>
 #include <exception>
 
-int main() {
+int main(int argc, char** argv) {
     using namespace sf::test;
     for (const auto& t : registry()) {
+        bool wanted = argc < 2;
+        for (int i = 1; i < argc && !wanted; ++i) wanted = std::strstr(t.name, argv[i]) != nullptr;
+        if (!wanted) continue;
         std::printf("[ RUN] %s\n", t.name);
         std::fflush(stdout); // so a crash still shows which test was running
         int before = g_failures;

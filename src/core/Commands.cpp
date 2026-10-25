@@ -562,6 +562,7 @@ CommandRegistry::CommandRegistry() {
     registerBrushLibraryCommands(*this); // brush_install, brush_code, brush_delete, ... (BrushLibrary.cpp)
     registerBrushCommands(*this); // brush_set_alpha (BrushAlpha.cpp)
     registerRetopoCommands(*this); // qremesh, project_all (RetopoCommands.cpp)
+    registerQRemeshGuideCommands(*this); // qremesh_guide, ... (QRemeshGuides.cpp)
 
     add({"stroke",
          "Apply a brush along a path on the active SubTool, like dragging the cursor in the viewport (one undo "
