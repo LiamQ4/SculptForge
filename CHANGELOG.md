@@ -6,6 +6,29 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### Blender bridge
+- **SculptForge Bridge, an add-on for Blender 4.2+** (`addons/blender`, GPL-3.0-or-later): select objects, click
+  **Send to SculptForge** (the 3D View's SculptForge tab, the Object menu or File > Export), sculpt, then
+  **File > Blender > Send to Blender** in SculptForge. The objects update in place in Blender, keeping their
+  transform, materials and modifiers; new SubTools become new objects. Works on Linux, Windows and macOS.
+  - The two sides share a per-user folder (`<user data>/SculptForge/SculptForge/blender`) and exchange `.GoZ` files
+    plus a JSON manifest per direction (object names, `matrix_world`, a revision); each side checks the other's
+    manifest once a second. No network. SculptForge records where it is installed and writes a heartbeat there, so
+    the add-on starts it (`--blender`) only when it isn't running.
+  - Identity: Blender object name <-> SubTool (its GoZ name). Positions travel in object space with the matrix;
+    Z-up <-> Y-up, metres both; mirrored objects keep their faces pointing out. A round trip is the identity
+    (positions, faces and winding, UVs, polypaint, mask, polygroups): tested in C++, from the add-on's side
+    against `sculptforge-cli`, and in a real Blender in CI.
+  - Unchanged topology updates only positions and attributes, so Blender keeps n-gons, edges, seams and other
+    data; changed topology rebuilds the mesh. Active UV map <-> UVs, active colour attribute <-> polypaint, sculpt
+    mask <-> mask, face sets <-> polygroups. Modifiers can be kept live or applied (then turned off on return).
+- Commands `blender_send` and `blender_receive` (CLI, MCP, Python), **File > Blender** (Send, Receive, Receive
+  automatically), F3 entries and Ctrl-hover help. GoZ receive and the bridge share the code that matches objects
+  to SubTools.
+- Packaging: `build_addon.py` writes the extension zip and a legacy add-on zip (`cmake --build build --target
+  blender_addon`); releases attach `sculptforge_bridge.zip`. Guide chapter **Working with Blender**.
+- UI tests: `copy SRC DST` stages files another program would write.
+
 ## [0.6.0] - 2026-10-24
 
 Performance release. Figures for a 33 million triangle model with 7 subdivision levels on an M1 Pro laptop,

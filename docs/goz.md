@@ -10,6 +10,8 @@ ZBrush's own **.ZTL** (tool) and **.ZPR** (project) files are proprietary and un
 cannot open them. Opening one gives an error that suggests sending the model with GoZ or exporting OBJ/FBX
 from ZBrush.
 
+The Blender bridge ([blender.md](blender.md)) sends meshes to and from Blender as the same `.GoZ` files.
+
 Code: `src/io/GozIO.h/.cpp` (format + bridge), `src/io/StlIO.h/.cpp`, `src/io/GozCommands.cpp`
 (commands), `src/app/PanelGoz.cpp` (File > ZBrush (GoZ) menu). Tests: `tests/test_goz.cpp`.
 

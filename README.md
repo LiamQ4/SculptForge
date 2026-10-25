@@ -141,6 +141,12 @@ keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
 - **FBX** (binary 7.4, LOD groups, blend shapes), **glTF/GLB** (morph targets), **OpenUSD** USDA/USDZ (UsdSkel
   blend shapes), OBJ, PLY and STL. Exports are checked with the Khronos glTF validator and OpenUSD's `usdchecker`.
 
+**Blender bridge**
+- The **SculptForge Bridge** add-on for Blender 4.2+ (`addons/blender`): select objects, Send to SculptForge,
+  sculpt, Send to Blender. The objects update in place, keeping transforms, materials and modifiers; quads, UVs,
+  colours, mask and face sets come across both ways. See [the guide](docs/guide/blender.md) and
+  [docs/blender.md](docs/blender.md).
+
 **ZBrush interchange**
 - `.GoZ` import/export with polygroups, mask, polypaint and UVs, and a GoZ bridge (Send / Receive) on Windows and
   macOS. Every visible SubTool goes over as its own ZBrush SubTool. See [docs/goz.md](docs/goz.md); the live bridge hasn't been tested against a running ZBrush yet.

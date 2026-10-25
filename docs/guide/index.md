@@ -2,7 +2,7 @@
 
 This guide explains every part of SculptForge, the free, open-source sculpting app for VFX, animation and games:
 how the interface is organised, how to sculpt, mask, paint (on vertices or textures) and manage SubTools, how to generate models with AI,
-and how to get your work into a game engine, a film pipeline or ZBrush. It is written for SculptForge
+and how to get your work into a game engine, a film pipeline, Blender or ZBrush. It is written for SculptForge
 0.4.
 
 You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<kbd>F1</kbd>) or on the
@@ -43,16 +43,17 @@ You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<
 
 20. [Baking normal and displacement maps](baking.md)
 21. [Exporting, Unreal and ZBrush](exporting.md)
-22. [Projects, autosave and QuickSave](projects.md)
-23. [Scripting and automation](scripting.md)
-24. [SculptForge for studios](studios.md)
+22. [Working with Blender](blender.md)
+23. [Projects, autosave and QuickSave](projects.md)
+24. [Scripting and automation](scripting.md)
+25. [SculptForge for studios](studios.md)
 
 ## Reference
 
-25. [Keyboard and mouse](shortcuts.md)
-26. [Performance and big meshes](performance.md)
-27. [Troubleshooting and FAQ](troubleshooting.md)
-28. [Glossary](glossary.md)
+26. [Keyboard and mouse](shortcuts.md)
+27. [Performance and big meshes](performance.md)
+28. [Troubleshooting and FAQ](troubleshooting.md)
+29. [Glossary](glossary.md)
 
 ## Getting help
 

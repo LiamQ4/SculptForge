@@ -68,7 +68,7 @@ void App::drawBlenderMenu() {
                  "Blender.",
                  "File > Blender");
     const std::string root = blenderExchangeRoot();
-    ImGui::TextDisabled("Needs the SculptForge add-on in Blender\n(Help > User Guide > Blender).");
+    ImGui::TextDisabled("Needs the SculptForge add-on in Blender\n(Help > User Guide > Working with Blender).");
     if (ImGui::IsItemHovered() && !root.empty()) ImGui::SetTooltip("Exchange folder: %s", root.c_str());
     ImGui::EndMenu();
 }

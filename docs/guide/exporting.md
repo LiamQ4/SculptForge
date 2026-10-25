@@ -224,8 +224,15 @@ any others.
 From scripts: `goz_export path=`, `goz_import path=`, `goz_send`, `goz_receive` and `export_stl path=` (see
 [3D printing](#3d-printing) for its options).
 
+## Blender
+
+To sculpt Blender objects in SculptForge and send them back into the same objects, use the SculptForge Bridge
+add-on and **File > Blender**: see [Working with Blender](blender.md). For a one-off exchange, OBJ, FBX and glTF
+all carry SubTools, UVs and quads both ways.
+
 ## See also
 
+- [Working with Blender](blender.md): the Blender add-on
 - [Projects, autosave and QuickSave](projects.md): save everything, not just the mesh
 - [SubTools](subtools.md): which SubTools are exported
 - [Layers and blend shapes](layers.md): what becomes morph targets
