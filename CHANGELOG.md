@@ -77,10 +77,13 @@ Guide: docs/guide/blender.md, "ZBrush-style keys in Sculpt Mode".
   mirror image is kept once), shown over the model (faint where the model hides them), Alt+click deletes one;
   **Delete Last** and **Clear**. Ctrl still masks and Shift still smooths while the brush is picked.
 - QRemesh puts an edge loop on every curve (a lattice line along it; along a closed curve the corners are placed
-  at a whole number of even steps, so the loop closes without a kink) and turns the edge flow around it to follow;
-  **Curves Strength** (0-100, default 50) sets how far. With symmetry, a curve on either side guides both. On a
-  sphere with a circular guide round an "eye", the edges near it are within 3-6 degrees of its direction (about
-  22 without), and the loop closes (6 of 6 test eyes, 32 of 32 in a random sweep).
+  at an even number of even steps, so the loop closes without a kink) and turns the edge flow around it to
+  follow; **Curves Strength** (0-100, default 50) sets how far. With symmetry, a curve on either side guides
+  both, and a loop across the middle (the mouth) meets its mirror image at a corner on the seam. A result with a
+  broken loop or a fan by a guide is tried again with another start for the field. On a sphere with a circular
+  guide round an "eye", the edges near it are within 2-8 degrees of its direction (about 22 without), and the
+  loop closes (6 of 6 test eyes, 4 of 4 mouths across the middle, 507 of 512 in random sweeps with and without
+  FMA; the misses are loops about 20 quads round).
 - Guides belong to each SubTool, are saved in projects (`qremesh_guides` per SubTool in the manifest, no format
   change: older projects open, older versions ignore them) and copied to the kept original. Guides left far from
   the surface (the SubTool moved) are ignored with a note.

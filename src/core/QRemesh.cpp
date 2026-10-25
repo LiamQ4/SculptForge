@@ -492,15 +492,22 @@ Level buildFinest(const WorkMesh& m, bool keepGroups, float sharpCos, std::vecto
 
 // --- QRemesh Guides --------------------------------------------------------------------------------------
 
-// A closed guide: its points (in order), the arc length at each, and how many lattice steps go round it.
+// A closed guide (or, with symmetry, a curve from the seam to the seam: half of a loop across the middle): its
+// points (in order), the arc length at each, and how many lattice steps go round (or along) it.
 struct ClosedGuide {
     std::vector<vec3> points;
     std::vector<float> arc; // arc[i]: length from points[0] to points[i]
     float length = 0.0f;
     SegmentBVH bvh;
     float steps = 0.0f;     // set by closedGuideSize
+    bool loop = true;       // false: from the seam to the seam, both ends lattice corners
+    size_t lines = 0;       // finest-level vertices with a line constraint on it (none: not on this piece)
 
-    vec3 at(float s) const { // the point at arc length s (wrapping round)
+    vec3 at(float s) const { // the point at arc length s (wrapping round a loop)
+        if (!loop) {
+            s = std::clamp(s, 0.0f, length);
+            if (s >= length) return points.back();
+        }
         s = std::fmod(s, length);
         if (s < 0.0f) s += length;
         const size_t i = size_t(std::upper_bound(arc.begin(), arc.end(), s) - arc.begin()) - 1;
@@ -515,8 +522,9 @@ struct ClosedGuide {
 // turn their orientation towards the curve's direction with a weight falling off from 1 on the curve. Vertices
 // with a constraint already (open edges, borders, hard edges) keep theirs. The curves' segments are added to
 // `guideSegs`, so relaxation keeps the loop's vertices on the curve. Line vertices on a closed guide remember
-// which (Level::gid) and where along it (Level::garc), for pinClosedGuides.
-void applyGuides(Level& l, const std::vector<QRemeshGuide>& guides, float radius,
+// which (Level::gid) and where along it (Level::garc), for pinClosedGuides; so do those on a curve with both
+// ends on the symmetry plane (`axis`; the half of a loop across the middle, cut there by qremesh).
+void applyGuides(Level& l, const std::vector<QRemeshGuide>& guides, float radius, int axis,
                  std::vector<std::pair<vec3, vec3>>& guideSegs, std::vector<ClosedGuide>& closed) {
     std::vector<vec3> a, b, ta, tb; // segments and the curve's tangent at each end
     std::vector<int32_t> segClosed; // per segment: its closed guide, or -1
@@ -530,7 +538,10 @@ void applyGuides(Level& l, const std::vector<QRemeshGuide>& guides, float radius
             return safeNormalize(g.points[next] - g.points[prev], vec3(0.0f));
         };
         const bool loop = g.closed && n > 2;
+        const bool seamToSeam = !g.closed && axis >= 0 && g.points.front()[axis] == 0.0f && g.points.back()[axis] == 0.0f;
+        const bool pinned = loop || seamToSeam;
         ClosedGuide c;
+        c.loop = loop;
         const size_t segs = loop ? n : n - 1;
         for (size_t i = 0; i < segs; ++i) {
             const size_t j = (i + 1) % n;
@@ -539,15 +550,16 @@ void applyGuides(Level& l, const std::vector<QRemeshGuide>& guides, float radius
             ta.push_back(tangent(i));
             tb.push_back(tangent(j));
             guideSegs.push_back({g.points[i], g.points[j]});
-            segClosed.push_back(loop ? int32_t(closed.size()) : -1);
+            segClosed.push_back(pinned ? int32_t(closed.size()) : -1);
             segArc.push_back(c.length);
-            if (loop) {
+            if (pinned) {
                 c.points.push_back(g.points[i]);
                 c.arc.push_back(c.length);
                 c.length += glm::length(g.points[j] - g.points[i]);
             }
         }
-        if (loop) {
+        if (seamToSeam) c.points.push_back(g.points.back()), c.arc.push_back(c.length);
+        if (pinned) {
             c.bvh.build(std::vector<vec3>(a.end() - long(segs), a.end()), std::vector<vec3>(b.end() - long(segs), b.end()));
             closed.push_back(std::move(c));
         }
@@ -556,6 +568,22 @@ void applyGuides(Level& l, const std::vector<QRemeshGuide>& guides, float radius
     SegmentBVH bvh;
     bvh.build(a, b);
     const size_t nv = l.size();
+    // Where a curve from the seam to the seam meets it: a lattice corner (the seam vertex nearest each end), so
+    // the loop crosses the middle there (relaxation pins a quad vertex to it, as at the source's corners).
+    for (const ClosedGuide& c : closed) {
+        if (c.loop) continue;
+        for (const vec3& end : {c.points.front(), c.points.back()}) {
+            uint32_t best = kNone;
+            float bestD = radius * radius;
+            for (uint32_t v = 0; v < nv; ++v) {
+                const float d = glm::dot(l.V[v] - end, l.V[v] - end);
+                if (l.boundary[v] && d < bestD) bestD = d, best = v;
+            }
+            if (best == kNone) continue;
+            l.ctype[best] = kPoint;
+            l.cpos[best] = end;
+        }
+    }
     l.gw.assign(nv, 0.0f);
     l.gdir.assign(nv, vec3(0.0f));
     if (!closed.empty()) {
@@ -590,6 +618,8 @@ void applyGuides(Level& l, const std::vector<QRemeshGuide>& guides, float radius
             }
         }
     });
+    for (int32_t c : l.gid)
+        if (c >= 0) ++closed[size_t(c)].lines;
 }
 
 // A loop's lattice closes up only when its length is a whole number of lattice steps; otherwise the position
@@ -609,7 +639,10 @@ void closedGuideSize(const Level& L, std::vector<float>& S, std::vector<ClosedGu
         c.steps = 0.0f;
         if (!cnt) continue;
         const float s = float(sum / double(cnt));
-        c.steps = std::max(4.0f, std::round(c.length / s));
+        // An even number round a loop: a disk of quads has an even number of sides, so with an odd number the
+        // lattice inside needs an odd face, and it ends up on the loop (a gap in it). Along a curve from the
+        // seam to the seam any whole number does: its mirror image doubles it.
+        c.steps = c.loop ? std::max(4.0f, 2.0f * std::round(0.5f * c.length / s)) : std::max(1.0f, std::round(c.length / s));
         const float f = c.length / (c.steps * s);
         for (auto [v, d] : near) {
             const float w = d < 0.25f * reach ? 1.0f : 1.0f - (d - 0.25f * reach) / (0.75f * reach);
@@ -1454,7 +1487,50 @@ struct PieceResult {
     std::vector<uint8_t> seam;
     float spacing = 0.0f;
     int attempts = 0;
+    size_t guideDefects = 0; // see guideDefects
 };
+
+// What went wrong round the QRemesh Guides in a piece's result: vertices on a loop (or a curve from the seam to
+// the seam) whose edge loop along it breaks, a loop not followed all the way, and fans (7 or more edges, a seam
+// vertex's mirror image counted) within `reach` of a guide. Zero when all is well.
+size_t guideDefects(const QuadMesh& q, const SegmentBVH& guides, const std::vector<ClosedGuide>& pinned, int axis,
+                    float edge, float reach) {
+    const size_t nv = q.P.size();
+    std::vector<std::vector<uint32_t>> nb(nv);
+    {
+        std::unordered_map<uint64_t, uint8_t> seen;
+        for (const auto& f : q.quads)
+            for (int k = 0; k < 4; ++k) {
+                const uint32_t a = f[k], b = f[(k + 1) % 4];
+                if (seen.emplace(edgeKey(a, b), 1).second) nb[a].push_back(b), nb[b].push_back(a);
+            }
+    }
+    auto onSeam = [&](uint32_t v) { return axis >= 0 && std::abs(q.P[v][axis]) < 0.01f * edge; };
+    size_t defects = 0;
+    for (uint32_t v = 0; v < nv; ++v) {
+        const size_t k = nb[v].size();
+        SurfaceHit hit;
+        if ((onSeam(v) ? 2 * k - 2 : k) >= 7 && guides.closestPoint(q.P[v], reach, hit)) ++defects;
+    }
+    for (const ClosedGuide& c : pinned) {
+        if (!c.lines || c.steps <= 0.0f) continue;
+        std::vector<uint8_t> on(nv, 0);
+        for (uint32_t v = 0; v < nv; ++v) {
+            SurfaceHit hit;
+            on[v] = q.feature[v] && c.bvh.closestPoint(q.P[v], 0.1f * edge, hit);
+        }
+        double along = 0.0;
+        for (uint32_t v = 0; v < nv; ++v) {
+            if (!on[v]) continue;
+            int deg = 0;
+            for (uint32_t u : nb[v])
+                if (on[u]) ++deg, along += 0.5 * double(glm::length(q.P[u] - q.P[v]));
+            if (deg != 2 && !(deg == 1 && !c.loop && onSeam(v))) ++defects;
+        }
+        if (along < 0.9 * double(c.length)) ++defects;
+    }
+    return defects;
+}
 
 // The field-aligned remesh of one connected piece to about `wantQuads` quads. False on cancel.
 bool remeshPiece(WorkMesh work, int axis, double wantQuads, const QRemeshOptions& opt, float diag,
@@ -1489,7 +1565,7 @@ bool remeshPiece(WorkMesh work, int axis, double wantQuads, const QRemeshOptions
         // The flow follows a curve over 0.5 (Curves Strength 0) to 6 quads (1) to each side; a quad is half the
         // lattice spacing (each extracted face splits into four).
         const float strength = std::clamp(opt.guideStrength, 0.0f, 1.0f);
-        applyGuides(levels[0], guides, spacing * (0.25f + 2.75f * strength), guideSegs, closedGuides);
+        applyGuides(levels[0], guides, spacing * (0.25f + 2.75f * strength), axis, guideSegs, closedGuides);
         mark("guides");
     }
     mark("finest level");
@@ -1698,6 +1774,8 @@ bool remeshPiece(WorkMesh work, int axis, double wantQuads, const QRemeshOptions
                 if (std::abs(qm.P[a][axis]) < 0.3f * sp && std::abs(qm.P[b][axis]) < 0.3f * sp) res.seam[a] = res.seam[b] = 1;
             }
     }
+    if (!guideBvh.empty())
+        res.guideDefects = guideDefects(qm, guideBvh, closedGuides, axis, 0.5f * sp, spacing * (0.25f + 2.75f * std::clamp(opt.guideStrength, 0.0f, 1.0f)) + sp);
     res.spacing = sp;
     res.mesh = std::move(qm);
     return true;
@@ -1837,6 +1915,40 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
                 }
                 if (off / double(m.points.size()) > 0.004 * diag) guides.push_back(std::move(m));
             }
+            // Only the +axis half is remeshed: each guide is cut at the plane. A loop across the middle becomes
+            // a curve from the seam to the seam (exactly on it at both ends), so its corners meet the seam's.
+            std::vector<QRemeshGuide> half;
+            for (const QRemeshGuide& g : guides) {
+                const size_t n = g.points.size();
+                const bool loop = g.closed && n > 2;
+                size_t start = 0; // a loop's walk starts on the far side, so no piece wraps round
+                if (loop)
+                    while (start < n && g.points[start][axis] >= 0.0f) ++start;
+                if (loop && start == n) {
+                    half.push_back(g);
+                    continue;
+                }
+                QRemeshGuide run;
+                run.stroke = g.stroke;
+                auto flush = [&] {
+                    if (run.points.size() >= 2) half.push_back(run);
+                    run.points.clear();
+                };
+                if (g.points[start][axis] >= 0.0f) run.points.push_back(g.points[start]);
+                for (size_t k = 0, segs = loop ? n : n - 1; k < segs; ++k) {
+                    const vec3 a = g.points[(start + k) % n], b = g.points[(start + k + 1) % n];
+                    const bool ina = a[axis] >= 0.0f, inb = b[axis] >= 0.0f;
+                    if (ina != inb) {
+                        vec3 p = glm::mix(a, b, a[axis] / (a[axis] - b[axis]));
+                        p[axis] = 0.0f;
+                        run.points.push_back(p);
+                        if (ina) flush();
+                    }
+                    if (inb) run.points.push_back(b);
+                }
+                flush();
+            }
+            guides = std::move(half);
         }
     }
 
@@ -1918,13 +2030,29 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
         const std::function<bool(float)> pieceReport = [&](float f) { return report(f0 + (f1 - f0) * f); };
         PieceResult r;
         // A piece the lattice misses is tried again finer, then kept as it is (its own triangles).
+        double want = budget[i];
         for (int attempt = 0; attempt < 3 && r.mesh.quads.empty(); ++attempt) {
             r = PieceResult{};
-            if (!remeshPiece(parts[i], axis, budget[i] * std::pow(2.5, attempt), opt, diag, guides, pieceReport, mark, r)) {
+            want = budget[i] * std::pow(2.5, attempt);
+            if (!remeshPiece(parts[i], axis, want, opt, diag, guides, pieceReport, mark, r)) {
                 error = "QRemesh cancelled";
                 return false;
             }
             st.attempts += r.attempts;
+        }
+        // The lattice round a guide can go wrong by chance (where the field's singularities land, which the
+        // smallest rounding differences move): a broken loop or a fan by a guide is tried with other starts for
+        // the field, keeping the best.
+        for (uint32_t seed = 1; seed <= 2 && r.guideDefects > 0 && !r.mesh.quads.empty(); ++seed) {
+            QRemeshOptions again = opt;
+            again.seed = opt.seed + seed * 7919u;
+            PieceResult other;
+            if (!remeshPiece(parts[i], axis, want, again, diag, guides, pieceReport, mark, other)) {
+                error = "QRemesh cancelled";
+                return false;
+            }
+            st.attempts += other.attempts;
+            if (!other.mesh.quads.empty() && other.guideDefects < r.guideDefects) r = std::move(other);
         }
         const uint32_t base = uint32_t(qm.P.size());
         if (r.mesh.quads.empty()) {

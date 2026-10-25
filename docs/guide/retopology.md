@@ -119,8 +119,9 @@ Good to know:
 - QRemesh snaps the guides onto the sculpt as it is when you run it, so sculpting after drawing them is fine. A
   guide left far from the surface, for example after moving the SubTool with the Gizmo, is ignored and the
   status line says so: draw it again.
-- A loop gets a whole number of quads around it, so it closes cleanly. Two guides closer together than about a
-  quad compete for the same loop; draw them further apart or raise **Target Polygons**.
+- A loop gets an even number of quads around it, so it closes cleanly. Two guides closer together than about a
+  quad compete for the same loop; draw them further apart or raise **Target Polygons**. A very small loop, about
+  20 quads round or fewer, may not close: raise **Target Polygons**.
 - **Curves Strength** doesn't change the loop on the curve, only how far around it the other edges turn to
   follow. Lower it when guides are close to each other or to the symmetry plane.
 
@@ -128,9 +129,13 @@ Good to know:
 
 Each curve constrains QRemesh's cross field (the directions the edges take) to run along it, falling off over a
 few quads (**Curves Strength**), and adds a lattice line on the curve, so one edge loop lies on it. Along a closed
-curve the lattice corners are placed at even steps, a whole number of them, so the loop meets itself without a
-kink. Measured on a sphere with a circular guide around an "eye", the edges near the curve are within about 3 to
-6 degrees of its direction (about 22 degrees without the guide), and the loop closes.
+curve the lattice corners are placed at even steps, an even number of them (a ring of quads round a disk always
+has an even number of sides), so the loop meets itself without a kink. With symmetry QRemesh remeshes one half,
+so a loop across the middle is cut there: its corners start on the seam, where it meets its mirror image.
+QRemesh then checks the loops and the quads near the guides; if a loop came out broken or a fan of seven or
+more edges sits by a guide, it tries again with a different start for the field and keeps the best. Measured on
+a sphere with a circular guide around an "eye", the edges near the curve are within about 2 to 8 degrees of its
+direction (about 22 degrees without the guide), and the loop closes.
 
 ## ProjectAll
 

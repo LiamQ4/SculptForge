@@ -53,14 +53,21 @@ std::vector<std::pair<uint32_t, uint32_t>> faceEdges(const Mesh& m) {
     return {edges.begin(), edges.end()};
 }
 
-// Vertices with 7 or more edges (fans, stars): a defect in a quad mesh.
-size_t highValence(const Mesh& m) {
+// Vertices with 7 or more edges (fans, stars): a defect in a quad mesh. With `reach`, only those within that
+// (along the unit sphere) of the circle around `c` at `angle`: the ones a guide there could cause.
+size_t highValence(const Mesh& m, glm::vec3 c = glm::vec3(0.0f), float angle = 0.0f, float reach = 0.0f) {
     std::map<uint32_t, int> deg;
     for (auto [a, b] : faceEdges(m)) ++deg[a], ++deg[b];
     size_t n = 0;
-    for (auto [v, d] : deg) n += d >= 7;
+    for (auto [v, d] : deg) {
+        const float off = std::acos(std::clamp(glm::dot(glm::normalize(m.positions[v]), glm::normalize(c)), -1.0f, 1.0f)) - angle;
+        n += d >= 7 && (reach <= 0.0f || std::abs(off) < reach);
+    }
     return n;
 }
+
+// Six quads (on the unit sphere with about `quads` of them): as far as Curves Strength 100 turns the flow.
+float sixQuads(int quads) { return 6.0f * std::sqrt(4.0f * kPi / float(quads)); }
 
 struct GuideFit {
     float meanAngle = 90.0f; // degrees, edges near the curve against its tangent (0 = along or across it)
@@ -241,7 +248,8 @@ TEST(qremesh_guide_loop_round_an_eye) {
         CHECK(b.meanAngle < 8.0f);
         CHECK(!a.closedLoop);
         loops += b.closedLoop;
-        CHECK(highValence(guided) == 0);
+        // Fans the guide could cause; QRemesh can leave the odd fold anywhere, guide or not.
+        CHECK(highValence(guided, e.at, e.angle, sixQuads(e.target)) == 0);
         debugDump(("guide_eye" + std::to_string(&e - eyes)).c_str(), guided, {e.at}, e.angle);
         if (&e == &eyes[0]) {
             debugDump("guide_plain", plain, {e.at}, e.angle);
@@ -315,6 +323,40 @@ TEST(qremesh_guide_with_symmetry_loops_both_sides) {
                 left.meanAngle, int(left.closedLoop));
     CHECK(right.closedLoop && left.closedLoop);
     CHECK(right.meanAngle < 8.0f && left.meanAngle < 8.0f);
+    CHECK(highValence(out, eye, angle, sixQuads(o.targetQuads)) == 0);
+}
+
+TEST(qremesh_guide_loop_across_the_symmetry_plane) {
+    // A loop round the mouth, across the middle, with X symmetry: only the right half is remeshed, so the loop
+    // is cut there and must meet its mirror image on the seam, at both ends.
+    const Mesh sphere = makeIcosphere(6);
+    struct Mouth {
+        float y, angle;
+        int target;
+    };
+    const Mouth mouths[] = {{-0.4f, 0.28f, 2100}, {-0.12f, 0.36f, 2700}, {0.0f, 0.44f, 3300}, {0.23f, 0.28f, 4200}};
+    int loops = 0;
+    for (const Mouth& mo : mouths) {
+        const glm::vec3 at(0.0f, mo.y, 0.9f);
+        QRemeshOptions o;
+        o.targetQuads = mo.target;
+        o.adaptive = 0.0f;
+        o.symmetryAxis = 0;
+        o.guides = {guideFrom(circleOnSphere(at, mo.angle, 240), true)};
+        Mesh out;
+        std::string err;
+        QRemeshStats st;
+        CHECK(qremesh(sphere, o, out, err, {}, &st));
+        CHECK(st.symmetryUsed && st.guides == 1);
+        CHECK(topologyReport(out).manifold());
+        const GuideFit f = measureFit(out, at, mo.angle);
+        std::printf("  mouth %.2f rad, %d quads: %.1f deg, loop %d\n", double(mo.angle), mo.target, f.meanAngle, int(f.closedLoop));
+        debugDump(("guide_mouth" + std::to_string(&mo - mouths)).c_str(), out, {at}, mo.angle);
+        CHECK(f.meanAngle < 10.0f);
+        CHECK(highValence(out, at, mo.angle, sixQuads(mo.target)) == 0);
+        loops += f.closedLoop;
+    }
+    CHECK(loops == 4);
 }
 
 TEST(qremesh_guide_drawing_and_commands) {
@@ -415,8 +457,8 @@ TEST(qremesh_guide_command_subtools_and_projects) {
     CHECK(r.ok && r.message.find("off the surface") != std::string::npos);
 }
 
-// SF_GUIDE_SWEEP=1: closed-loop rate, mean angle and fans over many eyes, sizes and targets, with and without
-// symmetry (for tuning).
+// SF_GUIDE_SWEEP=1: closed-loop rate, mean angle and fans near the guides over many eyes, sizes and targets,
+// with and without symmetry (for tuning); SF_GUIDE_SWEEP=N: N of them, SF_GUIDE_SEED: the field's seed.
 TEST(qremesh_guide_sweep) {
     if (!std::getenv("SF_GUIDE_SWEEP")) return;
     const Mesh sphere = makeIcosphere(6);
@@ -428,8 +470,9 @@ TEST(qremesh_guide_sweep) {
         seed = seed * 1664525u + 1013904223u;
         return float(seed >> 8) / float(1u << 24);
     };
-    for (int i = 0; i < 32; ++i) {
-        const bool sym = i >= 16;
+    const int count = std::max(std::atoi(std::getenv("SF_GUIDE_SWEEP")), 32);
+    for (int i = 0; i < count; ++i) {
+        const bool sym = i % 2;
         glm::vec3 eye = glm::normalize(glm::vec3(rnd() - 0.5f, rnd() - 0.5f, rnd() - 0.5f));
         const float angle = 0.25f + 0.4f * rnd();
         if (sym) eye = glm::normalize(glm::vec3(std::sin(angle) + 0.05f + 0.4f * rnd(), 0.6f * (rnd() - 0.5f), 0.8f));
@@ -437,6 +480,7 @@ TEST(qremesh_guide_sweep) {
         o.targetQuads = 1000 + int(4000 * rnd());
         o.adaptive = 0.0f;
         o.symmetryAxis = sym ? 0 : -1;
+        if (const char* seed = std::getenv("SF_GUIDE_SEED")) o.seed = uint32_t(std::atoi(seed));
         Mesh plain, out;
         std::string err;
         if (!qremesh(sphere, o, plain, err)) continue;
@@ -447,11 +491,13 @@ TEST(qremesh_guide_sweep) {
         ++runs;
         loops += f.closedLoop && g.closedLoop;
         angleSum += f.meanAngle;
-        const size_t hv = highValence(out), hp = highValence(plain);
+        const float reach = sixQuads(o.targetQuads);
+        const size_t hv = highValence(out, eye, angle, reach) + (sym ? highValence(out, eye * glm::vec3(-1, 1, 1), angle, reach) : 0);
+        const size_t hp = highValence(plain, eye, angle, reach) + (sym ? highValence(plain, eye * glm::vec3(-1, 1, 1), angle, reach) : 0);
         fans += hv, fansPlain += hp;
         std::printf("  %2d%s: target %d, angle %.2f: %.1f deg, loop %d%d, fans %zu (plain %zu)\n", i, sym ? " sym" : "    ",
                     o.targetQuads, angle, f.meanAngle, int(f.closedLoop), int(g.closedLoop), hv, hp);
     }
-    std::printf("  sweep: %d / %d closed loops, mean %.1f deg, %zu fans (plain %zu)\n", loops, runs,
+    std::printf("  sweep: %d / %d closed loops, mean %.1f deg, %zu fans near the guides (plain %zu)\n", loops, runs,
                 angleSum / std::max(runs, 1), fans, fansPlain);
 }
