@@ -114,6 +114,9 @@ public:
     // brush first (Smooth towards twice the edge length, so it simplifies, as in ZBrush). Not the Move brush.
     DyntopoSettings dyntopo;
     DynamicTopology& dynamicTopology() { return dynTopo_; }
+    // No remeshing for the rest of this stroke: strokes that undo and re-stamp while dragging (DragRect,
+    // DragDot; restoreStroke) put positions back, not topology. restoreStroke holds it too.
+    void holdTopology() { topologyHeld_ = true; }
 
     // Mirror sign vectors for the enabled symmetry axes (always starts with (1,1,1)).
     static std::vector<glm::vec3> mirrors(Symmetry sym);
@@ -143,6 +146,7 @@ private:
     float strokeDiagonal_ = 0.0f;
     // The last remesh (repairDab remeshes it again when the brush squashed a triangle).
     bool lastRemesh_ = false;
+    bool topologyHeld_ = false;
     glm::vec3 lastCenter_{0.0f};
     float lastRadius_ = 0.0f, lastEdge_ = 0.0f;
     std::vector<glm::vec3> lastMirrors_;

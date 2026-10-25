@@ -208,12 +208,13 @@ bool Sculptor::beginStroke(const Mesh& mesh, std::string label, int layer) {
     ++strokeId_;
     strokeDiagonal_ = 0.0f;
     lastRemesh_ = false;
+    topologyHeld_ = false;
     active_ = true;
     return true;
 }
 
 void Sculptor::remeshDab(Mesh& mesh, BVH& bvh, const DabParams& p, Symmetry sym, float scale, float reach) {
-    if (!dyntopo.enabled) return;
+    if (!dyntopo.enabled || topologyHeld_) return;
     auto clock = std::chrono::steady_clock::now();
     if (dyntopo.constantDetail && strokeDiagonal_ <= 0.0f) strokeDiagonal_ = glm::length(mesh.bounds().extent());
     const float edge = dyntopoEdgeLength(dyntopo, p.radius, strokeDiagonal_) * scale;
@@ -859,6 +860,7 @@ void Sculptor::grab(Mesh& mesh, BVH& bvh, const glm::vec3& delta) {
 // Puts every vertex the current stroke moved back to its stroke-start position.
 void Sculptor::restoreStroke(Mesh& mesh, BVH& bvh) {
     if (!active_) return;
+    topologyHeld_ = true; // (positions come back, topology wouldn't)
     // Polypaint laid down by the stroke so far (Paint brush / RGB while sculpting).
     if (!record_.colors.empty() && mesh.hasColors()) {
         const auto& ci = record_.colors.indices;

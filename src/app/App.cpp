@@ -848,6 +848,7 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
     }
     drag_ = Drag::Stroke;
     playingLayer_ = -1;
+    if (strokeType_ == StrokeType::DragRect || strokeType_ == StrokeType::DragDot) doc_.sculptor.holdTopology(); // (they re-stamp)
     clearLods();
     beginPaintStroke();
     if (doc_.sculptor.dyntopo.enabled && strokeSculpt_ && !dyntopoBlocker(doc_.mesh).empty())

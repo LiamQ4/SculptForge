@@ -16,7 +16,7 @@ remeshing first.
 | **Constant detail** | Draw palette | Off: the size follows the brush. On: one size for the whole mesh |
 
 Then sculpt as usual. Every brush works with it except **Move** (it drags the surface without remeshing), the
-mask and paint brushes, and **DragRect** strokes. **Smooth** remeshes towards larger triangles, so smoothing
+mask and paint brushes, and the stamping strokes **DragRect** and **DragDot** (so VDM stamps don't remesh either). **Smooth** remeshes towards larger triangles, so smoothing
 also simplifies, as in ZBrush.
 
 > **Tip:** Turn on **PolyF** (<kbd>Shift</kbd>+<kbd>F</kbd>) to see the triangles appear under the brush.
