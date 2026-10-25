@@ -5,6 +5,32 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Next version (in development)
+
+### Your ZBrush hands just work
+
+SculptForge now follows ZBrush's keys and gestures by default. A ZBrush sculptor tried an earlier version and
+put it down because it didn't feel like ZBrush; this release goes through every habit of the first hour.
+[Coming from ZBrush](coming-from-zbrush.md) lists what's the same, what's different and every shortcut side by
+side.
+
+- **S, U, I, O** open Draw Size, Z Intensity, RGB Intensity and Focal Shift under the cursor, and
+  <kbd>Space</kbd> opens the QuickMenu with all of them plus the brush, stroke, alpha and material.
+- **Focal Shift** shapes the brush falloff, shown as the cursor's inner ring. **RGB Intensity** gives painting a
+  strength of its own, and **Smooth keeps its own Z Intensity**, so a gentle brush still smooths properly.
+- **ZBrush's brush letters**: B C B ClayBuildup, B D S DamStandard, B M V Move, B I N Inflate...
+- **Masking**: <kbd>Ctrl</kbd>+click the model blurs the mask, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+click sharpens it;
+  <kbd>Ctrl</kbd>+<kbd>A</kbd>, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>, <kbd>Ctrl</kbd>+<kbd>I</kbd>,
+  <kbd>Ctrl</kbd>+<kbd>H</kbd> and <kbd>Ctrl</kbd>+<kbd>W</kbd> (group masked) work as in ZBrush.
+- **Strokes and the view**: <kbd>Shift</kbd> pressed mid-stroke draws a straight line; <kbd>Shift</kbd>+click,
+  let go and drag rolls the view; <kbd>Shift</kbd>+<kbd>Alt</kbd>+click frames a SubTool; <kbd>L</kbd> toggles
+  LazyMouse and <kbd>V</kbd> swaps colours.
+- **Visibility**: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click on a partly hidden mesh hides the group, as in ZBrush.
+- **Prefer the old keys?** **Preferences > Input > Style > SculptForge** brings back the number keys for brushes,
+  <kbd>I</kbd> for Z Intensity and the <kbd>Ctrl</kbd>+drag zoom.
+
+See [Sculpting and brushes](sculpting.md), [Masking](masking.md) and [Keyboard and mouse](shortcuts.md).
+
 ## Version 0.6
 
 Performance: half the memory, a view that turns twice as fast, quicker brushes on huge meshes, and SculptForge

@@ -72,7 +72,24 @@ With <kbd>Ctrl</kbd> held, clicks and drags on the empty background act on the w
 |---|---|
 | <kbd>Ctrl</kbd> + click the background | Invert the mask |
 | <kbd>Ctrl</kbd> + drag on the background | Clear the mask (MaskPen) |
-| <kbd>Ctrl</kbd> + drag on the background, with nothing masked | Zoom the view (MaskPen) |
+| <kbd>Ctrl</kbd> + drag on the background, with nothing masked | Nothing, as in ZBrush (the SculptForge input style zooms the view, see [Coming from ZBrush](coming-from-zbrush.md)) |
+
+On the model, a <kbd>Ctrl</kbd> + click that doesn't drag works on the mask's edges, as in ZBrush:
+
+| Gesture | Effect |
+|---|---|
+| <kbd>Ctrl</kbd> + click the model | Blur the mask (once per click; same as **Blur**) |
+| <kbd>Ctrl</kbd>+<kbd>Alt</kbd> + click the model | Sharpen the mask (same as **Sharpen**) |
+
+## Mask keys
+
+| Key | Effect |
+|---|---|
+| <kbd>Ctrl</kbd>+<kbd>A</kbd> | Mask All |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> | Clear Mask |
+| <kbd>Ctrl</kbd>+<kbd>I</kbd> | Invert Mask |
+| <kbd>Ctrl</kbd>+<kbd>H</kbd> | Show or hide the mask's shading (View Mask) |
+| <kbd>Ctrl</kbd>+<kbd>W</kbd> | Group Masked: the masked part becomes a new polygroup and the mask is cleared (see [Polygroups](polygroups.md)) |
 
 A drag starts after the cursor moves a few pixels, so a slightly shaky click still inverts. With **MaskLasso**
 or **MaskRect**, a <kbd>Ctrl</kbd> + drag on the background draws the shape instead; clear the mask with

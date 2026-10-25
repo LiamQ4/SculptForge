@@ -50,7 +50,7 @@ Notes on particular brushes:
 
 - **Move** and **SnakeHook** move the surface with the cursor instead of placing dabs, so stroke types
   (Dots, Spray and so on) don't apply to them.
-- **Layer** sets its height from the brush size and **Strength**. Pen pressure lowers the height when
+- **Layer** sets its height from the brush size and **Z Intensity**. Pen pressure lowers the height when
   **Pressure > Strength** is on, so you can feather the edge of a layer.
 - **Trim** gives crisp planes on cylinders and edges. Use it with **Front** on when you work on thin shapes.
 
@@ -119,21 +119,34 @@ and on custom brushes also **Copy brush code**, **Rename...**, **Save as .sfbrus
 > to choose a masking brush is not supported; mask strokes always use <kbd>Ctrl</kbd> with the current
 > settings.
 
-## Draw Size and Strength
+## Draw Size, Z Intensity, RGB Intensity and Focal Shift
 
-Two values control every brush. Both are on the top shelf and in the **Draw** palette.
+These values control every brush, with ZBrush's names and keys. Draw Size and Z Intensity are on the top shelf;
+all four are in the **Draw** palette and the [QuickMenu](#the-quickmenu).
 
 | Setting | Range | Default | How to change it |
 |---|---|---|---|
 | **Draw Size** | 2 to 800 | 60 | Brush radius in screen pixels. <kbd>[</kbd> and <kbd>]</kbd> make it 10% smaller or larger (hold to repeat). <kbd>S</kbd> opens a slider at the cursor. |
-| **Strength** | 0.01 to 1 | 0.50 | How strongly each dab changes the surface (ZBrush Z Intensity). <kbd>I</kbd> opens a slider at the cursor. |
+| **Z Intensity** | 1 to 100 | 50 | How strongly each dab changes the surface. <kbd>U</kbd> opens a slider at the cursor. |
+| **RGB Intensity** | 1 to 100 | 100 | How strongly painting colours the surface (the Paint brush, and sculpting with Rgb on). <kbd>I</kbd> opens a slider at the cursor. |
+| **Focal Shift** | -100 to 100 | 0 | The brush falloff. Below 0 the full-strength centre widens into a broad, hard tip; above 0 it narrows to a soft point. <kbd>O</kbd> opens a slider at the cursor. |
 
 Because **Draw Size** is measured on screen, the brush covers less of the model as you zoom in, which is what
 you want for detail work.
 
-The <kbd>S</kbd> and <kbd>I</kbd> pop-ups take the mouse or the keyboard: drag the slider and release to close
-it, or type a number and press <kbd>Enter</kbd>. For Strength you can type either `0.35` or `35`. <kbd>Esc</kbd>
-closes the pop-up without typing anything new.
+The brush cursor shows two rings, as in ZBrush: the outer one is the Draw Size, the inner one is Focal Shift
+(where the brush works at half strength). Masking, painting, Move and SnakeHook follow Focal Shift too; custom
+brushes made in Brush Lab keep their own tip shape.
+
+The <kbd>S</kbd>, <kbd>U</kbd>, <kbd>I</kbd> and <kbd>O</kbd> pop-ups take the mouse or the keyboard: drag the
+slider and release to close it, or type a number and press <kbd>Enter</kbd> (a minus first for a negative Focal
+Shift). <kbd>Esc</kbd> closes the pop-up without typing anything new.
+
+### Smooth's own Z Intensity
+
+Smooth keeps a Z Intensity of its own, as in ZBrush, so a gentle Standard stroke at 10 still smooths at full
+speed. Hold <kbd>Shift</kbd> (or pick the Smooth brush) and the Z Intensity slider shows **Smooth Z Intensity**:
+change it there, or hold <kbd>Shift</kbd> and press <kbd>U</kbd>. It starts at 50.
 
 ![The Draw palette](images/draw-palette.jpg)
 
@@ -156,11 +169,17 @@ The **Brush** palette has the same Front and invert settings as the checkboxes *
 | Hold | Effect |
 |---|---|
 | <kbd>Alt</kbd> | Inverts the brush for this stroke (see the table of brushes). |
-| <kbd>Shift</kbd> | Smooths with the Smooth brush, whatever brush is active. With the Paint brush active, <kbd>Shift</kbd> still smooths the shape. |
-| <kbd>Ctrl</kbd> | Paints a mask instead of sculpting; <kbd>Ctrl</kbd>+<kbd>Alt</kbd> erases it. See [Masking](masking.md). |
+| <kbd>Shift</kbd> (before the stroke) | Smooths with the Smooth brush, whatever brush is active, at Smooth's own Z Intensity. With the Paint brush active, <kbd>Shift</kbd> still smooths the shape. |
+| <kbd>Shift</kbd> (after the stroke started) | Draws a straight line from where you pressed <kbd>Shift</kbd>, snapped to 45 degree steps on screen. Let go of <kbd>Shift</kbd> to carry on freehand. |
+| <kbd>Ctrl</kbd> | Paints a mask instead of sculpting; <kbd>Ctrl</kbd>+<kbd>Alt</kbd> erases it. A <kbd>Ctrl</kbd>+click without dragging blurs the mask (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+click sharpens it). See [Masking](masking.md). |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd> | Visibility gestures: isolate, hide and show polygroups. See [Polygroups and visibility](polygroups.md). |
 
-Smoothing uses the current **Strength**, so lower Strength gives a gentler smooth.
+## The QuickMenu
+
+Press <kbd>Space</kbd> for ZBrush's QuickMenu under the cursor: the Brush, Stroke, Alpha and Material tiles,
+Draw Size, Focal Shift, Z Intensity and RGB Intensity, Zadd / Zsub, Sculpt / Paint, Rgb and X symmetry. Hold
+<kbd>Space</kbd> and let go to close it again (it stays while the pointer is on it), or tap <kbd>Space</kbd> to
+keep it open until you click elsewhere or press <kbd>Esc</kbd>. Clicking a tile opens its picker.
 
 ## Strokes
 

@@ -146,19 +146,22 @@ action registry, the same source as the Controls window.
 | Sculpt | Left-drag on the model |
 | Invert the brush (subtract) | Hold <kbd>Alt</kbd> while sculpting |
 | Smooth | Hold <kbd>Shift</kbd> while sculpting (works with any brush, and with Paint) |
+| Straight line | Press <kbd>Shift</kbd> after a stroke has started (45 degree steps) |
+| Roll the view | <kbd>Shift</kbd>+click the background, let go of <kbd>Shift</kbd>, drag |
 | Rotate | Left-drag on the background, or right-drag; hold <kbd>Shift</kbd> to snap to an axis view |
 | Pan | <kbd>Alt</kbd>+left-drag on the background, <kbd>Alt</kbd>+right-drag, or middle-drag |
-| Zoom | Mouse wheel; <kbd>Alt</kbd>+drag on the background then release <kbd>Alt</kbd>; <kbd>Ctrl</kbd>+right-drag; <kbd>Ctrl</kbd>+middle-drag; or <kbd>Ctrl</kbd>+left-drag on the background (when nothing is masked) |
+| Zoom | Mouse wheel; <kbd>Alt</kbd>+drag on the background then release <kbd>Alt</kbd>; <kbd>Ctrl</kbd>+right-drag; <kbd>Ctrl</kbd>+middle-drag; with the SculptForge input style also <kbd>Ctrl</kbd>+left-drag on the background (when nothing is masked) |
 | Paint the mask | Hold <kbd>Ctrl</kbd> while stroking on the model |
 | Erase the mask | Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd> while stroking on the model |
+| Blur / sharpen the mask | <kbd>Ctrl</kbd>+click / <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+click the model |
 | Invert the mask | <kbd>Ctrl</kbd>+click the background |
-| Clear the mask | <kbd>Ctrl</kbd>+drag on the background (with **MaskPen**) |
+| Clear the mask | <kbd>Ctrl</kbd>+drag on the background (with **MaskPen**), or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> |
 | Mask inside a lasso or rectangle | <kbd>Ctrl</kbd>+drag with **MaskLasso** or **MaskRect** picked in **Tool > Masking** (add <kbd>Alt</kbd>: unmask) |
-| Isolate a polygroup | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click it (again: invert the visibility) |
+| Isolate a polygroup | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click it (again: invert the visibility; with something hidden already: hide it) |
 | Hide a polygroup | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd>+click it |
 | Show everything | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click the background |
 | Hide outside a rectangle or lasso | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag (add <kbd>Alt</kbd>: hide inside); **SelectRect** or **SelectLasso** in **Tool > Visibility** |
-| Select a SubTool | <kbd>Alt</kbd>+click it in the view |
+| Select a SubTool | <kbd>Alt</kbd>+click it in the view (<kbd>Shift</kbd>+<kbd>Alt</kbd>+click: select and frame it) |
 | Move, scale or rotate with the Gizmo 3D | <kbd>W</kbd>, <kbd>E</kbd> or <kbd>R</kbd>, then drag a handle; hold <kbd>Shift</kbd> to snap (15 degrees, the grid, 10%) |
 | Move the gizmo only | <kbd>Alt</kbd>+drag a gizmo handle |
 | Put the gizmo's pivot on the model | <kbd>Alt</kbd>+click the model in Move, Scale or Rotate mode |
@@ -183,7 +186,7 @@ Some keys only mean something while a pop-up or panel has the keyboard.
 | <kbd>Enter</kbd> | Pick the first match |
 | <kbd>Esc</kbd> | Close |
 
-### Draw Size and Strength at the cursor (S, I)
+### Sliders at the cursor (S, U, I, O)
 
 | Key | Action |
 |---|---|
@@ -218,17 +221,21 @@ Some keys only mean something while a pop-up or panel has the keyboard.
 
 ## ZBrush keys that work differently
 
-Most ZBrush shortcuts do the same thing in SculptForge. A few differ because the feature works differently or
-doesn't exist yet:
+ZBrush's keys and gestures work in SculptForge (with **Preferences > Input > Style** on **ZBrush**, the
+default). The few that differ, because the feature works differently or doesn't exist yet:
 
 | ZBrush | SculptForge |
 |---|---|
-| <kbd>D</kbd> / <kbd>Shift</kbd>+<kbd>D</kbd> (subdivision level up / down) | No subdivision levels yet; <kbd>Ctrl</kbd>+<kbd>D</kbd> subdivides once and can be undone |
-| <kbd>Space</kbd> (QuickMenu) | No QuickMenu; use the left-shelf tiles, <kbd>B</kbd>, <kbd>M</kbd>, <kbd>S</kbd> and <kbd>I</kbd> |
-| <kbd>O</kbd> (Focal Shift) | No focal shift setting |
-| <kbd>Ctrl</kbd>+<kbd>W</kbd> (group masked) | **Tool > Polygroups > From mask** |
-| <kbd>Shift</kbd> (snap the view while rotating) | No view snapping yet |
+| <kbd>P</kbd> (perspective) | <kbd>P</kbd> is the Paint brush; the view is always in perspective |
+| <kbd>T</kbd> (Edit mode) | Always in Edit mode: there is no 2.5D canvas |
+| <kbd>W</kbd> / <kbd>E</kbd> / <kbd>R</kbd> (Transpose line) | The Gizmo 3D (see [Gizmo 3D](gizmo.md)) |
+| <kbd>1</kbd>, <kbd>2</kbd>, <kbd>3</kbd> (replay and record strokes) | Not yet |
+| <kbd>N</kbd> (list the SubTools) | **Tool > SubTool** in the right tray |
+| <kbd>F1</kbd> to <kbd>F6</kbd> (pop-ups) | <kbd>F1</kbd> is the Controls window, <kbd>F3</kbd> the command palette; <kbd>B</kbd>, <kbd>M</kbd> and the left-shelf tiles pop up brushes, strokes, alphas and materials |
+| <kbd>Ctrl</kbd>+<kbd>E</kbd> (edge loop), <kbd>Ctrl</kbd>+<kbd>U</kbd> (reload ZScript) | Export GLB and Send to Unreal |
 | <kbd>H</kbd> (hide the ZScript window) | <kbd>`</kbd> toggles the console |
+
+See [Coming from ZBrush](coming-from-zbrush.md) for the whole list.
 
 ## See also
 

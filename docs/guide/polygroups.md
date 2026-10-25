@@ -38,8 +38,9 @@ groups. So you can isolate one part and regroup just that part.
 Each button is one undo step.
 
 > **ZBrush:** **By normals** is Auto Groups / Groups By Normals, **By pieces** is Auto Groups on a mesh with
-> separate parts, **From mask** is Group Masked (<kbd>Ctrl</kbd>+<kbd>W</kbd> in ZBrush; it has no shortcut
-> here, but you can assign one), and **Merge visible** is Group Visible.
+> separate parts, **From mask** is Group Masked, and **Merge visible** is Group Visible.
+> <kbd>Ctrl</kbd>+<kbd>W</kbd> works as in ZBrush: the masked part becomes a new group and the mask is cleared
+> (with nothing masked, everything visible becomes one group).
 
 ### Group a region you painted
 
@@ -57,10 +58,12 @@ macOS):
 
 | Gesture | Effect |
 |---|---|
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click a polygroup | Isolate it: show only that group. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click a polygroup, everything shown | Isolate it: show only that group. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click a polygroup, something hidden | Hide that group (as in ZBrush). |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click the isolated group again | Invert the visibility: show everything else instead. |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd> + click a polygroup | Hide that group. |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click the background | Show everything. |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + drag a rectangle on the background, around nothing | Reverse the visibility. |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + drag | Keep what's inside the rectangle (or lasso), hide the rest. The shape is drawn green. |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd> + drag | Hide what's inside the rectangle (or lasso). The shape is drawn red. |
 

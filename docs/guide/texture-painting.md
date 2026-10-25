@@ -18,7 +18,7 @@ symmetry, mask and paint layers with blend modes.
 3. Choose a size (**1K**, **2K**, **4K** or **8K**; 2K is the default) and click **New Texture**. The model now
    carries a white texture, and painting goes into it: **Texture** lights up next to **Vertex** on the top
    shelf.
-4. Press <kbd>P</kbd> and paint. Draw Size, Strength, pen pressure, the stroke type, the alpha, symmetry and the
+4. Press <kbd>P</kbd> and paint. Draw Size, RGB Intensity, pen pressure, the stroke type, the alpha, symmetry and the
    mask work as they do for polypaint.
 
 Click **Show UVs** to see the texture with the UV layout drawn over it, below the buttons. Paint on the model and

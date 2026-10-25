@@ -7,7 +7,7 @@ and how to get your work into a game engine, a film pipeline or ZBrush. It is wr
 
 You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<kbd>F1</kbd>) or on the
 [SculptForge website](https://islandmed.github.io/SculptForge/guide/). If you're coming from ZBrush, start with
-[The interface](interface.md) and keep the [Glossary](glossary.md) at hand: most ZBrush habits work as they are.
+[Coming from ZBrush](coming-from-zbrush.md) and keep the [Glossary](glossary.md) at hand: ZBrush's keys and gestures work as they are.
 
 ![The SculptForge window with its main regions labelled](images/interface-overview.jpg)
 
@@ -15,44 +15,45 @@ You can read it inside SculptForge (**Help > User Guide**, or <kbd>Shift</kbd>+<
 
 1. [Welcome to SculptForge](welcome.md)
 2. [What's new](whats-new.md)
-3. [Installing SculptForge](installing.md)
-4. [The interface](interface.md)
-5. [Navigating the view](navigation.md)
+3. [Coming from ZBrush](coming-from-zbrush.md)
+4. [Installing SculptForge](installing.md)
+5. [The interface](interface.md)
+6. [Navigating the view](navigation.md)
 
 ## Sculpting
 
-6. [Sculpting and brushes](sculpting.md)
-7. [Brush Lab and sharing brushes](brush-lab.md)
-8. [Masking](masking.md)
-9. [Polygroups and visibility](polygroups.md)
-10. [SubTools](subtools.md)
-11. [Polypaint and materials](polypaint.md)
-12. [Texture painting](texture-painting.md)
-13. [Sculpt layers and blend shapes](layers.md)
-14. [Subdivision levels](subdivision-levels.md)
-15. [Moving, rotating and posing (Gizmo 3D)](gizmo.md)
-16. [Subdivide, remesh, decimate and LODs](geometry.md)
-17. [Quad retopology and detail projection](retopology.md)
+7. [Sculpting and brushes](sculpting.md)
+8. [Brush Lab and sharing brushes](brush-lab.md)
+9. [Masking](masking.md)
+10. [Polygroups and visibility](polygroups.md)
+11. [SubTools](subtools.md)
+12. [Polypaint and materials](polypaint.md)
+13. [Texture painting](texture-painting.md)
+14. [Sculpt layers and blend shapes](layers.md)
+15. [Subdivision levels](subdivision-levels.md)
+16. [Moving, rotating and posing (Gizmo 3D)](gizmo.md)
+17. [Subdivide, remesh, decimate and LODs](geometry.md)
+18. [Quad retopology and detail projection](retopology.md)
 
 ## AI and capture
 
-18. [Image and text to 3D](generate-3d.md)
-19. [Gaussian splats](splats.md)
+19. [Image and text to 3D](generate-3d.md)
+20. [Gaussian splats](splats.md)
 
 ## Files and pipelines
 
-20. [Baking normal and displacement maps](baking.md)
-21. [Exporting, Unreal and ZBrush](exporting.md)
-22. [Projects, autosave and QuickSave](projects.md)
-23. [Scripting and automation](scripting.md)
-24. [SculptForge for studios](studios.md)
+21. [Baking normal and displacement maps](baking.md)
+22. [Exporting, Unreal and ZBrush](exporting.md)
+23. [Projects, autosave and QuickSave](projects.md)
+24. [Scripting and automation](scripting.md)
+25. [SculptForge for studios](studios.md)
 
 ## Reference
 
-25. [Keyboard and mouse](shortcuts.md)
-26. [Performance and big meshes](performance.md)
-27. [Troubleshooting and FAQ](troubleshooting.md)
-28. [Glossary](glossary.md)
+26. [Keyboard and mouse](shortcuts.md)
+27. [Performance and big meshes](performance.md)
+28. [Troubleshooting and FAQ](troubleshooting.md)
+29. [Glossary](glossary.md)
 
 ## Getting help
 
