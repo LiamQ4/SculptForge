@@ -39,6 +39,21 @@ expect_value active_subtool == 0
 expect_value edited_subtools == 0
 shot alt-click
 
+# Shift+Alt+click selects a SubTool and frames it (ZBrush): the camera moves in on the Cube.
+remember camera_distance far
+hold shift+alt
+click_subtool Cube
+hold none
+expect_value active_subtool == 2
+expect_value camera_distance < $far
+expect_value edited_subtools == 0
+shot shift-alt-frame
+key f
+hold alt
+click_subtool Body
+hold none
+expect_value active_subtool == 0
+
 # A stroke changes only the active SubTool; undo history is per SubTool.
 click "Clay##brush.clay"
 stroke 0.3 0.4 0.6 0.6

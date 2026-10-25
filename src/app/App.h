@@ -570,6 +570,7 @@ private:
     void subtoolClickMove(float x, float y); // Alt press on another SubTool: dragging turns it into a stroke
     void subtoolClickRelease();              // ... and releasing without dragging selects it
     int subtoolClickTarget_ = -1;
+    bool subtoolClickFrame_ = false; // Shift+Alt+click: frame the SubTool as well
     float subtoolClickX_ = 0.0f, subtoolClickY_ = 0.0f;
     uint32_t renamingSubtool_ = 0; // SubTool id being renamed inline (0: none)
     uint32_t listedActiveSubtool_ = 0; // the list scrolls to the active SubTool when it changes

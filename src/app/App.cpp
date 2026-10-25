@@ -684,9 +684,13 @@ void App::onMouseDown(float x, float y, Uint8 button) {
         if (maskSelectMouseDown(x, y, mod)) return;
         if (gizmoMouseDown(x, y, mod)) return; // Gizmo 3D handles, pivot clicks (Gizmo.cpp)
         // Alt+click on another SubTool selects it (ZBrush); Alt+drag stays an inverted stroke or a pan.
-        if ((mod & SDL_KMOD_ALT) && !ctrlDown(mod) && !(mod & SDL_KMOD_SHIFT) && doc_.subtoolCount() > 1) {
+        // Shift+Alt+click selects and frames it (ZBrush), the active one too.
+        const bool frameClick = (mod & SDL_KMOD_ALT) && (mod & SDL_KMOD_SHIFT) && !ctrlDown(mod);
+        if ((mod & SDL_KMOD_ALT) && !ctrlDown(mod) && (frameClick || !(mod & SDL_KMOD_SHIFT)) &&
+            (doc_.subtoolCount() > 1 || frameClick)) {
             const int target = pickSubtool(x, y);
-            if (target >= 0 && target != doc_.activeSubtool) {
+            subtoolClickFrame_ = frameClick;
+            if (target >= 0 && (target != doc_.activeSubtool || frameClick)) {
                 drag_ = Drag::SubToolClick;
                 subtoolClickTarget_ = target;
                 subtoolClickX_ = x;

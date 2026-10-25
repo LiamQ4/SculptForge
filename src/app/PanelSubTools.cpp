@@ -103,9 +103,12 @@ void App::subtoolClickMove(float x, float y) {
 }
 
 void App::subtoolClickRelease() {
-    if (subtoolClickTarget_ >= 0 && subtoolClickTarget_ < doc_.subtoolCount())
-        runCommand("subtool_select", {{"index", double(subtoolClickTarget_)}});
+    if (subtoolClickTarget_ >= 0 && subtoolClickTarget_ < doc_.subtoolCount()) {
+        if (subtoolClickTarget_ != doc_.activeSubtool) runCommand("subtool_select", {{"index", double(subtoolClickTarget_)}});
+        if (subtoolClickFrame_) camera_.frame(doc_.mesh.bounds()); // Shift+Alt+click: frame it too
+    }
     subtoolClickTarget_ = -1;
+    subtoolClickFrame_ = false;
 }
 
 void App::drawSubToolsContents() {

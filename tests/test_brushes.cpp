@@ -83,6 +83,35 @@ TEST(round_alpha_leaves_existing_brushes_unchanged) {
     CHECK(std::abs(d.mesh.positions[nearest(d.mesh, glm::vec3(0))].y - 0.3f * 0.06f * 0.5f) < 1e-5f);
 }
 
+// ZBrush Focal Shift: 0 leaves the falloff (and so every brush) exactly as before; below 0 the tip is broader
+// and harder, above 0 a softer point; the cursor's inner ring sits where the falloff is one half.
+TEST(focal_shift_shapes_the_falloff) {
+    for (float d : {0.0f, 0.1f, 0.33f, 0.5f, 0.77f, 1.0f}) {
+        const float t = std::clamp(1.0f - d, 0.0f, 1.0f);
+        CHECK(brushFalloff(d, 1.0f, 0.0f) == t * t * (3.0f - 2.0f * t));
+        CHECK(brushFalloff(d, 1.0f, -0.6f) >= brushFalloff(d, 1.0f));
+        CHECK(brushFalloff(d, 1.0f, 0.6f) <= brushFalloff(d, 1.0f));
+    }
+    CHECK(brushFalloff(0.0f, 1.0f, 0.8f) == 1.0f);
+    CHECK(brushFalloff(1.0f, 1.0f, -0.8f) == 0.0f);
+    for (float f : {-1.0f, -0.4f, 0.0f, 0.5f, 1.0f})
+        CHECK(std::abs(brushFalloff(focalRingFraction(f), 1.0f, f) - 0.5f) < 1e-4f);
+    CHECK(std::abs(focalRingFraction(0.0f) - 0.5f) < 1e-6f);
+    CHECK(focalRingFraction(-0.5f) > 0.5f && focalRingFraction(0.5f) < 0.5f);
+
+    // On a brush: focal 0 is bit-identical to no focal at all; a soft point raises less away from the centre.
+    Document a = planeDoc(), b = planeDoc(), c = planeDoc();
+    DabParams p = dabAt(glm::vec3(0.0f));
+    stroke(a, BrushType::Standard, p);
+    p.focal = 0.0f;
+    stroke(b, BrushType::Standard, p);
+    CHECK(a.mesh.positions == b.mesh.positions);
+    p.focal = 0.7f;
+    stroke(c, BrushType::Standard, p);
+    const uint32_t off = nearest(c.mesh, glm::vec3(0.15f, 0.0f, 0.0f));
+    CHECK(c.mesh.positions[off].y < a.mesh.positions[off].y);
+}
+
 TEST(dam_standard_carves_sharp_pinched_groove) {
     Document d = planeDoc();
     const auto before = d.mesh.positions;
