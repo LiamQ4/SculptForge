@@ -173,8 +173,18 @@ void App::drawPalette_Draw() {
     ui::SliderInside("##drawsize", &radiusPx_, 2.0f, 800.0f, "Draw Size %.0f", ImGuiSliderFlags_Logarithmic);
     ui::HelpText("Draw Size", "S", "Brush radius in screen pixels. [ and ] change it by 10%.", "Draw");
     ImGui::SetNextItemWidth(-1);
-    ui::SliderInside("##strength", &strength_, 0.01f, 1.0f, "Strength %.2f");
-    ui::HelpText("Strength", "I", "How strongly each dab changes the surface (ZBrush Z Intensity).", "Draw");
+    drawZIntensitySlider("##strength");
+    ImGui::SetNextItemWidth(-1);
+    float rgb = rgbIntensity_ * 100.0f;
+    if (ui::SliderInside("##rgbintensity", &rgb, 1.0f, 100.0f, "RGB Intensity %.0f")) rgbIntensity_ = rgb / 100.0f;
+    ui::HelpText("RGB Intensity", "I", "How strongly painting colours the surface (1-100); Ctrl+click to type.", "Draw");
+    ImGui::SetNextItemWidth(-1);
+    float focal = focalShift_ * 100.0f;
+    if (ui::SliderInside("##focalshift", &focal, -100.0f, 100.0f, "Focal Shift %.0f")) focalShift_ = focal / 100.0f;
+    ui::HelpText("Focal Shift", "O",
+                 "The brush falloff: below 0 a broad, hard tip, above 0 a soft point. The brush cursor's inner ring shows "
+                 "where the brush works at half strength.",
+                 "Draw");
     segmented(*this, {"draw.sculpt", "draw.paint"});
     segmented(*this, {"draw.zadd", "draw.zsub"});
     actionRow(*this, {"draw.rgb", "draw.front_faces"});
@@ -281,6 +291,7 @@ void App::drawPalette_Preferences() {
         }
     }
     if (subpalette("preferences.interface", "Interface")) config::drawInterfaceSection(*this);
+    if (subpalette("preferences.input", "Input")) drawInputSection();
     if (subpalette("preferences.hotkeys", "Hotkeys")) config::drawHotkeysSection(*this);
     if (subpalette("preferences.lightbox", "LightBox")) config::drawLightBoxSection(*this);
     if (subpalette("preferences.tablet", "Tablet")) drawTabletSection();

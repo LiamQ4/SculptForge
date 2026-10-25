@@ -8,7 +8,8 @@ explains what it is, what it can and can't do yet, and how the rest of this guid
 SculptForge is a focused sculpting tool with the brushes, symmetry, masking and navigation that ZBrush artists
 already know, built around a ZBrush-style interface: shelves around a canvas, alphabetical palettes that hold
 every function, a LightBox of thumbnails and pop-up pickers. It runs natively on Windows, macOS and Linux,
-starts in a moment, works offline and costs nothing. There is no account, no subscription, no licence server
+starts in a moment, works offline and costs nothing. ZBrush's keys and gestures work out of the box: see
+[Coming from ZBrush](coming-from-zbrush.md). There is no account, no subscription, no licence server
 and no telemetry.
 
 It is free software under the GNU General Public License v3.0 or later. You own everything you make with it:
@@ -64,7 +65,9 @@ smooth, drag on the background to rotate, <kbd>Alt</kbd>+drag to pan, and hold <
 palettes have the names you expect (Alpha, Brush, Stroke, Tool, Transform...), the Tool palette holds the
 SubTool, Masking and Polygroups sub-palettes, <kbd>B</kbd> opens the brush pop-up with the same letter keys
 (B, S, T picks Standard), <kbd>,</kbd> opens the LightBox and <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd>
-stores your interface. The [Glossary](glossary.md) maps ZBrush terms to SculptForge ones.
+stores your interface, and <kbd>S</kbd> <kbd>U</kbd> <kbd>I</kbd> <kbd>O</kbd>, <kbd>Space</kbd>, <kbd>Ctrl</kbd>+<kbd>W</kbd>
+and the mask keys do what your hands expect. [Coming from ZBrush](coming-from-zbrush.md) lists what is the same,
+what differs and every shortcut side by side; the [Glossary](glossary.md) maps ZBrush terms to SculptForge ones.
 
 ## How this guide is organised
 

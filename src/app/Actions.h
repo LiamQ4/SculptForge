@@ -57,6 +57,9 @@ public:
     bool handleKey(SDL_Keycode key, SDL_Keymod mods);
     std::string shortcutText(std::string_view id) const; // effective chord after user overrides
     void setShortcut(std::string_view id, std::string chord); // user override ("" clears)
+    // Changes an action's default chord (Preferences > Input switches between the ZBrush and SculptForge
+    // defaults); user overrides still win.
+    void setDefaultShortcut(std::string_view id, std::string chord);
     Json overridesToJson() const;
     void overridesFromJson(const Json& j);
     void touch(std::string_view id); // most-recently-used, for the command palette

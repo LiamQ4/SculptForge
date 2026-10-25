@@ -95,6 +95,7 @@ void App::snakeHookTo(float x, float y) {
     p.strength = strength_;
     p.pressure = pressureStrength_ ? pressure : 1.0f;
     p.invert = strokeInvert_;
+    p.focal = focalShift_;
     p.alpha = &doc_.brushAlpha;
     p.alphaUp = screenUpVector(0.0f);
     // Small steps keep the tip under the cursor and the pulled surface even.
@@ -125,6 +126,7 @@ void App::dragRectTo(float x, float y) {
     p.pressure = pressureStrength_ ? pressure : 1.0f;
     p.invert = strokeInvert_;
     p.frontFacesOnly = frontFacesOnly_;
+    p.focal = focalShift_;
     p.alpha = &doc_.brushAlpha;
     p.alphaUp = glm::normalize(q * glm::vec3(drag.x, -drag.y, 0.0f)); // the alpha's top follows the drag
     if (strokePaint_) paintAt(p); // restoreStroke reverted the previous stamp's colours too

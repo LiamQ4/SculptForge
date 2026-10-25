@@ -43,7 +43,9 @@ const BrushRecipe* App::strokeRecipe() const {
     return strokeBrush_ == BrushType::Smooth || !strokeSculpt_ || strokeMask_ ? nullptr : activeRecipe();
 }
 
-void App::paintAt(const DabParams& p) {
+void App::paintAt(const DabParams& dab) {
+    DabParams p = dab;
+    p.strength = rgbIntensity_ * dabStrengthScale_; // paint has its own strength (ZBrush RGB Intensity)
     if (texturePainter_.active()) texturePainter_.dab(doc_.mesh, doc_.bvh, p, doc_.paintColor, symmetry_);
     else if (!paintsTexture(doc_.mesh)) paintDab(doc_.sculptor, doc_.mesh, doc_.bvh, p, doc_.paintColor, symmetry_);
 }

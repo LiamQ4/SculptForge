@@ -1,6 +1,6 @@
 # LightBox (comma key): tabs, history, loading models, appending SubTools, materials,
 # brushes, QuickSave; then the ZBrush-style pickers: the brush pop-up (B, type letters,
-# press the orange key), the material pop-up (M) and Draw Size / Strength at the cursor (S / I).
+# press the orange key), the material pop-up (M) and Draw Size / Z Intensity at the cursor (S / U).
 run new_plane resolution=8
 expect_value triangles == 128
 expect_value lightbox_open == 0   # (the window; "LightBox" is also the top-shelf button)
@@ -102,7 +102,7 @@ expect_status Brush: Standard
 # Backspace undoes a letter, Esc closes without picking.
 key b
 key s
-key n
+key h
 expect_status Brush: SnakeHook
 key b
 key z
@@ -125,7 +125,7 @@ click "Materials/Bronze"
 expect_status Material: Bronze
 expect_not "Materials/Red Wax"
 
-# Draw Size / Strength at the cursor: type a number and press Enter.
+# Draw Size / Z Intensity at the cursor: type a number and press Enter.
 key s
 expect "##cursorvalue"
 expect_text Draw Size 60
@@ -136,9 +136,9 @@ key enter
 key s
 expect_text Draw Size 120
 key escape
-key i
+key u
 expect "##cursorvalue"
-expect_text Strength 0.50
+expect_text Z Intensity 50
 shot strength-popup
 key escape
-expect_not "##cursorvalue"   # (the top shelf always shows its own Strength slider)
+expect_not "##cursorvalue"   # (the top shelf always shows its own Z Intensity slider)

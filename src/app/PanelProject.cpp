@@ -223,6 +223,9 @@ void App::storeProjectSettings() {
     brush.set("type", brushName(brush_));
     brush.set("radius_px", double(radiusPx_));
     brush.set("strength", double(strength_));
+    brush.set("smooth_strength", double(smoothStrength_));
+    brush.set("rgb_intensity", double(rgbIntensity_));
+    brush.set("focal_shift", double(focalShift_));
     brush.set("invert", invertToggle_);
     brush.set("front_faces_only", frontFacesOnly_);
     brush.set("pressure_strength", pressureStrength_);
@@ -281,8 +284,14 @@ void App::applyProjectSettings() {
             if (b["type"].asString() == brushName(BrushType(i))) brush_ = BrushType(i);
         readFloat(b, "radius_px", radiusPx_);
         readFloat(b, "strength", strength_);
+        readFloat(b, "smooth_strength", smoothStrength_);
+        readFloat(b, "rgb_intensity", rgbIntensity_);
+        readFloat(b, "focal_shift", focalShift_);
         radiusPx_ = std::clamp(radiusPx_, 2.0f, 800.0f);
         strength_ = std::clamp(strength_, 0.0f, 1.0f);
+        smoothStrength_ = std::clamp(smoothStrength_, 0.0f, 1.0f);
+        rgbIntensity_ = std::clamp(rgbIntensity_, 0.0f, 1.0f);
+        focalShift_ = std::clamp(focalShift_, -1.0f, 1.0f);
         readBool(b, "invert", invertToggle_);
         readBool(b, "front_faces_only", frontFacesOnly_);
         readBool(b, "pressure_strength", pressureStrength_);

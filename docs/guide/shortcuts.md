@@ -24,33 +24,26 @@ action registry, the same source as the Controls window.
 | Action | Keys | What it does |
 |---|---|---|
 | Brush picker | <kbd>B</kbd> | Pop up every brush under the cursor. Type the first letter of a brush, then the orange letter on its tile (B S T = Standard). |
-| Clay | <kbd>2</kbd> | Builds up clay that fills the hollows first. |
-| ClayBuildup | <kbd>0</kbd> | Square, flat-topped clay strokes for blocking in forms. |
-| Crease | <kbd>6</kbd> | Cuts a sharp crease; Alt raises a ridge. |
-| DamStandard | <kbd>9</kbd> | A sharp V-shaped crease with the sides pinched in (ZBrush DamStandard). |
-| Flatten | <kbd>7</kbd> | Presses the surface toward a plane. |
-| Inflate | <kbd>5</kbd> | Swells the surface outward along its normals. |
-| Move | <kbd>4</kbd> | Grabs the surface under the cursor and pulls it along. |
 | Paste brush | <kbd>Ctrl</kbd>+<kbd>V</kbd> | Add the brush on the clipboard: a brush code someone shared, or the text of a .sfbrush file. |
-| Pinch | <kbd>8</kbd> | Pulls the surface toward the stroke to tighten edges. |
-| Smooth | <kbd>3</kbd> | Relaxes the surface. Hold Shift to smooth with any brush. |
-| Standard | <kbd>1</kbd> | Raises the surface along the stroke; Alt digs in. |
 
 ### Color
 
 | Action | Keys | What it does |
 |---|---|---|
 | Pick colour | <kbd>C</kbd> | Take the paint colour from the model under the cursor. |
+| Switch Color | <kbd>V</kbd> | Swap the main and the secondary colour. |
 
 ### Draw
 
 | Action | Keys | What it does |
 |---|---|---|
 | Draw Size at cursor | <kbd>S</kbd> | A Draw Size slider under the cursor: drag it, or type a number and press Enter. |
+| Focal Shift at cursor | <kbd>O</kbd> | A Focal Shift slider under the cursor: below 0 a broad, hard brush tip, above 0 a soft point (-100..100). The inner ring of the brush cursor shows it. |
 | Larger brush | <kbd>]</kbd> | Make the brush 10% larger (hold to repeat). |
 | Paint | <kbd>P</kbd> | Paint colour without sculpting (ZBrush Rgb on, Zadd off). Alt paints back to white, Shift still smooths. |
+| RGB Intensity at cursor | <kbd>I</kbd> | An RGB Intensity slider under the cursor: how strongly painting colours the surface (1-100). |
 | Smaller brush | <kbd>[</kbd> | Make the brush 10% smaller (hold to repeat). |
-| Strength at cursor | <kbd>I</kbd> | A Strength slider under the cursor: drag it, or type a number and press Enter. |
+| Z Intensity at cursor | <kbd>U</kbd> | A Z Intensity slider under the cursor: drag it, or type a number (1-100) and press Enter. Hold Shift (or pick Smooth) to set Smooth's own Z Intensity. |
 
 ### Edit
 
@@ -77,6 +70,7 @@ action registry, the same source as the Controls window.
 |---|---|---|
 | Command palette | <kbd>F3</kbd> or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> | Search every command, brush and setting by name and run it. Commands that need parameters open in the console. |
 | Controls | <kbd>F1</kbd> | Every shortcut and mouse gesture, generated from the commands themselves. |
+| QuickMenu | <kbd>Space</kbd> | ZBrush's QuickMenu under the cursor: brush, stroke, alpha, material, colour, Draw Size, Focal Shift and the intensities. Hold Space and let go to close it, or tap Space to keep it open. |
 | User Guide | <kbd>Shift</kbd>+<kbd>F1</kbd> | The SculptForge user guide: every tool explained, with search. Hold Ctrl over a control and press F1 to open the chapter about it. |
 
 ### LightBox
@@ -96,6 +90,7 @@ action registry, the same source as the Controls window.
 | Action | Keys | What it does |
 |---|---|---|
 | Load UI... | <kbd>Ctrl</kbd>+<kbd>L</kbd> | Load a layout file someone shared (or you saved with Save UI). |
+| Save UI... | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> | Save the layout, shortcuts and interface preferences to a file you can share. |
 | Shelves | <kbd>Tab</kbd> | Hide or show the shelves and trays around the canvas. |
 | Store Config | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> | Keep the current layout, shortcuts and interface preferences for future sessions. Like ZBrush, SculptForge never saves them on its own. |
 
@@ -104,6 +99,7 @@ action registry, the same source as the Controls window.
 | Action | Keys | What it does |
 |---|---|---|
 | Fullscreen | <kbd>F11</kbd> | Fill the screen with SculptForge (again: back to a window). |
+| Mask | <kbd>Ctrl</kbd>+<kbd>H</kbd> | Darken masked areas. |
 | Wireframe | <kbd>Shift</kbd>+<kbd>F</kbd> | Show the mesh's polygons (quads and triangles) over the surface (ZBrush PolyFrame). |
 
 ### Script
@@ -112,13 +108,23 @@ action registry, the same source as the Controls window.
 |---|---|---|
 | Console | <kbd>`</kbd> | The script console: every command you run appears as a script line, and you can type commands yourself. |
 
+### Stroke
+
+| Action | Keys | What it does |
+|---|---|---|
+| LazyMouse | <kbd>L</kbd> | LazyMouse on or off: the brush trails the cursor on a string, for steady lines. |
+
 ### Tool
 
 | Action | Keys | What it does |
 |---|---|---|
+| Clear Mask | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> | Unmask everything (also: Ctrl+drag on the background). |
 | Divide | <kbd>Ctrl</kbd>+<kbd>D</kbd> | Add a subdivision level: four times the polygons, and the lower levels are kept, so you can step down to shape big forms and back up to the detail. Quads stay quads (Catmull-Clark). Smt off divides without smoothing. |
+| Group Masked | <kbd>Ctrl</kbd>+<kbd>W</kbd> | Turn the masked part into a new polygroup and clear the mask (ZBrush Ctrl+W). With nothing masked, everything visible becomes one group. |
 | Higher Res | <kbd>D</kbd> | Step one subdivision level up (more polygons, for detail). Edits made below carry the detail along. |
+| Invert Mask | <kbd>Ctrl</kbd>+<kbd>I</kbd> | Mask what is unmasked and unmask what is masked (also: Ctrl+click the background). |
 | Lower Res | <kbd>Shift</kbd>+<kbd>D</kbd> | Step one subdivision level down (fewer polygons, for big forms). The detail of the higher levels is kept. |
+| Mask All | <kbd>Ctrl</kbd>+<kbd>A</kbd> | Mask the whole visible SubTool. |
 
 ### Transform
 
@@ -140,19 +146,22 @@ action registry, the same source as the Controls window.
 | Sculpt | Left-drag on the model |
 | Invert the brush (subtract) | Hold <kbd>Alt</kbd> while sculpting |
 | Smooth | Hold <kbd>Shift</kbd> while sculpting (works with any brush, and with Paint) |
+| Straight line | Press <kbd>Shift</kbd> after a stroke has started (45 degree steps) |
+| Roll the view | <kbd>Shift</kbd>+click the background, let go of <kbd>Shift</kbd>, drag |
 | Rotate | Left-drag on the background, or right-drag; hold <kbd>Shift</kbd> to snap to an axis view |
 | Pan | <kbd>Alt</kbd>+left-drag on the background, <kbd>Alt</kbd>+right-drag, or middle-drag |
-| Zoom | Mouse wheel; <kbd>Alt</kbd>+drag on the background then release <kbd>Alt</kbd>; <kbd>Ctrl</kbd>+right-drag; <kbd>Ctrl</kbd>+middle-drag; or <kbd>Ctrl</kbd>+left-drag on the background (when nothing is masked) |
+| Zoom | Mouse wheel; <kbd>Alt</kbd>+drag on the background then release <kbd>Alt</kbd>; <kbd>Ctrl</kbd>+right-drag; <kbd>Ctrl</kbd>+middle-drag; with the SculptForge input style also <kbd>Ctrl</kbd>+left-drag on the background (when nothing is masked) |
 | Paint the mask | Hold <kbd>Ctrl</kbd> while stroking on the model |
 | Erase the mask | Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd> while stroking on the model |
+| Blur / sharpen the mask | <kbd>Ctrl</kbd>+click / <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+click the model |
 | Invert the mask | <kbd>Ctrl</kbd>+click the background |
-| Clear the mask | <kbd>Ctrl</kbd>+drag on the background (with **MaskPen**) |
+| Clear the mask | <kbd>Ctrl</kbd>+drag on the background (with **MaskPen**), or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> |
 | Mask inside a lasso or rectangle | <kbd>Ctrl</kbd>+drag with **MaskLasso** or **MaskRect** picked in **Tool > Masking** (add <kbd>Alt</kbd>: unmask) |
-| Isolate a polygroup | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click it (again: invert the visibility) |
+| Isolate a polygroup | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click it (again: invert the visibility; with something hidden already: hide it) |
 | Hide a polygroup | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd>+click it |
 | Show everything | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click the background |
 | Hide outside a rectangle or lasso | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag (add <kbd>Alt</kbd>: hide inside); **SelectRect** or **SelectLasso** in **Tool > Visibility** |
-| Select a SubTool | <kbd>Alt</kbd>+click it in the view |
+| Select a SubTool | <kbd>Alt</kbd>+click it in the view (<kbd>Shift</kbd>+<kbd>Alt</kbd>+click: select and frame it) |
 | Move, scale or rotate with the Gizmo 3D | <kbd>W</kbd>, <kbd>E</kbd> or <kbd>R</kbd>, then drag a handle; hold <kbd>Shift</kbd> to snap (15 degrees, the grid, 10%) |
 | Move the gizmo only | <kbd>Alt</kbd>+drag a gizmo handle |
 | Put the gizmo's pivot on the model | <kbd>Alt</kbd>+click the model in Move, Scale or Rotate mode |
@@ -177,7 +186,7 @@ Some keys only mean something while a pop-up or panel has the keyboard.
 | <kbd>Enter</kbd> | Pick the first match |
 | <kbd>Esc</kbd> | Close |
 
-### Draw Size and Strength at the cursor (S, I)
+### Sliders at the cursor (S, U, I, O)
 
 | Key | Action |
 |---|---|
@@ -212,17 +221,21 @@ Some keys only mean something while a pop-up or panel has the keyboard.
 
 ## ZBrush keys that work differently
 
-Most ZBrush shortcuts do the same thing in SculptForge. A few differ because the feature works differently or
-doesn't exist yet:
+ZBrush's keys and gestures work in SculptForge (with **Preferences > Input > Style** on **ZBrush**, the
+default). The few that differ, because the feature works differently or doesn't exist yet:
 
 | ZBrush | SculptForge |
 |---|---|
-| <kbd>D</kbd> / <kbd>Shift</kbd>+<kbd>D</kbd> (subdivision level up / down) | No subdivision levels yet; <kbd>Ctrl</kbd>+<kbd>D</kbd> subdivides once and can be undone |
-| <kbd>Space</kbd> (QuickMenu) | No QuickMenu; use the left-shelf tiles, <kbd>B</kbd>, <kbd>M</kbd>, <kbd>S</kbd> and <kbd>I</kbd> |
-| <kbd>O</kbd> (Focal Shift) | No focal shift setting |
-| <kbd>Ctrl</kbd>+<kbd>W</kbd> (group masked) | **Tool > Polygroups > From mask** |
-| <kbd>Shift</kbd> (snap the view while rotating) | No view snapping yet |
+| <kbd>P</kbd> (perspective) | <kbd>P</kbd> is the Paint brush; the view is always in perspective |
+| <kbd>T</kbd> (Edit mode) | Always in Edit mode: there is no 2.5D canvas |
+| <kbd>W</kbd> / <kbd>E</kbd> / <kbd>R</kbd> (Transpose line) | The Gizmo 3D (see [Gizmo 3D](gizmo.md)) |
+| <kbd>1</kbd>, <kbd>2</kbd>, <kbd>3</kbd> (replay and record strokes) | Not yet |
+| <kbd>N</kbd> (list the SubTools) | **Tool > SubTool** in the right tray |
+| <kbd>F1</kbd> to <kbd>F6</kbd> (pop-ups) | <kbd>F1</kbd> is the Controls window, <kbd>F3</kbd> the command palette; <kbd>B</kbd>, <kbd>M</kbd> and the left-shelf tiles pop up brushes, strokes, alphas and materials |
+| <kbd>Ctrl</kbd>+<kbd>E</kbd> (edge loop), <kbd>Ctrl</kbd>+<kbd>U</kbd> (reload ZScript) | Export GLB and Send to Unreal |
 | <kbd>H</kbd> (hide the ZScript window) | <kbd>`</kbd> toggles the console |
+
+See [Coming from ZBrush](coming-from-zbrush.md) for the whole list.
 
 ## See also
 

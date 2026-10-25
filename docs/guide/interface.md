@@ -13,7 +13,7 @@ how to rearrange the interface and keep your changes.
 |---|---|---|
 | Title strip | Top edge | Document name, scene statistics, status messages, QuickSave, layout presets, Menus, Search |
 | Palette bar | Under the title strip | The 16 palettes, which hold every function |
-| Top shelf | Above the canvas | LightBox, Sculpt/Paint, Zadd/Zsub, Rgb, Draw Size, Strength, symmetry, pressure |
+| Top shelf | Above the canvas | LightBox, Sculpt/Paint, Zadd/Zsub, Rgb, Draw Size, Z Intensity, symmetry, pressure |
 | Left shelf | Left of the canvas | Brush, Stroke, Alpha and Material tiles, the colour picker |
 | Canvas | Centre | The 3D view; strokes and navigation start only here |
 | Right shelf | Right of the canvas | Frame, Move, Zoom and Rotate, display toggles, Solo |
@@ -60,10 +60,10 @@ Interface > Palettes strictly A-Z (ZBrush order)**.
 | **Alpha** | The brush alphas: Round, Square, Noise, images from your library, Load image, Invert loaded image |
 | **Brush** | AI Brush (Brush Lab), Community brushes, Paste brush, your custom brushes, Front faces only, Invert (Alt), the recipe editor for a custom brush, and every brush as a thumbnail grid with a filter |
 | **Color** | The Paint brush, RGB while sculpting, the paint colour and swatches, Fill, Fill masked, Cavity, Clear, Show polypaint |
-| **Draw** | Draw Size, Strength, Sculpt/Paint, Zadd/Zsub, Rgb, Front, and the tablet options (Pressure > strength, Pressure > size) with a pen readout |
+| **Draw** | Draw Size, Z Intensity, RGB Intensity, Focal Shift, Sculpt/Paint, Zadd/Zsub, Rgb, Front, and the tablet options (Pressure > strength, Pressure > size) with a pen readout |
 | **Generate** | Generate 3D (image or text to 3D), Relief, Inflate and Stamp from an image, and the AI brush provider settings |
 | **Material** | The seven MatCap materials (Sculpt, the default, first) and Studio, Base colour |
-| **Preferences** | Config, Interface, Hotkeys, LightBox and Autosave sub-palettes (see [Customizing the interface](#customizing-the-interface)) |
+| **Preferences** | Config, Interface, Input, Hotkeys, LightBox, Tablet, Performance, Updates and Autosave sub-palettes (see [Customizing the interface](#customizing-the-interface)) |
 | **Render** | Wireframe, Show Mesh, Show Polypaint, Show Mask, Show Polygroups, Show Splats, Frame, Fullscreen |
 | **Script** | Console, Run script file, Copy session as script, Clear console |
 | **Splats** | Gaussian splat tools: show, flip, turn, fit, clean floaters, convert to mesh, sculpt to splats, save, clear |
@@ -124,7 +124,8 @@ First row:
   stroke.
 - **Rgb**: sculpt brushes paint the colour at the same time.
 - **Draw Size**: the brush radius in screen pixels (2 to 800).
-- **Strength**: how strongly each dab changes the surface (0.01 to 1), ZBrush's Z Intensity.
+- **Z Intensity**: how strongly each dab changes the surface (1 to 100). While <kbd>Shift</kbd> is held it shows
+  Smooth's own value.
 
 Second row:
 
@@ -135,7 +136,7 @@ Second row:
 - **ActiveTris / TotalTris** at the right: the triangles you can see and sculpt (visible SubTools, hidden
   parts left out) and the total in the scene.
 
-Draw Size and Strength are sliders with the label inside, as in ZBrush: drag along them, or
+Draw Size and Z Intensity are sliders with the label inside, as in ZBrush: drag along them, or
 <kbd>Ctrl</kbd>+click to type a value.
 
 ### Left shelf
@@ -218,12 +219,13 @@ brushes](brush-lab.md)).
   preview it on the model; click to keep it. Closing the picker without clicking puts the old material back.
   See [Polypaint and materials](polypaint.md).
 
-### Draw Size and Strength at the cursor
+### Sliders at the cursor and the QuickMenu
 
-Press <kbd>S</kbd> for a Draw Size slider under the mouse, or <kbd>I</kbd> for Strength. Drag the slider, or
-type a number and press <kbd>Enter</kbd> (<kbd>Esc</kbd> cancels). The pop-up closes when you release the
-slider. For Strength, typing a number above 1 is read as a percentage (`50` means 0.50). <kbd>[</kbd> and
-<kbd>]</kbd> make the brush 10% smaller or larger at any time.
+As in ZBrush, press <kbd>S</kbd> for a Draw Size slider under the mouse, <kbd>U</kbd> for Z Intensity,
+<kbd>I</kbd> for RGB Intensity or <kbd>O</kbd> for Focal Shift. Drag the slider, or type a number and press
+<kbd>Enter</kbd> (<kbd>Esc</kbd> cancels). The pop-up closes when you release the slider. <kbd>[</kbd> and
+<kbd>]</kbd> make the brush 10% smaller or larger at any time. <kbd>Space</kbd> opens the QuickMenu with all of
+them and the brush, stroke, alpha and material (see [The QuickMenu](sculpting.md#the-quickmenu)).
 
 ## The LightBox
 
@@ -425,6 +427,12 @@ Config keeps it.
 | **Left-handed layout** | Off | Mirrors the shelves and trays: tools on the right, navigation on the left |
 | **UI scale** | Automatic | Size of text and controls (100% to 200%); takes effect at the next start |
 | **Camera notch** | Automatic | Keeps the interface below a laptop's camera notch in fullscreen (see below) |
+
+**Preferences > Input** sets the key **Style**: **ZBrush** (the default) or **SculptForge**, which brings back
+the keys of SculptForge 0.6 and earlier: <kbd>1</kbd> to <kbd>9</kbd> and <kbd>0</kbd> pick the first ten
+brushes (<kbd>9</kbd> is QuickSave in the ZBrush style), <kbd>I</kbd> opens Z Intensity like <kbd>U</kbd>, and
+<kbd>Ctrl</kbd>+drag on the background zooms when nothing is masked. **Rotation** chooses free rotation (ZBrush)
+or a turntable. See [Coming from ZBrush](coming-from-zbrush.md).
 
 **Preferences > LightBox** has **Show at startup** (on by default), the number of **Rows**, **Placement**
 (along the top of the canvas, or at the bottom above the bottom shelf) and the **Library folder**.

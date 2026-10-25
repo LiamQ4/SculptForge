@@ -196,7 +196,7 @@ TEST(brush_popup_letter_keys) {
             if (names[i] == brush) return c;
         return '\0';
     };
-    // B, then S: Standard is T, Smooth M, SnakeHook N (ZBrush's B S T = Standard).
+    // B, then S: Standard is T, Smooth M, SnakeHook H (ZBrush's B S T, B S M, B S H).
     bool substring = true;
     auto kept = filterByTyped(names, "s", &substring);
     CHECK(!substring);
@@ -204,15 +204,21 @@ TEST(brush_popup_letter_keys) {
     auto badges = letterBadges(names, kept, "s");
     CHECK(keyOf(badges, "Standard") == 't');
     CHECK(keyOf(badges, "Smooth") == 'm');
-    CHECK(keyOf(badges, "SnakeHook") == 'n');
-    // C: Clay L, Crease R, ClayBuildup A, and the custom "Clay Buildup" the next free letter (Y).
+    CHECK(keyOf(badges, "SnakeHook") == 'h');
+    // C: Clay L, Crease R, ClayBuildup B (ZBrush's B C B), and the custom "Clay Buildup" the first free letter (A).
     kept = filterByTyped(names, "c");
     badges = letterBadges(names, kept, "c");
     CHECK(kept.size() == 4);
     CHECK(keyOf(badges, "Clay") == 'l');
     CHECK(keyOf(badges, "Crease") == 'r');
-    CHECK(keyOf(badges, "ClayBuildup") == 'a');
-    CHECK(keyOf(badges, "Clay Buildup") == 'y');
+    CHECK(keyOf(badges, "ClayBuildup") == 'b');
+    CHECK(keyOf(badges, "Clay Buildup") == 'a');
+    // ZBrush's keys for the brushes both apps have: B D S, B M V, B I N, B P I.
+    CHECK(keyOf(letterBadges(names, filterByTyped(names, "d"), "d"), "DamStandard") == 's');
+    CHECK(keyOf(letterBadges(names, filterByTyped(names, "m"), "m"), "Move") == 'v');
+    CHECK(keyOf(letterBadges(names, filterByTyped(names, "i"), "i"), "Inflate") == 'n');
+    CHECK(keyOf(letterBadges(names, filterByTyped(names, "p"), "p"), "Pinch") == 'i');
+    CHECK(keyOf(letterBadges(names, filterByTyped(names, "s"), "s"), "SnakeHook") == 'h');
     // Every key is unique.
     for (size_t i = 0; i < badges.size(); ++i)
         for (size_t j = i + 1; j < badges.size(); ++j)

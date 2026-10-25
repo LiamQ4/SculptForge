@@ -12,7 +12,7 @@ A `.sfproj` file holds everything SculptForge knows about the scene:
 - every [sculpt layer](layers.md) with its weight, and the active layer of each SubTool;
 - loaded [Gaussian splats](splats.md) and their placement;
 - your custom brushes, so a project opened on another computer still has them;
-- the camera, the material and display settings, the brush, Draw Size, Strength, paint colour and symmetry;
+- the camera, the material and display settings, the brush, Draw Size, Z Intensity (and Smooth's), RGB Intensity, Focal Shift, paint colour and symmetry;
 - a thumbnail, shown in the LightBox.
 
 Undo history isn't saved: an opened project starts with a clean history.

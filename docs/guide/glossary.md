@@ -47,7 +47,7 @@ for what is planned.
 | Projection Master | Not yet. **Generate > Stamp** projects an image onto the model from the view |
 | QuickSave | **QuickSave** in the title strip; the last 10 are kept. See [Projects](projects.md#quicksave) |
 | Rgb | **Rgb** on the top shelf (paint while sculpting) |
-| Rgb Intensity, Z Intensity | **Strength** (top shelf, <kbd>I</kbd>) |
+| Rgb Intensity, Z Intensity, Focal Shift | Same names and keys: **RGB Intensity** (<kbd>I</kbd>), **Z Intensity** (<kbd>U</kbd>), **Focal Shift** (<kbd>O</kbd>) in the Draw palette and the QuickMenu |
 | Sculptris Pro, dynamic topology | Not yet |
 | Reconstruct Subdiv | **Tool > Geometry > Reconstruct Subdiv** (`subdiv_reconstruct`) |
 | SDiv, Lower Res / Higher Res (Shift+D / D) | **Tool > Geometry**: the **SDiv** slider, **Lower Res** <kbd>Shift</kbd>+<kbd>D</kbd>, **Higher Res** <kbd>D</kbd> (`subdiv_level`). See [Subdivision levels](subdivision-levels.md) |
@@ -56,7 +56,7 @@ for what is planned.
 | Spotlight | Not yet |
 | Preferences > Performance, Preferences > Mem | **Preferences > Performance**: Antialiasing, Fast Navigation, Multithreading, the last stroke's cost and memory. See [Performance](performance.md) |
 | Store Config | **Store Config**, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> (**Preferences > Config**) |
-| Stroke (Dots, DragRect, Spray) | **Stroke** types Dots, DragRect, Spray, LazyMouse |
+| Stroke (Dots, DragRect, Spray) | **Stroke** types Dots, DragRect, Spray, LazyMouse (<kbd>L</kbd> toggles LazyMouse) |
 | SubTool | **SubTool**: same idea, <kbd>Alt</kbd>+click to select. See [SubTools](subtools.md) |
 | Texture Map, New From Polypaint | **Tool > Texture Map**: **New Texture** (1K-8K) and paint straight into it, or **Polypaint > Texture**. See [Texture painting](texture-painting.md) |
 | Texture palette | Not yet as a palette of texture images. **Tool > Texture Map > Import Texture** loads an image onto the UVs |

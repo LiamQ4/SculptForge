@@ -31,8 +31,9 @@ bool App::polygroupMouseDown(float x, float y, SDL_Keymod mod) {
 void App::polygroupMouseUp() {
     const bool alt = (inputMods() & SDL_KMOD_ALT) != 0;
     if (!selectMoved_) {
-        // Click: isolate the group under the cursor (again: invert), Alt hides it,
-        // empty canvas shows everything.
+        // Click, as in ZBrush: on a fully visible mesh show only the group under the cursor; on a partly
+        // hidden one hide it (the group that is all that's left: invert the visibility). Alt always hides it,
+        // the empty canvas shows everything.
         doc_.syncBvh();
         RayHit hit;
         if (!pick(selectPath_.front().x, selectPath_.front().y, hit)) {
@@ -40,13 +41,15 @@ void App::polygroupMouseUp() {
             return;
         }
         const uint32_t group = doc_.mesh.polygroupAt(hit.triangle);
-        if (alt) runCommand("hide_polygroup", {{"group", double(group)}});
-        else if (polygroupIsolated(doc_.mesh, group)) runCommand("invert_visibility");
+        if (polygroupIsolated(doc_.mesh, group)) runCommand("invert_visibility");
+        else if (alt || doc_.mesh.hasHidden()) runCommand("hide_polygroup", {{"group", double(group)}});
         else runCommand("isolate_polygroup", {{"group", double(group)}});
         return;
     }
-    // Drag: keep the inside of the rectangle or lasso, or with Alt hide it.
-    runSelection("hide_rect", "hide_lasso", {{"inside", alt}});
+    // Drag: keep the inside of the rectangle or lasso, or with Alt hide it. A shape around nothing (dragged on
+    // the background) reverses the visibility instead (ZBrush).
+    if (runSelection("hide_rect", "hide_lasso", {{"inside", alt}}) && !lastCommandOk_ && !alt && doc_.mesh.hasHidden())
+        runCommand("invert_visibility");
 }
 
 void App::drawPolygroupsSection() {

@@ -49,7 +49,10 @@ struct PickerUi {
     static bool isActive(const App& app, const BrushItem& item);
     static void select(App& app, const BrushItem& item);
     static ImTextureID thumbnail(App& app, const BrushItem& item);
-    static void sizePopup(App& app, bool strength); // opens the S / I slider under the mouse
+    // Opens a slider under the mouse (ZBrush S / U / I / O): Draw Size, Z Intensity (Smooth's own while Shift is
+    // held or Smooth is the brush), RGB Intensity or Focal Shift.
+    enum class Slider { DrawSize, ZIntensity, RgbIntensity, FocalShift };
+    static void sizePopup(App& app, Slider which);
 };
 
 // Action id of a brush for the shelves ("brush.clay", "brush.paint", "brush.recipe.<name>").

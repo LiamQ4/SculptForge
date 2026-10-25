@@ -17,6 +17,8 @@ namespace {
 
 constexpr float kMaskDragThresholdPx = 4.0f; // movement that turns a Ctrl+click into a drag
 
+bool ctrlDown(SDL_Keymod mod) { return (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0; }
+
 bool anyMasked(const Mesh& mesh) {
     return std::any_of(mesh.mask.begin(), mesh.mask.end(), [](float m) { return m > 0.0f; });
 }
@@ -40,17 +42,29 @@ void App::beginMaskStroke(float x, float y) {
     lastY_ = y;
     residual_ = 0.0f;
     lazyMouse_.reset(glm::vec2(x, y));
-    firstDab(x, y);
+    // ZBrush: a Ctrl+click on the model blurs the mask (Ctrl+Alt+click sharpens it); only a drag paints. The
+    // pen's eraser end set to Erase mask paints straight away.
+    maskClickPending_ = ctrlDown(inputMods());
+    maskClickX_ = x;
+    maskClickY_ = y;
+    if (!maskClickPending_) firstDab(x, y);
 }
 
-// ZBrush convention: Ctrl+drag on the background clears the mask. With
-// nothing masked the drag zooms instead, as it did before masking existed.
+void App::maskClickRelease() {
+    maskClickPending_ = false;
+    const bool sharpen = strokeInvert_;
+    endStroke(); // nothing was dabbed: no undo step
+    if (anyMasked(doc_.mesh)) runCommand(sharpen ? "mask_sharpen" : "mask_blur");
+}
+
+// ZBrush convention: Ctrl+drag on the background clears the mask. With nothing masked the SculptForge input
+// style zooms instead, as it did before masking existed; the ZBrush style does nothing.
 void App::maskCanvasMove(float x, float y) {
     if (maskCanvasMoved_) return;
     if (std::hypot(x - maskCanvasX_, y - maskCanvasY_) < kMaskDragThresholdPx) return;
     maskCanvasMoved_ = true;
     if (anyMasked(doc_.mesh)) runCommand("mask_clear");
-    else drag_ = Drag::Zoom;
+    else if (!zbrushStyle()) drag_ = Drag::Zoom;
 }
 
 void App::maskCanvasRelease() {

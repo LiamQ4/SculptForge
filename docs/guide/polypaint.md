@@ -24,7 +24,7 @@ paint layers with blend modes, and the MatCap materials that change how the mode
 
 1. Press <kbd>P</kbd>, click **Paint** on the top shelf, or pick **Paint** on the bottom shelf.
 2. Choose a colour (see below).
-3. Stroke over the model. Draw Size, Strength, the stroke type and the alpha work as they do for sculpting.
+3. Stroke over the model. Draw Size, the stroke type and the alpha work as they do for sculpting; **RGB Intensity** (<kbd>I</kbd>) sets how strongly the colour goes on.
 
 While the Paint brush is active:
 
@@ -212,5 +212,5 @@ paint_layer_add name=Dirt blend=multiply opacity=0.8; paint_from_cavity color=4a
 
 - [Masking](masking.md): protect areas from painting
 - [Sculpt layers and blend shapes](layers.md): the shape counterpart of paint layers
-- [Sculpting and brushes](sculpting.md): Draw Size, Strength, strokes and alphas also apply to painting
+- [Sculpting and brushes](sculpting.md): Draw Size, Focal Shift, strokes and alphas also apply to painting
 - [Exporting](exporting.md): which formats carry vertex colours

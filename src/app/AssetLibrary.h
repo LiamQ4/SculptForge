@@ -129,8 +129,9 @@ std::string typedName(const std::string& name);
 // containing it (`substring` says which). Empty `typed` keeps all.
 std::vector<size_t> filterByTyped(const std::vector<std::string>& names, const std::string& typed,
                                   bool* substring = nullptr);
-// The key badge of each kept name: the first letter after `typed` in the name that no earlier name
-// took. Returns (letter, index into names) pairs; substring matches get none.
+// The key badge of each kept name: ZBrush's own second letter for the brushes it shares with SculptForge
+// (B C B ClayBuildup, B D S DamStandard, B M V Move ...), otherwise the first letter after `typed` in the name
+// that no earlier name took. Returns (letter, index into names) pairs; substring matches get none.
 std::vector<std::pair<char, size_t>> letterBadges(const std::vector<std::string>& names,
                                                   const std::vector<size_t>& kept, const std::string& typed);
 

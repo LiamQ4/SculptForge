@@ -640,6 +640,9 @@ void App::handleEvent(const SDL_Event& e) {
         else if (!io.WantCaptureKeyboard && (e.key.key == SDLK_LEFTBRACKET || e.key.key == SDLK_RIGHTBRACKET))
             onKey(e.key.key, e.key.mod);
         break;
+    case SDL_EVENT_KEY_UP:
+        if (e.key.key == SDLK_SPACE) quickMenuKeyUp(); // a held Space closes the QuickMenu when let go
+        break;
     case SDL_EVENT_DROP_FILE:
         if (e.drop.data) openPathConfirmed(e.drop.data);
         break;
@@ -681,9 +684,13 @@ void App::onMouseDown(float x, float y, Uint8 button) {
         if (maskSelectMouseDown(x, y, mod)) return;
         if (gizmoMouseDown(x, y, mod)) return; // Gizmo 3D handles, pivot clicks (Gizmo.cpp)
         // Alt+click on another SubTool selects it (ZBrush); Alt+drag stays an inverted stroke or a pan.
-        if ((mod & SDL_KMOD_ALT) && !ctrlDown(mod) && !(mod & SDL_KMOD_SHIFT) && doc_.subtoolCount() > 1) {
+        // Shift+Alt+click selects and frames it (ZBrush), the active one too.
+        const bool frameClick = (mod & SDL_KMOD_ALT) && (mod & SDL_KMOD_SHIFT) && !ctrlDown(mod);
+        if ((mod & SDL_KMOD_ALT) && !ctrlDown(mod) && (frameClick || !(mod & SDL_KMOD_SHIFT)) &&
+            (doc_.subtoolCount() > 1 || frameClick)) {
             const int target = pickSubtool(x, y);
-            if (target >= 0 && target != doc_.activeSubtool) {
+            subtoolClickFrame_ = frameClick;
+            if (target >= 0 && (target != doc_.activeSubtool || frameClick)) {
                 drag_ = Drag::SubToolClick;
                 subtoolClickTarget_ = target;
                 subtoolClickX_ = x;
@@ -705,6 +712,10 @@ void App::onMouseDown(float x, float y, Uint8 button) {
             // Dragging on empty space navigates (ZBrush style).
             drag_ = (mod & SDL_KMOD_ALT) ? Drag::Pan : ctrlDown(mod) ? Drag::Zoom : Drag::Orbit;
             panFromAlt_ = drag_ == Drag::Pan;
+            // ZBrush: Shift+click, let go of Shift, then drag turns the view about its own axis (Z).
+            rollPending_ = drag_ == Drag::Orbit && (mod & SDL_KMOD_SHIFT);
+            rollStartX_ = x;
+            rollStartY_ = y;
         }
     } else if (button == SDL_BUTTON_RIGHT) {
         // ZBrush's right-click navigation: rotate (Shift snaps), Alt pans (release Alt to zoom), Ctrl zooms.
@@ -732,9 +743,21 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     lastInputPen_ = fromPen;
     // ZBrush: start a pan with Alt, then let go of Alt while still dragging to zoom.
     if (drag_ == Drag::Pan && panFromAlt_ && !(inputMods() & SDL_KMOD_ALT)) drag_ = Drag::Zoom;
+    // Shift+press on the background: letting go of Shift before the drag gets going rolls the view instead.
+    if (rollPending_ && drag_ == Drag::Orbit) {
+        if (!(inputMods() & SDL_KMOD_SHIFT)) {
+            drag_ = Drag::Roll;
+            rollPending_ = false;
+        } else if (std::hypot(x - rollStartX_, y - rollStartY_) > 6.0f) {
+            rollPending_ = false; // a Shift-snapped rotation after all
+        } else {
+            return;
+        }
+    }
     switch (drag_) {
     case Drag::Stroke: strokeTo(x, y); break;
     case Drag::Orbit: orbitBy(dx, dy); break;
+    case Drag::Roll: rollBy(x, y, dx, dy); break;
     case Drag::Pan: camera_.pan(dx, dy, canvasHeight()); break;
     case Drag::Zoom: camera_.zoom(-dy * 0.05f); break;
     case Drag::MaskCanvas: maskCanvasMove(x, y); break;
@@ -757,11 +780,29 @@ void App::orbitBy(float dx, float dy) {
     else camera_.setOrientation(orbitRaw_.orientation());
 }
 
+void App::rollBy(float x, float y, float dx, float dy) {
+    // Turn about the view axis by the angle the cursor sweeps around the canvas centre (a sideways drag far
+    // from the centre still turns, by its length).
+    const CanvasRect c = canvasRect();
+    const glm::vec2 centre(c.x + c.w * 0.5f, c.y + c.h * 0.5f);
+    const glm::vec2 now(x, y), before(x - dx, y - dy);
+    float angle = 0.0f;
+    if (glm::length(now - centre) > 20.0f && glm::length(before - centre) > 20.0f) {
+        const glm::vec2 a = before - centre, b = now - centre;
+        angle = std::atan2(a.x * b.y - a.y * b.x, glm::dot(a, b));
+    } else {
+        angle = dx * 0.008f;
+    }
+    camera_.setOrientation(camera_.orientation() * glm::angleAxis(-angle, glm::vec3(0, 0, 1)));
+}
+
 void App::onMouseUp() {
+    rollPending_ = false;
     orbitStarted_ = false;
     panFromAlt_ = false;
     if (drag_ == Drag::Select) selectionMouseUp();
-    if (drag_ == Drag::Stroke) endStroke();
+    if (drag_ == Drag::Stroke && maskClickPending_) maskClickRelease(); // Ctrl+click: blur / sharpen the mask
+    else if (drag_ == Drag::Stroke) endStroke();
     if (drag_ == Drag::MaskCanvas) maskCanvasRelease();
     if (drag_ == Drag::SubToolClick) subtoolClickRelease();
     gizmoRelease();
@@ -782,6 +823,8 @@ void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
 
 void App::beginStroke(float x, float y, const RayHit& hit) {
     strokeBrush_ = activeBrush();
+    straight_ = {};
+    straight_.shiftAtStart = (inputMods() & SDL_KMOD_SHIFT) != 0;
     strokeInvert_ = invertToggle_ != (((inputMods() & SDL_KMOD_ALT) != 0) || (erasing() && eraserAction() == PenAction::Invert));
     // Shift still smooths geometry while the Paint brush is active (ZBrush behaviour).
     strokePaint_ = strokeBrush_ != BrushType::Smooth && (paintMode_ || paintRgb_);
@@ -810,6 +853,7 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
         p.viewDir = camera_.forward();
         p.radius = radiusPx_ * pressure * camera_.worldPerPixel(hit.position, canvasHeight());
         p.strength = strength_;
+        p.focal = focalShift_;
         doc_.sculptor.beginGrab(doc_.mesh, doc_.bvh, p, symmetry_);
         grabPlanePoint_ = grabLast_ = hit.position;
         return;
@@ -828,6 +872,11 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
 }
 
 void App::strokeTo(float x, float y) {
+    if (maskClickPending_) { // Ctrl+press on the model: a drag past the click slop paints the mask after all
+        if (std::hypot(x - maskClickX_, y - maskClickY_) < 4.0f) return;
+        maskClickPending_ = false;
+        firstDab(maskClickX_, maskClickY_);
+    }
     const BrushRecipe* recipe = strokeRecipe();
     if (strokeBrush_ == BrushType::Move && !recipe && strokeSculpt_) {
         glm::vec3 origin, dir;
@@ -853,6 +902,11 @@ void App::strokeTo(float x, float y) {
         const glm::vec2 lazy = lazyMouse_.follow(glm::vec2(x, y));
         x = lazy.x;
         y = lazy.y;
+    }
+    { // Shift pressed after the stroke began: a straight line (ZBrush)
+        const glm::vec2 c = constrainStroke(x, y);
+        x = c.x;
+        y = c.y;
     }
 
     if (firstDabPending_) {
@@ -919,10 +973,13 @@ void App::dabAt(float x, float y, float pressure) {
     p.viewDir = camera_.forward();
     p.radius = radiusPx_ * (pressureSize_ ? std::max(pressure, 0.05f) : 1.0f) *
                camera_.worldPerPixel(hit.position, canvasHeight()) * dabRadiusScale_;
-    p.strength = strength_ * dabStrengthScale_;
+    // Smooth keeps its own Z Intensity (ZBrush), whether picked or held with Shift.
+    p.strength = (strokeBrush_ == BrushType::Smooth ? smoothStrength_ : strength_) * dabStrengthScale_;
     p.pressure = pressureStrength_ ? pressure : 1.0f;
     p.invert = strokeInvert_;
     p.frontFacesOnly = frontFacesOnly_;
+    p.focal = focalShift_;
+    lastDabScreen_ = glm::vec2(x, y);
     if (strokeMask_) {
         p.strength = maskStrength_;
         doc_.sculptor.dabMask(doc_.mesh, doc_.bvh, p, symmetry_);
@@ -944,6 +1001,7 @@ void App::dabAt(float x, float y, float pressure) {
 
 void App::endStroke() {
     strokeMask_ = false;
+    maskClickPending_ = false; // (a command can end a Ctrl+click before its release)
     firstDabPending_ = false;
     // Preferences > Performance shows what the stroke cost.
     if (doc_.sculptor.timings.dabs > 0) {
@@ -1203,6 +1261,7 @@ void App::drawUi() {
     // Draw order (ui-spec §12): shells, LightBox, floating windows, then pop-ups and help.
     drawShell();
     drawLightBoxUi(); // thumbnails, the LightBox over the canvas, pickers, size / strength pop-ups
+    drawQuickMenu();  // Space (Input.cpp)
     drawSubToolPopups();
     if (showBrushLab_) drawBrushLab();
     drawBrushGallery();
@@ -2137,16 +2196,18 @@ void App::drawBrushCursor() {
         dl->AddLine(ImVec2(c.x, c.y - arm), ImVec2(c.x, c.y + arm), IM_COL32(230, 230, 230, 220), 1.5f);
         return;
     }
+    const BrushType shownBrush = drag_ == Drag::Stroke ? strokeBrush_ : activeBrush(); // Shift mid-stroke draws a line
     ImU32 col = masking                                ? IM_COL32(230, 230, 230, 200)
-                : activeBrush() == BrushType::Smooth ? IM_COL32(120, 200, 255, 200)
+                : shownBrush == BrushType::Smooth    ? IM_COL32(120, 200, 255, 200)
                 : inverted                         ? IM_COL32(255, 110, 110, 200)
                                                    : IM_COL32(255, 190, 120, 200);
-    if (!masking && paintMode_ && activeBrush() != BrushType::Smooth) { // Paint brush: ring in the paint colour
+    if (!masking && paintMode_ && shownBrush != BrushType::Smooth) { // Paint brush: ring in the paint colour
         const glm::vec3 pc = linearToSrgb(inverted ? glm::vec3(1.0f) : doc_.paintColor);
         col = ImGui::GetColorU32(ImVec4(pc.x, pc.y, pc.z, 0.9f));
     }
     dl->AddCircle(c, r, col, 64, 1.5f);
-    dl->AddCircle(c, r * (0.25f + 0.75f * (1.0f - strength_)), IM_COL32(255, 255, 255, 60), 48, 1.0f);
+    // The inner ring is Focal Shift, as in ZBrush: where the falloff drops to half.
+    dl->AddCircle(c, r * focalRingFraction(focalShift_), IM_COL32(255, 255, 255, 90), 48, 1.0f);
     if (strokeType_ == StrokeType::LazyMouse && drag_ == Drag::Stroke) {
         // The string from the cursor to the lagging brush point.
         const ImVec2 lp(lazyMouse_.point.x, lazyMouse_.point.y);

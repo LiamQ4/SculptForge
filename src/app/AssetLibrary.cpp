@@ -336,7 +336,23 @@ std::vector<std::pair<char, size_t>> letterBadges(const std::vector<std::string>
     auto taken = [&](char c) {
         return std::any_of(badges.begin(), badges.end(), [c](const auto& b) { return b.first == c; });
     };
+    auto has = [&](size_t i) {
+        return std::any_of(badges.begin(), badges.end(), [i](const auto& b) { return b.second == i; });
+    };
+    // ZBrush's own keys for the brushes both apps have (B S T Standard, B C B ClayBuildup ...) come first, so
+    // the hands that know ZBrush pick the same brush.
+    static const std::pair<const char*, const char*> kZBrushKeys[] = {
+        {"standard", "st"}, {"smooth", "sm"}, {"snakehook", "sh"}, {"claybuildup", "cb"}, {"clay", "cl"},
+        {"damstandard", "ds"}, {"move", "mv"}, {"inflate", "in"}, {"pinch", "pi"}, {"flatten", "fl"},
+        {"trim", "td"}, {"layer", "ly"}, {"nudge", "nu"}, {"crease", "cr"}};
+    if (typed.size() == 1)
+        for (size_t i : kept) {
+            const std::string n = typedName(names[i]);
+            for (const auto& [name, keys] : kZBrushKeys)
+                if (n == name && keys[0] == typed[0] && !taken(keys[1]) && !has(i)) badges.emplace_back(keys[1], i);
+        }
     for (size_t i : kept) {
+        if (has(i)) continue;
         const std::string n = typedName(names[i]);
         if (n.rfind(typed, 0) != 0) continue;
         for (size_t k = typed.size(); k < n.size(); ++k)

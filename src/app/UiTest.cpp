@@ -8,7 +8,7 @@
 //
 //   click LABEL / double_click LABEL / right_click LABEL / hover LABEL
 //   type LABEL TEXT          click a text field and type into it
-//   key COMBO                e.g. enter, escape, ctrl+z, ctrl+shift+z, 3, comma, backtick, tab, f3
+//   key COMBO                e.g. enter, escape, ctrl+z, ctrl+shift+z, 3, comma, backtick, tab, f3, space, minus
 //   hold MODS                ctrl / shift / alt / ctrl+shift ... or none (for strokes and drags)
 //   stroke U0 V0 U1 V1 [S]   brush stroke across the model (fractions of its on-screen bounds)
 //   drag X0 Y0 X1 Y1 [S] [release]  left-drag in window fractions (rectangle hide, sliders...); release:
@@ -67,6 +67,9 @@
 //                            antialiasing (Preferences > Performance: 1, 2, 4, 8), view_samples (what the interactive
 //                            view draws with now: 1 while Fast Navigation moves a big scene), multithreading (1 on),
 //                            last_stroke_dabs (dabs of the last finished stroke)
+//                            z_intensity, smooth_intensity, rgb_intensity (0-100), focal_shift (-100..100), draw_size,
+//                            quickmenu_open, lazy_mouse, input_style (0 ZBrush, 1 SculptForge), brush_type (BrushType
+//                            index, -1 for a custom brush or Paint), last_dab_x / last_dab_y (window pixels), paint_r
 //                            gizmo_mode (0 Draw, 1 Move, 2 Scale, 3 Rotate), gizmo_hover (handle under the cursor,
 //                            0 = none, in gizmo_drag's order from 1), gizmo_falloff, pivot_x / pivot_y / pivot_z,
 //                            center_x / center_y / center_z and size_x / size_y / size_z (active mesh bounds)
@@ -264,6 +267,19 @@ double Demo::query(const std::string& name, bool& known) const {
         const int k = name.back() == 'r' ? 0 : name.back() == 'g' ? 1 : 2;
         return sum[k] / double(px.size() / 4);
     }
+    // ZBrush feel (Input.cpp): the intensities and Focal Shift as shown (0-100, -100..100).
+    if (name == "z_intensity") return std::round(app_.strength_ * 100.0f);
+    if (name == "smooth_intensity") return std::round(app_.smoothStrength_ * 100.0f);
+    if (name == "rgb_intensity") return std::round(app_.rgbIntensity_ * 100.0f);
+    if (name == "focal_shift") return std::round(app_.focalShift_ * 100.0f);
+    if (name == "draw_size") return std::round(app_.radiusPx_);
+    if (name == "quickmenu_open") return app_.quickMenu_.open ? 1.0 : 0.0;
+    if (name == "lazy_mouse") return app_.strokeType_ == StrokeType::LazyMouse ? 1.0 : 0.0;
+    if (name == "input_style") return double(app_.uiPrefs_.inputStyle);
+    if (name == "brush_type") return app_.doc_.activeBrush >= 0 || app_.paintMode_ ? -1.0 : double(int(app_.brush_));
+    if (name == "last_dab_x") return app_.lastDabScreen_.x;
+    if (name == "last_dab_y") return app_.lastDabScreen_.y;
+    if (name == "paint_r") return std::round(255.0f * linearToSrgb(app_.doc_.paintColor).x);
     if (name == "gizmo_mode") return double(int(app_.gizmo_.mode));
     if (name == "gizmo_hover") return double(int(app_.gizmo_.hover));
     if (name == "gizmo_falloff") return app_.gizmo_.falloff;
@@ -440,6 +456,8 @@ void Demo::testKey(int line, const std::string& combo) {
     else if (lower == "backtick" || lower == "grave") keyName = "`";
     else if (lower == "tab") keyName = "Tab";
     else if (lower == "f3") keyName = "F3";
+    else if (lower == "space") keyName = "Space";
+    else if (lower == "minus") keyName = "-";
     const SDL_Keycode key = SDL_GetKeyFromName(keyName.c_str());
     if (key == SDLK_UNKNOWN) {
         run([this, line, keyName] { fail(line, "unknown key \"" + keyName + "\""); });

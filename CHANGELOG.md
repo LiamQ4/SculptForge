@@ -6,6 +6,36 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### ZBrush feel: ZBrush's keys and gestures by default
+Audit in docs/zbrush-parity.md (sources: Maxon's ZBrush shortcut sheet and documentation); guide chapter
+docs/guide/coming-from-zbrush.md.
+- **U / I / O**: Z Intensity, RGB Intensity and Focal Shift sliders at the cursor, as in ZBrush (S stays Draw
+  Size). Values show 0-100 (Focal Shift -100..100); the top shelf and Draw palette say Z Intensity instead of
+  Strength.
+- **RGB Intensity**: painting has its own strength (default 100), separate from Z Intensity.
+- **Focal Shift**: the brush falloff, for every built-in brush, Move, SnakeHook, masking and painting (Brush Lab
+  recipes keep their own tip). At 0 the maths is unchanged. The cursor's inner ring now shows Focal Shift
+  (where the brush works at half strength) instead of the strength.
+- **Smooth keeps its own Z Intensity** (default 50): Shift-smoothing no longer follows the active brush's
+  strength. Holding Shift (or picking Smooth) shows and sets it.
+- **Space**: the QuickMenu under the cursor (brush, stroke, alpha, material, Draw Size, Focal Shift, the
+  intensities, Zadd/Zsub, Sculpt/Paint, Rgb, X). Hold and let go to close, or tap to keep it open.
+- **Brush letters**: B C B ClayBuildup, B D S DamStandard, B M V Move, B I N Inflate, B P I Pinch, B S H
+  SnakeHook (ZBrush's), instead of the first free letter.
+- **Mask keys**: Ctrl+A Mask All, Ctrl+Shift+A Clear Mask, Ctrl+I Invert, Ctrl+H View Mask; **Ctrl+W** Group
+  Masked (and clear the mask; with nothing masked, Group Visible).
+- **Ctrl+click on the model blurs the mask, Ctrl+Alt+click sharpens it** (a Ctrl+drag still paints).
+- **Shift pressed after a stroke starts** draws a straight line, snapped to 45 degree steps.
+- **Shift+click the background, let go of Shift, drag** rolls the view about its axis.
+- **Shift+Alt+click a SubTool** selects and frames it.
+- **Ctrl+Shift+click a polygroup on a partly hidden mesh hides it** (it used to isolate it); a Ctrl+Shift
+  rectangle around nothing reverses the visibility.
+- **L** toggles LazyMouse, **V** swaps the main and secondary colour, **Ctrl+Shift+Alt+I** is Save UI.
+- **Preferences > Input**: Style **ZBrush** (default) or **SculptForge**, which keeps 0.6's keys: 1-9 and 0 pick
+  brushes (ZBrush style: free, 9 = QuickSave), I = Z Intensity, Ctrl+drag on the background zooms when nothing
+  is masked (ZBrush style: nothing). Rotation (free / turntable) is also here.
+- Projects store Smooth's Z Intensity, RGB Intensity and Focal Shift.
+
 ## [0.6.0] - 2026-10-24
 
 Performance release. Figures for a 33 million triangle model with 7 subdivision levels on an M1 Pro laptop,

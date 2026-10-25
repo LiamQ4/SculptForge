@@ -123,7 +123,7 @@ size_t paintDab(Sculptor& sculptor, Mesh& mesh, const BVH& bvh, const DabParams&
         brushVertices(mesh, bvh, center, p.radius, verts);
         for (uint32_t v : verts) {
             if (p.frontFacesOnly && v < mesh.normals.size() && glm::dot(mesh.normals[v], viewDir) > 0.0f) continue;
-            const float w = brushFalloff(glm::distance(mesh.positions[v], center), p.radius) * s * vertexInfluence(mesh, v);
+            const float w = brushFalloff(glm::distance(mesh.positions[v], center), p.radius, p.focal) * s * vertexInfluence(mesh, v);
             if (w <= 0.0f) continue;
             sculptor.recordColor(mesh, v);
             paintVertex(mesh, v, color, w, p.invert); // Alt paints Base back to white, erases a layer

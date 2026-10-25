@@ -28,16 +28,18 @@ camera.
 | To | Do this |
 |---|---|
 | Rotate | Left-drag on the background, or right-drag anywhere on the canvas; add <kbd>Shift</kbd> to snap to an axis view |
+| Roll (turn about the view axis) | <kbd>Shift</kbd>+click the background, let go of <kbd>Shift</kbd>, then drag (ZBrush) |
 | Pan | <kbd>Alt</kbd>+left-drag on the background, <kbd>Alt</kbd>+right-drag, or middle-drag |
-| Zoom | Mouse wheel; <kbd>Alt</kbd>+left-drag on the background, then let go of <kbd>Alt</kbd> and keep dragging; <kbd>Ctrl</kbd>+right-drag; <kbd>Ctrl</kbd>+middle-drag; or <kbd>Ctrl</kbd>+left-drag on the background |
+| Zoom | Mouse wheel; <kbd>Alt</kbd>+left-drag on the background, then let go of <kbd>Alt</kbd> and keep dragging; <kbd>Ctrl</kbd>+right-drag; <kbd>Ctrl</kbd>+middle-drag; with the SculptForge input style also <kbd>Ctrl</kbd>+left-drag on the background |
 | Frame the model | <kbd>F</kbd>, or **Frame** on the right shelf |
+| Frame one SubTool | <kbd>Shift</kbd>+<kbd>Alt</kbd>+click it (it becomes the active SubTool) |
 
 "Background" means any part of the canvas where the cursor isn't over the model. A left-drag that starts on
 the model sculpts instead, so with a pen or a one-button mouse, start rotations beside the model. When the
 model fills the view, zoom out a little or use the right-shelf buttons.
 
 > **Note:** <kbd>Ctrl</kbd>+left-drag on the background clears the mask when something is masked (and
-> <kbd>Ctrl</kbd>+click there inverts it); it zooms only while nothing is masked. Use the wheel or
+> <kbd>Ctrl</kbd>+click there inverts it); with the SculptForge input style it zooms while nothing is masked. Use the wheel or
 > <kbd>Ctrl</kbd>+middle-drag to zoom on a masked model. See [Masking](masking.md).
 
 On macOS, <kbd>Cmd</kbd> works wherever this guide says <kbd>Ctrl</kbd> for these gestures, except
