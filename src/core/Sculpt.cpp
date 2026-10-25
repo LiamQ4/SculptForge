@@ -27,6 +27,7 @@ const char* brushName(BrushType type) {
     case BrushType::Trim: return "Trim";
     case BrushType::Layer: return "Layer";
     case BrushType::Nudge: return "Nudge";
+    case BrushType::Vdm: return "VDM";
     default: return "?";
     }
 }
@@ -303,7 +304,8 @@ void Sculptor::dab(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p, Sym
         mp.viewDir *= m;
         mp.strokeDelta *= m;
         mp.alphaUp *= m;
-        dabSingle(mesh, bvh, type, mp);
+        if (type == BrushType::Vdm) dabVdmSingle(mesh, bvh, mp, m.x * m.y * m.z);
+        else dabSingle(mesh, bvh, type, mp);
     }
     updateDabNormals(mesh);
 }

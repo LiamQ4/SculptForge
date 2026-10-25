@@ -10,6 +10,7 @@
 #include "core/Sculpt.h"
 #include "core/Splats.h"
 #include "core/Undo.h"
+#include "core/Vdm.h"
 
 #include <string>
 #include <utility>
@@ -53,6 +54,10 @@ struct Document {
     int activeBrush = -1; // index into `brushes`, -1 = use a built-in brush type
     BrushAlpha brushAlpha; // stamp shaping every brush's falloff (empty = round); brush_set_alpha
     glm::vec3 paintColor{0.6f, 0.03f, 0.02f}; // current polypaint colour (linear RGB; see set_color)
+    // Vector displacement maps for the VDM brush (core/Vdm.h): the built-ins, then the studio and user
+    // library's .sfvdm files and any loaded this session. `brushVdm` is the one the VDM brush stamps.
+    std::vector<std::shared_ptr<const VectorDisplacement>> vdms = builtinVdms();
+    std::shared_ptr<const VectorDisplacement> brushVdm = builtinVdms().front();
     // Adds or replaces (by name) a recipe and returns its index. Replacing with a
     // BrushSource::Session recipe keeps the existing brush's origin.
     int addBrush(BrushRecipe recipe);
