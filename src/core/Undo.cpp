@@ -164,10 +164,10 @@ void UndoStack::apply(UndoRecord& r, Mesh& mesh, BVH& bvh) {
         r.topology->swapWith(mesh);
         mesh.rebuildTopology();
         std::vector<uint32_t> restored;
-        for (uint32_t v : r.topology->vertexSlots)
+        for (uint32_t v : r.topology->reevaluate)
             if (v < mesh.vertexCount()) restored.push_back(v);
-        if (!mesh.layers.empty()) mesh.evaluate(restored);
-        if (!mesh.paintLayers.empty()) compositePaint(mesh, restored);
+        if (!restored.empty() && !mesh.layers.empty()) mesh.evaluate(restored);
+        if (!restored.empty() && !mesh.paintLayers.empty()) compositePaint(mesh, restored);
         mesh.recomputeAllNormals();
         bvh.build(mesh);
     }

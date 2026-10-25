@@ -435,13 +435,43 @@ float DynamicTopology::len2(uint32_t a, uint32_t b) const {
     return glm::dot(d, d);
 }
 
-// The edge passes within the brush radius of the dab's centre.
-bool DynamicTopology::inside(uint32_t a, uint32_t b) const {
+// The edge passes within the brush radius of the dab's centre (with `mirrored`, or of one of its mirror images).
+bool DynamicTopology::inside(uint32_t a, uint32_t b, bool mirrored) const {
     const glm::vec3 p = mesh_->positions[a], d = mesh_->positions[b] - p;
     const float dd = glm::dot(d, d);
-    const float t = dd > 0.0f ? std::clamp(glm::dot(center_ - p, d) / dd, 0.0f, 1.0f) : 0.0f;
-    const glm::vec3 q = p + d * t - center_;
-    return glm::dot(q, q) <= radius_ * radius_;
+    auto within = [&](const glm::vec3& c) {
+        const float t = dd > 0.0f ? std::clamp(glm::dot(c - p, d) / dd, 0.0f, 1.0f) : 0.0f;
+        const glm::vec3 q = p + d * t - c;
+        return glm::dot(q, q) <= radius_ * radius_;
+    };
+    if (within(center_)) return true;
+    if (!mirrored) return false;
+    for (const glm::vec3& s : mirrorSigns_)
+        if (within(center_ * s)) return true;
+    return false;
+}
+
+// The triangles under the brush, and the slivers under its mirror images. Operations are found on the brush's
+// side and done on every side at once (orbit); the slivers are the exception, since a brush can squash a
+// triangle on one side only (overlapping mirrored dabs), and they must be repaired where they are.
+void DynamicTopology::queryRegion() {
+    bvh_->queryTriangles(*mesh_, center_, radius_, regionTris_);
+    slivers_.clear();
+    const auto& p = mesh_->positions;
+    auto addSlivers = [&](const std::vector<uint32_t>& tris) {
+        for (uint32_t t : tris) {
+            const glm::uvec3& tri = mesh_->triangles[t];
+            if (quality(p[tri.x], p[tri.y], p[tri.z]) < 0.05f) slivers_.push_back(t);
+        }
+    };
+    addSlivers(regionTris_);
+    std::vector<uint32_t> more;
+    for (const glm::vec3& s : mirrorSigns_) {
+        bvh_->queryTriangles(*mesh_, center_ * s, radius_, more);
+        addSlivers(more);
+    }
+    std::sort(slivers_.begin(), slivers_.end());
+    slivers_.erase(std::unique(slivers_.begin(), slivers_.end()), slivers_.end());
 }
 
 // Left alone: fully masked, next to a hidden triangle, on a non-manifold edge, or without triangles.
@@ -454,23 +484,36 @@ bool DynamicTopology::locked(uint32_t v) const {
     if (m.hasHidden())
         for (uint32_t t : tris)
             if (m.hidden[t]) return true;
-    // Each neighbour shares one (boundary) or two triangles with v; more is non-manifold.
-    uint32_t count[64], other[64];
-    int n = 0;
+    // Each neighbour shares one (boundary) or two triangles with v; more is non-manifold. (A small table for the
+    // usual valences; sorting for the rare fan with more neighbours.)
+    if (tris.size() <= 32) {
+        uint32_t other[96], count[96];
+        int n = 0;
+        for (uint32_t t : tris) {
+            const glm::uvec3& tri = m.triangles[t];
+            for (int c = 0; c < 3; ++c) {
+                if (tri[c] == v) continue;
+                int i = 0;
+                while (i < n && other[i] != tri[c]) ++i;
+                if (i == n) {
+                    other[n] = tri[c];
+                    count[n++] = 0;
+                }
+                if (++count[i] > 2) return true;
+            }
+        }
+        return false;
+    }
+    std::vector<uint32_t>& others = lockScratch_;
+    others.clear();
     for (uint32_t t : tris) {
         const glm::uvec3& tri = m.triangles[t];
-        for (int c = 0; c < 3; ++c) {
-            if (tri[c] == v) continue;
-            int i = 0;
-            while (i < n && other[i] != tri[c]) ++i;
-            if (i == n) {
-                if (n == 64) return true;
-                other[n] = tri[c];
-                count[n++] = 0;
-            }
-            if (++count[i] > 2) return true;
-        }
+        for (int c = 0; c < 3; ++c)
+            if (tri[c] != v) others.push_back(tri[c]);
     }
+    std::sort(others.begin(), others.end());
+    for (size_t i = 0; i + 2 < others.size(); ++i)
+        if (others[i] == others[i + 2]) return true;
     return false;
 }
 
@@ -669,6 +712,16 @@ uint32_t DynamicTopology::split(uint32_t a, uint32_t b) {
         else if (len > limit) bend *= limit / len;
     }
     const glm::vec3 mid = (pa + pb) * 0.5f + bend;
+    // Splitting a triangle squashed flat only makes more flat ones (collapses and flips repair those).
+    const float minArea = 1e-6f * target_ * target_;
+    for (int i = 0; i < n; ++i) {
+        const glm::uvec3& tri = m.triangles[tris[i]];
+        uint32_t c = tri.x;
+        for (int k = 0; k < 3; ++k)
+            if (tri[k] != a && tri[k] != b) c = tri[k];
+        const glm::vec3 pc = m.positions[c];
+        if (glm::length(glm::cross(mid - pa, pc - pa)) < minArea || glm::length(glm::cross(pb - mid, pc - mid)) < minArea) return kNone;
+    }
     const uint32_t v = newVertex();
     interpolateVertex(v, a, b, 0.5f, mid);
     if (!m.base.empty()) m.base[v] += bend; // (sculpt layers: positions stay base + offsets)
@@ -858,11 +911,13 @@ bool DynamicTopology::canCollapse(uint32_t keep, uint32_t drop, const glm::vec3&
     if (n == 1 && (rk.size() < 3 || rd.size() < 3)) return false;
     // No long edge, no triangle turned over or made degenerate or much worse.
     const auto& pos = m.positions;
-    for (const std::vector<uint32_t>* r : {&rk, &rd})
-        for (uint32_t u : *r)
+    // (Only what the collapse makes worse counts: merging two vertices at one point moves nothing.)
+    for (uint32_t end : {keep, drop})
+        for (uint32_t u : end == keep ? rk : rd)
             if (u != keep && u != drop) {
                 const glm::vec3 d = pos[u] - p;
-                if (glm::dot(d, d) >= splitLen2_) return false;
+                const float l = glm::dot(d, d);
+                if (l >= splitLen2_ && l > len2(u, end) * 1.0001f) return false;
             }
     const float minArea = 1e-4f * target_ * target_;
     for (uint32_t v : {keep, drop})
@@ -877,8 +932,9 @@ bool DynamicTopology::canCollapse(uint32_t keep, uint32_t drop, const glm::vec3&
             const glm::vec3 nOld = glm::cross(o[1] - o[0], o[2] - o[0]);
             const glm::vec3 nNew = glm::cross(q[1] - q[0], q[2] - q[0]);
             const float lNew = glm::length(nNew), lOld = glm::length(nOld);
-            if (lNew < minArea) return false;
-            if (glm::dot(nOld, nNew) <= 0.3f * lOld * lNew) return false;
+            if (lNew < minArea && lNew < lOld * 0.999f) return false;
+            // (A triangle already squashed flat has no direction to keep: it is being repaired, not turned over.)
+            if (lOld >= minArea && glm::dot(nOld, nNew) <= 0.3f * lOld * lNew) return false;
             const float qNew = quality(q[0], q[1], q[2]);
             if (qNew < 0.1f && qNew < quality(o[0], o[1], o[2])) return false;
         }
@@ -918,6 +974,15 @@ void DynamicTopology::collapsePass() {
             if (a > b && edgeTriangles(a, b, tris) != 1) continue;
             const float l = len2(a, b);
             if (l < collapseLen2_ && inside(a, b)) heap_.push_back({-l, std::min(a, b), std::max(a, b)});
+        }
+    }
+    for (uint32_t t : slivers_) {
+        if (t >= mesh_->triangleCount() || deadT_[t]) continue;
+        const glm::uvec3 tri = mesh_->triangles[t];
+        for (int c = 0; c < 3; ++c) {
+            const uint32_t a = tri[c], b = tri[(c + 1) % 3];
+            const float l = len2(a, b);
+            if (l < collapseLen2_ && inside(a, b, true)) heap_.push_back({-l, std::min(a, b), std::max(a, b)});
         }
     }
     auto less = [](const Edge& x, const Edge& y) {
@@ -981,6 +1046,28 @@ bool DynamicTopology::flipGain(uint32_t a, uint32_t b, uint32_t& c, uint32_t& d)
     if (c == kNone || d == kNone || c == d) return false;
     uint32_t tmp[4];
     if (edgeTriangles(c, d, tmp) > 0) return false;
+    const auto& p = m.positions;
+    const glm::vec3 n1 = glm::cross(p[b] - p[a], p[c] - p[a]), n2 = glm::cross(p[a] - p[b], p[d] - p[b]);
+    const float l1 = glm::length(n1), l2 = glm::length(n2);
+    const glm::vec3 m1 = glm::cross(p[a] - p[c], p[d] - p[c]), m2 = glm::cross(p[b] - p[d], p[c] - p[d]);
+    const float k1 = glm::length(m1), k2 = glm::length(m2);
+    const float minArea = 1e-4f * target_ * target_;
+    if (k1 < minArea || k2 < minArea) return false;
+    const float qOld = std::min(quality(p[a], p[b], p[c]), quality(p[b], p[a], p[d]));
+    const float qNew = std::min(quality(p[c], p[a], p[d]), quality(p[d], p[b], p[c]));
+    const glm::vec3 nSum = n1 + n2;
+    if (glm::dot(m1, nSum) <= 0.0f || glm::dot(m2, nSum) <= 0.0f) return false;
+    // A sliver (a triangle squashed flat, its normal meaningless) is flipped whenever that makes both clearly
+    // better, whatever the valences: collapses can't always reach it, and splitting it only makes more.
+    if (qOld < 0.05f) {
+        ring(a, ringC_);
+        if (ringC_.size() <= 3) return false;
+        ring(b, ringC_);
+        if (ringC_.size() <= 3) return false;
+        return qNew > 2.0f * qOld + 0.02f && glm::dot(m1, m2) > 0.5f * k1 * k2;
+    }
+    if (glm::dot(n1, n2) <= 0.94f * l1 * l2) return false; // a crease: flipping would change the shape
+    if (glm::dot(m1, m2) <= 0.9f * k1 * k2) return false;
     std::vector<uint32_t>& r = ringC_;
     auto valence = [&](uint32_t v, int& target) {
         ring(v, r);
@@ -994,18 +1081,6 @@ bool DynamicTopology::flipGain(uint32_t a, uint32_t b, uint32_t& c, uint32_t& d)
     const int before = sq(va - ta) + sq(vb - tb) + sq(vc - tc) + sq(vd - td);
     const int after = sq(va - 1 - ta) + sq(vb - 1 - tb) + sq(vc + 1 - tc) + sq(vd + 1 - td);
     if (after >= before) return false;
-    const auto& p = m.positions;
-    const glm::vec3 n1 = glm::cross(p[b] - p[a], p[c] - p[a]), n2 = glm::cross(p[a] - p[b], p[d] - p[b]);
-    const float l1 = glm::length(n1), l2 = glm::length(n2);
-    if (glm::dot(n1, n2) <= 0.94f * l1 * l2) return false; // a crease: flipping would change the shape
-    const glm::vec3 m1 = glm::cross(p[a] - p[c], p[d] - p[c]), m2 = glm::cross(p[b] - p[d], p[c] - p[d]);
-    const float k1 = glm::length(m1), k2 = glm::length(m2);
-    const float minArea = 1e-4f * target_ * target_;
-    if (k1 < minArea || k2 < minArea) return false;
-    const glm::vec3 nSum = n1 + n2;
-    if (glm::dot(m1, nSum) <= 0.0f || glm::dot(m2, nSum) <= 0.0f || glm::dot(m1, m2) <= 0.9f * k1 * k2) return false;
-    const float qOld = std::min(quality(p[a], p[b], p[c]), quality(p[b], p[a], p[d]));
-    const float qNew = std::min(quality(p[c], p[a], p[d]), quality(p[d], p[b], p[c]));
     return qNew >= 0.5f * qOld;
 }
 
@@ -1039,6 +1114,19 @@ void DynamicTopology::flipPass() {
                 if (a < b && inside(a, b)) candidates.emplace_back(a, b);
             }
         }
+    }
+    // And the longest edge of every sliver under the brush and its mirror images (a brush can squash triangles
+    // flat too).
+    for (uint32_t t : slivers_) {
+        if (t >= mesh_->triangleCount() || deadT_[t]) continue;
+        const glm::uvec3& tri = mesh_->triangles[t];
+        const auto& p = mesh_->positions;
+        if (quality(p[tri.x], p[tri.y], p[tri.z]) >= 0.05f) continue;
+        int longest = 0;
+        for (int c = 1; c < 3; ++c)
+            if (len2(tri[c], tri[(c + 1) % 3]) > len2(tri[longest], tri[(longest + 1) % 3])) longest = c;
+        const uint32_t a = tri[longest], b = tri[(longest + 1) % 3];
+        candidates.emplace_back(std::min(a, b), std::max(a, b));
     }
     std::sort(candidates.begin(), candidates.end());
     candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
@@ -1097,15 +1185,34 @@ void DynamicTopology::relaxPass() {
         d -= n * glm::dot(d, n);
         moves.emplace_back(v, d * 0.5f);
     }
+    // Applied one by one, each only if no triangle around it turns over or goes flat.
+    const float minArea = 1e-4f * target_ * target_;
     for (const auto& [v, d] : moves) {
+        const glm::vec3 to = m.positions[v] + d;
+        bool ok = true;
+        for (uint32_t t : m.vertexTriangles(v)) {
+            const glm::uvec3& tri = m.triangles[t];
+            glm::vec3 o[3], q[3];
+            for (int c = 0; c < 3; ++c) {
+                o[c] = m.positions[tri[c]];
+                q[c] = tri[c] == v ? to : o[c];
+            }
+            const glm::vec3 nOld = glm::cross(o[1] - o[0], o[2] - o[0]), nNew = glm::cross(q[1] - q[0], q[2] - q[0]);
+            const float lNew = glm::length(nNew);
+            if (lNew < minArea || glm::dot(nOld, nNew) <= 0.5f * glm::length(nOld) * lNew) {
+                ok = false;
+                break;
+            }
+        }
+        if (!ok) continue;
         recordVertex(v);
-        m.positions[v] += d;
+        m.positions[v] = to;
         if (!m.base.empty()) m.base[v] += d;
     }
 }
 
 void DynamicTopology::gatherRegion() {
-    bvh_->queryTriangles(*mesh_, center_, radius_, regionTris_);
+    queryRegion();
     if (mirrorSigns_.empty()) return;
     // Every vertex of the triangles under each mirror image of the brush, to pair up.
     std::vector<uint32_t>& verts = regionVerts_;
@@ -1121,10 +1228,11 @@ void DynamicTopology::gatherRegion() {
                 verts.push_back(v);
             }
     };
-    addCorners(regionTris_);
-    // (A margin: the mirror images of the corners found here must be among those found there, though
-    // the two sides never match exactly.)
+    // With a margin around each image of the brush: the mirror images of the corners found under one must be
+    // among those found under the others, though the sides never match exactly.
     const float reach = radius_ * 1.25f + target_ * 2.0f;
+    bvh_->queryTriangles(*mesh_, center_, reach, tris);
+    addCorners(tris);
     for (const glm::vec3& s : mirrorSigns_) {
         bvh_->queryTriangles(*mesh_, center_ * s, reach, tris);
         addCorners(tris);
@@ -1191,7 +1299,7 @@ bool DynamicTopology::remesh(Mesh& mesh, BVH& bvh, const glm::vec3& center, floa
     if (regionTris_.empty()) return false;
     splitPass();
     bvh.refitChanged(mesh);
-    bvh.queryTriangles(mesh, center_, radius_, regionTris_);
+    queryRegion();
     collapsePass();
     flipPass();
     relaxPass();

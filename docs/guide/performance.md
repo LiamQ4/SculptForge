@@ -72,7 +72,7 @@ setting is also in the <kbd>F3</kbd> command palette (type "antialiasing", "fast
 ## Dynamic topology
 
 [Dynamic topology](dynamic-topology.md) only works where the brush is, so its speed depends on how many
-triangles the brush covers rather than on the size of the mesh: on an M1 Pro a medium dab takes 4 to 12
+triangles the brush covers rather than on the size of the mesh: on an M1 Pro a medium dab takes 9 to 13
 milliseconds on a one-million-triangle sphere. It gets slower when a big brush (or a low Detail) has to merge
 many small triangles at once; it then spreads the work over several dabs. Undoing a stroke rebuilds the mesh's
 connections, which takes about a tenth of a second per million triangles. `sculptforge --bench --bench-dyntopo`

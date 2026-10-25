@@ -66,7 +66,7 @@ Each stroke is one undo step. Undo puts every triangle back exactly, and it only
 stroke changed, so it costs little memory even on millions of triangles (a few megabytes per stroke).
 
 Dynamic topology is fastest on meshes of up to a few million triangles. On the benchmark computer (an M1 Pro), a
-dab with a medium brush on a one-million-triangle sphere takes 4 to 12 milliseconds including the screen
+dab with a medium brush on a one-million-triangle sphere takes 9 to 13 milliseconds including the screen
 update; undoing a stroke on such a mesh takes about a tenth of a second. A very big brush over very small
 triangles merges them over several dabs rather than all at once, to keep the brush responsive. See
 [Performance and big meshes](performance.md).

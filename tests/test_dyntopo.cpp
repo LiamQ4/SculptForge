@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <map>
 #include <set>
 #include <tuple>
@@ -36,7 +37,13 @@ std::string invalid(const Mesh& m, bool closed, int euler = 2) {
             if (tri[c] >= nv) return "corner out of range";
         if (tri.x == tri.y || tri.y == tri.z || tri.x == tri.z) return "repeated corner";
         const glm::vec3 n = glm::cross(m.positions[tri.y] - m.positions[tri.x], m.positions[tri.z] - m.positions[tri.x]);
-        if (!(glm::length(n) > 1e-12f)) return "degenerate triangle " + std::to_string(t);
+        if (!(glm::length(n) > 1e-12f)) {
+            if (std::getenv("SF_STRESS"))
+                std::printf("  degenerate %zu: edges %g %g %g at %g %g %g\n", t, glm::distance(m.positions[tri.x], m.positions[tri.y]),
+                            glm::distance(m.positions[tri.y], m.positions[tri.z]), glm::distance(m.positions[tri.z], m.positions[tri.x]),
+                            m.positions[tri.x].x, m.positions[tri.x].y, m.positions[tri.x].z);
+            return "degenerate triangle " + std::to_string(t);
+        }
         for (int c = 0; c < 3; ++c) {
             used[tri[c]] = 1;
             if (++directed[{tri[c], tri[(c + 1) % 3]}] > 1) return "edge used twice in one direction";
@@ -72,13 +79,19 @@ bool bvhMatches(const Mesh& m, const BVH& bvh) {
         bvh.queryVertices(m, c, r, got);
         for (uint32_t v = 0; v < m.vertexCount(); ++v)
             if (glm::dot(m.positions[v] - c, m.positions[v] - c) <= r * r) want.push_back(v);
-        if (got != want) return false;
-        const glm::vec3 origin = c * 3.0f + glm::vec3(0.01f, 0.02f, 0.0f);
-        const glm::vec3 dir = glm::normalize(-origin);
+        if (got != want) {
+            std::printf("  BVH vertex query: %zu found, %zu inside\n", got.size(), want.size());
+            return false;
+        }
+        const glm::vec3 origin = c * 3.0f + glm::vec3(0.01f, 0.37f, 0.02f);
+        // (Aimed a little off the origin: a ray through a vertex exactly is a coin toss for any ray caster.)
+        const glm::vec3 dir = glm::normalize(glm::vec3(0.0131f, 0.0071f, 0.0213f) - origin);
         RayHit hit;
         const bool found = bvh.raycast(m, origin, dir, hit);
         float best = 1e30f;
-        for (const glm::uvec3& t : m.triangles) {
+        for (uint32_t ti = 0; ti < m.triangleCount(); ++ti) {
+            if (m.triangleHidden(ti)) continue; // (picking skips hidden triangles)
+            const glm::uvec3& t = m.triangles[ti];
             const glm::vec3 a = m.positions[t.x], e1 = m.positions[t.y] - a, e2 = m.positions[t.z] - a;
             const glm::vec3 pv = glm::cross(dir, e2);
             const float det = glm::dot(e1, pv);
@@ -89,7 +102,10 @@ bool bvhMatches(const Mesh& m, const BVH& bvh) {
             const float w = glm::dot(dir, q) / det, tt = glm::dot(e2, q) / det;
             if (u >= 0 && w >= 0 && u + w <= 1 && tt > 0) best = std::min(best, tt);
         }
-        if (found != (best < 1e30f) || (found && std::abs(hit.t - best) > 1e-4f)) return false;
+        if (found != (best < 1e30f) || (found && std::abs(hit.t - best) > 1e-4f)) {
+            std::printf("  BVH ray: hit %d at %f, nearest %f\n", int(found), found ? hit.t : 0.0f, best);
+            return false;
+        }
     }
     return true;
 }
@@ -484,4 +500,123 @@ TEST(dyntopo_smooth_simplifies) {
     d.undo.push(d.sculptor.endStroke());
     CHECK(invalid(d.mesh, true).empty());
     CHECK(d.mesh.triangleCount() < before);
+}
+
+// Long randomized sessions (set SF_STRESS=1, or another number for other seeds; skipped otherwise, it takes a while): every brush, detail, radius,
+// symmetry and invert, with a partial mask, polygroups, hidden triangles, a sculpt layer and polypaint, random
+// undo / redo between strokes; the mesh stays valid after every stroke and undoing everything gives the start back.
+TEST(dyntopo_stress_random_sessions) {
+    if (!std::getenv("SF_STRESS")) return;
+    for (int session = 0; session < 3; ++session) {
+        const bool open = session == 2;
+        Document d = makeDoc(open ? makePlane(60, 2.0f) : makeIcosphere(4 + session, 1.0f));
+        Mesh& m = d.mesh;
+        m.ensureColors();
+        m.ensurePolygroups();
+        m.ensureMask();
+        m.ensureHidden();
+        for (uint32_t v = 0; v < m.vertexCount(); ++v) {
+            m.colors[v] = glm::vec3(0.5f + 0.5f * m.positions[v].x, 0.3f, 0.2f);
+            m.mask[v] = m.positions[v].z < -0.6f ? 1.0f : m.positions[v].z < -0.3f ? 0.5f : 0.0f;
+        }
+        for (uint32_t t = 0; t < m.triangleCount(); ++t) {
+            const glm::vec3 c = m.positions[m.triangles[t].x];
+            m.polygroups[t] = c.y > 0.3f ? 2u : 1u;
+            m.hidden[t] = c.x > 0.8f && c.y < -0.4f;
+        }
+        d.activeLayer = session == 1 ? m.addLayer("L") : -1;
+        m.rebuildTopology();
+        m.recomputeAllNormals();
+        d.bvh.build(m);
+        const Mesh start = m;
+        CHECK(bvhMatches(m, d.bvh));
+        d.sculptor.dyntopo.enabled = true;
+        // SF_STRESS=N picks the seeds (any N gives a different run; 1 is the reference).
+        uint32_t rng = 777u + uint32_t(session) + 1000u * uint32_t(std::max(0, std::atoi(std::getenv("SF_STRESS")) - 1));
+        auto rnd = [&rng] {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            return float(rng & 0xffff) / 65535.0f;
+        };
+        const BrushType types[] = {BrushType::Standard, BrushType::SnakeHook, BrushType::Smooth, BrushType::Clay,
+                                   BrushType::Pinch,    BrushType::Inflate,   BrushType::Crease, BrushType::Flatten,
+                                   BrushType::DamStandard, BrushType::ClayBuildup, BrushType::Layer, BrushType::Nudge,
+                                   BrushType::Trim};
+        std::string why;
+        int strokes = 0, undos = 0;
+        for (int step = 0; step < 120 && why.empty(); ++step) {
+            if (rnd() < 0.2f && d.undo.canUndo()) {
+                const int n = 1 + int(rnd() * 3);
+                for (int i = 0; i < n && d.undo.canUndo(); ++i, ++undos) d.undo.undo(m, d.bvh);
+                if (rnd() < 0.5f)
+                    while (d.undo.canRedo() && rnd() < 0.7f) d.undo.redo(m, d.bvh);
+            } else {
+                const Mesh pre = m;
+                const BrushType type = types[size_t(rnd() * 12.99f)];
+                d.sculptor.dyntopo.detail = rnd();
+                d.sculptor.dyntopo.constantDetail = rnd() < 0.2f;
+                const Symmetry sym{rnd() < 0.5f, rnd() < 0.15f, rnd() < 0.15f};
+                CHECK(d.sculptor.beginStroke(m, brushName(type), d.activeLayer));
+                const glm::vec3 dir = open ? glm::vec3(rnd() * 2 - 1, 1.0f, rnd() * 2 - 1)
+                                           : glm::normalize(glm::vec3(rnd() - 0.5f, rnd() - 0.5f, rnd() - 0.5f) + glm::vec3(0, 0, 0.01f));
+                const glm::vec3 step3 = glm::normalize(glm::cross(dir, glm::vec3(0.3f, 0.2f, 1.0f))) * (0.03f + 0.1f * rnd());
+                const float radius = 0.05f + 0.4f * rnd() * rnd();
+                const bool inv = rnd() < 0.3f;
+                for (int i = 0; i < 12; ++i) {
+                    RayHit hit;
+                    const glm::vec3 from = (dir + step3 * float(i)) * 3.0f;
+                    const glm::vec3 ray = open ? glm::vec3(0, -1, 0) : glm::normalize(-from);
+                    if (!d.bvh.raycast(m, open ? glm::vec3(from.x, 3.0f, from.z) : from, ray, hit)) continue;
+                    DabParams p;
+                    p.center = hit.position;
+                    p.viewDir = ray;
+                    p.radius = radius;
+                    p.strength = 0.3f + 0.6f * rnd();
+                    p.invert = inv;
+                    p.strokeDelta = step3 * 0.5f;
+                    d.sculptor.dab(m, d.bvh, type, p, sym);
+                    if (std::getenv("SF_STRESS_DEBUG")) std::printf("    dab %d at %g %g %g r %g\n", i, p.center.x, p.center.y, p.center.z, radius);
+                }
+                const size_t depth = d.undo.undoCount();
+                d.undo.push(d.sculptor.endStroke());
+                ++strokes;
+                // Each stroke undoes to exactly where it started and redoes to exactly where it ended (a stroke that
+                // changed nothing pushes no step).
+                const Mesh post = m;
+                if (d.undo.undoCount() == depth) {
+                    if (m.triangles != pre.triangles || m.positions != pre.positions) why = "a stroke without an undo step changed the mesh";
+                    goto checked;
+                }
+                d.undo.undo(m, d.bvh);
+                if (m.triangles != pre.triangles || m.positions != pre.positions || m.colors != pre.colors || m.mask != pre.mask) {
+                    size_t moved = 0;
+                    for (size_t v = 0; v < std::min(m.vertexCount(), pre.vertexCount()); ++v) moved += m.positions[v] != pre.positions[v];
+                    std::printf("  step %d %s detail %.2f sym %d%d%d: undo differs (tris %d, %zu positions, topology %d)\n", step,
+                                brushName(type), d.sculptor.dyntopo.detail, sym.x, sym.y, sym.z, int(m.triangles != pre.triangles), moved,
+                                int(post.triangles != pre.triangles));
+                    why = "undo";
+                }
+                d.undo.redo(m, d.bvh);
+                if (why.empty() && (m.triangles != post.triangles || m.positions != post.positions)) why = "redo";
+            checked:;
+            }
+            if (why.empty()) why = invalid(m, !open);
+            if (why.empty() && !bvhMatches(m, d.bvh)) why = "BVH";
+            if (why.empty() && (m.colors.size() != m.vertexCount() || m.mask.size() != m.vertexCount() ||
+                                m.polygroups.size() != m.triangleCount() || m.hidden.size() != m.triangleCount()))
+                why = "attribute sizes";
+            if (why.empty() && !m.layers.empty())
+                for (uint32_t v = 0; v < m.vertexCount() && why.empty(); ++v)
+                    if (glm::distance(m.positions[v], m.base[v] + m.layers[0].delta[v] * m.layers[0].weight) > 1e-4f) why = "layer sum";
+            if (!why.empty()) std::printf("  session %d step %d: %s\n", session, step, why.c_str());
+        }
+        CHECK(why.empty());
+        std::printf("  session %d: %d strokes, %d undos, %zu -> %zu triangles\n", session, strokes, undos, start.triangleCount(),
+                    m.triangleCount());
+        while (d.undo.canUndo()) d.undo.undo(m, d.bvh);
+        CHECK(m.triangles == start.triangles);
+        CHECK(m.positions == start.positions);
+        CHECK(m.colors == start.colors && m.mask == start.mask && m.polygroups == start.polygroups && m.hidden == start.hidden);
+    }
 }

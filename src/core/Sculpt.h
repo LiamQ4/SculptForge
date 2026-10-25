@@ -130,10 +130,17 @@ private:
     void displaceAll(Mesh& mesh, std::span<const uint32_t> verts, std::span<const glm::vec3> d);
 
     // Dynamic topology: remeshes before a dab, and keeps the stroke's per-vertex state in step with it.
-    void remeshDab(Mesh& mesh, BVH& bvh, const DabParams& p, Symmetry sym, float scale);
+    void remeshDab(Mesh& mesh, BVH& bvh, const DabParams& p, Symmetry sym, float scale, float reach);
+    void repairDab(Mesh& mesh, BVH& bvh);
+    void followRemesh(Mesh& mesh);
     void mergeTopologyUndo(TopologyUndo& topo, const Mesh& mesh);
     DynamicTopology dynTopo_;
     float strokeDiagonal_ = 0.0f;
+    // The last remesh (repairDab remeshes it again when the brush squashed a triangle).
+    bool lastRemesh_ = false;
+    glm::vec3 lastCenter_{0.0f};
+    float lastRadius_ = 0.0f, lastEdge_ = 0.0f;
+    std::vector<glm::vec3> lastMirrors_;
 
     bool active_ = false;
     int layer_ = -1;

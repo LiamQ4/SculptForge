@@ -25,7 +25,7 @@ Guide chapter docs/guide/dynamic-topology.md.
 - `dyntopo` command (enabled, detail, constant) for the console, CLI, MCP and Python; Dynamic and Detail are
   saved with project settings; stored UI layouts get the new top-shelf items on load.
 - Benchmark: `--bench-dyntopo` (docs/performance.md). On an M1 Pro, a medium dab on a 1M-triangle sphere takes
-  4-12 ms including the GPU update.
+  9-13 ms including the GPU update.
 
 ## [0.7.0] - 2026-10-25
 

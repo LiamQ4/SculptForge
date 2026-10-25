@@ -79,6 +79,9 @@ struct TopologyUndo {
     TopologyVertexValues vertices;
     TopologyTriangleValues triangles;
     std::vector<glm::vec2> uvs; // the whole UVs of the other state, when it had them (dynamic topology drops them)
+    // Slots whose positions / colours must be worked out again from layers after applying (only when brush undo
+    // entries from before the stroke's first remesh were merged in; normally every value is exact).
+    std::vector<uint32_t> reevaluate;
     void swapWith(Mesh& mesh);
     size_t bytes() const;
 };
@@ -102,6 +105,11 @@ public:
     std::span<const uint32_t> recordedVertices() const { return recordedNow_; }
     // The stroke changed the mesh's topology (or recorded it).
     bool active() const { return mesh_ != nullptr; }
+    // Keeps vertex slot v's stroke-start state in the stroke's undo record (the brush calls it before moving or
+    // painting a vertex while the stroke remeshes; no-op when it is recorded already or nothing is remeshed).
+    void recordStrokeStart(uint32_t v) {
+        if (mesh_ && v < mesh_->vertexCount()) recordVertex(v);
+    }
     // Vertex slot v is in the stroke's undo record (its stroke-start state is kept there).
     bool recordedVertex(uint32_t v) const { return v < vertRec_.size() * 64 && ((vertRec_[v >> 6] >> (v & 63)) & 1); }
     // Ends the stroke: packs the mesh's adjacency, rebuilds the BVH if the edits wore it down, and returns the
@@ -148,7 +156,7 @@ private:
     int featureEdges(uint32_t v, uint32_t* other) const;
     bool boundaryVertex(uint32_t v) const;
     float len2(uint32_t a, uint32_t b) const;
-    bool inside(uint32_t a, uint32_t b) const;
+    bool inside(uint32_t a, uint32_t b, bool mirrored = false) const;
     glm::vec3 faceNormalAt(uint32_t v) const;
     // Symmetry: the mirror images of vertex v (kNone where unknown).
     uint32_t mirrorOf(size_t mirror, uint32_t v) const;
@@ -170,6 +178,7 @@ private:
     void relaxPass();
     void pushEdgesAround(uint32_t v, bool longer);
     void gatherRegion();
+    void queryRegion();
 
     Mesh* mesh_ = nullptr;
     BVH* bvh_ = nullptr;
@@ -192,14 +201,14 @@ private:
     std::vector<uint32_t> seen_, regionVerts_; // gatherRegion: vertices listed this remesh (seen_ == mirrorStamp_)
     std::vector<uint8_t> deadV_, deadT_;
     std::vector<uint32_t> freeV_, freeT_;
-    std::vector<uint32_t> changedV_, changedT_, regionTris_;
+    std::vector<uint32_t> changedV_, changedT_, regionTris_, slivers_;
     std::vector<uint8_t> changedVFlag_;
     std::vector<Edge> heap_;
     std::vector<std::pair<uint32_t, uint32_t>> moved_;
     std::vector<uint32_t> recordedNow_;
     mutable bool orbitIncomplete_ = false; // the last orbit() missed a mirror image
     size_t ops_ = 0, maxOps_ = 0;
-    mutable std::vector<uint32_t> scratch_, scratch2_, ringA_, ringB_, ringC_;
+    mutable std::vector<uint32_t> scratch_, scratch2_, ringA_, ringB_, ringC_, lockScratch_;
 };
 
 } // namespace sf
