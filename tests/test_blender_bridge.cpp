@@ -212,8 +212,11 @@ TEST(blender_bridge_names_and_app_info) {
     CHECK(!blenderSend({}, folder, msg) && msg.find("Nothing") != std::string::npos);
 
     writeBridgeAppInfo(folder, "/opt/SculptForge/bin/sculptforge", "1.2.3");
-    std::ifstream f(root / "app.json");
-    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::string text;
+    { // closed before the folder is removed (Windows can't delete open files)
+        std::ifstream f(root / "app.json");
+        text.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    }
     CHECK(text.find("\"/opt/SculptForge/bin/sculptforge\"") != std::string::npos && text.find("1.2.3") != std::string::npos);
     writeBridgeHeartbeat(folder);
     CHECK(fs::exists(root / "alive.json"));
