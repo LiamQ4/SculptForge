@@ -97,9 +97,10 @@ quads, reversed back for a mirrored object.
 
 ## Starting SculptForge
 
-On send, the add-on treats SculptForge as running when `alive.json` is less than 6 seconds old. On the very first
-send (when it creates `to_sculptforge/`) it waits up to 2.5 s, because SculptForge only beats once that folder
-exists. Otherwise it starts SculptForge with `--blender` (macOS: `open -n <app> --args --blender`), found from
+On send, the add-on treats SculptForge as running when `alive.json` is less than 6 seconds old. SculptForge beats
+as soon as it starts (once `to_sculptforge/` exists), every 2 s after that, and right after its own Send to
+Blender. On the very first send (when it creates `to_sculptforge/`) the add-on waits up to 2.5 s for a beat, and
+within a minute of starting SculptForge itself up to 5 s, so a slow start never gets a second copy. Otherwise it starts SculptForge with `--blender` (macOS: `open -n <app> --args --blender`), found from
 the add-on preference, `app.json`, `PATH`, then the usual install folders. `--blender` loads the pending send at
 start; without it, a send that was already there when SculptForge started is not loaded by itself.
 

@@ -39,6 +39,7 @@ FACE_SETS = ".sculpt_face_set"
 
 class _State:
     sent = False         # this session sent something: what SculptForge sends back loads by itself
+    launched = 0.0       # when this session last started SculptForge (time.time())
     inbox_time = 0       # last seen modification time of to_blender/manifest.json
     seen = -1            # revision last loaded (or present when the add-on started)
     message = ""         # last result, shown in the panel
@@ -321,8 +322,10 @@ def send(context):
     exchange.write_manifest(folder, entries, bpy.app.version_string)
     state.sent = True
     count = "%d object%s" % (len(entries), "" if len(entries) == 1 else "s")
-    # A running SculptForge loads it within a second (it beats only once the folder exists: wait for that).
-    if exchange.sculptforge_running(root) or (first and exchange.wait_for_heartbeat(root, 2.5)):
+    # A running SculptForge loads it within a second. It beats only once the folder exists, and one this session
+    # started may still be starting: wait for its heartbeat rather than start a second one.
+    starting = time.time() - state.launched < 60.0
+    if exchange.sculptforge_running(root) or ((first or starting) and exchange.wait_for_heartbeat(root, 5.0 if starting else 2.5)):
         return "INFO", "Sent %s to SculptForge" % count
     path = exchange.find_sculptforge(root, p.sculptforge_path if p else "")
     if not path:
@@ -330,6 +333,7 @@ def send(context):
                            "start it and use File > Blender > Receive from Blender" % count)
     try:
         exchange.launch_sculptforge(path)
+        state.launched = time.time()
     except OSError as e:
         return "WARNING", "Sent %s, but SculptForge could not be started (%s): %s" % (count, path, e)
     return "INFO", "Sent %s; starting SculptForge" % count

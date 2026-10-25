@@ -8,6 +8,7 @@
 
 #include "io/BlenderBridge.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 
@@ -86,16 +87,20 @@ void App::pollBlender() {
         blenderSeenRevision_ = bridgeRevision(inbox);
         if (options_.blender && blenderInboxTime_) receiveFromBlender();
     }
-    // UI tests check every frame (their frames are simulated); the app once a second.
+    // UI tests check every frame (their frames are simulated); the app once a second, and at once when a heartbeat
+    // is due (at start, and after Send to Blender).
     const Uint64 now = SDL_GetTicksNS();
     const Uint64 interval = options_.uiTest.empty() ? 1'000'000'000ull : 0;
-    if (now - blenderLastPollNs_ < interval) return;
+    if (blenderLastBeatNs_ != 0 && blenderLastPollNs_ != 0 && now - blenderLastPollNs_ < interval) return;
     blenderLastPollNs_ = now;
 
     std::error_code ec;
     if (!std::filesystem::is_directory(std::filesystem::path(std::u8string(inbox.begin(), inbox.end())), ec))
+    {
+        blenderLastBeatNs_ = std::max<Uint64>(blenderLastBeatNs_, 1); // nothing due: back to once a second
         return; // the add-on has never sent anything: no heartbeat either
-    if (now - blenderLastBeatNs_ >= 2'000'000'000ull) {
+    }
+    if (blenderLastBeatNs_ == 0 || now - blenderLastBeatNs_ >= 2'000'000'000ull) { // at once, then every 2 s
         blenderLastBeatNs_ = now;
         writeBridgeHeartbeat(root);
     }

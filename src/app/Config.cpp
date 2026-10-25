@@ -241,7 +241,10 @@ void App::initActions() {
         nullptr, [this] { return !pendingUnreal_.valid(); },
         "Export a game-ready FBX and import it into the running Unreal Editor (Python remote execution).");
     // Blender bridge (PanelBlender.cpp, addons/blender).
-    add("file.send_blender", "Send to Blender", "File > Blender", nullptr, [this] { runCommand("blender_send"); },
+    add("file.send_blender", "Send to Blender", "File > Blender", nullptr, [this] {
+            runCommand("blender_send");
+            blenderLastBeatNs_ = 0; // beat now: the add-on must see this SculptForge as running when Blender sends next
+        },
         ICON_LC_SEND, "blender_send", nullptr, nullptr,
         "Send the visible SubTools back to Blender (the SculptForge add-on): objects that came from Blender update "
         "in place, keeping their transform, materials and modifiers; new SubTools become new objects.");
