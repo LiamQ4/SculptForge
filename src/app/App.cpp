@@ -1331,6 +1331,8 @@ void App::drawLayersContents() {
     ImGui::TextDisabled("Sculpt expressions & correctives;\nexported as glTF morph targets.");
 
     if (ImGui::RadioButton("Base mesh", doc_.activeLayer < 0)) runCommand("layer_set_active", {{"index", -1.0}});
+    constexpr const char* kLayersPath = "Tool > Layers";
+    ui::HelpText("Base mesh", nullptr, "Strokes go into the base shape, not a layer.", kLayersPath);
 
     int removeIndex = -1;
     for (int i = 0; i < int(doc_.mesh.layers.size()); ++i) {
@@ -1339,6 +1341,10 @@ void App::drawLayersContents() {
         ImGui::Separator();
         if (ImGui::RadioButton(layer.name.c_str(), doc_.activeLayer == i))
             runCommand("layer_set_active", {{"index", double(i)}});
+        ui::HelpText(layer.name.c_str(), nullptr,
+                     "Select to sculpt into this layer (ZBrush's REC). With subdivision levels, record at any level: a "
+                     "layer keeps its own detail on every level and follows Lower Res / Higher Res and Divide.",
+                     kLayersPath);
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - 52 * scale);
         const bool playing = playingLayer_ == i;
         if (ImGui::SmallButton(playing ? "Stop" : "Play")) {
@@ -1346,15 +1352,21 @@ void App::drawLayersContents() {
             playTime_ = 0.0f;
             if (playing) setLayerWeight(i, 1.0f);
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Animate this blend shape 0 -> 1 -> 0");
+        ui::HelpText(playing ? "Stop" : "Play", nullptr, "Animate this blend shape 0 -> 1 -> 0 (Stop sets it back to 1).",
+                     kLayersPath);
         ImGui::SameLine();
         if (ImGui::SmallButton("X")) removeIndex = i;
+        ui::HelpText("Delete layer", nullptr, "Delete this layer on every subdivision level (undoable).", kLayersPath);
         float w = layer.weight;
         ImGui::SetNextItemWidth(-1);
         if (ImGui::SliderFloat("##weight", &w, 0.0f, 1.0f, "weight %.2f")) {
             if (playingLayer_ == i) playingLayer_ = -1;
             setLayerWeight(i, w);
         }
+        ui::HelpText("Weight", nullptr,
+                     "How strongly the layer shows: 0 = off (ZBrush's eye), 1 = as sculpted. One weight for every "
+                     "subdivision level.",
+                     kLayersPath);
         ImGui::PopID();
     }
     if (removeIndex >= 0) {
@@ -1369,6 +1381,7 @@ void App::drawLayersContents() {
                                   ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
     if (ImGui::Button("+ Add") || enter) runCommand("layer_add", {{"name", std::string(newLayerName_)}});
+    ui::HelpText("+ Add", nullptr, "Add a sculpt layer with the name typed beside it; strokes go into it.", kLayersPath);
 }
 
 void App::sendToUnreal() {
