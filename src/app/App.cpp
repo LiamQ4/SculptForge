@@ -1001,6 +1001,7 @@ void App::dabAt(float x, float y, float pressure) {
 
 void App::endStroke() {
     strokeMask_ = false;
+    maskClickPending_ = false; // (a command can end a Ctrl+click before its release)
     firstDabPending_ = false;
     // Preferences > Performance shows what the stroke cost.
     if (doc_.sculptor.timings.dabs > 0) {
