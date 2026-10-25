@@ -64,6 +64,8 @@
 //                            texture_painted (texels of the texture composite that aren't white),
 //                            texture_mean_r / texture_mean_g / texture_mean_b (mean composite, sRGB 0-255),
 //                            auto_uv_running, qremesh_running (QRemesh working in the background),
+//                            qremesh_guides (guide curves on the active SubTool), qremesh_guide_loops (closed ones),
+//                            guides_mode (1 while the QRemesh Guides brush is picked),
 //                            quads (quad pairs in the active SubTool), quad_percent (quads among its polygons)
 //                            sdiv (the current subdivision level, 1 = base; 0 without levels), sdiv_levels (0 = none)
 //                            antialiasing (Preferences > Performance: 1, 2, 4, 8), view_samples (what the interactive
@@ -254,6 +256,13 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "auto_uv_running") return app_.autoUv_ ? 1.0 : 0.0;
     if (const double v = app_.bakeTestValue(name); !std::isnan(v)) return v;
     if (name == "qremesh_running") return app_.qremesh_ ? 1.0 : 0.0;
+    if (name == "qremesh_guides") return double(app_.doc_.qremeshGuides.size());
+    if (name == "qremesh_guide_loops") {
+        size_t n = 0;
+        for (const QRemeshGuide& g : app_.doc_.qremeshGuides) n += g.closed;
+        return double(n);
+    }
+    if (name == "guides_mode") return app_.guidesMode_ ? 1.0 : 0.0;
     if (name == "quads") return double(m.quadCount());
     if (name == "quad_percent")
         return m.triangleCount() ? 100.0 * double(m.quadCount()) / double(m.triangleCount() - m.quadCount()) : 0.0;

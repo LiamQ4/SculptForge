@@ -280,8 +280,9 @@ void App::initActions() {
                 brush_ = type;
                 doc_.activeBrush = -1;
                 paintMode_ = false;
+                guidesMode_ = false; // leaves the QRemesh Guides brush
             },
-            ICON_LC_BRUSH, nullptr, [this, type] { return brush_ == type && doc_.activeBrush < 0 && !paintMode_; }, nullptr,
+            ICON_LC_BRUSH, nullptr, [this, type] { return brush_ == type && doc_.activeBrush < 0 && !paintMode_ && !guidesMode_; }, nullptr,
             (std::string("Sculpt with the ") + brushName(type) + " brush.").c_str());
     }
 

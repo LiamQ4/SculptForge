@@ -688,6 +688,7 @@ void App::onMouseDown(float x, float y, Uint8 button) {
         if (polygroupMouseDown(x, y, mod)) return;
         if (maskSelectMouseDown(x, y, mod)) return;
         if (gizmoMouseDown(x, y, mod)) return; // Gizmo 3D handles, pivot clicks (Gizmo.cpp)
+        if (guideMouseDown(x, y, mod)) return; // the QRemesh Guides brush (PanelRetopo.cpp)
         // Alt+click on another SubTool selects it (ZBrush); Alt+drag stays an inverted stroke or a pan.
         // Shift+Alt+click selects and frames it (ZBrush), the active one too.
         const bool frameClick = (mod & SDL_KMOD_ALT) && (mod & SDL_KMOD_SHIFT) && !ctrlDown(mod);
@@ -769,6 +770,7 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     case Drag::SubToolClick: subtoolClickMove(x, y); break;
     case Drag::Select: selectionMove(x, y); break;
     case Drag::Gizmo: gizmoDragTo(x, y); break;
+    case Drag::Guide: guideDragTo(x, y); break;
     case Drag::None: break;
     }
 }
@@ -810,6 +812,7 @@ void App::onMouseUp() {
     else if (drag_ == Drag::Stroke) endStroke();
     if (drag_ == Drag::MaskCanvas) maskCanvasRelease();
     if (drag_ == Drag::SubToolClick) subtoolClickRelease();
+    if (drag_ == Drag::Guide) guideRelease();
     gizmoRelease();
     drag_ = Drag::None;
     dragFromPen_ = false;
@@ -1282,9 +1285,12 @@ void App::drawUi() {
     }
     const ImVec2 mouse(mouseX_, mouseY_);
     drawGizmo(); // Gizmo 3D handles and panel (Gizmo.cpp)
-    // In Gizmo mode the brush ring shows only while Ctrl masks.
+    drawQRemeshGuides(); // QRemesh Guides curves (PanelRetopo.cpp)
+    // In Gizmo mode (and with the QRemesh Guides brush) the brush ring shows only while Ctrl masks or Shift smooths.
+    const bool ringOff = gizmoActive() || (guidesMode_ && !(inputMods() & SDL_KMOD_SHIFT));
     if (((!ImGui::GetIO().WantCaptureMouse && canvasRect().contains(mouse.x, mouse.y)) || drag_ == Drag::Stroke) &&
-        !hideBrushCursor_ && drag_ != Drag::Select && (!gizmoActive() || drag_ == Drag::Stroke || ctrlDown(inputMods())))
+        !hideBrushCursor_ && drag_ != Drag::Select && drag_ != Drag::Guide &&
+        (!ringOff || drag_ == Drag::Stroke || ctrlDown(inputMods())))
         drawBrushCursor();
     drawSelectionOverlay();
     drawBrushLibraryPopups();
