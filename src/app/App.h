@@ -357,6 +357,25 @@ private:
     bool alphaInvert_ = false;
     std::mutex alphaMutex_;
     std::string pendingAlphaPath_; // set by the file dialog thread
+    // Vector displacement brushes (PanelVdm.cpp, core/Vdm.h): the Brush palette's Vector Displacement section,
+    // its file dialogs and actions, DragDot, and the DragRect stroke the VDM brush brings along (as ZBrush's do).
+    void dragDotTo(float x, float y);
+    bool vdmBrushActive() const { return brush_ == BrushType::Vdm && doc_.activeBrush < 0 && !paintMode_; }
+    void drawVdmSection();
+    void registerVdmActions();
+    void pollVdm(); // every frame: file dialog results, and the stroke follows the brush
+    void afterVdmCommand(const std::string& name, const CommandResult& r);
+    static void SDLCALL onVdmChosen(void* userdata, const char* const* files, int filter);
+    static void SDLCALL onVdmExportChosen(void* userdata, const char* const* files, int filter);
+    friend void drawVdmGrid(App&, GridMode);
+    std::mutex vdmMutex_;
+    std::string pendingVdmPath_, pendingVdmExport_; // set by the file dialog threads
+    VdmImportOptions vdmImport_;
+    int vdmPlaneRes_ = 256, vdmCaptureSize_ = 256;
+    char vdmName_[64] = "My VDM";
+    bool vdmStrokeAuto_ = false;              // the VDM brush switched the stroke to DragRect
+    StrokeType vdmSavedStroke_ = StrokeType::Dots;
+    bool vdmWasActive_ = false;
     // Persistent brush library (PanelBrushLibrary.cpp, core/BrushLibrary.h): the Custom brushes list
     // with its right-click menu, paste (Ctrl+V), and saving Brush Lab edits a moment after the last change.
     void initBrushLibrary();

@@ -165,6 +165,7 @@ void App::drawPalette_Brush() {
             }
         }
     }
+    if (subpalette("brush.vdm", "Vector Displacement")) drawVdmSection(); // PanelVdm.cpp
     drawBrushGrid(*this, GridMode::Palette);
 }
 

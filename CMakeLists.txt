@@ -180,6 +180,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/PanelPolygroups.cpp
     src/app/Selection.cpp
     src/app/PanelBrushes.cpp
+    src/app/PanelVdm.cpp
     src/app/PanelBrushLibrary.cpp
     src/app/PanelBrushGallery.cpp
     src/app/PanelPolypaint.cpp

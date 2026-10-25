@@ -354,6 +354,9 @@ const char* brushTypeDescription(int type) {
         return "Raises the surface to one fixed height per stroke; overlapping passes never stack.";
     case BrushType::Nudge:
         return "Slides the surface sideways along the stroke without changing its height.";
+    case BrushType::Vdm:
+        return "Vector displacement: drag out one stamp of a whole 3D shape, overhangs and all (a horn, an ear, "
+               "scales). Choose the map in Brush > Vector Displacement or the Alpha picker. Works best on dense meshes.";
     default:
         return "";
     }
@@ -690,11 +693,12 @@ void drawBrushGrid(App& app, GridMode mode) {
 
 void drawStrokeGrid(App& app, GridMode mode) {
     const float tile = 64.0f * app.uiScale_;
-    static const char* const glyphs[] = {ICON_LC_ELLIPSIS, ICON_LC_SQUARE_DASHED_MOUSE_POINTER, ICON_LC_SPRAY_CAN,
-                                         ICON_LC_SPLINE_POINTER};
+    static const char* const glyphs[] = {ICON_LC_ELLIPSIS, ICON_LC_SQUARE_DASHED_MOUSE_POINTER, ICON_LC_MOUSE_POINTER_2,
+                                         ICON_LC_SPRAY_CAN, ICON_LC_SPLINE_POINTER};
     static const char* const help[] = {
         "Even dabs along the path: the classic brush stroke.",
         "Click and drag one stamp: the drag length sets its size and its direction the rotation (great with alphas).",
+        "Click and drag one stamp of the brush's Draw Size around the surface; it lands where you let go (great for VDMs).",
         "Scattered dabs of random size and strength, for organic texture.",
         "The brush trails the cursor on a string, for smooth, steady lines.",
     };
@@ -724,7 +728,44 @@ void drawStrokeGrid(App& app, GridMode mode) {
     }
 }
 
+void drawVdmGrid(App& app, GridMode mode) {
+    const float tile = 64.0f * app.uiScale_;
+    const int columns = columnsFor(tile, mode);
+    sectionHeader("Vector displacement");
+    int column = 0;
+    for (size_t i = 0; i < app.doc_.vdms.size(); ++i) {
+        const std::shared_ptr<const VectorDisplacement> v = app.doc_.vdms[i];
+        tileGrid(column, columns);
+        const bool on = app.vdmBrushActive() && app.doc_.brushVdm == v;
+        const ImTextureID tex = app.thumbs_.vdm(v);
+        const std::string id = v->name + "##vdm" + std::to_string(i);
+        if (AssetTile(id.c_str(), tex, ICON_LC_STAMP, v->name, tile, on)) {
+            app.doc_.brushVdm = v;
+            app.brush_ = BrushType::Vdm;
+            app.doc_.activeBrush = -1;
+            app.paintMode_ = false;
+            app.status_ = "VDM: " + v->name;
+            if (mode == GridMode::Popup) closePicker();
+        }
+        const std::string text = v->builtin ? "Built-in vector displacement map (CC0)." : "Vector displacement map from your library.";
+        quickInfo(tex, ICON_LC_STAMP, v->name, text, v->path.empty() ? std::string() : v->path);
+        ui::HelpText(v->name.c_str(), nullptr, "Stamp this vector displacement map with the VDM brush (DragRect).",
+                     "Brush > Vector Displacement");
+        if (!v->builtin && ImGui::BeginPopupContextItem()) {
+            ImGui::TextDisabled("%s", v->name.c_str());
+            ImGui::Separator();
+            if (ImGui::MenuItem("Delete##vdm")) app.runCommand("vdm_delete", {{"name", v->name}});
+            ImGui::EndPopup();
+        }
+    }
+    AssetTileHoverGlow();
+}
+
 void drawAlphaGrid(App& app, GridMode mode) {
+    if (app.vdmBrushActive()) {
+        drawVdmGrid(app, mode);
+        ImGui::Dummy(ImVec2(0, 4));
+    }
     const float tile = 64.0f * app.uiScale_;
     const int columns = columnsFor(tile, mode);
     const BrushAlpha& current = app.doc_.brushAlpha;

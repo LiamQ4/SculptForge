@@ -15,6 +15,7 @@
 #include "core/BrushRecipe.h"
 #include "core/Image.h"
 #include "core/Mesh.h"
+#include "core/Vdm.h"
 
 #include <imgui.h>
 
@@ -44,6 +45,7 @@ public:
     ImTextureID brush(int brushType); // BrushType, or kPaintBrush (AssetLibrary.h)
     ImTextureID recipe(const BrushRecipe& recipe);
     ImTextureID alpha(const BrushAlpha& alpha);
+    ImTextureID vdm(const std::shared_ptr<const VectorDisplacement>& vdm); // one stamp of the map on a plane
     ImTextureID material(int matcap);     // -1 = Studio
     ImTextureID primitive(int primitive); // Primitive (AssetLibrary.h)
     // Projects (their embedded thumbnail.png, else rendered once), meshes and images.

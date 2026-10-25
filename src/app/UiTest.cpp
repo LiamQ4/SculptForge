@@ -68,7 +68,8 @@
 //                            sdiv (the current subdivision level, 1 = base; 0 without levels), sdiv_levels (0 = none)
 //                            antialiasing (Preferences > Performance: 1, 2, 4, 8), view_samples (what the interactive
 //                            view draws with now: 1 while Fast Navigation moves a big scene), multithreading (1 on),
-//                            last_stroke_dabs (dabs of the last finished stroke)
+//                            last_stroke_dabs (dabs of the last finished stroke), stroke_type (0 Dots, 1 DragRect,
+//                            2 DragDot, 3 Spray, 4 LazyMouse), vdms (VDM brush maps), vdm_files (.sfvdm in the library)
 //                            z_intensity, smooth_intensity, rgb_intensity (0-100), focal_shift (-100..100), draw_size,
 //                            quickmenu_open, lazy_mouse, input_style (0 ZBrush, 1 SculptForge), brush_type (BrushType
 //                            index, -1 for a custom brush or Paint), last_dab_x / last_dab_y (window pixels), paint_r
@@ -277,6 +278,8 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "draw_size") return std::round(app_.radiusPx_);
     if (name == "quickmenu_open") return app_.quickMenu_.open ? 1.0 : 0.0;
     if (name == "lazy_mouse") return app_.strokeType_ == StrokeType::LazyMouse ? 1.0 : 0.0;
+    if (name == "stroke_type") return double(int(app_.strokeType_)); // 0 Dots, 1 DragRect, 2 DragDot, 3 Spray, 4 LazyMouse
+    if (name == "vdms") return double(app_.doc_.vdms.size());
     if (name == "input_style") return double(app_.uiPrefs_.inputStyle);
     if (name == "brush_type") return app_.doc_.activeBrush >= 0 || app_.paintMode_ ? -1.0 : double(int(app_.brush_));
     if (name == "last_dab_x") return app_.lastDabScreen_.x;
@@ -329,14 +332,15 @@ double Demo::query(const std::string& name, bool& known) const {
     }
     if (name == "user_brushes")
         return double(std::count_if(doc.brushes.begin(), doc.brushes.end(), [](const BrushRecipe& b) { return isUserLibraryBrush(b); }));
-    if (name == "library_files") {
+    if (name == "library_files" || name == "vdm_files") { // .sfbrush / .sfvdm files in the user library
+        const char* ext = name == "vdm_files" ? ".sfvdm" : ".sfbrush";
         const std::string& dir = brushLibraryPaths().userDir;
         std::error_code ec;
         size_t n = 0;
         if (!dir.empty())
             for (std::filesystem::directory_iterator it(std::filesystem::path(std::u8string(dir.begin(), dir.end())), ec), end;
                  !ec && it != end; it.increment(ec))
-                n += it->path().extension() == ".sfbrush";
+                n += it->path().extension() == ext;
         return double(n);
     }
     if (name == "masked") {

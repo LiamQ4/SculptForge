@@ -873,6 +873,10 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
         dragAnchorHit_ = hit.position;
         return; // the stamp appears once the drag gives it a size
     }
+    if (strokeType_ == StrokeType::DragDot) {
+        dragDotTo(x, y); // one stamp under the cursor, which follows it until release (PanelVdm.cpp)
+        return;
+    }
     firstDab(x, y);
 }
 
@@ -901,6 +905,10 @@ void App::strokeTo(float x, float y) {
     }
     if (strokeType_ == StrokeType::DragRect && !strokeMask_) { // mask strokes paint dots
         dragRectTo(x, y);
+        return;
+    }
+    if (strokeType_ == StrokeType::DragDot && !strokeMask_) {
+        dragDotTo(x, y);
         return;
     }
     if (strokeType_ == StrokeType::LazyMouse) {
@@ -992,6 +1000,7 @@ void App::dabAt(float x, float y, float pressure) {
     }
     p.alpha = &doc_.brushAlpha;
     p.alphaUp = screenUpVector(dabAngle_);
+    p.vdm = doc_.brushVdm.get();
     p.strokeDelta = haveLastDab_ ? hit.position - lastDabHit_ : glm::vec3(0.0f);
     lastDabHit_ = hit.position;
     haveLastDab_ = true;
@@ -1055,6 +1064,7 @@ void App::runCommand(const std::string& name, const Args& args) {
     if (r.ok && (name == "subtool_append" || name == "subtool_duplicate") && !onScreen(doc_.mesh.bounds()))
         camera_.frame(sceneBounds());
     afterCommand(name, args, r);
+    afterVdmCommand(name, r); // the VDM brush after vdm_set / vdm_capture, the top view after vdm_new_plane
     watchActiveBrush();
     updateTitle();
     consoleEcho(name, args, r); // the console shows every command as a script line
@@ -1100,6 +1110,9 @@ void App::openPath(const std::string& path) {
         if (loadReferenceImage(path)) showImageTo3D_ = true;
     } else if (ext == ".sfbrush") {
         installBrushFile(path);
+    } else if (ext == ".exr" || ext == ".sfvdm") { // a vector displacement map for the VDM brush
+        runCommand("vdm_set", {{"path", path}, {"swap_yz", vdmImport_.swapYZ}, {"flip_x", vdmImport_.flipX},
+                               {"flip_y", vdmImport_.flipY}, {"flip_z", vdmImport_.flipZ}, {"scale", double(vdmImport_.scale)}});
     } else {
         runCommand("open", {{"path", path}});
     }
@@ -1272,6 +1285,7 @@ void App::drawUi() {
     drawBrushGallery();
     if (showImageTo3D_) drawImageTo3D();
     pollAlphaFile();
+    pollVdm();
     if (previewLod_ >= 0) {
         const CanvasRect c = canvasRect();
         std::string banner = "Previewing LOD" + std::to_string(previewLod_) + "  -  " +

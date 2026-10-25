@@ -167,6 +167,9 @@ std::unique_ptr<Mesh> sculptBrushPreview(const BrushRecipe* recipe, int type, fl
     case BrushType::Layer:
         stroke(d, nullptr, bt, planeCurve(), down, 0.34f, 1.0f); // its height scales with the radius
         break;
+    case BrushType::Vdm: // one stamp of the built-in Horn
+        stroke(d, nullptr, bt, {glm::vec3(0.0f, 1.0f, 0.1f)}, down, 0.5f, 0.5f, false);
+        break;
     default:
         stroke(d, nullptr, bt, planeCurve(), down, r, 1.0f);
         break;
@@ -278,6 +281,35 @@ ImTextureID ThumbnailCache::recipe(const BrushRecipe& recipe) {
             return r;
         },
         true);
+}
+
+ImTextureID ThumbnailCache::vdm(const std::shared_ptr<const VectorDisplacement>& vdm) {
+    if (!vdm || vdm->empty()) return ImTextureID(0);
+    // Name, size and a sparse sample of the vectors (as alpha() does): cheap enough every frame.
+    uint64_t h = fnv1a64("vdm|" + vdm->name + "|" + std::to_string(vdm->width) + "x" + std::to_string(vdm->height));
+    const size_t n = vdm->vectors.size();
+    for (size_t i = 0; i < 97; ++i) {
+        const glm::vec3 v = vdm->vectors[i * n / 97];
+        h = fnv1a64(std::string_view(reinterpret_cast<const char*>(&v), sizeof v), h);
+    }
+    return request(
+        "vdm|" + hex64(h) + "|" + std::to_string(kThumbnailVersion),
+        [vdm] {
+            // One stamp on a fine plane, seen from above at an angle (the stamp's top is away from the camera).
+            Result r;
+            Document d;
+            d.setMesh(makePlane(200, 2.6f));
+            d.brushVdm = vdm;
+            stroke(d, nullptr, BrushType::Vdm, {glm::vec3(0.0f, 1.0f, 0.0f)}, glm::vec3(0.0f, -1.0f, 0.0f), 0.62f,
+                   0.5f, false);
+            r.mesh = sceneMesh(d);
+            r.pitch = -40.0f;
+            r.yaw = 20.0f;
+            r.distance = 2.3f;
+            r.label = "vdm " + vdm->name;
+            return r;
+        },
+        false);
 }
 
 ImTextureID ThumbnailCache::alpha(const BrushAlpha& alpha) {

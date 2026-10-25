@@ -129,6 +129,7 @@ void App::dragRectTo(float x, float y) {
     p.focal = focalShift_;
     p.alpha = &doc_.brushAlpha;
     p.alphaUp = glm::normalize(q * glm::vec3(drag.x, -drag.y, 0.0f)); // the alpha's top follows the drag
+    p.vdm = doc_.brushVdm.get();
     if (strokePaint_) paintAt(p); // restoreStroke reverted the previous stamp's colours too
     if (!strokeSculpt_) return;
     const BrushRecipe* recipe = strokeRecipe();
