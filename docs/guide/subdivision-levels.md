@@ -64,7 +64,7 @@ What happens to your sculpting when you change level:
 | | When you change it at one level |
 |---|---|
 | Shape | Carried up as detail, softened down (see above) |
-| Sculpt layers | Each layer has its own detail on every level, kept relative to the surface like the shape's: rotate or reshape a low level and a layer's wrinkles turn and bend with it. Weights apply to all levels. See [Layers](layers.md) |
+| Sculpt layers | Each layer has its own detail on every level, kept relative to the surface like the shape's: rotate or reshape a low level and a layer's wrinkles turn and bend with it. Weights apply to all levels. See [Layers and subdivision levels](layers.md#layers-and-subdivision-levels) |
 | Mask | Copied down to the vertices below, interpolated up where it changed |
 | Polypaint and paint layers | As the mask: paint at a low level for broad colour, at a high level for detail. Painting low only changes the higher levels where you painted |
 | Polygroups, hidden faces | Copied down to the parent faces, inherited up by the faces they contain |

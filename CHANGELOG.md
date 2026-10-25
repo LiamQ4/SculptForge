@@ -6,6 +6,36 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### QRemesh Guides (ZBrush's ZRemesher Guides)
+- **QRemesh Guides brush** (Tool > Geometry > QRemesh > Guides, the brush picker, F3): drag on the model to draw
+  curves for QRemesh's edge loops to follow, around the eyes, the mouth, a joint. Curves are snapped to the
+  surface, closed into a loop when they end where they started, mirrored with symmetry (a curve that is its own
+  mirror image is kept once), shown over the model (faint where the model hides them), Alt+click deletes one;
+  **Delete Last** and **Clear**. Ctrl still masks and Shift still smooths while the brush is picked.
+- QRemesh puts an edge loop on every curve (a lattice line along it; along a closed curve the corners are placed
+  at a whole number of even steps, so the loop closes without a kink) and turns the edge flow around it to follow;
+  **Curves Strength** (0-100, default 50) sets how far. With symmetry, a curve on either side guides both. On a
+  sphere with a circular guide round an "eye", the edges near it are within 3-6 degrees of its direction (about
+  22 without), and the loop closes (6 of 6 test eyes, 32 of 32 in a random sweep).
+- Guides belong to each SubTool, are saved in projects (`qremesh_guides` per SubTool in the manifest, no format
+  change: older projects open, older versions ignore them) and copied to the kept original. Guides left far from
+  the surface (the SubTool moved) are ignored with a note.
+- Scripting: `qremesh_guide` (points, view, symmetry), `qremesh_guide_delete_last`, `qremesh_guides_clear`,
+  `qremesh_guides_info`; `qremesh` gains `guides` and `curves_strength`.
+- Keep Groups (loops along polygroup borders) and Use Polypaint (density) were already there.
+
+### Sculpt layers on subdivision levels
+- Checked against ZBrush's 3D Layers and covered by tests: a layer recorded at the top survives Lower / Higher Res
+  bit for bit, shows at lower levels as the same strokes in the base would, keeps one weight for every level, and
+  survives Divide, Reconstruct Subdiv, Del Lower / Del Higher, undo, saving and loading at any level, and blend
+  shape export from any level (`subdiv_export`). Layers added or sculpted at a low level show above. Nothing needed
+  fixing; the Layers panel got Ctrl-hover help and the guide a "Layers and subdivision levels" section.
+
+### Other
+- UI tests: `camera YAW PITCH` step; the guide's screenshot script turns the mesh back on after the splats shot
+  (the subdivision-level shots after it showed only splats).
+- `sculptforge_tests NAME...` runs only the tests whose names contain one of the arguments.
+
 ## [0.7.0] - 2026-10-25
 
 ZBrush's keys and gestures by default, and a bridge to Blender.

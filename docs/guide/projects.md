@@ -10,6 +10,7 @@ A `.sfproj` file holds everything SculptForge knows about the scene:
 
 - every [SubTool](subtools.md), with its name, visibility, mesh, mask, polypaint, polygroups, hidden faces and UVs;
 - every [sculpt layer](layers.md) with its weight, and the active layer of each SubTool;
+- each SubTool's [QRemesh Guides](retopology.md#qremesh-guides), the curves QRemesh's edge loops follow;
 - loaded [Gaussian splats](splats.md) and their placement;
 - your custom brushes, so a project opened on another computer still has them;
 - the camera, the material and display settings, the brush, Draw Size, Z Intensity (and Smooth's), RGB Intensity, Focal Shift, paint colour and symmetry;

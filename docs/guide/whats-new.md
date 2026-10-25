@@ -5,6 +5,22 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Next version (in development)
+
+### Draw the edge loops you want
+
+**QRemesh Guides** are ZBrush's ZRemesher Guides brush: draw curves on the sculpt, around the eyes, the mouth or a
+joint, and QRemesh puts an edge loop on each one and turns the flow around it to follow. A curve that ends where
+it started becomes a loop that closes cleanly, symmetry mirrors what you draw, and **Curves Strength** sets how far
+around a curve the flow follows it. Guides are kept with each SubTool and saved in the project. See
+[QRemesh Guides](retopology.md#qremesh-guides).
+
+### Sculpt layers on every subdivision level
+
+Sculpt layers now have a guide section on how they work with subdivision levels, like ZBrush's 3D Layers: record
+a layer at the top, step down and up, divide, reconstruct or delete levels, save, and it's still there, with one
+weight for every level. See [Layers and subdivision levels](layers.md#layers-and-subdivision-levels).
+
 ## Version 0.7
 
 ZBrush's keys and gestures by default, and a bridge that sends models between Blender and SculptForge.
