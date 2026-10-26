@@ -53,7 +53,7 @@ still on the roadmap:
 - Booleans and stencils.
 
 Others are not on the roadmap: ZSpheres, ZModeler, the 2.5D canvas, and reading ZBrush's own `.ZTL` and `.ZPR`
-files (bring models over with GoZ or as OBJ, FBX or GLB instead).
+files directly (bring models over with GoZ, the ZTool Export plug-in for ZBrush, or as OBJ, FBX or GLB).
 
 > **Not yet:** where a chapter describes a ZBrush feature SculptForge doesn't have, it says so in a callout
 > like this one. The project's ROADMAP.md lists what is planned and in which order.

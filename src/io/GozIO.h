@@ -98,4 +98,14 @@ std::string gozObjectListPath(const std::string& root);
 // Error text for ZBrush's proprietary files (.ztl, .zpr, .zbr).
 std::string zbrushProprietaryMessage(const std::string& extension);
 
+// ZTools converted in ZBrush by the SculptForge ZTool Export plug-in (integrations/zbrush): next to `<name>.ztl`
+// it writes one `<name>.sf<NNN>_<SubTool>.GoZ` per SubTool (NNN keeps the SubTool order). A folder of .GoZ files
+// (such as `<name>.sculptforge`) works too.
+// The converted files for a .ztl path or a folder, in SubTool order; empty when there are none.
+std::vector<std::string> convertedZToolFiles(const std::string& path);
+// Loads them, one object per SubTool named after it. `note` gets a warning when the .ztl is newer than the
+// conversion.
+bool loadConvertedZTool(const std::string& path, std::vector<MeshObject>& out, std::string& error,
+                        std::string* note = nullptr);
+
 } // namespace sf

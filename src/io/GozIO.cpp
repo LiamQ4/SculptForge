@@ -787,9 +787,99 @@ bool gozReceive(const std::string& root, Mesh& out, std::string& message, std::v
 std::string zbrushProprietaryMessage(const std::string& extension) {
     std::string ext = extension;
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::toupper(c)); });
+    if (ext == ".ZTL")
+        return ".ZTL is ZBrush's proprietary format and cannot be read directly. Convert it once in ZBrush with the "
+               "SculptForge ZTool Export plug-in (Help > User Guide > Coming from ZBrush), then open the .ztl again; "
+               "or send the model with GoZ (File > ZBrush (GoZ) > Receive from ZBrush).";
     return ext + " is ZBrush's proprietary format and cannot be read. In ZBrush, send the model with GoZ "
                  "(File > ZBrush (GoZ) > Receive from ZBrush) or export it as OBJ or FBX "
                  "(Tool > Export / the FBX ExportImport plug-in) and open that instead.";
+}
+
+namespace {
+
+std::string lowerAscii(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return s;
+}
+
+// "Dragon.sf007_Body" -> 7 chars of prefix: the length of "<stem>.sf<digits>_" when `name` starts with it.
+size_t ztoolPrefixLength(const std::string& name, const std::string& stem) {
+    const std::string head = lowerAscii(stem) + ".sf";
+    if (name.size() <= head.size() || lowerAscii(name.substr(0, head.size())) != head) return 0;
+    size_t i = head.size();
+    while (i < name.size() && std::isdigit(static_cast<unsigned char>(name[i]))) ++i;
+    return i > head.size() && i + 1 < name.size() && name[i] == '_' ? i + 1 : 0;
+}
+
+} // namespace
+
+std::vector<std::string> convertedZToolFiles(const std::string& path) {
+    std::error_code ec;
+    const fs::path p = utf8Path(path);
+    std::vector<fs::path> files;
+    auto scan = [&](const fs::path& dir, const std::string& stem) {
+        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            if (lowerAscii(pathUtf8(it->path().extension())) != ".goz" || !it->is_regular_file(ec)) continue;
+            if (!stem.empty() && ztoolPrefixLength(pathUtf8(it->path().stem()), stem) == 0) continue;
+            files.push_back(it->path());
+        }
+    };
+    if (fs::is_directory(p, ec)) {
+        scan(p, "");
+    } else if (lowerAscii(pathUtf8(p.extension())) == ".ztl") {
+        scan(p.has_parent_path() ? p.parent_path() : fs::path("."), pathUtf8(p.stem()));
+        if (files.empty()) {
+            fs::path folder = p;
+            folder.replace_extension(".sculptforge");
+            if (fs::is_directory(folder, ec)) scan(folder, "");
+        }
+    }
+    std::sort(files.begin(), files.end());
+    std::vector<std::string> out;
+    for (const fs::path& f : files) out.push_back(pathUtf8(f));
+    return out;
+}
+
+bool loadConvertedZTool(const std::string& path, std::vector<MeshObject>& out, std::string& error, std::string* note) {
+    std::error_code ec;
+    const std::vector<std::string> files = convertedZToolFiles(path);
+    if (files.empty()) {
+        error = "No converted ZTool found for " + path + " (convert it in ZBrush with the SculptForge ZTool Export plug-in)";
+        return false;
+    }
+    const fs::path source = utf8Path(path);
+    const bool isZtl = lowerAscii(pathUtf8(source.extension())) == ".ztl";
+    out.clear();
+    fs::file_time_type newest{};
+    for (const std::string& file : files) {
+        const fs::path f = utf8Path(file);
+        MeshObject obj;
+        GozInfo info;
+        std::string err;
+        if (!loadGoz(file, obj.mesh, err, &info)) {
+            error = pathUtf8(f.filename()) + ": " + err;
+            return false;
+        }
+        newest = std::max(newest, fs::last_write_time(f, ec));
+        // "Dragon.sf007_Body" or "007_Body" -> "Body": the number only keeps the SubTool order.
+        std::string stem = pathUtf8(f.stem());
+        size_t cut = isZtl ? ztoolPrefixLength(stem, pathUtf8(source.stem())) : 0;
+        if (cut == 0) {
+            size_t digits = 0;
+            while (digits < stem.size() && std::isdigit(static_cast<unsigned char>(stem[digits]))) ++digits;
+            if (digits > 0 && digits + 1 < stem.size() && stem[digits] == '_') cut = digits + 1;
+        }
+        obj.name = info.name.empty() ? stem.substr(cut) : info.name;
+        if (obj.mesh.triangleCount() > 0) out.push_back(std::move(obj));
+    }
+    if (out.empty()) {
+        error = "The converted ZTool for " + path + " has no polygons";
+        return false;
+    }
+    if (note && isZtl && fs::last_write_time(source, ec) > newest && !ec)
+        *note = "the .ztl was saved after it was converted; convert it again in ZBrush to get the latest version";
+    return true;
 }
 
 } // namespace sf

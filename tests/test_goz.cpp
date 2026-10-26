@@ -243,11 +243,59 @@ TEST(goz_commands_and_open) {
     CHECK(r.ok && third.mesh.hasMask() && third.mesh.hasColors() && third.mesh.hasUvs() && third.gozName == "sf_goz_cmd");
     std::filesystem::remove(path);
 
-    for (const char* ext : {".ZTL", ".zpr"}) {
-        r = reg.execute(doc, "open", {{"path", std::string("model") + ext}});
-        CHECK(!r.ok && r.message.find("proprietary") != std::string::npos && r.message.find("GoZ") != std::string::npos &&
-              r.message.find("OBJ") != std::string::npos);
+    r = reg.execute(doc, "open", {{"path", "model.zpr"}});
+    CHECK(!r.ok && r.message.find("proprietary") != std::string::npos && r.message.find("GoZ") != std::string::npos &&
+          r.message.find("OBJ") != std::string::npos);
+    // A .ztl without a conversion beside it points to the ZBrush plug-in.
+    r = reg.execute(doc, "open", {{"path", "model.ZTL"}});
+    CHECK(!r.ok && r.message.find("proprietary") != std::string::npos && r.message.find("ZTool Export") != std::string::npos);
+}
+
+// The SculptForge ZTool Export plug-in writes <name>.sf<NNN>_<SubTool>.GoZ next to <name>.ztl; opening the .ztl
+// opens every SubTool in order. A folder of numbered .GoZ files opens the same way.
+TEST(goz_converted_ztool_opens_as_subtools) {
+    namespace fs = std::filesystem;
+    const fs::path base = fs::path(tempPath("sf_ztool_test"));
+    fs::remove_all(base);
+    fs::create_directories(base / "Dragon.sculptforge");
+    Mesh body = makeIcosphere(2);
+    paintAll(body);
+    Mesh horn = makeIcosphere(1);
+    std::string err;
+    // Written out of order on purpose: the number, not the directory order, sets the SubTool order.
+    for (const fs::path dir : {base, base / "Dragon.sculptforge"}) {
+        const std::string prefix = dir == base ? "Dragon.sf" : "";
+        CHECK(saveGoz((dir / (prefix + "002_Horn.GoZ")).string(), horn, "Horn", err));
+        CHECK(saveGoz((dir / (prefix + "001_Body.GoZ")).string(), body, "Body", err));
     }
+    CHECK(saveGoz((base / "Other.sf001_Rock.GoZ").string(), horn, "Rock", err)); // another ZTool's file
+    { std::ofstream((base / "Dragon.sculptforge" / "notes.txt").string()) << "not a mesh"; }
+    { std::ofstream((base / "Dragon.ztl").string(), std::ios::binary) << "ZTL"; }
+
+    CHECK(convertedZToolFiles((base / "Dragon.ztl").string()).size() == 2);
+    CHECK(convertedZToolFiles((base / "Missing.ztl").string()).empty());
+    CHECK(convertedZToolFiles((base / "Dragon.obj").string()).empty());
+
+    CommandRegistry reg;
+    for (const std::string path : {(base / "Dragon.ztl").string(), (base / "Dragon.sculptforge").string()}) {
+        Document doc;
+        CommandResult r = reg.execute(doc, "open", {{"path", path}});
+        CHECK(r.ok && r.message.find("2 SubTools") != std::string::npos);
+        CHECK(doc.subtoolCount() == 2);
+        if (doc.subtoolCount() != 2) continue;
+        CHECK(doc.subtools[0].name == "Body" && doc.subtools[1].name == "Horn");
+        CHECK(doc.subtoolMesh(0).triangleCount() == body.triangleCount() && doc.subtoolMesh(0).hasColors() &&
+              doc.subtoolMesh(0).hasMask() && doc.subtoolMesh(0).hasUvs());
+        CHECK(doc.subtoolMesh(1).triangleCount() == horn.triangleCount());
+    }
+
+    // Without a conversion, a .ztl explains the plug-in; an empty folder is an error, not an empty scene.
+    Document doc;
+    CommandResult r = reg.execute(doc, "open", {{"path", (base / "Missing.ztl").string()}});
+    CHECK(!r.ok && r.message.find("ZTool Export") != std::string::npos);
+    fs::create_directories(base / "Empty.sculptforge");
+    CHECK(!reg.execute(doc, "open", {{"path", (base / "Empty.sculptforge").string()}}).ok);
+    fs::remove_all(base);
 }
 
 TEST(goz_bridge_send_and_receive) {

@@ -23,6 +23,12 @@ palette: click it and SculptForge unwraps the model if it has no UVs (Auto UV, i
 texture, so the next stroke paints texels. Big brushes on 4K textures paint four to five times faster. See
 [Texture painting](texture-painting.md).
 
+### Bring your ZTools over
+
+ZBrush's `.ZTL` files are proprietary, but a free plug-in for ZBrush now converts them once, and then
+SculptForge opens the `.ZTL` itself, every SubTool with its polygroups, polypaint, mask and UVs. See
+[Coming from ZBrush](coming-from-zbrush.md#bring-your-ztools-over).
+
 ## Version 0.8
 
 Dynamic topology, vector displacement brushes, QRemesh Guides, and sculpt layers on every subdivision level.
