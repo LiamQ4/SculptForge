@@ -17,6 +17,7 @@
 #include "core/ThreadPool.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -573,7 +574,9 @@ TEST(texture_stroke_benchmark) {
             }
         }
     }
-    CHECK(bigDab4k < 60.0); // generous for CI machines; the M1 Pro target is ~10 ms
+    // Timing depends on the machine and on what else runs (CI runners are small and run tests in parallel), so
+    // the limit is only checked on request: SF_BENCH_LIMITS=1. The M1 Pro target is ~10 ms.
+    if (std::getenv("SF_BENCH_LIMITS")) CHECK(bigDab4k < 60.0);
 }
 
 TEST(texture_dab_is_deterministic_with_threads) {
