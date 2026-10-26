@@ -99,7 +99,7 @@ bool App::init(const AppOptions& options) {
                                   (headless ? SDL_WINDOW_HIDDEN : 0) |
                                   (options.fullscreen && !headless ? SDL_WINDOW_FULLSCREEN : 0);
     const int winW = recording ? options.width : 1600, winH = recording ? options.height : 960;
-    window_ = SDL_CreateWindow("SculptForge", winW, winH, flags);
+    window_ = SDL_CreateWindow("SculptForge CKW", winW, winH, flags);
     if (!window_) {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
         return false;
@@ -1272,7 +1272,7 @@ void App::updateTitle() {
     std::string name = doc_.path.empty()
                            ? std::string("Untitled")
                            : std::filesystem::path(std::u8string(doc_.path.begin(), doc_.path.end())).filename().string();
-    std::string title = (doc_.dirty() ? "* " : "") + name + " - SculptForge";
+    std::string title = (doc_.dirty() ? "* " : "") + name + " - SculptForge CKW";
     if (title == windowTitle_) return; // called every frame
     windowTitle_ = title;
     SDL_SetWindowTitle(window_, title.c_str());
@@ -1320,7 +1320,7 @@ void App::drawUi() {
         ImGui::SetNextWindowSize(ImVec2(460 * uiScale_, 0), ImGuiCond_Always);
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
         if (ImGui::Begin("About SculptForge", &showAbout_, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse)) {
-            ImGui::Text("SculptForge %s", SCULPTFORGE_VERSION);
+            ImGui::Text("SculptForge CKW %s", SCULPTFORGE_VERSION);
             ImGui::TextWrapped("Free and open-source digital sculpting.");
             ImGui::Spacing();
             ImGui::TextWrapped("Copyright (C) 2026 The SculptForge contributors. This program is free software: you can "

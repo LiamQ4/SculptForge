@@ -56,6 +56,30 @@ systems. Preserve upstream license and attribution files.
 
 ## Local app and build
 
+The CKW Windows Release build is staged in `out/ckw-app/`. Desktop and per-user
+Start menu shortcuts named **SculptForge CKW** launch `out/ckw-app/bin/sculptforge.exe`.
+The application window and About display identify it as CKW. This initial build
+retains upstream sculpting behavior; CKW Clay Polish is not implemented yet.
+
+Rebuild and refresh the executable (close the app first):
+
+```powershell
+cmake -S . -B build-ckw -DSCULPTFORGE_UPDATE_CHECK=OFF
+cmake --build build-ckw --config Release --parallel 8
+ctest --test-dir build-ckw -C Release --output-on-failure
+cmake --install build-ckw --config Release --prefix out/ckw-app
+```
+
+Upstream update notifications are disabled for this build: adopt upstream changes
+through the merge workflow above and rebuild the CKW executable.
+
+Initial Windows Release validation: build succeeded, app startup was responsive
+with the CKW title, and 43/45 CTest checks passed (including core and Blender
+exchange/UI checks). `ui_lightbox` failed on a QuickSave help message;
+`ui_zbrush_feel` failed on negative Focal Shift entry. The official 0.8.1 portable
+release also fails the Focal Shift check at the same test line. Full local logs:
+`out/ckw-build.log` and `out/ckw-tests.log`.
+
 The official Windows portable download is stored under `out/ckw-downloads/`;
 `out/` is already ignored. This is an upstream baseline executable, not a CKW
 custom build. A source build requires CMake 3.24+ and a C++20 compiler; see
