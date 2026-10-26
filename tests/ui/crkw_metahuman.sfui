@@ -1,0 +1,15 @@
+# Native panel remains usable without redistributing proprietary/local templates.
+run new_sphere subdivisions=3
+remember subtools count_before
+click "CrokedWillo##palette.ckw"
+click "MetaHuman Sculpt##crkw.metahuman"
+expect_text "Native template sculpting"
+expect "Create MetaHuman##crkw.mh_create"
+expect "Fix UVs##crkw.mh_fix"
+expect "Show UV Textures##crkw.mh_textures"
+expect "Export for MetaHuman##crkw.mh_export"
+type "##crkw.mh_assets" "missing-crkw-metahuman-templates"
+click "Create MetaHuman##crkw.mh_create"
+expect_status "Cannot read FBX"
+expect_value subtools == $count_before
+shot native-panel

@@ -177,6 +177,9 @@ public:
     // one of them changes it (mutableTexture copies first). `paintToTexture`: the Paint brush, fills and
     // the paint layers work on the texture instead of the vertices.
     std::shared_ptr<PaintTexture> texture;
+    // CRKW display-only overrides: never sculpted, exported, or serialized as painted texture/UVs.
+    std::shared_ptr<PaintTexture> previewTexture;
+    std::vector<glm::vec2> previewUvs;
     bool paintToTexture = false;
 
     // Subdivision levels (core/Multires.h): the stack this mesh is one level of, shared copy-on-write by

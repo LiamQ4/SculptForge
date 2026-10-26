@@ -24,6 +24,7 @@ namespace sf {
 // undo, so every tool and command keeps working on the active one; its slot
 // here holds only the name and flags until another SubTool is selected.
 struct SubTool {
+    Json crkwMetaHuman; // optional native template identity and immutable UV/topology reference
     uint32_t id = 0; // stable for the session (renderer slots, UI selection)
     std::string name;
     bool visible = true;

@@ -591,7 +591,7 @@ std::string objectName(const ufbx_node* node) {
 }
 
 // Merges every mesh node into one object, or (split) makes one object per node.
-bool readFbx(const std::string& path, bool split, std::vector<MeshObject>& out, std::string& error) {
+bool readFbx(const std::string& path, bool split, std::vector<MeshObject>& out, std::string& error, bool preserve = false) {
     ufbx_load_opts opts = {};
     opts.target_axes = ufbx_axes_right_handed_y_up;
     opts.target_unit_meters = 1.0;
@@ -633,6 +633,7 @@ bool readFbx(const std::string& path, bool split, std::vector<MeshObject>& out, 
         for (size_t f = 0; f < mesh->faces.count; ++f) {
             const uint32_t n = ufbx_triangulate_face(tri.data(), tri.size(), mesh, mesh->faces.data[f]);
             for (uint32_t t = 0; t < n; ++t) {
+                if (preserve) m.polygroups.push_back(f < mesh->face_material.count ? mesh->face_material.data[f] : 0);
                 m.triangles.push_back(glm::uvec3(base + mesh->vertex_indices.data[tri[t * 3]], base + mesh->vertex_indices.data[tri[t * 3 + 1]],
                                                  base + mesh->vertex_indices.data[tri[t * 3 + 2]]));
                 for (int c = 0; c < 3; ++c) {
@@ -671,7 +672,11 @@ bool readFbx(const std::string& path, bool split, std::vector<MeshObject>& out, 
         if (o.m.triangles.empty()) continue;
         if (!o.uvs) o.m.uvs.clear();
         for (auto& l : o.layers) l.delta.resize(o.m.positions.size(), glm::vec3(0.0f));
-        out.push_back({o.name, weldImported(o.m, o.layers)});
+        if (preserve) {
+            o.m.rebuildTopology();
+            o.m.recomputeAllNormals();
+            out.push_back({o.name, std::move(o.m)});
+        } else out.push_back({o.name, weldImported(o.m, o.layers)});
     }
     if (out.empty()) {
         error = "No meshes found in " + path;
@@ -691,6 +696,10 @@ bool loadFbx(const std::string& path, Mesh& out, std::string& error) {
 
 bool loadFbx(const std::string& path, std::vector<MeshObject>& out, std::string& error) {
     return readFbx(path, true, out, error);
+}
+
+bool loadFbxTemplate(const std::string& path, std::vector<MeshObject>& out, std::string& error) {
+    return readFbx(path, true, out, error, true);
 }
 
 } // namespace sf

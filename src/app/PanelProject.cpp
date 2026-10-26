@@ -104,7 +104,7 @@ void App::initProject() {
         const auto saved = std::filesystem::last_write_time(autosave, ec);
         std::error_code ec2;
         const auto exited = std::filesystem::last_write_time(marker, ec2);
-        offerRestore_ = !ec && (ec2 || saved > exited);
+        offerRestore_ = options_.uiTest.empty() && !ec && (ec2 || saved > exited);
     }
 }
 

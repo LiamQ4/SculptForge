@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Commands.h"
 #include "core/CkwPolish.h"
+#include "core/CrkwMetaHuman.h"
 
 #include "core/Bake.h"
 #include "core/Benchmark.h"
@@ -102,6 +103,7 @@ std::string jsonEscape(const std::string& s) {
 CommandRegistry::CommandRegistry() {
     using T = ParamSpec::Type;
     registerCkwPolishCommands(*this);
+    registerCrkwMetaHumanCommands(*this);
 
     add({"new_sphere",
          "Replace the scene with a new sphere ready for sculpting.",

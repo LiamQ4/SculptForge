@@ -125,6 +125,11 @@ The official Windows portable download is stored under `out/ckw-downloads/`;
 custom build. A source build requires CMake 3.24+ and a C++20 compiler; see
 README.md and CONTRIBUTING.md for the full build and test instructions.
 
+Native **CrokedWillo > MetaHuman Sculpt** tools support local template creation,
+guide previews, base UV repair and separate-part FBX export. See
+[the CRKW MetaHuman workflow](docs/crkw-metahuman.md) for setup and limitations.
+Template assets remain local and are not redistributed with the fork.
+
 Internal `ckw` source identifiers, the existing `ckw/crookedtools` branch and
 `ckw_clay_polish` script command are retained for compatibility. New scripts can
 use `crkw_clay_polish`. Public app, shelf and shortcut branding uses CRKW.

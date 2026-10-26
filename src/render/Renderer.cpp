@@ -1142,7 +1142,8 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs, bool ind
     if (textured) {
         visibleUvs_.resize(drawn * 3);
         poolFor(drawn, [&](size_t b, size_t e) {
-            for (size_t i = b; i < e; ++i) std::copy_n(mesh.uvs.data() + size_t(drawnTris[i]) * 3, 3, visibleUvs_.data() + i * 3);
+            const auto& uvs = mesh.previewUvs.size() == mesh.uvs.size() && mesh.previewTexture ? mesh.previewUvs : mesh.uvs;
+            for (size_t i = b; i < e; ++i) std::copy_n(uvs.data() + size_t(drawnTris[i]) * 3, 3, visibleUvs_.data() + i * 3);
         }, 1 << 16);
         const std::vector<glm::vec2>& uvs = visibleUvs_;
         gl::BindBuffer(GL_TEXTURE_BUFFER, s.uvData);
@@ -1579,7 +1580,7 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
     if (normalMap && (!normalMap->rgb || !normalMap->tangents || normalMap->tangents->size() != mesh.uvs.size() ||
                       !mesh.hasUvs() || normalMap->rgb->size() != size_t(normalMap->width) * size_t(normalMap->height) * 3))
         normalMap = nullptr; // made for another mesh
-    const bool wantUvs = hasTexture(mesh) || normalMap;
+    const bool wantUvs = hasTexture(mesh) || mesh.previewTexture || normalMap;
     // Dynamic topology changes topology a little at a time: patches (notePatches) instead of a full upload,
     // until there are too many of them.
     const bool patched = !s.patches.empty() || !mesh.changedTriangles.empty();
@@ -1712,7 +1713,7 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
 // The painted texture (core/Texture.h): a full upload when it is new or replaced, then only the rectangle
 // painted since this slot's last upload (PaintTexture::revision / dirtyFrom), with fresh mipmaps.
 void Renderer::syncTexture(MeshSlot& s, Mesh& mesh) {
-    PaintTexture* tex = s.hasUvs ? mesh.texture.get() : nullptr;
+    PaintTexture* tex = s.hasUvs ? (mesh.previewTexture ? mesh.previewTexture.get() : mesh.texture.get()) : nullptr;
     if (!tex) {
         if (s.paintTexture) gl::DeleteTextures(1, &s.paintTexture);
         s.paintTexture = 0;

@@ -1,6 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Project.h"
+#include "core/CrkwMetaHuman.h"
 
 #include "core/Multires.h"
 
@@ -713,6 +714,7 @@ bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error, bool wor
 
 // A SubTool read from a project, before it joins the document.
 struct LoadedSubtool {
+    Json crkwMetaHuman;
     std::string name, gozName;
     std::vector<QRemeshGuide> qremeshGuides;
     bool visible = true;
@@ -763,6 +765,7 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
         Json st = Json::object();
         st.set("name", s.name);
         st.set("visible", s.visible);
+        if (s.crkwMetaHuman.isObject()) st.set("crkw_metahuman", s.crkwMetaHuman);
         writeMesh(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i), st);
         st.set("active_layer", active ? doc.activeLayer : s.activeLayer);
         if (hasPaintLayers(doc.subtoolMesh(i)))
@@ -881,6 +884,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
             if (s.name.empty()) s.name = "SubTool";
             s.visible = sj["visible"].asBool(true);
             s.gozName = sj["goz_name"].asString();
+            s.crkwMetaHuman = sj["crkw_metahuman"];
             s.qremeshGuides = qremeshGuidesFromJson(sj["qremesh_guides"]);
             if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error, false, false)) return false;
             // The BVH builds (on the pool) while the levels and topology load (off it), then the normals.
@@ -933,11 +937,13 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     doc.gozName = subtools[0].gozName;
     doc.qremeshGuides = std::move(subtools[0].qremeshGuides);
     doc.subtools[0].visible = subtools[0].visible;
+    doc.subtools[0].crkwMetaHuman = std::move(subtools[0].crkwMetaHuman);
     for (size_t i = 1; i < subtools.size(); ++i) {
         BVH* builtI = subtools[i].finishBvh();
         const int at = doc.addSubtool(std::move(subtools[i].mesh), subtools[i].name, false, -1, builtI);
         SubTool& s = doc.subtools[size_t(at)];
         s.visible = subtools[i].visible;
+        s.crkwMetaHuman = std::move(subtools[i].crkwMetaHuman);
         s.activeLayer = validLayer(subtools[i].activeLayer, s.mesh);
         s.gozName = subtools[i].gozName;
         s.qremeshGuides = std::move(subtools[i].qremeshGuides);
@@ -965,6 +971,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     for (const auto& [key, value] : manifest.members())
         if (!isCoreKey(key)) doc.projectSettings.set(key, value);
     doc.path = path;
+    restoreCrkwMetaHumanPreviews(doc);
     doc.markClean();
     return true;
 }

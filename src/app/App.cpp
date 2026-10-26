@@ -18,6 +18,7 @@
 #include "core/Decimate.h"
 #include "core/ImageTo3D.h"
 #include "core/Project.h"
+#include "core/CrkwMetaHuman.h"
 #include "core/Script.h"
 #include "io/BlenderBridge.h"
 #include "render/GL.h"
@@ -1074,6 +1075,7 @@ void App::runCommand(const std::string& name, const Args& args) {
     if (r.ok && (name == "subtool_append" || name == "subtool_duplicate") && !onScreen(doc_.mesh.bounds()))
         camera_.frame(sceneBounds());
     afterCommand(name, args, r);
+    if (r.ok && (name.rfind("subdiv_", 0) == 0 || name == "undo" || name == "redo")) restoreCrkwMetaHumanPreviews(doc_);
     afterVdmCommand(name, r); // the VDM brush after vdm_set / vdm_capture, the top view after vdm_new_plane
     watchActiveBrush();
     updateTitle();
@@ -1291,6 +1293,7 @@ void App::drawUi() {
     drawCrkwSilhouette();
     drawLightBoxUi(); // thumbnails, the LightBox over the canvas, pickers, size / strength pop-ups
     drawQuickMenu();  // Space (Input.cpp)
+    drawCrkwMetaHuman();
     drawSubToolPopups();
     if (showBrushLab_) drawBrushLab();
     drawBrushGallery();

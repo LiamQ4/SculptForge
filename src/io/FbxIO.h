@@ -55,5 +55,7 @@ bool loadFbx(const std::string& path, Mesh& out, std::string& error);
 // The same, but each visible mesh node is its own object, named after the
 // node (or after its LOD group, for a LOD0 mesh).
 bool loadFbx(const std::string& path, std::vector<MeshObject>& out, std::string& error);
+// CRKW conform templates: keep every control point/index and material face id; never weld coincident vertices.
+bool loadFbxTemplate(const std::string& path, std::vector<MeshObject>& out, std::string& error);
 
 } // namespace sf

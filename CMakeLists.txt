@@ -40,6 +40,7 @@ add_library(sculptforge_core STATIC
   src/core/Document.cpp
   src/core/Commands.cpp
   src/core/CkwPolish.cpp
+  src/core/CrkwMetaHuman.cpp
   src/core/Polygroups.cpp
   src/core/ScreenSelect.cpp
   src/core/SubTools.cpp
@@ -164,6 +165,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/Bench.cpp
     src/app/App.cpp
     src/app/PanelCkw.cpp
+    src/app/PanelMetaHuman.cpp
     src/app/CkwHuion.cpp
     src/app/Demo.cpp
     src/app/UiTest.cpp
@@ -211,6 +213,7 @@ if(SCULPTFORGE_BUILD_APP)
   target_link_libraries(sculptforge PRIVATE sculptforge_core sculptforge_ai imgui SDL3::SDL3)
   target_include_directories(sculptforge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lucide)
   target_compile_definitions(sculptforge PRIVATE SCULPTFORGE_VERSION="${PROJECT_VERSION}"
+                                                 CRKW_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
                                                  SF_UPDATE_CHECK=$<BOOL:${SCULPTFORGE_UPDATE_CHECK}>)
   if(MSVC)
     target_compile_options(sculptforge PRIVATE /W4 /utf-8 /permissive-)

@@ -708,6 +708,12 @@ private:
     void drawPalette_Help();
     // CKW extensions live in PanelCkw.cpp to keep upstream integration small.
     void drawPalette_Ckw();
+    void initCrkwMetaHuman();
+    void drawCrkwMetaHuman();
+    bool showCrkwMetaHuman_ = false;
+    char crkwMhAssets_[1024]{}, crkwMhExport_[1024]{};
+    int crkwMhLayout_ = 0, crkwMhMap_ = 1;
+    bool crkwMhTextures_ = false;
     void drawCrkwSilhouette();
     bool crkwSilhouette_ = true;
     int crkwSilhouetteSize_ = 144, crkwSilhouetteCorner_ = 0;

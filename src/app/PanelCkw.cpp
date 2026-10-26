@@ -41,6 +41,8 @@ void App::initCkwWindow() {
             ckwBorderless_ = settings["borderless"].asBool(true);
             ckwStartHuion_ = settings["startHuion"].asBool(true);
             if (settings["display"].isString()) ckwDisplay_ = settings["display"].asString();
+            if (settings["metaHumanAssets"].isString()) std::snprintf(crkwMhAssets_, sizeof crkwMhAssets_, "%s", settings["metaHumanAssets"].asString().c_str());
+            if (settings["metaHumanExport"].isString()) std::snprintf(crkwMhExport_, sizeof crkwMhExport_, "%s", settings["metaHumanExport"].asString().c_str());
             auto color = [&](const char* key, glm::vec3& value) {
                 const auto& c = settings[key];
                 if (!c.isArray() || c.items().size() != 3) return;
@@ -67,6 +69,8 @@ void App::saveCkwWindow() {
     settings.set("borderless", ckwBorderless_);
     settings.set("startHuion", ckwStartHuion_);
     settings.set("display", ckwDisplay_);
+    settings.set("metaHumanAssets", std::string(crkwMhAssets_));
+    settings.set("metaHumanExport", std::string(crkwMhExport_));
     auto color = [](const glm::vec3& c) { Json a = Json::array(); for (int i = 0; i < 3; ++i) a.push(double(c[i])); return a; };
     settings.set("backgroundTop", color(renderSettings_.backgroundTop));
     settings.set("backgroundBottom", color(renderSettings_.backgroundBottom));
@@ -124,6 +128,7 @@ void App::applyCkwWindow(bool save) {
 }
 
 void App::registerCkwActions() {
+    initCrkwMetaHuman();
     actions_.add({"ckw.clay_polish", "CRKW Clay Polish", ICON_LC_WAND_SPARKLES,
         "Smooth the visible unmasked surface, then sharpen curvature. One undo step; topology is preserved.",
         "CrokedWillo", "", "crkw_clay_polish", [this] {
@@ -168,6 +173,7 @@ void App::drawPalette_Ckw() {
     }
     ImGui::TextWrapped("Respects masks and hidden vertices. Ctrl+Z undoes both stages.");
     if (doc_.sculptor.dyntopo.enabled) ImGui::TextWrapped("Disable Dynamic topology to use Clay Polish.");
+    if (ImGui::Button("MetaHuman Sculpt##crkw.metahuman", ImVec2(-1, 0))) showCrkwMetaHuman_ = true;
     ImGui::Separator();
     ImGui::TextUnformatted("Background");
     bool appearanceChanged = ImGui::Checkbox("Gradient##crkw.background_gradient", &renderSettings_.backgroundGradient);
