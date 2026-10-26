@@ -706,6 +706,19 @@ private:
     void drawPalette_File();
     void drawPalette_Generate();
     void drawPalette_Help();
+    // CKW extensions live in PanelCkw.cpp to keep upstream integration small.
+    void drawPalette_Ckw();
+    void registerCkwActions();
+    void initCkwWindow();
+    void applyCkwWindow(bool save = true);
+    void saveCkwWindow();
+    void startCkwHuion();
+    bool ckwBorderless_ = true;
+    bool ckwStartHuion_ = true;
+    std::string ckwDisplay_ = "Kamvas 22plus";
+    float ckwSoftness_ = 0.3f, ckwSharpness_ = 0.4f;
+    float ckwPreserve_ = 0.7f, ckwEdgeSmoothing_ = 0.35f;
+    int ckwSoftPasses_ = 2, ckwSharpPasses_ = 2;
     void drawPalette_Material();
     void drawPalette_Preferences();
     void drawPalette_Render();

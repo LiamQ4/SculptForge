@@ -104,6 +104,7 @@ bool App::init(const AppOptions& options) {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
         return false;
     }
+    if (!headless && options.demo.empty()) initCkwWindow();
     {
         Image icon;
         std::string iconErr;
@@ -628,7 +629,7 @@ void App::handleEvent(const SDL_Event& e) {
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         lastInputPen_ = e.button.which == SDL_PEN_MOUSEID;
         // Strokes and navigation start only on the canvas, never on the shell around it.
-        if (!io.WantCaptureMouse && canvasRect().contains(e.button.x, e.button.y))
+        if (!pickerOpen() && !io.WantCaptureMouse && canvasRect().contains(e.button.x, e.button.y))
             onMouseDown(e.button.x, e.button.y, e.button.button);
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:

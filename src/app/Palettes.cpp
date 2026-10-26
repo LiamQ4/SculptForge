@@ -29,6 +29,7 @@ const PaletteDef* palettes(int& count) {
         {"alpha", "Alpha", ICON_LC_CIRCLE_DASHED, nullptr, &App::drawPalette_Alpha},
         {"brush", "Brush", ICON_LC_BRUSH, nullptr, &App::drawPalette_Brush},
         {"color", "Color", ICON_LC_PALETTE, "Polypaint & Materials", &App::drawPalette_Color},
+        {"ckw", "CrokedWillo", ICON_LC_WAND_SPARKLES, nullptr, &App::drawPalette_Ckw},
         {"draw", "Draw", ICON_LC_PENCIL, nullptr, &App::drawPalette_Draw},
         {"edit", "Edit", ICON_LC_UNDO_2, nullptr, &App::drawPalette_Edit},
         {"file", "File", ICON_LC_FILE, nullptr, &App::drawPalette_File},

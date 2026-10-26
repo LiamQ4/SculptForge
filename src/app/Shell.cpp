@@ -244,6 +244,7 @@ bool drawShelfTile(App& app, const Action& a, ImVec2 size) {
 // ---------------------------------------------------------------------------
 
 void App::registerShellActions() {
+    registerCkwActions();
     auto add = [this](Action a) { actions_.add(std::move(a)); };
     auto flag = [this](std::string id, std::string label, const char* icon, std::string palette, std::string shortcut,
                        bool* value, std::string description) {
@@ -360,8 +361,8 @@ void App::registerShellActions() {
     flag("view.mesh", "Show Mesh", ICON_LC_BOX, "Render", "", &renderSettings_.showMesh, "Draw the sculpt.");
     add({"view.fullscreen", "Fullscreen", ICON_LC_MAXIMIZE, "Fill the screen with SculptForge (again: back to a window).",
          "Render", "F11", "",
-         [this] { SDL_SetWindowFullscreen(window_, !(SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN)); },
-         [this] { return (SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN) != 0; }, nullptr});
+         [this] { ckwBorderless_ = !ckwBorderless_; applyCkwWindow(); },
+         [this] { return ckwBorderless_; }, nullptr}); // CKW: F11 uses borderless windowed fullscreen.
     add({"view.splats", "Splats", ICON_LC_SPARKLE, "Show the Gaussian splat capture.", "Render", "", "",
          [this] { renderSettings_.showSplats = !renderSettings_.showSplats; },
          [this] { return renderSettings_.showSplats; }, [this] { return !doc_.splats.empty(); }});
@@ -816,12 +817,14 @@ void App::drawPaletteBar(const ShellGeometry& g) {
         for (const char* first : {"file", "edit"})
             for (int i = 0; i < count; ++i)
                 if (std::string_view(list[i].id) == first) order.push_back(i);
-    int help = -1;
+    int help = -1, ckw = -1;
     for (int i = 0; i < count; ++i) {
-        if (!uiPrefs_.alphabeticalPalettes && std::string_view(list[i].id) == "help") help = i; // last, as usual
+        if (std::string_view(list[i].id) == "ckw") ckw = i; // CKW stays last in the left-aligned menu group.
+        else if (std::string_view(list[i].id) == "help") help = i; // CKW: Help, CrokedWillo remain adjacent.
         else if (std::find(order.begin(), order.end(), i) == order.end()) order.push_back(i);
     }
     if (help >= 0) order.push_back(help);
+    if (ckw >= 0) order.push_back(ckw);
     for (size_t k = 0; k < order.size(); ++k) {
         const int i = int(k);
         const PaletteDef& p = list[order[k]];

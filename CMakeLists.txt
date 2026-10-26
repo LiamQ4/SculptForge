@@ -39,6 +39,7 @@ add_library(sculptforge_core STATIC
   src/core/Primitives.cpp
   src/core/Document.cpp
   src/core/Commands.cpp
+  src/core/CkwPolish.cpp
   src/core/Polygroups.cpp
   src/core/ScreenSelect.cpp
   src/core/SubTools.cpp
@@ -162,6 +163,8 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/main.cpp
     src/app/Bench.cpp
     src/app/App.cpp
+    src/app/PanelCkw.cpp
+    src/app/CkwHuion.cpp
     src/app/Demo.cpp
     src/app/UiTest.cpp
     src/app/Actions.cpp

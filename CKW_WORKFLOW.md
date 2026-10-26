@@ -58,8 +58,33 @@ systems. Preserve upstream license and attribution files.
 
 The CKW Windows Release build is staged in `out/ckw-app/`. Desktop and per-user
 Start menu shortcuts named **SculptForge CKW** launch `out/ckw-app/bin/sculptforge.exe`.
-The application window and About display identify it as CKW. This initial build
-retains upstream sculpting behavior; CKW Clay Polish is not implemented yet.
+The application window and About display identify it as CKW.
+
+### CrokedWillo workspace
+
+The CrokedWillo tab is immediately after Help, last in the left-aligned palette
+bar. CKW Clay Polish offers smoothing and curvature sharpening with independent
+strengths and pass counts, shape correction, and tangential edge smoothing.
+It preserves topology, protects masked and hidden vertices, supports sculpt
+layers, and records both stages as one undo step. Disable Dynamic topology
+before using it. This is a CKW approximation of the Sculpt Helper workflow,
+not a direct port of Blender's mesh-filter implementation.
+
+F11 and the CrokedWillo window checkbox toggle borderless windowed fullscreen.
+The preferred display defaults to Kamvas 22plus. Change it in CrokedWillo;
+display, mode, and Huion startup preferences save automatically in
+`%APPDATA%/SculptForge/SculptForge/ckw-window.json`. A disconnected display falls
+back to the primary monitor without discarding the preferred display name.
+
+On Windows CKW checks for HuionTablet at startup and launches the installed
+`Program Files/HuionTablet/HuionTablet.exe` if absent. Huion may itself request
+administrator consent; CKW does not bypass it or create elevated tasks. Turn
+off auto-start or open Huion manually from CrokedWillo. Headless tests, renders,
+and recordings never launch Huion or change desktop window settings.
+
+The Draw Size popup closes on mouse/pen release, not transient widget
+deactivation. The `CKW-SIZE-DRAG` comments in Pickers.cpp preserve the original
+upstream close logic for review/removal if upstream supplies an equivalent fix.
 
 Rebuild and refresh the executable (close the app first):
 
@@ -73,12 +98,16 @@ cmake --install build-ckw --config Release --prefix out/ckw-app
 Upstream update notifications are disabled for this build: adopt upstream changes
 through the merge workflow above and rebuild the CKW executable.
 
-Initial Windows Release validation: build succeeded, app startup was responsive
-with the CKW title, and 43/45 CTest checks passed (including core and Blender
-exchange/UI checks). `ui_lightbox` failed on a QuickSave help message;
+Current Windows Release validation: build succeeded, app startup was responsive
+on Kamvas 22plus at 1920x1080 in borderless windowed mode (exclusive fullscreen
+off), and 44/46 CTest checks passed (including core and Blender exchange/UI
+checks). The final CKW workspace, tablet, and Blender bridge UI checks all
+passed after the last rebuild; new CKW geometry tests passed 988 checks.
+`ui_lightbox` failed on a QuickSave help message;
 `ui_zbrush_feel` failed on negative Focal Shift entry. The official 0.8.1 portable
 release also fails the Focal Shift check at the same test line. Full local logs:
-`out/ckw-build.log` and `out/ckw-tests.log`.
+`out/ckw-build-final.log`, `out/ckw-tests.log`,
+`out/ckw-final-targeted-tests.log`, and `out/ckw-startup.log`.
 
 The official Windows portable download is stored under `out/ckw-downloads/`;
 `out/` is already ignored. This is an upstream baseline executable, not a CKW

@@ -1,0 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+namespace sf {
+class CommandRegistry;
+void registerCkwPolishCommands(CommandRegistry& registry);
+}

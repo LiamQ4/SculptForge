@@ -1,0 +1,41 @@
+# CKW: resizing a brush must leave shelves and menus visible.
+run new_sphere subdivisions=3
+mouse_move 0.5 0.5
+key s
+expect "##cursorvalue"
+remember draw_size original_size
+shot size-open
+drag_item "##cursorvalue" 60 0 0.5 keep
+expect "##cursorvalue"
+expect_value draw_size > $original_size
+shot size-held
+release
+expect_not "##cursorvalue"
+expect_value shelves_visible == 1
+expect "File##palette.file"
+shot size-dragged
+mouse_move 0.5 0.5
+key s
+pen_drag_item "##cursorvalue" 70 0 0.5 0.8 0.5
+expect_not "##cursorvalue"
+expect_value shelves_visible == 1
+pen_out
+click "CrokedWillo##palette.ckw"
+expect_text "CKW Sculpt Helper"
+expect "CKW Clay Polish##ckw.clay_polish"
+expect "Windowed fullscreen (borderless)##ckw"
+expect_value ckw_borderless == 1
+snapshot
+click "CKW Clay Polish##ckw.clay_polish"
+expect_status "CKW Clay Polish applied"
+expect_value moved > 0
+shot ckw-tools
+key escape
+key ctrl+z
+expect_value moved == 0
+click "CrokedWillo##palette.ckw"
+click "Windowed fullscreen (borderless)##ckw"
+expect_value ckw_borderless == 0
+key escape
+key f11
+expect_value ckw_borderless == 1

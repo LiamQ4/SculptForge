@@ -331,6 +331,7 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "command_palette_open") return app_.palette_.isOpen() ? 1.0 : 0.0;
     if (name == "customize") return app_.layout_.customize ? 1.0 : 0.0;
     if (name == "shelves_visible") return app_.layout_.shelvesVisible ? 1.0 : 0.0;
+    if (name == "ckw_borderless") return app_.ckwBorderless_ ? 1.0 : 0.0;
     if (name == "right_tray_open") return app_.layout_.rightTrayOpen ? 1.0 : 0.0;
     if (name == "left_tray_open") return app_.layout_.leftTrayOpen ? 1.0 : 0.0;
     if (name == "lightbox_open") return app_.lightbox_.open() ? 1.0 : 0.0;
@@ -691,6 +692,7 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
         if (!need(3)) return false;
         const std::string label = w[1];
         const float dx = num(2, 0), dy = num(3, 0), seconds = num(4, 0.4f);
+        const bool keep = w.size() > 5 && w[5] == "keep"; // CKW: inspect a popup before release.
         auto from = std::make_shared<ImVec2>();
         steps_.push_back([this, line, label, from](float t) {
             if (findItem(label, *from)) {
@@ -700,13 +702,13 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             if (t > 3.0f) fail(line, notFound(label));
             return t > 3.0f;
         });
-        steps_.push_back([this, from, dx, dy, seconds](float t) {
+        steps_.push_back([this, from, dx, dy, seconds, keep](float t) {
             if (t == 0.0f) return false; // a frame of hover first
             if (!buttonDown_ && t < seconds) mouseButton(true, SDL_BUTTON_LEFT);
             const float u = std::min(t / seconds, 1.0f);
             mouseMotion(from->x + dx * u, from->y + dy * u);
             if (t >= seconds) {
-                mouseButton(false, SDL_BUTTON_LEFT);
+                if (!keep) mouseButton(false, SDL_BUTTON_LEFT);
                 return true;
             }
             return false;
