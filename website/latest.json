@@ -1,11 +1,11 @@
 {
-  "version": "0.8.0",
+  "version": "0.8.1",
   "download": "https://islandmed.github.io/SculptForge/#download",
   "notes": "https://islandmed.github.io/SculptForge/guide/whats-new.html",
   "highlights": [
-    "Dynamic topology (Sculptris Pro): brushes add triangles where they need detail, so a sphere pulls into horns without stretching",
-    "Vector displacement brushes: stamp horns, ears and scales with overhangs; Blender-compatible EXR maps",
-    "QRemesh Guides: draw the edge loops you want",
-    "Sculpt layers on every subdivision level, and ZBrush-style keys in Blender's Sculpt Mode"
+    "Bring your ZTools over: a free ZBrush plug-in converts them, then SculptForge opens the .ZTL",
+    "Hold Ctrl for the mask brushes (MaskLasso, MaskRect) and Ctrl+Shift for SelectRect / SelectLasso, as in ZBrush",
+    "Texture painting 4-5x faster, and New Texture right where you paint",
+    "Group by UVs, and ZBrush's zoom direction"
   ]
 }
