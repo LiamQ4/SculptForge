@@ -201,8 +201,11 @@ work?". **Restore** opens it as unsaved work (save it under a name); **Discard**
 ## Frequently asked questions
 
 **Can SculptForge open ZBrush files (.ZTL, .ZPR)?**
-No. They are proprietary and undocumented. Use GoZ, or export OBJ or FBX from ZBrush. See
-[Exporting, Send to Unreal and GoZ](exporting.md#exchange-models-with-zbrush-goz).
+Not directly: they are proprietary and undocumented. Convert ZTools once in ZBrush with the free
+**SculptForge ZTool Export** plug-in, then open the `.ZTL` in SculptForge (see
+[Coming from ZBrush](coming-from-zbrush.md#bring-your-ztools-over)). Or use GoZ, or export OBJ or FBX from ZBrush
+(see [Exporting, Send to Unreal and GoZ](exporting.md#exchange-models-with-zbrush-goz)). `.ZPR` projects can't be
+converted; open their ZTools instead.
 
 **Does it have subdivision levels, DynaMesh, ZRemesher or UVs?**
 Voxel remesh works like DynaMesh, **QRemesh** like ZRemesher (with **ProjectAll** to bring the detail back; see

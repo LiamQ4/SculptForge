@@ -5,6 +5,14 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Next version (in development)
+
+### Bring your ZTools over
+
+ZBrush's `.ZTL` files are proprietary, but a free plug-in for ZBrush now converts them once, and then
+SculptForge opens the `.ZTL` itself, every SubTool with its polygroups, polypaint, mask and UVs. See
+[Coming from ZBrush](coming-from-zbrush.md#bring-your-ztools-over).
+
 ## Version 0.8
 
 Dynamic topology, vector displacement brushes, QRemesh Guides, and sculpt layers on every subdivision level.

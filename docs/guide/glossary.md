@@ -68,7 +68,7 @@ for what is planned.
 | ZPlugin | No in-app plugin system yet. Automate with the Python module, `sculptforge-cli` and MCP ([Scripting](scripting.md)) |
 | ZRemesher | **Tool > Geometry > QRemesh** (`qremesh`): Target Polygons, Half / Same / Double, Adaptive Size, Keep Groups, Use Polypaint, symmetry. No curve guides yet. See [Quad retopology](retopology.md) |
 | ZScript | Script commands: the console (backtick key), script files, `sculptforge-cli`. See [Scripting](scripting.md) |
-| ZTL, ZPR files | Not supported. Use GoZ, OBJ, FBX or GLB to bring models over; save work as `.sfproj` |
+| ZTL, ZPR files | Not read directly. Convert ZTools with the ZTool Export plug-in for ZBrush (then open the `.ZTL`), or use GoZ, OBJ, FBX or GLB; save work as `.sfproj` |
 
 ## SculptForge terms
 

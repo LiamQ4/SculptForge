@@ -152,13 +152,18 @@ CommandRegistry::CommandRegistry() {
              std::string err;
              GozInfo goz;
              bool ok;
+             std::string ztoolNote;
              if (ext == ".glb" || ext == ".gltf") ok = loadGltf(path, objects, err, &splats);
              else if (ext == ".usda" || ext == ".usd" || ext == ".usdz") ok = loadUsd(path, objects, splats, err);
              else if (ext == ".splat") ok = loadDotSplat(path, splats, err);
              else if (ext == ".fbx") ok = loadFbx(path, objects, err);
              else if (ext == ".goz") ok = loadGoz(path, m, err, &goz);
              else if (ext == ".stl") ok = loadStl(path, m, err);
-             else if (ext == ".ztl" || ext == ".zpr" || ext == ".zbr") return {false, zbrushProprietaryMessage(ext)};
+             else if (ext == ".ztl" || ext == ".sculptforge") {
+                 // A ZTool converted in ZBrush by the SculptForge ZTool Export plug-in (GoZ files beside it).
+                 if (convertedZToolFiles(path).empty()) return {false, zbrushProprietaryMessage(".ztl")};
+                 ok = loadConvertedZTool(path, objects, err, &ztoolNote);
+             } else if (ext == ".zpr" || ext == ".zbr") return {false, zbrushProprietaryMessage(ext)};
              else if (ext == ".ply") {
                  PlyContent content;
                  ok = loadPly(path, m, splats, content, err);
@@ -181,6 +186,7 @@ CommandRegistry::CommandRegistry() {
                  if (ext == ".goz") doc.gozName = goz.name;
                  msg += " (" + (count > 1 ? std::to_string(count) + " SubTools, " : std::string()) + std::to_string(tris) +
                         " triangles" + (quads == 0 ? "" : ", " + std::to_string(quads) + " quads") + (layers == 0 ? "" : ", " + std::to_string(layers) + " layers") + ")";
+                 if (!ztoolNote.empty()) msg += "; " + ztoolNote;
              }
              if (!splats.empty()) {
                  doc.splats = std::move(splats);

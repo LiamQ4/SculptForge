@@ -6,6 +6,14 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### ZTools from ZBrush
+- **SculptForge ZTool Export**, a ZBrush plug-in (`integrations/zbrush`, ZScript, GPL-3.0-or-later, attached to
+  releases): ZPlugin > SculptForge > **Convert ZTL** / **Save for SculptForge** writes every SubTool of a ZTool at
+  its highest subdivision level as `<name>.sf<NNN>_<SubTool>.GoZ` next to the `.ZTL`.
+- Opening a `.ZTL` (File > Open, drag and drop, `open`) opens that conversion as SubTools in order, with names,
+  polygroups, polypaint, mask and UVs, and warns when the `.ZTL` is newer than the conversion; without one the
+  message points to the plug-in. A folder of numbered `.GoZ` files (`<name>.sculptforge`) opens the same way.
+
 ## [0.8.0] - 2026-10-25
 
 Dynamic topology (Sculptris Pro), vector displacement brushes, QRemesh Guides, sculpt layers on every

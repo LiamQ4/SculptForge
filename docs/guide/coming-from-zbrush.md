@@ -43,6 +43,28 @@ keys and gestures by default; where it has habits of its own, they are kept as a
 - **Sculpting in Blender too?** The Blender add-on can give Blender's Sculpt Mode ZBrush's keys. See
   [Working with Blender](blender.md#zbrush-style-keys-in-sculpt-mode).
 
+## Bring your ZTools over
+
+ZBrush's `.ZTL` files are proprietary, so SculptForge can't read them directly. The free **SculptForge ZTool
+Export** plug-in runs inside ZBrush and converts them once:
+
+1. Download [SculptForgeZToolExport.txt](https://github.com/islandmed/SculptForge/blob/main/integrations/zbrush/SculptForgeZToolExport.txt) (also attached to every
+   release) and copy it into ZBrush's `ZStartup/ZPlugs64` folder, then restart ZBrush. Or load it once with
+   **ZScript > Load**.
+2. In ZBrush, **ZPlugin > SculptForge > Convert ZTL** asks for a `.ZTL`, loads it and writes each SubTool next to
+   it as a GoZ file (`Dragon.ZTL` gives `Dragon.sf001_Body.GoZ`, `Dragon.sf002_Horns.GoZ`...).
+   **Save for SculptForge** does the same for the ZTool you have open, saving the `.ZTL` where you choose.
+3. In SculptForge, open the `.ZTL` (**File > Open**, or drop it on the window). Its SubTools open in the same
+   order with the same names, polygroups, polypaint, mask and UVs.
+
+Each SubTool comes over at its highest subdivision level; the lower levels, sculpt layers and ZBrush materials
+don't. If you change the ZTool in ZBrush later, convert it again: SculptForge warns when the `.ZTL` is newer than
+its conversion. `.ZPR` projects can't be converted; save their ZTools first.
+
+> **Note:** the plug-in is new and hasn't been tested in every ZBrush version yet. If it stops with an error or a
+> SubTool is missing, please [report it](https://github.com/islandmed/SculptForge/issues) with your ZBrush
+> version; exporting each SubTool with **Tool > Export** as `.GoZ` or `.OBJ` works in the meantime.
+
 ## What's different
 
 | ZBrush | SculptForge | Why |

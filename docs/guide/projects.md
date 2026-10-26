@@ -22,8 +22,9 @@ Model formats such as OBJ, GLB or FBX can't hold all of this (masks, hidden face
 them is an export, not a save. See [Exporting](exporting.md).
 
 > **ZBrush:** A `.sfproj` is the equivalent of a ZBrush project (`.ZPR`), and saving a single SubTool scene is close
-> to saving a `.ZTL`. SculptForge can't read `.ZPR` or `.ZTL` files: bring models over with
-> [GoZ](exporting.md) or as OBJ, FBX or GLB.
+> to saving a `.ZTL`. SculptForge can't read `.ZPR` files, and opens a `.ZTL` only after
+> the [ZTool Export plug-in](coming-from-zbrush.md#bring-your-ztools-over) converted it in ZBrush; otherwise bring
+> models over with [GoZ](exporting.md) or as OBJ, FBX or GLB.
 
 ## Save a project
 

@@ -60,8 +60,9 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 | GoZ exchange with ZBrush | **Yes** (new in 0.2; not yet tested against a live ZBrush) | Yes |
 | Multiresolution (subdivision levels), dynamic topology, UV editing | Not yet ([roadmap](ROADMAP.md)) | Yes |
 
-SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files; bring models over with GoZ (`.GoZ` files
-keep polygroups, mask and polypaint) or as OBJ, FBX or GLB.
+SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files directly. Bring models over with GoZ (`.GoZ`
+files keep polygroups, mask and polypaint), as OBJ, FBX or GLB, or convert a ZTool library once with the
+[ZTool Export plug-in for ZBrush](integrations/zbrush/README.md), after which SculptForge opens the `.ZTL` files.
 
 > **Status: early release (v0.8).** The core sculpting, pipeline and AI features work and are tested on every
 > commit. Version 0.8 adds dynamic topology (Sculptris Pro style: brushes add triangles where they need them),

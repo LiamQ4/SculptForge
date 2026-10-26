@@ -53,7 +53,7 @@ namespace {
 const SDL_DialogFileFilter kObjFilters[] = {{"Wavefront OBJ", "obj"}, {"All files", "*"}};
 const SDL_DialogFileFilter kGlbFilters[] = {{"glTF binary", "glb"}, {"All files", "*"}};
 const SDL_DialogFileFilter kBrushFilters[] = {{"SculptForge brush", "sfbrush"}, {"All files", "*"}};
-const SDL_DialogFileFilter kModelFilters[] = {{"Projects, models and splats", "sfproj;obj;fbx;glb;gltf;ply;stl;GoZ;goz;splat;usda;usd;usdz"}, {"All files", "*"}};
+const SDL_DialogFileFilter kModelFilters[] = {{"Projects, models and splats", "sfproj;obj;fbx;glb;gltf;ply;stl;GoZ;goz;ztl;ZTL;splat;usda;usd;usdz"}, {"All files", "*"}};
 const SDL_DialogFileFilter kFbxFilters[] = {{"FBX", "fbx"}, {"All files", "*"}};
 const SDL_DialogFileFilter kUsdFilters[] = {{"USDZ package", "usdz"}, {"USD text", "usda"}};
 const SDL_DialogFileFilter kSplatFilters[] = {{"Gaussian splats (PLY)", "ply"}, {"glTF splats", "glb"}, {"OpenUSD", "usda;usdz"}};

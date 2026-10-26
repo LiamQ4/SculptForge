@@ -213,9 +213,11 @@ GoZ keeps polygroups, mask, polypaint and UVs. Quads from ZBrush stay quads: Pol
 they go back to ZBrush as the same quads. GoZ has no hidden-face flag, so hidden faces are sent like
 any others.
 
-> **ZBrush:** SculptForge cannot open ZBrush's own `.ZTL` and `.ZPR` files (they are proprietary and
-> undocumented). Bring models over with GoZ, or export OBJ or FBX from ZBrush. Subdivision levels don't come
-> across: SculptForge receives the mesh at the level you sent.
+> **ZBrush:** SculptForge can't read ZBrush's own `.ZTL` and `.ZPR` files (they are proprietary and
+> undocumented). Bring models over with GoZ, export OBJ or FBX from ZBrush, or convert your ZTools once with the
+> **SculptForge ZTool Export** plug-in for ZBrush, after which SculptForge opens the `.ZTL` itself (see
+> [Coming from ZBrush](coming-from-zbrush.md#bring-your-ztools-over)). Subdivision levels don't come across:
+> SculptForge receives the mesh at the level you sent.
 
 > **Note:** The GoZ bridge follows the format of the open-source Blender GoZ add-on (GoB) and is tested with
 > files, but has not yet been tested against a live ZBrush. If a send does not arrive, export a `.GoZ` file
