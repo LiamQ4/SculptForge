@@ -730,6 +730,9 @@ private:
     float ckwSoftness_ = 0.3f, ckwSharpness_ = 0.4f;
     float ckwPreserve_ = 0.7f, ckwEdgeSmoothing_ = 0.35f;
     int ckwSoftPasses_ = 2, ckwSharpPasses_ = 2;
+    int crkwMsIterations_ = 18, crkwMsType_ = 0; // type: 0 mean, 1 curvedness
+    float crkwMsStep_ = 1.0f, crkwMsBlend_ = 1.0f, crkwMsExponent_ = 1.0f;
+    bool crkwMsPinBorders_ = true;
     void drawPalette_Material();
     void drawPalette_Preferences();
     void drawPalette_Render();

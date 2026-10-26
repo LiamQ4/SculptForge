@@ -70,6 +70,14 @@ layers, and records both stages as one undo step. Disable Dynamic topology
 before using it. This is a CRKW approximation of the Sculpt Helper workflow,
 not a direct port of Blender's mesh-filter implementation.
 
+CRKW Mesh Sharpen (below Clay Polish; script command `crkw_mesh_sharpen`) is a port of the
+Sculpt Helper add-on's Mesh Sharpen geometry-nodes filter (`src/core/CkwMeshSharpen.cpp`):
+curvature-weighted smoothing that flattens planes and tightens creases. Curvature is measured
+once, then Iterations passes pull each vertex toward its neighbours weighted by their curvature;
+Blend mixes with the input, Pin Borders keeps open edges fixed, Curvature is Mean or Curvedness.
+Like ZBrush it works on the current subdivision level, and it respects masks, hidden vertices
+and sculpt layers (one undo step). Not yet compared numerically with Blender's output.
+
 The Reset Clay Polish button restores all six filter values without modifying
 the mesh or its undo history. Background controls offer a solid colour or a
 two-colour gradient, with a reset to the upstream colours. The optional silhouette

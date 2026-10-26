@@ -7,6 +7,47 @@
 #include <cmath>
 
 namespace sf {
+std::vector<float> crkwInfluence(const Mesh& m) {
+    std::vector<float> influence(m.vertexCount());
+    poolFor(influence.size(), [&](size_t b, size_t e) {
+        for (size_t v = b; v < e; ++v)
+            influence[v] = m.vertexHidden(uint32_t(v)) ? 0.0f : std::clamp(1.0f - m.maskAt(uint32_t(v)), 0.0f, 1.0f);
+    });
+    return influence;
+}
+
+CommandResult crkwCommitPositions(Document& doc, const std::vector<glm::vec3>& original, float layerWeight,
+                                  const char* label) {
+    Mesh& m = doc.mesh;
+    for (const auto& p : m.positions) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) {
+            m.positions = original;
+            m.recomputeAllNormals();
+            return {false, std::string(label) + ": non-finite geometry; operation cancelled"};
+        }
+    }
+    UndoRecord undo;
+    undo.label = label;
+    undo.layer = doc.activeLayer;
+    auto& target = m.layerTarget(doc.activeLayer);
+    for (uint32_t v = 0; v < m.vertexCount(); ++v) {
+        const auto delta = m.positions[v] - original[v];
+        if (delta == glm::vec3(0)) continue;
+        // No layers: target aliases positions; save the original position directly.
+        if (m.layers.empty()) undo.positions.add(v, original[v]);
+        else {
+            undo.positions.add(v, target[v]);
+            target[v] += delta / layerWeight;
+        }
+        m.markDirty(v);
+    }
+    if (undo.positions.empty()) return {true, std::string(label) + ": surface unchanged"};
+    m.recomputeAllNormals();
+    doc.bvhDirty = true;
+    doc.undo.push(std::move(undo));
+    return {true, std::string(label) + " applied"};
+}
+
 void registerCkwPolishCommands(CommandRegistry& registry) {
     using T = ParamSpec::Type;
     registry.add({"ckw_clay_polish", "CRKW Clay Polish: smooth and sharpen visible, unmasked geometry (one undo step).",
@@ -36,11 +77,7 @@ void registerCkwPolishCommands(CommandRegistry& registry) {
             // Jacobi passes read a fixed input, so thread scheduling cannot change the result.
             const auto original = m.positions;
             std::vector<glm::vec3> next(count), correction(count);
-            std::vector<float> influence(count);
-            poolFor(count, [&](size_t b, size_t e) {
-                for (size_t v = b; v < e; ++v)
-                    influence[v] = m.vertexHidden(uint32_t(v)) ? 0.0f : std::clamp(1.0f - m.maskAt(uint32_t(v)), 0.0f, 1.0f);
-            });
+            const std::vector<float> influence = crkwInfluence(m);
             auto average = [&](const auto& values, uint32_t v) {
                 const auto ring = m.neighbors(v);
                 glm::vec3 avg(0);
@@ -83,33 +120,7 @@ void registerCkwPolishCommands(CommandRegistry& registry) {
                 });
                 m.positions.swap(next);
             }
-            UndoRecord undo;
-            undo.label = "CRKW Clay Polish";
-            undo.layer = doc.activeLayer;
-            for (const auto& p : m.positions) {
-                if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) {
-                    m.positions = original;
-                    m.recomputeAllNormals();
-                    return {false, "CRKW Clay Polish: non-finite geometry; operation cancelled"};
-                }
-            }
-            auto& target = m.layerTarget(doc.activeLayer);
-            for (uint32_t v = 0; v < count; ++v) {
-                const auto delta = m.positions[v] - original[v];
-                if (delta == glm::vec3(0)) continue;
-                // No layers: target aliases positions; save the original position directly.
-                if (m.layers.empty()) undo.positions.add(v, original[v]);
-                else {
-                    undo.positions.add(v, target[v]);
-                    target[v] += delta / layerWeight;
-                }
-                m.markDirty(v);
-            }
-            if (undo.positions.empty()) return {true, "CRKW Clay Polish: surface unchanged"};
-            m.recomputeAllNormals();
-            doc.bvhDirty = true;
-            doc.undo.push(std::move(undo));
-            return {true, "CRKW Clay Polish applied"};
+            return crkwCommitPositions(doc, original, layerWeight, "CRKW Clay Polish");
         }});
     // Retain the original command for existing scripts while exposing the new brand.
     Command alias = *registry.find("ckw_clay_polish");

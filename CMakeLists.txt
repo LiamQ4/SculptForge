@@ -40,6 +40,7 @@ add_library(sculptforge_core STATIC
   src/core/Document.cpp
   src/core/Commands.cpp
   src/core/CkwPolish.cpp
+  src/core/CkwMeshSharpen.cpp
   src/core/CrkwMetaHuman.cpp
   src/core/Polygroups.cpp
   src/core/ScreenSelect.cpp

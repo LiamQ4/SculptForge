@@ -136,6 +136,13 @@ void App::registerCkwActions() {
                 {"soft_passes", double(ckwSoftPasses_)}, {"sharp_passes", double(ckwSharpPasses_)},
                 {"preserve_shape", double(ckwPreserve_)}, {"edge_smoothing", double(ckwEdgeSmoothing_)}});
         }, nullptr, [this] { return doc_.mesh.vertexCount() > 0 && !doc_.sculptor.dyntopo.enabled; }});
+    actions_.add({"crkw.mesh_sharpen", "CRKW Mesh Sharpen", ICON_LC_WAND_SPARKLES,
+        "Curvature-weighted smoothing on the current subdivision level: flattens planes, tightens creases. One undo step.",
+        "CrokedWillo", "", "crkw_mesh_sharpen", [this] {
+            runCommand("crkw_mesh_sharpen", {{"iterations", double(crkwMsIterations_)}, {"step", double(crkwMsStep_)},
+                {"blend", double(crkwMsBlend_)}, {"exponent", double(crkwMsExponent_)},
+                {"type", std::string(crkwMsType_ == 1 ? "curvedness" : "mean")}, {"pin_borders", crkwMsPinBorders_}});
+        }, nullptr, [this] { return doc_.mesh.vertexCount() > 0 && !doc_.sculptor.dyntopo.enabled; }});
     using T = ParamSpec::Type;
     commands_.add({"crkw_background", "Set CRKW viewport background colours (0-1 RGB); settings save automatically.",
         {{"red", T::Number, "Top/solid red", false}, {"green", T::Number, "Top/solid green", false},
@@ -173,6 +180,21 @@ void App::drawPalette_Ckw() {
     }
     ImGui::TextWrapped("Respects masks and hidden vertices. Ctrl+Z undoes both stages.");
     if (doc_.sculptor.dyntopo.enabled) ImGui::TextWrapped("Disable Dynamic topology to use Clay Polish.");
+    ImGui::Separator();
+    ui::ActionButton(*this, "crkw.mesh_sharpen", ImVec2(-1, 30 * uiScale_));
+    ImGui::SliderInt("##crkw.ms_iterations", &crkwMsIterations_, 0, 64, "Iterations %d");
+    ui::SliderInside("##crkw.ms_step", &crkwMsStep_, 0, 1, "Step %.2f");
+    ui::SliderInside("##crkw.ms_blend", &crkwMsBlend_, 0, 1, "Blend %.2f");
+    ui::SliderInside("##crkw.ms_exponent", &crkwMsExponent_, 0, 1, "Exponent %.2f");
+    ImGui::Combo("##crkw.ms_type", &crkwMsType_, "Curvature: Mean\0Curvature: Curvedness\0");
+    ImGui::Checkbox("Pin Borders##crkw.ms_pin", &crkwMsPinBorders_);
+    if (ImGui::Button("Reset Mesh Sharpen##crkw.reset_mesh_sharpen", ImVec2(-1, 0))) {
+        crkwMsIterations_ = 18; crkwMsType_ = 0;
+        crkwMsStep_ = crkwMsBlend_ = crkwMsExponent_ = 1.0f;
+        crkwMsPinBorders_ = true;
+    }
+    ImGui::TextWrapped("Works on the current subdivision level. Respects masks and hidden vertices.");
+    ImGui::Separator();
     if (ImGui::Button("MetaHuman Sculpt##crkw.metahuman", ImVec2(-1, 0))) showCrkwMetaHuman_ = true;
     ImGui::Separator();
     ImGui::TextUnformatted("Background");

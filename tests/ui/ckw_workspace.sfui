@@ -34,6 +34,16 @@ key escape
 key ctrl+z
 expect_value moved == 0
 click "CrokedWillo##palette.ckw"
+expect "CRKW Mesh Sharpen##crkw.mesh_sharpen"
+snapshot
+click "CRKW Mesh Sharpen##crkw.mesh_sharpen"
+expect_status "CRKW Mesh Sharpen applied"
+expect_value moved > 0
+shot crkw-mesh-sharpen
+key escape
+key ctrl+z
+expect_value moved == 0
+click "CrokedWillo##palette.ckw"
 click "Settings##crkw.settings"
 expect_text "CRKW Settings"
 click "Windowed fullscreen (borderless)##ckw"

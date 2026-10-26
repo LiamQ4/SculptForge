@@ -103,6 +103,7 @@ std::string jsonEscape(const std::string& s) {
 CommandRegistry::CommandRegistry() {
     using T = ParamSpec::Type;
     registerCkwPolishCommands(*this);
+    registerCrkwMeshSharpenCommands(*this);
     registerCrkwMetaHumanCommands(*this);
 
     add({"new_sphere",
