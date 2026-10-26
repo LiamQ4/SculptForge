@@ -6,6 +6,10 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-25
+
+Fixes from a ZBrush artist's testing, and ZTools from ZBrush.
+
 ### ZBrush feel (tester feedback on 0.7)
 - ZBrush input style: every zoom drag (Ctrl+right-drag, Alt-drag then release Alt,
   Ctrl+middle-drag) zooms out when dragged up, as in ZBrush; the SculptForge style keeps zooming in.
@@ -696,7 +700,8 @@ First public release.
 - Rez package (`packaging/rez`).
 - Headless thumbnail/turntable rendering and scripted demo recording.
 
-[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/islandmed/SculptForge/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/islandmed/SculptForge/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/islandmed/SculptForge/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/islandmed/SculptForge/compare/v0.5.0...v0.6.0
