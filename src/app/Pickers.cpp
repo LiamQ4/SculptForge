@@ -1025,6 +1025,8 @@ void drawPickers(App& app) {
     // Draw Size (S), Z Intensity (U), RGB Intensity (I) and Focal Shift (O) at the cursor.
     if (s.slider >= 0) {
         ImGui::SetNextFrameWantCaptureKeyboard(true);
+        // CKW-SIZE-DRAG: keep input on the popup, including the opening frame.
+        ImGui::SetNextFrameWantCaptureMouse(true);
         const auto which = PickerUi::Slider(s.slider);
         // The value as shown: Draw Size in pixels, the intensities 0-100 and Focal Shift -100..100, as in ZBrush.
         struct Def {
@@ -1108,13 +1110,30 @@ void drawPickers(App& app) {
             }
             ImGui::LogText("%s %.0f", d.name, double(*d.value * d.shownScale));
             ui::HelpText(d.name, d.key, d.help, "Draw");
-            if (ImGui::IsItemActive())
+            // CKW-SIZE-DRAG workaround: item deactivation isn't a mouse release
+            // (pen/mouse source changes or focus changes can deactivate it while held).
+            // Keep the upstream logic here for comparison when merging an upstream fix:
+            // if (ImGui::IsItemActive()) s.sliderWasActive = true;
+            // else if (s.sliderWasActive) close = true;
+            const bool onSlider = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            if (ImGui::IsItemActive() || (onSlider && ImGui::IsMouseClicked(ImGuiMouseButton_Left)))
                 s.sliderWasActive = true;
-            else if (s.sliderWasActive)
-                close = true; // closes on release, as in ZBrush
+            if (s.sliderWasActive) {
+                if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) close = true;
+                else if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    // ImGui may lose its active ID on a pen source transition. Keep
+                    // scrubbing from the pointer until the physical button is released.
+                    const float left = ImGui::GetItemRectMin().x + ImGui::GetStyle().GrabMinSize * .5f;
+                    const float right = ImGui::GetItemRectMax().x - ImGui::GetStyle().GrabMinSize * .5f;
+                    const float t = std::clamp((ImGui::GetIO().MousePos.x - left) / std::max(right - left, 1.0f), 0.0f, 1.0f);
+                    if (!ImGui::IsItemActive())
+                        *d.value = which == PickerUi::Slider::DrawSize
+                            ? d.lo * std::pow(d.hi / d.lo, t) : d.lo + (d.hi - d.lo) * t;
+                }
+            }
             const bool clicked =
                 ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-            if (clicked && !first && !ImGui::IsWindowHovered()) close = true;
+            if (clicked && !first && !s.sliderWasActive && !onSlider && !ImGui::IsWindowHovered()) close = true;
         }
         ImGui::End();
         ImGui::PopStyleColor();
