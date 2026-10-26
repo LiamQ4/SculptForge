@@ -7,12 +7,21 @@ chapter opens by itself the first time you start a new version; you can always f
 
 ## Next version (in development)
 
+### More like ZBrush
+
 - **ZBrush zoom direction.** With the ZBrush input style, dragging up zooms out on every zoom drag, as in ZBrush.
   See [Navigation](navigation.md).
 - **Ctrl and Ctrl+Shift brushes.** Hold <kbd>Ctrl</kbd> and the left shelf shows the mask brush; with
   <kbd>Ctrl</kbd> held the Brush and Stroke pickers pick MaskPen, MaskLasso or MaskRect. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>
   does the same for SelectRect and SelectLasso. See [Masking](masking.md).
 - **Group by UVs.** One polygroup per UV island, in **Tool > Polygroups**. See [Polygroups and visibility](polygroups.md).
+
+### Texture painting: one click to start, and faster
+
+With the Paint brush on, a SubTool without a texture now shows **New Texture** on the top shelf and in the Color
+palette: click it and SculptForge unwraps the model if it has no UVs (Auto UV, in the background) and gives it a
+texture, so the next stroke paints texels. Big brushes on 4K textures paint four to five times faster. See
+[Texture painting](texture-painting.md).
 
 ## Version 0.8
 

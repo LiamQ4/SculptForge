@@ -422,6 +422,7 @@ private:
     void drawTextureMapContents();
     void registerTextureUiActions();
     void startAutoUv();
+    void startNewTexture(); // New Texture on the top shelf / Color palette: Auto UV first when there are no UVs
     void pollAutoUv();
     struct AutoUvJob {
         std::future<bool> done;
@@ -433,6 +434,7 @@ private:
         size_t triangles = 0;            // the mesh must still have this many triangles when it finishes
     };
     std::unique_ptr<AutoUvJob> autoUv_;
+    bool textureAfterAutoUv_ = false;    // the running Auto UV came from New Texture: make the texture after it
     int textureSizeChoice_ = 1;          // 1K, 2K, 4K, 8K
     bool showUvView_ = false;            // Texture Map > Show UVs
     // Bake sub-palette (PanelBake.cpp): normal / displacement / AO / cavity / colour maps from a high-poly onto

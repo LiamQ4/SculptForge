@@ -20,6 +20,7 @@
 #include <cstring>
 #include <filesystem>
 #include <thread>
+#include <utility>
 #include <unordered_map>
 
 namespace sf {
@@ -113,6 +114,13 @@ void App::registerTextureUiActions() {
         [this] { return paintsTexture(doc_.mesh); }, textured,
         "Paint into the SubTool's texture: the colour resolution comes from the texture, not the mesh. The Paint "
         "brush, Rgb sculpting, fills and Paint Layers all work on it.");
+    // Shown on the top shelf and in the Color palette while painting a SubTool that has no texture yet.
+    add("draw.new_texture", "New Texture", "Draw", [this] { startNewTexture(); }, nullptr,
+        [this] { return !autoUv_ && doc_.mesh.triangleCount() > 0; },
+        "Start texture painting: give the SubTool a texture (the size chosen in Tool > Texture Map, 2K by default) "
+        "so paint goes into texels instead of vertices, and the detail comes from the texture, not the mesh. "
+        "Without UVs, Auto UV unwraps the model first (in the background, with its progress in the status bar).",
+        "texture_create");
     add("view.texture", "Texture", "Render", [this] { renderSettings_.showTexture = !renderSettings_.showTexture; },
         [this] { return renderSettings_.showTexture; }, nullptr,
         "Show the painted texture on the model (multiplied over the material, like polypaint).");
@@ -165,6 +173,16 @@ void App::drawKeepTextureCheckbox(const char* id, const char* path) {
                  path);
 }
 
+void App::startNewTexture() {
+    if (autoUv_ || doc_.mesh.triangleCount() == 0) return;
+    if (!doc_.mesh.hasUvs()) {
+        startAutoUv();
+        textureAfterAutoUv_ = autoUv_ != nullptr; // pollAutoUv makes the texture when the UVs are in
+        return;
+    }
+    runCommand("texture_create", {{"size", std::to_string(kSizes[std::clamp(textureSizeChoice_, 0, 3)])}});
+}
+
 void App::startAutoUv() {
     if (autoUv_ || doc_.mesh.triangleCount() == 0) return;
     auto job = std::make_unique<AutoUvJob>();
@@ -205,6 +223,7 @@ void App::pollAutoUv() {
         return;
     }
     const std::unique_ptr<AutoUvJob> job = std::move(autoUv_);
+    const bool makeTexture = std::exchange(textureAfterAutoUv_, false);
     if (!job->done.get()) {
         status_ = *job->error;
         return;
@@ -225,8 +244,14 @@ void App::pollAutoUv() {
     doc_.replaceMeshUndoable(std::move(m), "Auto UV");
     uvLinesKey_ = 0;
     updateTitle();
-    status_ = "Auto UV: " + std::to_string(job->result->charts) + " UV islands" +
-              (!note.empty() ? note : hasTexture(doc_.mesh) ? "" : ". Now make a texture: Tool > Texture Map > New Texture");
+    const std::string islands = "Auto UV: " + std::to_string(job->result->charts) + " UV islands";
+    if (makeTexture && !hasTexture(doc_.mesh)) {
+        runCommand("texture_create", {{"size", std::to_string(kSizes[std::clamp(textureSizeChoice_, 0, 3)])}});
+        if (hasTexture(doc_.mesh)) status_ = islands + ", new " + std::to_string(doc_.mesh.texture->width / 1024) +
+                                             "K texture: paint goes into it";
+        return;
+    }
+    status_ = islands + (!note.empty() ? note : hasTexture(doc_.mesh) ? "" : ". Now make a texture: New Texture");
 }
 
 void App::drawTextureMapContents() {

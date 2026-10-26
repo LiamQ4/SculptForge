@@ -30,7 +30,7 @@ UiLayout standardLayout() {
     l.openSubpalettes = {"tool.subtool"};
     l.topShelf = {"ui.lightbox",       "sep",           "tool.draw",            "tool.move",           "tool.scale",
                   "tool.rotate",       "sep",           "draw.sculpt",          "draw.paint",          "sep",
-                  "draw.zadd",         "draw.zsub",     "draw.rgb",             "draw.paint_vertex",   "draw.paint_texture",   "sep",                 "widget.draw_size",
+                  "draw.zadd",         "draw.zsub",     "draw.rgb",             "draw.paint_vertex",   "draw.paint_texture",   "draw.new_texture",     "sep",                 "widget.draw_size",
                   "widget.strength",   "row",           "ui.brush_lab",         "draw.front_faces",    "sep",
                   "draw.dynamic",      "widget.dyntopo_detail", "sep",
                   "transform.symmetry_x",   "transform.symmetry_y", "transform.symmetry_z",    "sep",                 "draw.pressure_strength",

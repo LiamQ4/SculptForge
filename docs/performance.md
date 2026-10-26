@@ -12,6 +12,27 @@ sculptforge-cli --bench ...                     # the same without the GPU (CI, 
 Machine for all figures: Apple M1 Pro (8 performance + 2 efficiency cores, 32 GB unified memory, 30 GB usable
 under Asahi Linux), integrated GPU, Mesa 26.1 (OpenGL 4.6). How the benchmark works is described under v0.5 below.
 
+## 0.8.1: texture painting (feat/texpaint)
+
+One dab of the Paint brush into a texture, X symmetry on, a stroke of 12 dabs across an icosphere with spherical
+UVs (`sculptforge_tests texture_stroke_benchmark`, CPU only). Small brush radius 0.03, big 0.35 (about a million
+texels per dab at 4K). Upload: texels sent to the GPU per dab.
+
+| Texture | Triangles | Brush | Before | After | Upload before -> after |
+|---|---|---|---|---|---|
+| 2K | 1.3K | big | 7.6 ms | 2.6 ms | 0.13 -> 0.16 Mtexels |
+| 4K | 1.3K | big | 29.5 ms | 6.0 ms | 0.52 -> 0.53 Mtexels |
+| 2K | 328K | big | 18.1 ms | 5.3 ms | 0.13 -> 0.16 Mtexels |
+| 4K | 328K | big | 47.3 ms | 11.4 ms | 0.52 -> 0.53 Mtexels |
+| 4K | 328K | small | 0.40 ms | 0.43 ms | 0.01 -> 0.03 Mtexels |
+
+What changed: the texels of a dab are painted in parallel over 16-row bands of the texture, each band visiting
+the triangles under the brush in the same order, so the result is identical on one thread or many
+(`texture_dab_is_deterministic_with_threads`). The view uploads only the 64x64 tiles that changed instead of one
+rectangle around everything painted since the last frame, so two mirrored dabs far apart in UV space no longer
+send the texture between them (the upload grows a little here because it is rounded to whole tiles). The rest
+of a dab with a dense mesh is the serial search for the triangles under the brush.
+
 ## v0.8: dynamic topology (feat/dyntopo)
 
 ```

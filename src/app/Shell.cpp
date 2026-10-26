@@ -1173,6 +1173,7 @@ bool App::shelfItemShown(const std::string& item) const {
     if (layout_.customize) return true;
     if (item == "view.splats") return !doc_.splats.empty(); // only when there's a capture
     if (item == "draw.paint_vertex" || item == "draw.paint_texture") return hasTexture(doc_.mesh); // paint target
+    if (item == "draw.new_texture") return !hasTexture(doc_.mesh) && (paintMode_ || paintRgb_ || autoUv_); // start one
     if (item == "widget.dyntopo_detail") return doc_.sculptor.dyntopo.enabled; // with Dynamic on
     return true;
 }
