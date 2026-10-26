@@ -6,7 +6,10 @@
 // "Masking" section of the Tools panel. The operations themselves are the
 // mask_* commands (core/Masking.cpp).
 #include "app/App.h"
+#include "app/Pickers.h"
 #include "app/Ui.h"
+
+#include <IconsLucide.h>
 
 #include <algorithm>
 #include <cmath>
@@ -90,6 +93,58 @@ void App::maskSelectMouseUp() {
     }
     // Mask the inside, or unmask it with Alt (Mask Strength sets how much).
     runSelection("mask_rect", "mask_lasso", {{"unmask", alt}, {"strength", double(maskStrength_)}});
+}
+
+App::HeldBrush App::heldBrush() const {
+    const SDL_Keymod mod = inputMods();
+    if (!ctrlDown(mod)) return HeldBrush::None;
+    return (mod & SDL_KMOD_SHIFT) ? HeldBrush::Select : HeldBrush::Mask;
+}
+
+std::vector<App::HeldBrushItem> App::heldBrushItems(HeldBrush held) {
+    if (held == HeldBrush::Mask)
+        return {{"mask.pen", "MaskPen", "Dots", ICON_LC_PEN_TOOL, SelectShape::Pen},
+                {"mask.lasso", "MaskLasso", "Lasso", ICON_LC_LASSO, SelectShape::Lasso},
+                {"mask.rect", "MaskRect", "Rect", ICON_LC_SQUARE_DASHED, SelectShape::Rect}};
+    if (held == HeldBrush::Select)
+        return {{"select.rect", "SelectRect", "Rect", ICON_LC_SQUARE_DASHED, SelectShape::Rect},
+                {"select.lasso", "SelectLasso", "Lasso", ICON_LC_LASSO, SelectShape::Lasso}};
+    return {};
+}
+
+const App::HeldBrushItem* App::heldBrushCurrent(HeldBrush held) const {
+    static const std::vector<HeldBrushItem> mask = heldBrushItems(HeldBrush::Mask);
+    static const std::vector<HeldBrushItem> select = heldBrushItems(HeldBrush::Select);
+    const std::vector<HeldBrushItem>& items = held == HeldBrush::Mask ? mask : select;
+    if (held == HeldBrush::None) return nullptr;
+    const SelectShape shape = held == HeldBrush::Mask ? maskShape_ : hideShape_;
+    for (const HeldBrushItem& it : items)
+        if (it.shape == shape) return &it;
+    return nullptr;
+}
+
+bool App::drawHeldBrushGrid(HeldBrush held, bool strokes) {
+    const float tile = 64.0f * uiScale_;
+    const HeldBrushItem* current = heldBrushCurrent(held);
+    bool picked = false;
+    int column = 0;
+    for (const HeldBrushItem& it : heldBrushItems(held)) {
+        if (column++ > 0) ImGui::SameLine(0.0f, 6.0f);
+        const char* label = strokes ? it.stroke : it.brush;
+        const std::string id = std::string(label) + "##held." + it.action;
+        const Action* a = actions_.find(it.action);
+        if (AssetTile(id.c_str(), ImTextureID(0), it.icon, label, tile, current && current->shape == it.shape) && a &&
+            a->run) {
+            actions_.touch(a->id);
+            a->run();
+            status_ = std::string("Brush: ") + it.brush;
+            picked = true;
+        }
+        const std::string help = strokes ? std::string("Stroke of ") + it.brush + ". " + (a ? a->description : "")
+                                         : (a ? a->description : std::string());
+        ui::HelpText(label, nullptr, help.c_str(), held == HeldBrush::Mask ? "Tool > Masking" : "Tool > Visibility");
+    }
+    return picked;
 }
 
 void App::drawMaskingSection() {

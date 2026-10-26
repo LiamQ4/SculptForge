@@ -76,6 +76,8 @@ struct State {
     int openedFrame = -1, closedFrame = -1;
     int keysFrom = 0; // frame from which typed keys count (not the key that opened it)
     bool addToShelf = false;
+    // Opened with Ctrl (mask brushes) or Ctrl+Shift (selection brushes) held, as in ZBrush: App::HeldBrush.
+    int held = 0;
     std::string typed; // brush picker: letters typed so far
     // Material hover preview: the material to go back to.
     bool previewing = false;
@@ -909,11 +911,15 @@ void openPicker(Picker picker, ImVec2 anchor) {
     s.keysFrom = ImGui::GetFrameCount() + 2;
     s.typed.clear();
     s.addToShelf = false;
+    const SDL_Keymod mods = SDL_GetModState();
+    s.held = !(mods & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) ? 0 : (mods & SDL_KMOD_SHIFT) ? 2 : 1;
+    if (picker != Picker::Brush && picker != Picker::Stroke) s.held = 0;
 }
 
 void openBrushPickerForShelf(ImVec2 anchor) {
     openPicker(Picker::Brush, anchor);
     st().addToShelf = st().open;
+    st().held = 0;
 }
 
 bool pickerOpen() { return st().open || st().slider >= 0; }
@@ -963,37 +969,52 @@ void drawPickers(App& app) {
     if (s.open) {
         const float scale = app.uiScale_;
         const float gridW = 6 * (64.0f * scale + 6.0f) + 20.0f + ImGui::GetStyle().ScrollbarSize;
-        switch (s.picker) {
-        case Picker::Brush:
-            if (beginPickerWindow("Brushes##picker", gridW)) {
-                pickerTitle(ICON_LC_BRUSH, s.addToShelf ? "Add a brush to the shelf" : "Brushes", "B");
-                drawBrushGrid(app, GridMode::Popup);
-            }
-            ImGui::End();
-            break;
-        case Picker::Stroke:
-            if (beginPickerWindow("Strokes##picker", 4 * (64.0f * scale + 6.0f) + 20.0f)) {
-                pickerTitle(ICON_LC_SPLINE, "Stroke", nullptr);
+        if (s.held != 0) { // Ctrl / Ctrl+Shift held: the mask or selection brushes (Brush and Stroke only)
+            if (beginPickerWindow(s.picker == Picker::Brush ? "Brushes##picker" : "Strokes##picker",
+                                  3 * (64.0f * scale + 6.0f) + 20.0f)) {
+                const bool strokes = s.picker == Picker::Stroke;
+                pickerTitle(strokes ? ICON_LC_SPLINE : ICON_LC_BRUSH,
+                            s.held == 1 ? (strokes ? "Mask stroke (Ctrl)" : "Mask brushes (Ctrl)")
+                                        : (strokes ? "Selection stroke (Ctrl+Shift)" : "Selection brushes (Ctrl+Shift)"),
+                            nullptr);
                 ImGui::Spacing();
-                drawStrokeGrid(app, GridMode::Popup);
+                if (app.drawHeldBrushGrid(s.held == 1 ? App::HeldBrush::Mask : App::HeldBrush::Select, strokes))
+                    closePicker();
             }
             ImGui::End();
-            break;
-        case Picker::Alpha:
-            if (beginPickerWindow("Alphas##picker", gridW)) {
-                pickerTitle(ICON_LC_CIRCLE_DASHED, "Alpha", nullptr);
-                drawAlphaGrid(app, GridMode::Popup);
+        } else {
+            switch (s.picker) {
+            case Picker::Brush:
+                if (beginPickerWindow("Brushes##picker", gridW)) {
+                    pickerTitle(ICON_LC_BRUSH, s.addToShelf ? "Add a brush to the shelf" : "Brushes", "B");
+                    drawBrushGrid(app, GridMode::Popup);
+                }
+                ImGui::End();
+                break;
+            case Picker::Stroke:
+                if (beginPickerWindow("Strokes##picker", 4 * (64.0f * scale + 6.0f) + 20.0f)) {
+                    pickerTitle(ICON_LC_SPLINE, "Stroke", nullptr);
+                    ImGui::Spacing();
+                    drawStrokeGrid(app, GridMode::Popup);
+                }
+                ImGui::End();
+                break;
+            case Picker::Alpha:
+                if (beginPickerWindow("Alphas##picker", gridW)) {
+                    pickerTitle(ICON_LC_CIRCLE_DASHED, "Alpha", nullptr);
+                    drawAlphaGrid(app, GridMode::Popup);
+                }
+                ImGui::End();
+                break;
+            case Picker::Material:
+                if (beginPickerWindow("Materials##picker", gridW)) {
+                    pickerTitle(ICON_LC_SUN, "Material", "M");
+                    ImGui::Spacing();
+                    drawMaterialGrid(app, GridMode::Popup);
+                }
+                ImGui::End();
+                break;
             }
-            ImGui::End();
-            break;
-        case Picker::Material:
-            if (beginPickerWindow("Materials##picker", gridW)) {
-                pickerTitle(ICON_LC_SUN, "Material", "M");
-                ImGui::Spacing();
-                drawMaterialGrid(app, GridMode::Popup);
-            }
-            ImGui::End();
-            break;
         }
     }
     if (!s.open && s.previewing) { // closed without picking: put the material back

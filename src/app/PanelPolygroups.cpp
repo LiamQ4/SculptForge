@@ -86,6 +86,7 @@ void App::drawPolygroupsSection() {
     if (ImGui::Button("Merge visible", ImVec2(half, 0))) group("polygroup_merge_visible");
     ImGui::SameLine();
     if (ImGui::Button("Clear groups", ImVec2(half, 0))) runCommand("polygroup_clear");
+    ui::ActionButton(*this, "polygroup.uv_groups", ImVec2(half, 0));
 }
 
 void App::drawVisibilitySection() {

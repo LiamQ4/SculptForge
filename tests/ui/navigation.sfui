@@ -22,14 +22,20 @@ remember camera_pan p0
 hold alt
 drag 0.12 0.3 0.12 0.7 0.6 release
 expect_value camera_pan != $p0
-expect_value camera_distance != $d0
+# (the zoom part of that drag went down: in)
+expect_value camera_distance < $d0
 
-# Right-drag: Ctrl zooms, Alt pans.
+# Right-drag: Ctrl zooms, Alt pans. As in ZBrush, dragging up zooms out and dragging down zooms in.
 remember camera_distance d1
 hold ctrl
-orbit 0 120
+orbit 0 -120
 hold none
-expect_value camera_distance != $d1
+expect_value camera_distance > $d1
+remember camera_distance d2
+hold ctrl
+orbit 0 240
+hold none
+expect_value camera_distance < $d2
 remember camera_pan p1
 hold alt
 orbit 80 0

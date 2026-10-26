@@ -1015,7 +1015,9 @@ void App::drawLightBoxUi() {
 }
 
 bool App::lightBoxKey(SDL_Keycode key, SDL_Keymod mod) {
-    if (mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI | SDL_KMOD_SHIFT)) return false;
+    // Ctrl+B / Ctrl+Shift+B: the brush picker with the mask / selection brushes (ZBrush: B with Ctrl held).
+    const bool heldPicker = key == SDLK_B && (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) && !(mod & SDL_KMOD_ALT);
+    if (!heldPicker && (mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI | SDL_KMOD_SHIFT))) return false;
     const char* id = key == SDLK_COMMA ? "ui.lightbox"
                      : key == SDLK_B   ? "ui.picker.brush"
                      : key == SDLK_M   ? "ui.picker.material"

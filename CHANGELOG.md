@@ -6,6 +6,18 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### ZBrush feel (tester feedback on 0.7)
+- ZBrush input style: every zoom drag (Ctrl+right-drag, Alt-drag then release Alt,
+  Ctrl+middle-drag) zooms out when dragged up, as in ZBrush; the SculptForge style keeps zooming in.
+  Rotation and panning were checked and already follow the cursor as in ZBrush.
+- Ctrl brushes, as in ZBrush: while Ctrl is held the left shelf shows the mask brush (MaskPen,
+  MaskLasso, MaskRect) and its stroke (Dots, Lasso, Rect); the Brush picker (Ctrl+B or a
+  Ctrl+click on the brush tile) and the Stroke picker opened with Ctrl held pick among them.
+  Ctrl+Shift does the same for SelectRect and SelectLasso. Tool > Masking and Tool >
+  Visibility keep their buttons.
+- Polygroups > **Group by UVs** (ZBrush UV Groups): one polygroup per UV island of the visible mesh, undoable;
+  `polygroup_uv` command for the console, CLI, MCP and Python.
+
 ## [0.8.0] - 2026-10-25
 
 Dynamic topology (Sculptris Pro), vector displacement brushes, QRemesh Guides, sculpt layers on every

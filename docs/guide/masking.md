@@ -37,7 +37,10 @@ On macOS, <kbd>Cmd</kbd> works wherever this guide says <kbd>Ctrl</kbd>.
 
 ## Mask with a lasso or rectangle
 
-To mask a large or sharply outlined area in one go, pick a mask selection shape at the top of **Tool > Masking**:
+To mask a large or sharply outlined area in one go, pick a mask selection shape. As in ZBrush, holding
+<kbd>Ctrl</kbd> turns the brush on the left shelf into the mask brush: with <kbd>Ctrl</kbd> held, click the brush
+tile (or press <kbd>B</kbd>) to pick **MaskPen**, **MaskLasso** or **MaskRect**, or click the stroke tile to pick
+the stroke (**Dots**, **Lasso** or **Rect**). The same shapes sit at the top of **Tool > Masking**:
 
 | Shape | <kbd>Ctrl</kbd> + drag |
 |---|---|
@@ -62,7 +65,9 @@ The cursor turns into a small cross while <kbd>Ctrl</kbd> is held, since the bru
 selection.
 
 > **ZBrush:** these are ZBrush's MaskLasso and MaskRect brushes. Like ZBrush, the shape stays selected until you
-> pick another one, so switch back to **MaskPen** to paint masks again. MaskCurve is not available yet.
+> pick another one, so switch back to **MaskPen** to paint masks again. Holding <kbd>Ctrl</kbd> shows the mask
+> brush on the shelf and <kbd>Ctrl</kbd> with the Brush or Stroke picker picks it, as in ZBrush. MaskCurve is not
+> available yet.
 
 ## Background gestures
 

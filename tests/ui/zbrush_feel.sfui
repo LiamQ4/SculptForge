@@ -225,7 +225,8 @@ remember camera_distance d1
 hold ctrl
 drag 0.12 0.3 0.12 0.7
 hold none
-expect_value camera_distance != $d1
+# The SculptForge style keeps its own direction: dragging down zooms out.
+expect_value camera_distance > $d1
 key f
 click "Preferences##palette.preferences"
 click "ZBrush##input.style_zbrush"

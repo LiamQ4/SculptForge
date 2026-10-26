@@ -1454,8 +1454,24 @@ bool tileFrame(const char* id, ImVec2 size, ImFont* font, const std::string& cap
 
 } // namespace
 
+void App::drawHeldBrushIcon(ImDrawList* dl, ImVec2 a, ImVec2 b, const char* icon, bool select) {
+    const ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+    dl->AddCircleFilled(c, (b.x - a.x) * 0.36f, select ? IM_COL32(40, 90, 70, 255) : IM_COL32(90, 40, 40, 255), 32);
+    centredText(dl, fontIcons_, a, b, IM_COL32(255, 255, 255, 230), icon);
+}
+
 void App::drawBrushTile(const char* id, ImVec2 size) {
     const float s = uiScale_;
+    // ZBrush: Ctrl held shows the mask brush, Ctrl+Shift the selection brush; a click picks among those.
+    if (const HeldBrushItem* held = heldBrushCurrent(heldBrush())) {
+        ImVec2 a, b;
+        const bool clicked = tileFrame(id, size, fontSmall_, held->brush, s, a, b);
+        drawHeldBrushIcon(ImGui::GetWindowDrawList(), a, b, held->icon, heldBrush() == HeldBrush::Select);
+        if (clicked) openPicker(Picker::Brush, ImVec2(ImGui::GetItemRectMax().x + 4.0f * s, ImGui::GetItemRectMin().y));
+        ui::HelpText("Brush", "B", "Ctrl held: the mask brush (Ctrl+Shift: the selection brush). Click, or press B with Ctrl "
+                     "held, to pick MaskPen, MaskLasso or MaskRect (SelectRect or SelectLasso).", "Left shelf");
+        return;
+    }
     const BrushRecipe* recipe = activeRecipe();
     const std::string name = guidesMode_ ? "QRemesh Guides" : paintMode_ ? "Paint" : recipe ? recipe->name : brushName(brush_);
     ImVec2 a, b;
@@ -1485,6 +1501,15 @@ void App::drawBrushTile(const char* id, ImVec2 size) {
 
 void App::drawStrokeTile(const char* id, ImVec2 size) {
     const float s = uiScale_;
+    if (const HeldBrushItem* held = heldBrushCurrent(heldBrush())) { // Ctrl / Ctrl+Shift: the mask's stroke
+        ImVec2 a, b;
+        const bool clicked = tileFrame(id, size, fontSmall_, held->stroke, s, a, b);
+        drawHeldBrushIcon(ImGui::GetWindowDrawList(), a, b, held->icon, heldBrush() == HeldBrush::Select);
+        if (clicked) openPicker(Picker::Stroke, ImVec2(ImGui::GetItemRectMax().x + 4.0f * s, ImGui::GetItemRectMin().y));
+        ui::HelpText("Stroke", nullptr, "Ctrl held: the mask's stroke, Dots (MaskPen), Lasso or Rect (Ctrl+Shift: the "
+                     "selection's). Click with Ctrl held to choose.", "Left shelf");
+        return;
+    }
     ImVec2 a, b;
     const bool clicked = tileFrame(id, size, fontSmall_, strokeTypeName(strokeType_), s, a, b);
     ImDrawList* dl = ImGui::GetWindowDrawList();

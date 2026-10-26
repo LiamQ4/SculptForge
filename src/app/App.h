@@ -918,6 +918,21 @@ private:
     void registerInputActions();
     void applyInputStyle(); // the style's default shortcuts (1-0 brushes or 9 QuickSave; I = RGB or Z Intensity)
     bool zbrushStyle() const { return uiPrefs_.inputStyle == 0; }
+    // ZBrush: while Ctrl is held the brush is the mask brush, with Ctrl+Shift the selection (hide) brush. The shelf
+    // tiles show it, and the Brush / Stroke pickers opened then pick among those brushes (PanelMasking.cpp).
+    enum class HeldBrush { None, Mask, Select };
+    HeldBrush heldBrush() const;
+    struct HeldBrushItem {
+        const char* action; // "mask.lasso": the Tool > Masking / Visibility button it stands for
+        const char* brush;  // MaskLasso
+        const char* stroke; // Lasso
+        const char* icon;
+        SelectShape shape;
+    };
+    static std::vector<HeldBrushItem> heldBrushItems(HeldBrush held);
+    const HeldBrushItem* heldBrushCurrent(HeldBrush held) const; // the one picked now
+    bool drawHeldBrushGrid(HeldBrush held, bool strokes); // the picker's grid; true when one was picked
+    void drawHeldBrushIcon(ImDrawList* dl, ImVec2 a, ImVec2 b, const char* icon, bool select); // shelf tiles (Shell.cpp)
     void drawInputSection(); // Preferences > Input
     // Z Intensity (0-100 on screen): Smooth's own while Shift is held or Smooth is the brush, as in ZBrush.
     void drawZIntensitySlider(const char* id);
