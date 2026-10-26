@@ -32,13 +32,14 @@ groups. So you can isolate one part and regroup just that part.
 | **By normals** | A new group wherever the surface turns more than the angle next to it (1 to 90 degrees, default 30). Each flat side of a box becomes its own group. | `polygroup_auto_by_normals` |
 | **By pieces** | One group per disconnected piece, such as separate eyes or buttons in one mesh. | `polygroup_by_connectivity` |
 | **From mask** | Masked triangles move into a new group. | `polygroup_from_mask` |
+| **Group by UVs** | One group per UV island: triangles that touch without a UV seam between them share a group. Needs UVs (**Tool > Texture Map > Auto UV** or an imported model's). | `polygroup_uv` |
 | **Merge visible** | Everything visible becomes one group. | `polygroup_merge_visible` |
 | **Clear groups** | Remove all polygroups; the whole SubTool becomes one group again. | `polygroup_clear` |
 
 Each button is one undo step.
 
 > **ZBrush:** **By normals** is Auto Groups / Groups By Normals, **By pieces** is Auto Groups on a mesh with
-> separate parts, **From mask** is Group Masked, and **Merge visible** is Group Visible.
+> separate parts, **From mask** is Group Masked, **Group by UVs** is UV Groups, and **Merge visible** is Group Visible.
 > <kbd>Ctrl</kbd>+<kbd>W</kbd> works as in ZBrush: the masked part becomes a new group and the mask is cleared
 > (with nothing masked, everything visible becomes one group).
 
@@ -68,7 +69,9 @@ macOS):
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd> + drag | Hide what's inside the rectangle (or lasso). The shape is drawn red. |
 
 Whether a drag draws a rectangle or a lasso is set by **SelectRect** and **SelectLasso** at the top of
-**Tool > Visibility** (SelectRect by default). With **SelectLasso**, the drag traces a free-hand outline that
+**Tool > Visibility** (SelectRect by default), or, as in ZBrush, with <kbd>Ctrl</kbd>+<kbd>Shift</kbd> held: the
+left shelf then shows the selection brush, and clicking the brush tile (or pressing <kbd>B</kbd>) or the stroke tile
+picks **SelectRect** or **SelectLasso**. With **SelectLasso**, the drag traces a free-hand outline that
 closes back to where you started; drag around a part as if you were drawing round it with a pen. The drag can
 start on the model or on the background.
 
@@ -132,7 +135,7 @@ Group the model, then click **Split groups** in **Tool > SubTool**: each polygro
 | Command | Options |
 |---|---|
 | `polygroup_auto_by_normals` | `angle` (1-180 degrees, default 30) |
-| `polygroup_by_connectivity`, `polygroup_from_mask`, `polygroup_merge_visible`, `polygroup_clear` | |
+| `polygroup_by_connectivity`, `polygroup_uv`, `polygroup_from_mask`, `polygroup_merge_visible`, `polygroup_clear` | |
 | `isolate_polygroup`, `hide_polygroup` | `group` (required): the polygroup id |
 | `show_all`, `invert_visibility`, `delete_hidden` | |
 | `hide_rect` | `x0 y0 x1 y1` (-1 to 1, y up), `inside`, optional `view_proj` matrix; without a view the rectangle spans the mesh seen from the front |

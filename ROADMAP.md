@@ -76,8 +76,9 @@ rendering/animation (use Blender).
 
 - ✅ Masking: Ctrl paints / Ctrl+Alt erases the mask, invert, clear, blur, sharpen, grow, shrink,
   mask by cavity and by polygroup; every brush and polypaint respect the mask
-- ✅ Polygroups (auto by normals, by connectivity, from mask, merge visible) and ZBrush-style visibility:
-  Ctrl+Shift isolate / hide a group, rectangle hide, show all, invert, delete hidden
+- ✅ Polygroups (auto by normals, by connectivity, by UVs, from mask, merge visible) and ZBrush-style visibility:
+  Ctrl+Shift isolate / hide a group, rectangle hide, show all, invert, delete hidden; Ctrl / Ctrl+Shift switch
+  the brush to the mask / selection brushes (ZBrush)
 - ✅ SubTools: separate meshes in one scene, each with its own undo history; append (primitives or files),
   duplicate, delete, rename, show/hide, solo, reorder, merge down / merge visible, split by polygroups or pieces,
   Alt+click to select. Saved in projects (format 2) and exported as separate objects to OBJ, glTF, FBX (an LOD

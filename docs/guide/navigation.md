@@ -21,7 +21,8 @@ camera.
 > **ZBrush:** the gestures are ZBrush's. Dragging on the background (or right-dragging) rotates, with
 > <kbd>Shift</kbd> to snap; <kbd>Alt</kbd>+drag pans, and letting go of <kbd>Alt</kbd> while still dragging
 > zooms; <kbd>Ctrl</kbd>+right-drag zooms and <kbd>Alt</kbd>+right-drag pans, as with ZBrush's right-click
-> navigation. The right-shelf Move, Zoom and Rotate buttons work as in ZBrush.
+> navigation. As in ZBrush, dragging up (forward) zooms out and dragging down zooms in, and when you rotate or pan
+> the model follows the cursor. The right-shelf Move, Zoom and Rotate buttons work as in ZBrush.
 
 ## Mouse and pen
 
@@ -32,6 +33,9 @@ camera.
 | Pan | <kbd>Alt</kbd>+left-drag on the background, <kbd>Alt</kbd>+right-drag, or middle-drag |
 | Zoom | Mouse wheel; <kbd>Alt</kbd>+left-drag on the background, then let go of <kbd>Alt</kbd> and keep dragging; <kbd>Ctrl</kbd>+right-drag; <kbd>Ctrl</kbd>+middle-drag; with the SculptForge input style also <kbd>Ctrl</kbd>+left-drag on the background |
 | Frame the model | <kbd>F</kbd>, or **Frame** on the right shelf |
+
+Zoom drags go the ZBrush way: drag up to zoom out, down to zoom in. The SculptForge input style
+(**Preferences > Input**) reverses them: drag up to come closer.
 | Frame one SubTool | <kbd>Shift</kbd>+<kbd>Alt</kbd>+click it (it becomes the active SubTool) |
 
 "Background" means any part of the canvas where the cursor isn't over the model. A left-drag that starts on
