@@ -161,6 +161,7 @@ constexpr GLbitfield GL_COLOR_BUFFER_BIT = 0x4000;
     X(void, BindFramebuffer, GLenum, GLuint)                                                 \
     X(GLenum, CheckFramebufferStatus, GLenum)                                                \
     X(void, FramebufferRenderbuffer, GLenum, GLenum, GLenum, GLuint)                         \
+    X(void, FramebufferTexture2D, GLenum, GLenum, GLenum, GLuint, GLint)                       \
     X(void, GenRenderbuffers, GLsizei, GLuint*)                                              \
     X(void, DeleteRenderbuffers, GLsizei, const GLuint*)                                     \
     X(void, BindRenderbuffer, GLenum, GLuint)                                                \

@@ -1,0 +1,50 @@
+# CRKW: GPU silhouette, editable background, compact settings, and reset-only controls.
+run new_sphere subdivisions=3
+run subtool_append type=cube name=Box
+wait 0.3
+expect_value crkw_silhouette == 1
+expect_value crkw_silhouette_texture == 1
+shot silhouette-scene
+click "CrokedWillo##palette.ckw"
+expect_text "CRKW Sculpt Helper"
+expect_not "Windowed fullscreen (borderless)##ckw"
+snapshot
+drag_item "##ckw.softness" 60 0 0.2
+expect_value crkw_softness != 300
+drag_item "##ckw.sharpness" -60 0 0.2
+drag_item "##ckw.preserve" -40 0 0.2
+click "Reset Clay Polish##crkw.reset_polish"
+expect_value crkw_softness == 300
+expect_value crkw_sharpness == 400
+expect_value crkw_soft_passes == 2
+expect_value crkw_sharp_passes == 2
+expect_value crkw_preserve == 700
+expect_value crkw_edges == 350
+expect_value moved == 0
+run crkw_background red=0.15 green=0.25 blue=0.35 gradient=false
+expect_value crkw_background_gradient == 0
+expect_value crkw_background_red == 150
+shot solid-background
+click "Gradient##crkw.background_gradient"
+expect_value crkw_background_gradient == 1
+expect_text "Bottom colour"
+shot gradient-background
+click "Reset background##crkw.reset_background"
+expect_value crkw_background_red == 200
+click "Silhouette preview##crkw.silhouette"
+expect_value crkw_silhouette == 0
+shot preview-hidden
+click "Silhouette preview##crkw.silhouette"
+drag_item "##crkw.preview_size" 40 0 0.2
+expect_value crkw_preview_size > 144
+click "##crkw.preview_corner"
+click "Top left"
+expect_value crkw_preview_corner == 1
+wait 0.2
+shot preview-top-left
+click "Settings##crkw.settings"
+expect "Windowed fullscreen (borderless)##ckw"
+expect "Start HuionTablet with CRKW##ckw"
+shot settings-menu
+key escape
+shot appearance-controls

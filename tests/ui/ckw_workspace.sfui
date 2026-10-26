@@ -1,4 +1,4 @@
-# CKW: resizing a brush must leave shelves and menus visible.
+# CRKW: resizing a brush must leave shelves and menus visible.
 run new_sphere subdivisions=3
 mouse_move 0.5 0.5
 key s
@@ -21,19 +21,21 @@ expect_not "##cursorvalue"
 expect_value shelves_visible == 1
 pen_out
 click "CrokedWillo##palette.ckw"
-expect_text "CKW Sculpt Helper"
-expect "CKW Clay Polish##ckw.clay_polish"
-expect "Windowed fullscreen (borderless)##ckw"
+expect_text "CRKW Sculpt Helper"
+expect "CRKW Clay Polish##ckw.clay_polish"
+expect_not "Windowed fullscreen (borderless)##ckw"
 expect_value ckw_borderless == 1
 snapshot
-click "CKW Clay Polish##ckw.clay_polish"
-expect_status "CKW Clay Polish applied"
+click "CRKW Clay Polish##ckw.clay_polish"
+expect_status "CRKW Clay Polish applied"
 expect_value moved > 0
 shot ckw-tools
 key escape
 key ctrl+z
 expect_value moved == 0
 click "CrokedWillo##palette.ckw"
+click "Settings##crkw.settings"
+expect_text "CRKW Settings"
 click "Windowed fullscreen (borderless)##ckw"
 expect_value ckw_borderless == 0
 key escape

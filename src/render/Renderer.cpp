@@ -156,6 +156,7 @@ flat in int vPrimBase;
 uniform vec4 uViewport;  // the view's rectangle in window pixels
 uniform vec2 uProjScale; // projection x and y scale
 uniform vec3 uBaseColor;
+uniform int uSilhouette;
 uniform int uPaint;      // 1: vertex colours replace the base colour
 uniform int uShowMask;   // 1: darken masked areas
 uniform int uGroups;     // 0: off, 1: per-triangle ids from uGroupIds, 2: everything is group 0
@@ -185,6 +186,7 @@ vec3 groupColor(uint id) {
 }
 void main() {
     vec3 albedo = uBaseColor;
+    if (uSilhouette != 0) { fragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
     vec3 tint = vec3(1.0); // multiplies a matcap: polypaint or polygroup colours
 #ifdef PRIM
     if (uGroups == 1) albedo = tint = groupColor(texelFetch(uGroupIds, vPrimBase + gl_PrimitiveID).r);
@@ -292,11 +294,13 @@ void main() {
 const char* kBgFS = R"(#version 330 core
 in vec2 vUv;
 out vec4 fragColor;
+uniform vec3 uBackgroundTop;
+uniform vec3 uBackgroundBottom;
+uniform int uBackgroundGradient;
 void main() {
-    vec3 top = vec3(0.20, 0.21, 0.24);
-    vec3 bottom = vec3(0.08, 0.08, 0.09);
     float d = length(vUv - vec2(0.5, 0.55));
-    vec3 c = mix(bottom, top, clamp(vUv.y, 0.0, 1.0)) * (1.0 - 0.35 * d);
+    vec3 c = uBackgroundGradient == 0 ? uBackgroundTop :
+        mix(uBackgroundBottom, uBackgroundTop, clamp(vUv.y, 0.0, 1.0)) * (1.0 - 0.35 * d);
     fragColor = vec4(c, 1.0);
 }
 )";
@@ -441,6 +445,9 @@ bool Renderer::init(std::string& error) {
     if (!wireProgram_) return false;
     bgProgram_ = link(kBgVS, kBgFS, error);
     if (!bgProgram_) return false;
+    bgTop_ = gl::GetUniformLocation(bgProgram_, "uBackgroundTop");
+    bgBottom_ = gl::GetUniformLocation(bgProgram_, "uBackgroundBottom");
+    bgGradient_ = gl::GetUniformLocation(bgProgram_, "uBackgroundGradient");
     splatProgram_ = link(kSplatVS, kSplatFS, error);
     if (!splatProgram_) return false;
     gl::GenVertexArrays(1, &splatVao_);
@@ -497,6 +504,7 @@ const Renderer::MeshProgram* Renderer::meshProgram(int features) {
     p.viewport = at("uViewport");
     p.projScale = at("uProjScale");
     p.baseColor = at("uBaseColor");
+    p.silhouette = at("uSilhouette");
     p.paint = at("uPaint");
     p.showMask = at("uShowMask");
     p.groups = at("uGroups");
@@ -645,6 +653,10 @@ size_t Renderer::gpuBytes() const {
 }
 
 void Renderer::shutdown() {
+    if (silhouetteFbo_) gl::DeleteFramebuffers(1, &silhouetteFbo_);
+    if (silhouetteTex_) gl::DeleteTextures(1, &silhouetteTex_);
+    if (silhouetteDepth_) gl::DeleteRenderbuffers(1, &silhouetteDepth_);
+    silhouetteFbo_ = silhouetteTex_ = silhouetteDepth_ = 0;
     for (auto& s : slots_) freeSlot(s);
     slots_.clear();
     drawList_.clear();
@@ -1981,6 +1993,9 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
     // Background gradient.
     gl::Disable(GL_DEPTH_TEST);
     gl::UseProgram(bgProgram_);
+    gl::Uniform3fv(bgTop_, 1, glm::value_ptr(settings.backgroundTop));
+    gl::Uniform3fv(bgBottom_, 1, glm::value_ptr(settings.backgroundBottom));
+    gl::Uniform1i(bgGradient_, settings.backgroundGradient ? 1 : 0);
     gl::BindVertexArray(emptyVao_);
     if (!thumbnailPass_) gl::DrawArrays(GL_TRIANGLES, 0, 3);
 
@@ -2157,11 +2172,11 @@ void Renderer::drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clus
 // One mesh. Mask and polygroup colours are for the SubTool being edited; polypaint shows on all of them.
 void Renderer::drawSlot(const MeshSlot& s, bool active, const RenderSettings& settings) {
     // A painted texture shows through the textured program (polypaint still multiplies it).
-    const bool textured = s.hasUvs && s.paintTexture && settings.showPolypaint && settings.showTexture;
+    const bool textured = !settings.silhouette && s.hasUvs && s.paintTexture && settings.showPolypaint && settings.showTexture;
     // A baked normal map preview bends the shading normal (core/Bake.h).
-    const bool normalMapped = s.hasUvs && s.normalTexture && s.hasTangents;
+    const bool normalMapped = !settings.silhouette && s.hasUvs && s.normalTexture && s.hasTangents;
     const int groups = active && settings.showPolygroups ? (s.hasGroups ? 1 : 2) : 0;
-    const int features = (s.hasColors || s.hasMask ? kPaint : 0) | (groups == 1 ? kPrim : 0) | (textured ? kTextured : 0) |
+    const int features = (!settings.silhouette && (s.hasColors || s.hasMask) ? kPaint : 0) | (groups == 1 ? kPrim : 0) | (textured ? kTextured : 0) |
                          (normalMapped ? kNormalMap : 0);
     const MeshProgram* p = meshProgram(features);
     if (!p) return;
@@ -2173,6 +2188,7 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, const RenderSettings& se
     gl::Uniform4fv(p->viewport, 1, glm::value_ptr(frameViewport_));
     gl::Uniform2f(p->projScale, frameProj_[0][0], frameProj_[1][1]);
     gl::Uniform3fv(p->baseColor, 1, glm::value_ptr(settings.baseColor));
+    gl::Uniform1i(p->silhouette, settings.silhouette ? 1 : 0);
     gl::Uniform1i(p->matcap, matcapTexture(settings.matcap) ? 1 : 0);
     const MatcapCavity cavity = matcapCavity(settings.matcap);
     gl::Uniform2f(p->matcapCavity, cavity.crease, cavity.ridge);
@@ -2236,6 +2252,73 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, const RenderSettings& se
 // ---------------------------------------------------------------------------
 // Thumbnails (LightBox / pickers)
 // ---------------------------------------------------------------------------
+
+GLuint Renderer::silhouetteTexture(const Camera& viewCamera, int size) {
+    size = std::clamp(size, 96, 256);
+    GLint oldDraw = 0, oldRead = 0, viewport[4]{}, scissor[4]{}, scissorOn = 0;
+    gl::GetIntegerv(0x8CA6, &oldDraw); // GL_DRAW_FRAMEBUFFER_BINDING
+    gl::GetIntegerv(0x8CAA, &oldRead); // GL_READ_FRAMEBUFFER_BINDING
+    gl::GetIntegerv(0x0BA2, viewport); // GL_VIEWPORT
+    gl::GetIntegerv(0x0C10, scissor);  // GL_SCISSOR_BOX
+    gl::GetIntegerv(GL_SCISSOR_TEST, &scissorOn);
+    auto restore = [&] {
+        gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(oldDraw));
+        gl::BindFramebuffer(GL_READ_FRAMEBUFFER, GLuint(oldRead));
+        gl::Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+        gl::Scissor(scissor[0], scissor[1], scissor[2], scissor[3]);
+        if (scissorOn) gl::Enable(GL_SCISSOR_TEST); else gl::Disable(GL_SCISSOR_TEST);
+    };
+    if (!silhouetteFbo_ || silhouetteSize_ != size) {
+        if (silhouetteFbo_) gl::DeleteFramebuffers(1, &silhouetteFbo_);
+        if (silhouetteTex_) gl::DeleteTextures(1, &silhouetteTex_);
+        if (silhouetteDepth_) gl::DeleteRenderbuffers(1, &silhouetteDepth_);
+        gl::GenFramebuffers(1, &silhouetteFbo_);
+        gl::GenTextures(1, &silhouetteTex_);
+        gl::GenRenderbuffers(1, &silhouetteDepth_);
+        gl::ActiveTexture(GL_TEXTURE0);
+        gl::BindTexture(GL_TEXTURE_2D, silhouetteTex_);
+        gl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        gl::BindRenderbuffer(GL_RENDERBUFFER, silhouetteDepth_);
+        gl::RenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, size, size);
+        gl::BindFramebuffer(GL_FRAMEBUFFER, silhouetteFbo_);
+        gl::FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, silhouetteTex_, 0);
+        gl::FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, silhouetteDepth_);
+        if (gl::CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            restore();
+            silhouetteSize_ = 0;
+            return 0;
+        }
+        silhouetteSize_ = size;
+    }
+    AABB bounds;
+    for (const DrawItem& item : drawList_)
+        for (const MeshSlot& s : slots_)
+            if (s.id == item.id && s.drawnTriangles > 0) bounds.expand(s.box);
+    Camera camera = viewCamera;
+    camera.aspect = 1;
+    camera.frame(bounds); // slot bounds avoid scanning millions of CPU vertices
+    RenderSettings silhouette;
+    silhouette.silhouette = true;
+    silhouette.backgroundTop = silhouette.backgroundBottom = glm::vec3(.94f);
+    silhouette.backgroundGradient = false;
+    silhouette.showSplats = false;
+    silhouette.showPolypaint = false;
+    silhouette.dimInactive = false;
+    silhouette.motionProxy = true;
+    const size_t oldDrawn = lastDrawn_;
+    const bool oldProxy = proxyUsed_;
+    gl::BindFramebuffer(GL_FRAMEBUFFER, silhouetteFbo_);
+    gl::Disable(GL_SCISSOR_TEST);
+    draw(camera, size, size, silhouette);
+    lastDrawn_ = oldDrawn;
+    proxyUsed_ = oldProxy;
+    restore();
+    return silhouetteTex_;
+}
 
 bool Renderer::renderMeshThumbnail(Mesh& mesh, const Camera& camera, int size, const RenderSettings& settings,
                                    std::vector<uint8_t>& rgba, std::string& error) {

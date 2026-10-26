@@ -708,6 +708,11 @@ private:
     void drawPalette_Help();
     // CKW extensions live in PanelCkw.cpp to keep upstream integration small.
     void drawPalette_Ckw();
+    void drawCrkwSilhouette();
+    bool crkwSilhouette_ = true;
+    int crkwSilhouetteSize_ = 144, crkwSilhouetteCorner_ = 0;
+    unsigned crkwSilhouetteTexture_ = 0;
+    double crkwSilhouetteNext_ = 0;
     void registerCkwActions();
     void initCkwWindow();
     void applyCkwWindow(bool save = true);

@@ -666,7 +666,7 @@ void App::drawTitleStrip(const ShellGeometry& g) {
     ImGui::TextColored(theme::accent, ICON_LC_BOX);
     ImGui::SameLine(0.0f, 5.0f * s);
     if (fontBold_) ImGui::PushFont(fontBold_);
-    ImGui::TextUnformatted("SculptForge");
+    ImGui::TextUnformatted("SculptForge CRKW");
     if (fontBold_) ImGui::PopFont();
 
     // Document name; click saves.

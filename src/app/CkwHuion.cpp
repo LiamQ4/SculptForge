@@ -1,4 +1,4 @@
-// CKW: launch the installed Huion app at normal user privilege, if needed.
+// CRKW: launch the installed Huion app at normal user privilege, if needed.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "app/App.h"
 #if defined(_WIN32)
@@ -14,7 +14,7 @@ void App::startCkwHuion() {
     if (!options_.uiTest.empty() || !options_.recordPath.empty() || !options_.renderPath.empty()) return;
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
-        SDL_Log("CKW Huion: could not inspect running processes; skipping auto-start");
+        SDL_Log("CRKW Huion: could not inspect running processes; skipping auto-start");
         return;
     }
     PROCESSENTRY32W entry{};
@@ -26,7 +26,7 @@ void App::startCkwHuion() {
         } while (Process32NextW(snapshot, &entry));
     }
     CloseHandle(snapshot);
-    if (running) { SDL_Log("CKW Huion: HuionTablet is already running"); return; }
+    if (running) { SDL_Log("CRKW Huion: HuionTablet is already running"); return; }
     wchar_t programFiles[32768]{};
     const DWORD size = GetEnvironmentVariableW(L"ProgramFiles", programFiles, DWORD(std::size(programFiles)));
     if (size == 0 || size >= std::size(programFiles)) return;
@@ -34,7 +34,7 @@ void App::startCkwHuion() {
     const auto exe = folder / L"HuionTablet.exe";
     std::error_code error;
     if (!std::filesystem::is_regular_file(exe, error)) {
-        SDL_Log("CKW Huion: HuionTablet is not installed in Program Files; skipping auto-start");
+        SDL_Log("CRKW Huion: HuionTablet is not installed in Program Files; skipping auto-start");
         return;
     }
     std::wstring commandLine = L"\"" + exe.wstring() + L"\"";
@@ -49,9 +49,9 @@ void App::startCkwHuion() {
                        nullptr, folder.c_str(), &startup, &process)) {
         CloseHandle(process.hThread);
         CloseHandle(process.hProcess);
-        SDL_Log("CKW Huion: launched HuionTablet; Huion itself may request administrator consent");
+        SDL_Log("CRKW Huion: launched HuionTablet; Huion itself may request administrator consent");
     } else {
-        SDL_Log("CKW Huion: normal launch failed (Windows error %lu); no elevation attempted", GetLastError());
+        SDL_Log("CRKW Huion: normal launch failed (Windows error %lu); no elevation attempted", GetLastError());
     }
 #endif
 }

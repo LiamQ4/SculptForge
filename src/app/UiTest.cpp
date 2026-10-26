@@ -332,6 +332,18 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "customize") return app_.layout_.customize ? 1.0 : 0.0;
     if (name == "shelves_visible") return app_.layout_.shelvesVisible ? 1.0 : 0.0;
     if (name == "ckw_borderless") return app_.ckwBorderless_ ? 1.0 : 0.0;
+    if (name == "crkw_silhouette") return app_.crkwSilhouette_ ? 1.0 : 0.0;
+    if (name == "crkw_silhouette_texture") return app_.crkwSilhouetteTexture_ ? 1.0 : 0.0;
+    if (name == "crkw_preview_size") return app_.crkwSilhouetteSize_;
+    if (name == "crkw_preview_corner") return app_.crkwSilhouetteCorner_;
+    if (name == "crkw_softness") return std::round(app_.ckwSoftness_ * 1000);
+    if (name == "crkw_sharpness") return std::round(app_.ckwSharpness_ * 1000);
+    if (name == "crkw_soft_passes") return app_.ckwSoftPasses_;
+    if (name == "crkw_sharp_passes") return app_.ckwSharpPasses_;
+    if (name == "crkw_preserve") return std::round(app_.ckwPreserve_ * 1000);
+    if (name == "crkw_edges") return std::round(app_.ckwEdgeSmoothing_ * 1000);
+    if (name == "crkw_background_gradient") return app_.renderSettings_.backgroundGradient ? 1.0 : 0.0;
+    if (name == "crkw_background_red") return std::round(app_.renderSettings_.backgroundTop.x * 1000);
     if (name == "right_tray_open") return app_.layout_.rightTrayOpen ? 1.0 : 0.0;
     if (name == "left_tray_open") return app_.layout_.leftTrayOpen ? 1.0 : 0.0;
     if (name == "lightbox_open") return app_.lightbox_.open() ? 1.0 : 0.0;

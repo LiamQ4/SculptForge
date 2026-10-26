@@ -16,6 +16,11 @@
 namespace sf {
 
 struct RenderSettings {
+    // CRKW viewport appearance (defaults preserve the upstream gradient).
+    glm::vec3 backgroundTop{0.20f, 0.21f, 0.24f};
+    glm::vec3 backgroundBottom{0.08f, 0.08f, 0.09f};
+    bool backgroundGradient = true;
+    bool silhouette = false; // internal flat-black preview pass
     bool wireframe = false;
     glm::vec3 baseColor{0.80f, 0.55f, 0.45f}; // clay
     bool showPolypaint = true;   // vertex colours replace baseColor when the mesh has them
@@ -106,6 +111,8 @@ public:
 
     // Texture of built-in matcap `index` (sRGB RGBA8, rows bottom-up) for UI previews; 0 if none.
     GLuint matcapTexture(int index) const;
+    // Small GPU-only scene preview; reuses uploaded meshes and never reads pixels back.
+    GLuint silhouetteTexture(const Camera& camera, int size);
 
     // --- Thumbnails (LightBox / pickers) ---
     // Renders `mesh` alone (not the synced scene, which is left as it was) into a `size` x `size`
@@ -117,6 +124,9 @@ private:
     void drawSplats(const glm::mat4& view, const glm::mat4& proj, int fbWidth, int fbHeight, float opacity);
 
     GLuint wireProgram_ = 0, bgProgram_ = 0, splatProgram_ = 0;
+    GLuint silhouetteFbo_ = 0, silhouetteTex_ = 0, silhouetteDepth_ = 0;
+    int silhouetteSize_ = 0;
+    GLint bgTop_ = -1, bgBottom_ = -1, bgGradient_ = -1;
     // Splats: per-splat data in a texture buffer, drawn as instanced quads in back-to-front order.
     GLuint splatVao_ = 0, splatData_ = 0, splatTexture_ = 0, splatOrder_ = 0;
     GLsizei splatCount_ = 0;
@@ -254,7 +264,7 @@ private:
         GLuint id = 0;
         GLint view = -1, proj = -1, gridOrigin = -1, gridStep = -1, viewport = -1, projScale = -1, baseColor = -1, paint = -1,
               showMask = -1, groups = -1, matcap = -1, matcapCavity = -1, dim = -1, primBase = -1, hasPaint = -1,
-              normalFlipY = -1, twoSided = -1;
+              normalFlipY = -1, twoSided = -1, silhouette = -1;
     };
     static constexpr int kPaint = 1, kPrim = 2, kTextured = 4, kNormalMap = 8;
     MeshProgram programs_[16];

@@ -42,7 +42,7 @@ TEST(ckw_polish_layers_disabled_passes_and_dyntopo) {
     doc.sculptor.dyntopo.enabled = true;
     CHECK(!commands.execute(doc, "ckw_clay_polish").ok);
     doc.sculptor.dyntopo.enabled = false;
-    doc.activeLayer = doc.mesh.addLayer("CKW");
+    doc.activeLayer = doc.mesh.addLayer("CRKW");
     doc.mesh.layers[0].weight = .6f;
     const auto before = doc.mesh.positions;
     CHECK(commands.execute(doc, "ckw_clay_polish").ok);
