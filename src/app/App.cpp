@@ -765,7 +765,8 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     case Drag::Orbit: orbitBy(dx, dy); break;
     case Drag::Roll: rollBy(x, y, dx, dy); break;
     case Drag::Pan: camera_.pan(dx, dy, canvasHeight()); break;
-    case Drag::Zoom: camera_.zoom(-dy * 0.05f); break;
+    // ZBrush: dragging up (forward) zooms out, every zoom drag; the SculptForge style zooms in.
+    case Drag::Zoom: camera_.zoom((zbrushStyle() ? dy : -dy) * 0.05f); break;
     case Drag::MaskCanvas: maskCanvasMove(x, y); break;
     case Drag::SubToolClick: subtoolClickMove(x, y); break;
     case Drag::Select: selectionMove(x, y); break;
