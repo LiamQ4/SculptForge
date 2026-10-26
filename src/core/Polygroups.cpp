@@ -70,7 +70,7 @@ std::vector<uint32_t> floodGroups(const Mesh& m, Accept accept) {
             const uint32_t t = stack.back();
             stack.pop_back();
             forEachEdgeNeighbor(m, t, [&](uint32_t u) {
-                if (region[u] != kUnassigned || m.triangleHidden(u) || !accept(seed, u)) return;
+                if (region[u] != kUnassigned || m.triangleHidden(u) || !accept(seed, t, u)) return;
                 region[u] = id;
                 stack.push_back(u);
             });
@@ -178,7 +178,7 @@ std::vector<uint32_t> groupsByNormals(const Mesh& mesh, float maxAngleDegrees) {
     std::vector<glm::vec3> normals(mesh.triangleCount());
     for (uint32_t t = 0; t < mesh.triangleCount(); ++t) normals[t] = faceNormal(mesh, t);
     const float minDot = std::cos(glm::radians(std::clamp(maxAngleDegrees, 0.0f, 180.0f))) - 1e-5f;
-    return floodGroups(mesh, [&](uint32_t seed, uint32_t u) {
+    return floodGroups(mesh, [&](uint32_t seed, uint32_t, uint32_t u) {
         // Degenerate slivers have no normal; let them join their neighbours.
         if (normals[u] == glm::vec3(0.0f) || normals[seed] == glm::vec3(0.0f)) return true;
         return glm::dot(normals[seed], normals[u]) >= minDot;
@@ -186,7 +186,26 @@ std::vector<uint32_t> groupsByNormals(const Mesh& mesh, float maxAngleDegrees) {
 }
 
 std::vector<uint32_t> groupsByConnectivity(const Mesh& mesh) {
-    return floodGroups(mesh, [](uint32_t, uint32_t) { return true; });
+    return floodGroups(mesh, [](uint32_t, uint32_t, uint32_t) { return true; });
+}
+
+std::vector<uint32_t> groupsByUvs(const Mesh& mesh) {
+    if (!mesh.hasUvs()) return {};
+    // Neighbours join when the corners at both shared vertices have the same UVs (no seam between them).
+    return floodGroups(mesh, [&](uint32_t, uint32_t t, uint32_t u) {
+        const glm::uvec3& a = mesh.triangles[t];
+        const glm::uvec3& b = mesh.triangles[u];
+        int shared = 0;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) {
+                if (a[i] != b[j]) continue;
+                if (glm::any(glm::greaterThan(glm::abs(mesh.uvs[3 * size_t(t) + size_t(i)] - mesh.uvs[3 * size_t(u) + size_t(j)]),
+                                              glm::vec2(1e-6f))))
+                    return false;
+                ++shared;
+            }
+        return shared >= 2;
+    });
 }
 
 std::vector<uint32_t> groupsFromMask(const Mesh& mesh, size_t* changed) {
@@ -341,6 +360,14 @@ void registerPolygroupCommands(CommandRegistry& reg) {
              {},
              [](Document& doc, const Args&) -> CommandResult {
                  commitPolygroups(doc, groupsByConnectivity(doc.mesh), "Groups by Connectivity");
+                 return {true, groupSummary(doc.mesh)};
+             }});
+
+    reg.add({"polygroup_uv",
+             "Give every UV island of the visible mesh its own polygroup (ZBrush Polygroups > UV Groups).", {},
+             [](Document& doc, const Args&) -> CommandResult {
+                 if (!doc.mesh.hasUvs()) return {false, "This mesh has no UVs: unwrap it first (Tool > UV Map)"};
+                 commitPolygroups(doc, groupsByUvs(doc.mesh), "Group by UVs");
                  return {true, groupSummary(doc.mesh)};
              }});
 

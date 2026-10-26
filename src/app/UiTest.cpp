@@ -68,6 +68,7 @@
 //                            qremesh_guides (guide curves on the active SubTool), qremesh_guide_loops (closed ones),
 //                            guides_mode (1 while the QRemesh Guides brush is picked),
 //                            quads (quad pairs in the active SubTool), quad_percent (quads among its polygons)
+//                            mask_shape (0 MaskPen, 1 MaskLasso, 2 MaskRect), hide_shape (1 SelectLasso, 2 SelectRect)
 //                            sdiv (the current subdivision level, 1 = base; 0 without levels), sdiv_levels (0 = none)
 //                            antialiasing (Preferences > Performance: 1, 2, 4, 8), view_samples (what the interactive
 //                            view draws with now: 1 while Fast Navigation moves a big scene), multithreading (1 on),
@@ -293,6 +294,8 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "stroke_type") return double(int(app_.strokeType_)); // 0 Dots, 1 DragRect, 2 DragDot, 3 Spray, 4 LazyMouse
     if (name == "vdms") return double(app_.doc_.vdms.size());
     if (name == "input_style") return double(app_.uiPrefs_.inputStyle);
+    if (name == "mask_shape") return double(int(app_.maskShape_)); // 0 MaskPen, 1 MaskLasso, 2 MaskRect
+    if (name == "hide_shape") return double(int(app_.hideShape_)); // 1 SelectLasso, 2 SelectRect
     if (name == "dynamic") return app_.doc_.sculptor.dyntopo.enabled ? 1.0 : 0.0;
     if (name == "dynamic_detail") return std::round(app_.doc_.sculptor.dyntopo.detail * 100.0f);
     if (name == "brush_type") return app_.doc_.activeBrush >= 0 || app_.paintMode_ ? -1.0 : double(int(app_.brush_));

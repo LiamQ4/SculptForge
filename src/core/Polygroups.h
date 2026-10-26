@@ -32,6 +32,9 @@ size_t visiblePolygroupCount(const Mesh& mesh);
 std::vector<uint32_t> groupsByNormals(const Mesh& mesh, float maxAngleDegrees);
 // One group per edge-connected piece of visible triangles.
 std::vector<uint32_t> groupsByConnectivity(const Mesh& mesh);
+// One group per UV island: visible triangles joined across edges whose UVs match at both ends (ZBrush UV Groups).
+// Empty when the mesh has no UVs.
+std::vector<uint32_t> groupsByUvs(const Mesh& mesh);
 // Visible triangles whose average vertex mask is >= 0.5 move to a new group;
 // `changed` (optional) receives how many did.
 std::vector<uint32_t> groupsFromMask(const Mesh& mesh, size_t* changed = nullptr);

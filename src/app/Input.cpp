@@ -94,6 +94,13 @@ void App::registerInputActions() {
         "Turn the masked part into a new polygroup and clear the mask (ZBrush Ctrl+W). With nothing masked, "
         "everything visible becomes one group.",
         [this] { groupMasked(); });
+    add("polygroup.uv_groups", "Group by UVs", ICON_LC_GRID_2X2, "Tool > Polygroups", "",
+        "One polygroup per UV island (ZBrush UV Groups): triangles that touch without a UV seam share a group. "
+        "Only the visible part is regrouped. Needs UVs (Tool > Texture Map > Auto UV makes some).",
+        [this] {
+            runCommand("polygroup_uv");
+            if (lastCommandOk_) renderSettings_.showPolygroups = true;
+        });
     actions_.setDefaultShortcut("config.save", "Ctrl+Shift+Alt+I");
 
     // Preferences > Input: the key style.

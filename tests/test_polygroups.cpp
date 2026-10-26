@@ -64,7 +64,7 @@ TEST(polygroup_commands_registered) {
     CommandRegistry reg;
     for (const char* name : {"polygroup_auto_by_normals", "polygroup_by_connectivity", "polygroup_from_mask",
                              "polygroup_clear", "polygroup_merge_visible", "hide_polygroup", "isolate_polygroup",
-                             "show_all", "invert_visibility", "hide_rect", "hide_lasso", "delete_hidden"})
+                             "show_all", "invert_visibility", "hide_rect", "hide_lasso", "delete_hidden", "polygroup_uv"})
         CHECK(reg.find(name) != nullptr);
     CHECK(reg.toolSchemaJson().find("\"isolate_polygroup\"") != std::string::npos);
 }
@@ -92,6 +92,47 @@ TEST(polygroups_by_normals) {
     // A narrow angle splits it into patches.
     CHECK(reg.execute(s, "polygroup_auto_by_normals", {{"angle", 20.0}}).ok);
     CHECK(visiblePolygroupCount(s.mesh) > 10);
+}
+
+TEST(polygroups_by_uvs) {
+    // Box mapping: every side of the cube is its own UV island (its corners' UVs depend on the side).
+    Mesh cube = makeCube();
+    for (uint32_t t = 0; t < 12; ++t)
+        for (int c = 0; c < 3; ++c) {
+            const glm::vec3 p = cube.positions[cube.triangles[t][c]];
+            cube.uvs.push_back(glm::vec2(float(t / 2) * 3.0f + p.x, p.y + 0.5f * p.z));
+        }
+    Document d = makeDoc(cube);
+    CommandRegistry reg;
+    CHECK(reg.execute(d, "polygroup_uv").ok);
+    CHECK(visiblePolygroupCount(d.mesh) == 6);
+    for (uint32_t t = 0; t < 12; t += 2) CHECK(d.mesh.polygroups[t] == d.mesh.polygroups[t + 1]);
+    CHECK(reg.execute(d, "undo").ok);
+    CHECK(visiblePolygroupCount(d.mesh) == 1);
+
+    // One continuous island (UVs per vertex, no seams): one group, even across the sides.
+    for (uint32_t t = 0; t < 12; ++t)
+        for (int c = 0; c < 3; ++c) {
+            const glm::vec3 p = d.mesh.positions[d.mesh.triangles[t][c]];
+            d.mesh.uvs[3 * t + uint32_t(c)] = glm::vec2(p.x + 0.25f * p.z, p.y);
+        }
+    CHECK(reg.execute(d, "polygroup_by_connectivity").ok); // start from something else
+    CHECK(reg.execute(d, "polygroup_auto_by_normals", {{"angle", 30.0}}).ok);
+    CHECK(visiblePolygroupCount(d.mesh) == 6);
+    CHECK(reg.execute(d, "polygroup_uv").ok);
+    CHECK(visiblePolygroupCount(d.mesh) == 1);
+
+    // Two separate pieces with the same UVs are still two islands (they don't touch on the model).
+    Document two = makeDoc(makeTwoSpheres(1));
+    two.mesh.uvs.assign(two.mesh.triangleCount() * 3, glm::vec2(0.5f));
+    CHECK(reg.execute(two, "polygroup_uv").ok);
+    CHECK(visiblePolygroupCount(two.mesh) == 2);
+
+    // No UVs: refused with a message, nothing changes.
+    Document none = makeDoc(makeCube());
+    const CommandResult r = reg.execute(none, "polygroup_uv");
+    CHECK(!r.ok && r.message.find("no UVs") != std::string::npos);
+    CHECK(!none.mesh.hasPolygroups() && !none.undo.canUndo());
 }
 
 TEST(polygroups_by_connectivity_and_merge) {
