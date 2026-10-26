@@ -33,7 +33,9 @@
 #include "core/Sculpt.h"
 
 #include <cstdint>
+#include <atomic>
 #include <functional>
+#include <mutex>
 #include <memory>
 #include <string>
 #include <vector>
@@ -69,13 +71,17 @@ struct PaintTexture {
     int activeLayer = -1;            // the layer painting writes into (-1 = Base)
 
     // GPU sync (see Renderer): `revision` counts changes; texels changed since `dirtyFrom` lie in
-    // [dirtyMin, dirtyMax). A view that last uploaded revision r >= dirtyFrom uploads only that rectangle.
+    // [dirtyMin, dirtyMax), inside the kTextureTile tiles flagged in `dirtyTiles`. A view that last uploaded
+    // revision r >= dirtyFrom uploads only those tiles (two mirrored dabs far apart in UV space don't send
+    // everything between them).
     uint64_t revision = 1, dirtyFrom = 1;
     glm::ivec2 dirtyMin{0}, dirtyMax{0};
+    std::vector<uint8_t> dirtyTiles; // tilesX * tilesY flags (rows bottom-up), sized on first use
     void markDirty(int x0, int y0, int x1, int y1);
     void markAllDirty();
+    bool tileDirty(int tx, int ty) const;
     // Called by a view after uploading: the rectangle starts again from here.
-    void clearDirty() { dirtyFrom = revision; dirtyMin = dirtyMax = glm::ivec2(0); }
+    void clearDirty();
 
     // Which texels some UV triangle covers (1 bit each; filled by ensureCoverage).
     std::vector<uint8_t> coverage;
@@ -90,6 +96,9 @@ struct PaintTexture {
     std::vector<uint8_t>& target(int layer);
     size_t bytes() const;
 };
+
+// Texels a view that is up to date except for the latest changes would upload now (benchmarks, tests).
+size_t textureUploadTexels(const PaintTexture& tex);
 
 // A new white texture.
 std::shared_ptr<PaintTexture> makeTexture(int width, int height);
@@ -142,20 +151,28 @@ public:
 
 private:
     struct Tile {
-        uint32_t index = 0;
         std::vector<uint8_t> original; // the tile before the stroke (kTextureTile^2 RGBA)
         std::vector<float> coverage;   // stroke coverage per texel
         std::vector<uint32_t> stamp;   // last dab that wrote the texel
     };
+    // The tile's stroke record, made on first touch (thread-safe).
     Tile& tile(uint32_t index, const std::vector<uint8_t>& target, int width, int height);
+    struct DabTri { // a triangle under the brush (mirror `mirror`), with the texel box the dab can reach
+        uint32_t tri = 0;
+        int mirror = 0;
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    };
 
     bool active_ = false;
     int layer_ = -1;
     int tilesX_ = 0, tilesY_ = 0;
-    std::vector<int32_t> tileSlot_;
-    std::vector<Tile> tiles_;
+    std::vector<std::unique_ptr<Tile>> tiles_; // per tile (row-major), null until the stroke touches it
+    std::unique_ptr<std::atomic<Tile*>[]> tilePtr_; // the same tiles, for lock-free lookups from the band threads
+    std::mutex tileMutex_;                          // guards making a tile
     uint32_t dab_ = 0;
     std::vector<uint32_t> tris_;
+    std::vector<DabTri> dabTris_;
+    std::vector<std::vector<uint32_t>> bandTris_; // per 16-row band: indices into dabTris_, in serial order
 };
 
 // --- Whole-texture operations (callers record undo: TextureStackUndo or captureTexture) ---

@@ -13,6 +13,7 @@
 #include "core/Primitives.h"
 #include "core/Project.h"
 #include "core/Texture.h"
+#include "core/ThreadPool.h"
 
 #include <chrono>
 #include <cmath>
@@ -532,4 +533,77 @@ TEST(texture_dab_is_interactive_at_4k_on_a_million_triangles) {
                 dabMs, texels / 20);
     CHECK(texels > 0);
     CHECK(dabMs < 30.0); // interactive: several dabs per frame
+}
+
+TEST(texture_stroke_benchmark) {
+    // Dab cost and the texels a frame uploads, for 2K / 4K, a small and a big brush, a light and a dense mesh
+    // (docs/performance.md). Each dab is one frame here: the upload is the dirty rectangle the view sends.
+    std::printf("  texture stroke (X symmetry, 12 dabs): size / tris / radius -> ms per dab, Mtexels uploaded per dab\n");
+    double bigDab4k = 0.0;
+    for (int level : {3, 7}) {
+        Mesh base = makeIcosphere(level);
+        sphericalUvs(base);
+        BVH bvh;
+        bvh.build(base);
+        for (int size : {2048, 4096}) {
+            for (float radius : {0.03f, 0.35f}) {
+                Mesh m = base;
+                m.texture = makeTexture(size, size);
+                m.paintToTexture = true;
+                TexturePainter painter;
+                CHECK(painter.begin(m));
+                m.texture->clearDirty();
+                DabParams p = dab(glm::vec3(0, 0, 1), radius, 0.5f);
+                p.viewDir = glm::vec3(0, 0, -1);
+                double ms = 0.0, uploaded = 0.0;
+                for (int i = 0; i < 12; ++i) {
+                    p.center = glm::normalize(glm::vec3(-0.15f + 0.025f * float(i), 0.2f, 1.0f));
+                    const auto t0 = std::chrono::steady_clock::now();
+                    painter.dab(m, bvh, p, glm::vec3(1, 0, 0), Symmetry{true, false, false});
+                    ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                    uploaded += double(textureUploadTexels(*m.texture));
+                    m.texture->clearDirty();
+                }
+                UndoRecord rec;
+                painter.end(rec);
+                std::printf("    %dK / %7zu / %.2f: %6.2f ms, %5.2f Mtexels\n", size / 1024, m.triangleCount(), radius,
+                            ms / 12.0, uploaded / 12.0 / 1e6);
+                if (size == 4096 && radius > 0.1f) bigDab4k = std::max(bigDab4k, ms / 12.0);
+            }
+        }
+    }
+    CHECK(bigDab4k < 60.0); // generous for CI machines; the M1 Pro target is ~10 ms
+}
+
+TEST(texture_dab_is_deterministic_with_threads) {
+    // The band pass gives the same texels (and undo tiles) on one thread as on many, with a layer and symmetry.
+    Mesh base = makeIcosphere(5);
+    sphericalUvs(base);
+    BVH bvh;
+    bvh.build(base);
+    std::vector<uint8_t> result[2];
+    size_t tiles[2] = {};
+    for (int serial = 0; serial < 2; ++serial) {
+        ThreadPool::shared().setSerial(serial == 1);
+        Mesh m = base;
+        m.texture = makeTexture(2048, 2048);
+        m.paintToTexture = true;
+        addTextureLayer(*m.texture, "Layer 1");
+        TexturePainter painter;
+        CHECK(painter.begin(m));
+        DabParams p = dab(glm::vec3(0, 0, 1), 0.3f, 0.6f);
+        p.viewDir = glm::vec3(0, 0, -1);
+        for (int i = 0; i < 6; ++i) {
+            p.center = glm::normalize(glm::vec3(-0.2f + 0.08f * float(i), 0.1f * float(i % 2), 1.0f));
+            painter.dab(m, bvh, p, glm::vec3(0.2f, 0.4f, 0.9f), Symmetry{true, false, false});
+        }
+        UndoRecord rec;
+        painter.end(rec);
+        CHECK(rec.textureTiles != nullptr);
+        tiles[serial] = rec.textureTiles ? rec.textureTiles->texels.tiles.size() : 0;
+        result[serial] = m.texture->pixels;
+    }
+    ThreadPool::shared().setSerial(false);
+    CHECK(tiles[0] == tiles[1]);
+    CHECK(result[0] == result[1]);
 }

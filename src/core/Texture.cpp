@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Texture.h"
 
+#include "core/ThreadPool.h"
+
 #include "core/Undo.h"
 
 #include <algorithm>
@@ -416,6 +418,11 @@ bool validTextureSize(int size) { return size == 1024 || size == 2048 || size ==
 void PaintTexture::markDirty(int x0, int y0, int x1, int y1) {
     x0 = std::max(x0, 0), y0 = std::max(y0, 0), x1 = std::min(x1, width), y1 = std::min(y1, height);
     if (x0 >= x1 || y0 >= y1) return;
+    const int tilesX = tileCount(width);
+    dirtyTiles.resize(size_t(tilesX) * size_t(tileCount(height)), 0);
+    for (int ty = y0 / kTextureTile; ty <= (y1 - 1) / kTextureTile; ++ty)
+        std::memset(&dirtyTiles[size_t(ty) * size_t(tilesX) + size_t(x0 / kTextureTile)], 1,
+                    size_t((x1 - 1) / kTextureTile - x0 / kTextureTile + 1));
     if (dirtyMin.x >= dirtyMax.x) {
         dirtyMin = {x0, y0};
         dirtyMax = {x1, y1};
@@ -431,6 +438,28 @@ void PaintTexture::markAllDirty() {
     dirtyFrom = revision; // older uploads are stale: views re-upload everything
     dirtyMin = {0, 0};
     dirtyMax = {width, height};
+    dirtyTiles.assign(size_t(tileCount(width)) * size_t(tileCount(height)), 1);
+}
+
+bool PaintTexture::tileDirty(int tx, int ty) const {
+    const size_t i = size_t(ty) * size_t(tileCount(width)) + size_t(tx);
+    return i < dirtyTiles.size() && dirtyTiles[i];
+}
+
+void PaintTexture::clearDirty() {
+    dirtyFrom = revision;
+    dirtyMin = dirtyMax = glm::ivec2(0);
+    std::fill(dirtyTiles.begin(), dirtyTiles.end(), uint8_t(0));
+}
+
+size_t textureUploadTexels(const PaintTexture& t) {
+    size_t n = 0;
+    for (int ty = 0; ty < tileCount(t.height); ++ty)
+        for (int tx = 0; tx < tileCount(t.width); ++tx)
+            if (t.tileDirty(tx, ty))
+                n += size_t(std::min(kTextureTile, t.width - tx * kTextureTile)) *
+                     size_t(std::min(kTextureTile, t.height - ty * kTextureTile));
+    return n;
 }
 
 std::vector<uint8_t>& PaintTexture::target(int layer) {
@@ -553,7 +582,6 @@ glm::vec3 sampleTextureAt(const Mesh& m, uint32_t tri, const glm::vec3& point) {
 bool TexturePainter::begin(Mesh& mesh) {
     active_ = false;
     tiles_.clear();
-    tileSlot_.clear();
     dab_ = 0;
     if (!paintsTexture(mesh)) return false;
     const PaintTexture& t = *mesh.texture;
@@ -563,17 +591,20 @@ bool TexturePainter::begin(Mesh& mesh) {
     ensureCoverage(mesh, tex);
     tilesX_ = (tex.width + kTextureTile - 1) / kTextureTile;
     tilesY_ = (tex.height + kTextureTile - 1) / kTextureTile;
-    tileSlot_.assign(size_t(tilesX_) * size_t(tilesY_), -1);
+    tiles_.resize(size_t(tilesX_) * size_t(tilesY_));
+    tilePtr_ = std::make_unique<std::atomic<Tile*>[]>(tiles_.size());
+    for (size_t i = 0; i < tiles_.size(); ++i) tilePtr_[i].store(nullptr, std::memory_order_relaxed);
     active_ = true;
     return true;
 }
 
 TexturePainter::Tile& TexturePainter::tile(uint32_t index, const std::vector<uint8_t>& target, int width, int height) {
-    int32_t& slot = tileSlot_[index];
-    if (slot >= 0) return tiles_[size_t(slot)];
-    slot = int32_t(tiles_.size());
-    Tile& t = tiles_.emplace_back();
-    t.index = index;
+    if (Tile* made = tilePtr_[index].load(std::memory_order_acquire)) return *made;
+    std::lock_guard<std::mutex> lock(tileMutex_);
+    std::unique_ptr<Tile>& slot = tiles_[index];
+    if (slot) return *slot;
+    slot = std::make_unique<Tile>();
+    Tile& t = *slot;
     constexpr size_t n = size_t(kTextureTile) * kTextureTile;
     t.original.assign(n * 4, 0);
     t.coverage.assign(n, 0.0f);
@@ -583,9 +614,14 @@ TexturePainter::Tile& TexturePainter::tile(uint32_t index, const std::vector<uin
     for (int y = 0; y < ch; ++y)
         std::memcpy(&t.original[size_t(y) * kTextureTile * 4], &target[(size_t(ty + y) * size_t(width) + size_t(tx)) * 4],
                     size_t(cw) * 4);
+    tilePtr_[index].store(&t, std::memory_order_release);
     return t;
 }
 
+// A dab in two passes: (1) per mirror, the triangles under the brush and the texel box each can reach, in a
+// fixed order; (2) the texture's 16-row bands in parallel, each visiting its triangles in that same order. A
+// texel lies in one band, so it sees exactly the writes it would get serially: the result doesn't depend on
+// the thread count.
 size_t TexturePainter::dab(Mesh& mesh, const BVH& bvh, const DabParams& p, const glm::vec3& color, Symmetry sym) {
     if (!active_ || p.radius <= 0.0f || !hasTexture(mesh)) return 0;
     PaintTexture& tex = mutableTexture(mesh);
@@ -598,19 +634,27 @@ size_t TexturePainter::dab(Mesh& mesh, const BVH& bvh, const DabParams& p, const
     const bool useAlpha = p.alpha && !p.alpha->empty();
     const bool masked = mesh.hasMask();
     const bool normals = mesh.normals.size() == mesh.vertexCount();
-    glm::ivec2 changedMin(w, h), changedMax(0, 0);
-    size_t changed = 0;
+    const float r = p.radius, r2 = r * r;
 
+    struct Mirror {
+        glm::vec3 center, viewDir, aUp, aRight;
+        uint32_t stamp;
+    };
+    std::vector<Mirror> mirrors;
+    dabTris_.clear();
     for (const glm::vec3& m : Sculptor::mirrors(sym)) {
-        const glm::vec3 center = p.center * m, viewDir = p.viewDir * m;
+        Mirror mi;
+        mi.center = p.center * m;
+        mi.viewDir = p.viewDir * m;
         // The alpha's frame on the view plane (as recipe brushes orient it).
         glm::vec3 aUp = p.alphaUp * m;
-        aUp -= viewDir * glm::dot(aUp, viewDir);
-        aUp = glm::length(aUp) > 1e-6f ? glm::normalize(aUp) : glm::vec3(0, 1, 0);
-        const glm::vec3 aRight = glm::cross(aUp, -viewDir);
-        const float r = p.radius, r2 = r * r;
-        ++dab_;
-        bvh.queryTriangles(mesh, center, r, tris_);
+        aUp -= mi.viewDir * glm::dot(aUp, mi.viewDir);
+        mi.aUp = glm::length(aUp) > 1e-6f ? glm::normalize(aUp) : glm::vec3(0, 1, 0);
+        mi.aRight = glm::cross(mi.aUp, -mi.viewDir);
+        mi.stamp = ++dab_;
+        const int mirror = int(mirrors.size());
+        mirrors.push_back(mi);
+        bvh.queryTriangles(mesh, mi.center, r, tris_);
         for (uint32_t ti : tris_) {
             if (mesh.triangleHidden(ti)) continue;
             const glm::uvec3& tv = mesh.triangles[ti];
@@ -627,76 +671,131 @@ size_t TexturePainter::dab(Mesh& mesh, const BVH& bvh, const DabParams& p, const
             const glm::vec3 Ax = (q1 * e2.y - q2 * e1.y) / det, Ay = (q2 * e1.x - q1 * e2.x) / det;
             const float mxx = glm::dot(Ax, Ax), mxy = glm::dot(Ax, Ay), myy = glm::dot(Ay, Ay);
             const float mdet = mxx * myy - mxy * mxy;
-            int cx0 = 0, cy0 = 0, cx1 = w - 1, cy1 = h - 1;
+            DabTri d{ti, mirror, 0, 0, w - 1, h - 1};
             if (mdet > 1e-30f) {
-                const glm::vec3 rel = center - P0;
+                const glm::vec3 rel = mi.center - P0;
                 const float bx = glm::dot(Ax, rel), by = glm::dot(Ay, rel);
                 const float dx = (myy * bx - mxy * by) / mdet, dy = (mxx * by - mxy * bx) / mdet;
                 const glm::vec3 closest = P0 + Ax * dx + Ay * dy;
-                const float k = r2 - glm::dot(closest - center, closest - center);
+                const float k = r2 - glm::dot(closest - mi.center, closest - mi.center);
                 if (k < 0.0f) continue;
                 const float hx = std::sqrt(k * myy / mdet), hy = std::sqrt(k * mxx / mdet);
                 const glm::vec2 c = su.t[0] + glm::vec2(dx, dy);
-                cx0 = int(std::floor(c.x - hx)) - kTextureGutter - 1;
-                cx1 = int(std::ceil(c.x + hx)) + kTextureGutter + 1;
-                cy0 = int(std::floor(c.y - hy)) - kTextureGutter - 1;
-                cy1 = int(std::ceil(c.y + hy)) + kTextureGutter + 1;
+                d.x0 = int(std::floor(c.x - hx)) - kTextureGutter - 1;
+                d.x1 = int(std::ceil(c.x + hx)) + kTextureGutter + 1;
+                d.y0 = int(std::floor(c.y - hy)) - kTextureGutter - 1;
+                d.y1 = int(std::ceil(c.y + hy)) + kTextureGutter + 1;
             }
+            // The triangle's own texel box (with the gutter) limits it too.
+            int bx0, by0, bx1, by1;
+            su.bounds(w, h, kTextureGutter, bx0, by0, bx1, by1);
+            d.x0 = std::max(d.x0, bx0), d.y0 = std::max(d.y0, by0), d.x1 = std::min(d.x1, bx1), d.y1 = std::min(d.y1, by1);
+            if (d.x0 > d.x1 || d.y0 > d.y1) continue;
+            dabTris_.push_back(d);
+        }
+    }
+    if (dabTris_.empty()) return 0;
+
+    // Bucket the triangles by band (keeping their order), then paint the bands that have any.
+    constexpr int kBandRows = 16; // small enough that one dab makes plenty of jobs
+    const int bandCount = (h + kBandRows - 1) / kBandRows;
+    bandTris_.resize(size_t(bandCount));
+    for (auto& b : bandTris_) b.clear();
+    for (uint32_t i = 0; i < uint32_t(dabTris_.size()); ++i)
+        for (int band = dabTris_[i].y0 / kBandRows; band <= dabTris_[i].y1 / kBandRows; ++band)
+            bandTris_[size_t(band)].push_back(i);
+    std::vector<int> bands;
+    for (int band = 0; band < bandCount; ++band)
+        if (!bandTris_[size_t(band)].empty()) bands.push_back(band);
+    struct BandResult {
+        glm::ivec2 lo{INT32_MAX}, hi{INT32_MIN};
+        size_t changed = 0;
+    };
+    std::vector<BandResult> results(bands.size());
+
+    ThreadPool::shared().run(bands.size(), [&](size_t job) {
+        const int band = bands[job];
+        const int by0 = band * kBandRows, by1 = std::min(h, by0 + kBandRows) - 1;
+        BandResult& res = results[job];
+        for (uint32_t di : bandTris_[size_t(band)]) {
+            const DabTri& d = dabTris_[di];
+            const Mirror& mi = mirrors[size_t(d.mirror)];
+            const glm::uvec3& tv = mesh.triangles[d.tri];
+            const TriSetup su(mesh.uvs[size_t(d.tri) * 3], mesh.uvs[size_t(d.tri) * 3 + 1], mesh.uvs[size_t(d.tri) * 3 + 2], w, h);
+            const glm::vec3 P0 = mesh.positions[tv.x], P1 = mesh.positions[tv.y], P2 = mesh.positions[tv.z];
             const float m0 = masked ? mesh.mask[tv.x] : 0.0f, m1 = masked ? mesh.mask[tv.y] : 0.0f,
                         m2 = masked ? mesh.mask[tv.z] : 0.0f;
             const glm::vec3 N0 = normals ? mesh.normals[tv.x] : glm::vec3(0), N1 = normals ? mesh.normals[tv.y] : glm::vec3(0),
                             N2 = normals ? mesh.normals[tv.z] : glm::vec3(0);
-            const glm::vec3 faceN = glm::cross(q1, q2);
-            visitTriangle(su, w, h, kTextureGutter, &tex, cx0, cy0, cx1, cy1, [&](int x, int y, const glm::vec3& b, bool) {
+            const glm::vec3 faceN = glm::cross(P1 - P0, P2 - P0);
+            Tile* cached = nullptr;
+            uint32_t cachedIndex = UINT32_MAX;
+            visitTriangle(su, w, h, kTextureGutter, &tex, d.x0, std::max(d.y0, by0), d.x1, std::min(d.y1, by1),
+                          [&](int x, int y, const glm::vec3& b, bool) {
                 const glm::vec3 P = P0 * b.x + P1 * b.y + P2 * b.z;
-                const glm::vec3 o = P - center;
+                const glm::vec3 o = P - mi.center;
                 const float d2 = glm::dot(o, o);
                 if (d2 >= r2) return;
                 // Front faces only: never paint through to the far side.
                 const glm::vec3 N = normals ? N0 * b.x + N1 * b.y + N2 * b.z : faceN;
-                if (glm::dot(N, viewDir) > 0.0f) return;
-                const float f = useAlpha ? p.alpha->sample(glm::dot(o, aRight) / r, glm::dot(o, aUp) / r)
+                if (glm::dot(N, mi.viewDir) > 0.0f) return;
+                const float f = useAlpha ? p.alpha->sample(glm::dot(o, mi.aRight) / r, glm::dot(o, mi.aUp) / r)
                                          : brushFalloff(std::sqrt(d2), r, p.focal);
                 const float wgt = f * s * (1.0f - std::clamp(m0 * b.x + m1 * b.y + m2 * b.z, 0.0f, 1.0f));
                 if (wgt <= 0.0f) return;
                 const uint32_t ti2 = uint32_t(y / kTextureTile) * uint32_t(tilesX_) + uint32_t(x / kTextureTile);
-                Tile& t = tile(ti2, target, w, h);
+                if (ti2 != cachedIndex) {
+                    cached = &tile(ti2, target, w, h);
+                    cachedIndex = ti2;
+                }
+                Tile& t = *cached;
                 const size_t li = size_t(y % kTextureTile) * kTextureTile + size_t(x % kTextureTile);
-                if (t.stamp[li] == dab_) return; // one write per texel per dab (shared edges, overlapping UVs)
-                t.stamp[li] = dab_;
+                if (t.stamp[li] == mi.stamp) return; // one write per texel per dab (shared edges, overlapping UVs)
+                t.stamp[li] = mi.stamp;
                 float& acc = t.coverage[li];
                 acc += std::min(wgt, 1.0f) * (1.0f - acc);
                 paintTexel(&target[(size_t(y) * size_t(w) + size_t(x)) * 4], &t.original[li * 4], onLayer, color, acc, p.invert);
-                changedMin = glm::min(changedMin, glm::ivec2(x, y));
-                changedMax = glm::max(changedMax, glm::ivec2(x + 1, y + 1));
-                ++changed;
+                res.lo = glm::min(res.lo, glm::ivec2(x, y));
+                res.hi = glm::max(res.hi, glm::ivec2(x + 1, y + 1));
+                ++res.changed;
             });
         }
-    }
-    if (changed) {
-        if (!tex.layers.empty()) compositeTexture(tex, changedMin.x, changedMin.y, changedMax.x, changedMax.y);
-        else tex.markDirty(changedMin.x, changedMin.y, changedMax.x, changedMax.y);
-    }
+        // With layers, the band recomposites its own changed rows (in parallel with the other bands).
+        if (res.changed && !tex.layers.empty() && tex.base.size() == tex.pixels.size())
+            for (int y = res.lo.y; y < res.hi.y; ++y)
+                for (int x = res.lo.x; x < res.hi.x; ++x) {
+                    const size_t i = size_t(y) * size_t(w) + size_t(x);
+                    compositeTexel(tex, i, &tex.pixels[i * 4]);
+                }
+    });
+
+    size_t changed = 0;
+    for (const BandResult& res : results)
+        if (res.changed) {
+            changed += res.changed;
+            tex.markDirty(res.lo.x, res.lo.y, res.hi.x, res.hi.y);
+        }
     return changed;
 }
 
 void TexturePainter::end(UndoRecord& record) {
-    if (active_ && !tiles_.empty()) {
+    if (active_) {
         auto u = std::make_unique<TextureTileUndo>();
         u->layer = layer_;
-        std::sort(tiles_.begin(), tiles_.end(), [](const Tile& a, const Tile& b) { return a.index < b.index; });
-        u->texels.tiles.reserve(tiles_.size());
         u->texels.offsets.push_back(0);
-        for (const Tile& t : tiles_) {
-            u->texels.tiles.push_back(t.index);
-            appendTile(u->texels, t.original.data(), size_t(kTextureTile) * 4, kTextureTile, kTextureTile);
-        }
-        record.textureTiles = std::move(u);
+        for (uint32_t i = 0; i < uint32_t(tiles_.size()); ++i)
+            if (tiles_[i]) {
+                u->texels.tiles.push_back(i);
+                appendTile(u->texels, tiles_[i]->original.data(), size_t(kTextureTile) * 4, kTextureTile, kTextureTile);
+            }
+        if (!u->texels.tiles.empty()) record.textureTiles = std::move(u);
     }
     active_ = false;
     tiles_.clear();
-    tileSlot_.clear();
+    tilePtr_.reset();
     std::vector<uint32_t>().swap(tris_);
+    std::vector<DabTri>().swap(dabTris_);
+    bandTris_.clear();
 }
 
 void TextureTileUndo::swapWith(Mesh& mesh) {

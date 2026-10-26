@@ -1725,10 +1725,28 @@ void Renderer::syncTexture(MeshSlot& s, Mesh& mesh) {
     } else {
         gl::BindTexture(GL_TEXTURE_2D, s.paintTexture);
         const bool rect = s.textureRevision >= tex->dirtyFrom && tex->dirtyMin.x < tex->dirtyMax.x && tex->dirtyMin.y < tex->dirtyMax.y;
-        const glm::ivec2 lo = rect ? tex->dirtyMin : glm::ivec2(0), hi = rect ? tex->dirtyMax : glm::ivec2(tex->width, tex->height);
         gl::PixelStorei(GL_UNPACK_ROW_LENGTH, tex->width);
-        gl::TexSubImage2D(GL_TEXTURE_2D, 0, lo.x, lo.y, hi.x - lo.x, hi.y - lo.y, GL_RGBA, GL_UNSIGNED_BYTE,
-                          tex->pixels.data() + (size_t(lo.y) * size_t(tex->width) + size_t(lo.x)) * 4);
+        auto upload = [&](int x0, int y0, int x1, int y1) {
+            x1 = std::min(x1, tex->width), y1 = std::min(y1, tex->height);
+            gl::TexSubImage2D(GL_TEXTURE_2D, 0, x0, y0, x1 - x0, y1 - y0, GL_RGBA, GL_UNSIGNED_BYTE,
+                              tex->pixels.data() + (size_t(y0) * size_t(tex->width) + size_t(x0)) * 4);
+        };
+        if (!rect) {
+            upload(0, 0, tex->width, tex->height);
+        } else {
+            // Only the dirty tiles of the rectangle, as runs along each tile row.
+            const int tx0 = tex->dirtyMin.x / kTextureTile, tx1 = (tex->dirtyMax.x - 1) / kTextureTile;
+            for (int ty = tex->dirtyMin.y / kTextureTile; ty <= (tex->dirtyMax.y - 1) / kTextureTile; ++ty)
+                for (int tx = tx0; tx <= tx1;) {
+                    if (!tex->tileDirty(tx, ty)) {
+                        ++tx;
+                        continue;
+                    }
+                    const int start = tx;
+                    while (tx <= tx1 && tex->tileDirty(tx, ty)) ++tx;
+                    upload(start * kTextureTile, ty * kTextureTile, tx * kTextureTile, (ty + 1) * kTextureTile);
+                }
+        }
         gl::PixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     }
     gl::GenerateMipmap(GL_TEXTURE_2D);
