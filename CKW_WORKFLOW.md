@@ -56,8 +56,10 @@ systems. Preserve upstream license and attribution files.
 
 ## Local app and build
 
-The CRKW Windows Release build is staged in `out/crkw-app/`. Desktop and per-user
+The CRKW Windows Release build is staged in `out/crkw-app/`, the only install folder. Desktop and per-user
 Start menu shortcuts named **SculptForge CRKW** launch `out/crkw-app/bin/sculptforge.exe`.
+`out/crkw-metahuman-app` is a directory junction to `out/crkw-app` (2026-10-26), so a taskbar pin
+made from the old path also opens the latest build. Never install to another prefix.
 The application window and About display identify it as CRKW.
 
 ### CrokedWillo workspace
