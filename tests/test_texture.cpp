@@ -8,6 +8,7 @@
 #include "TestHarness.h"
 
 #include "core/AutoUv.h"
+#include "core/BrushAlpha.h"
 #include "core/Commands.h"
 #include "core/Polypaint.h"
 #include "core/Primitives.h"
@@ -606,4 +607,45 @@ TEST(texture_dab_is_deterministic_with_threads) {
     ThreadPool::shared().setSerial(false);
     CHECK(tiles[0] == tiles[1]);
     CHECK(result[0] == result[1]);
+}
+
+TEST(texture_dab_sharpness_does_not_depend_on_mesh_density) {
+    // The ZBrush tester's "resolution depends on the geometry density": a hard square alpha on a 2-triangle
+    // plane must give the same texels as on a 64x64 plane, with an edge as sharp as the texture allows.
+    BrushAlpha square; // fully opaque up to the square's edge: the hardest possible stamp
+    square.width = square.height = 4;
+    square.values.assign(16, 1.0f);
+    std::vector<uint8_t> result[2];
+    const int resolutions[2] = {1, 64};
+    for (int i = 0; i < 2; ++i) {
+        Mesh m = texturedPlane(resolutions[i], 1024);
+        m.rebuildTopology();
+        m.recomputeAllNormals();
+        BVH bvh;
+        bvh.build(m);
+        TexturePainter painter;
+        CHECK(painter.begin(m));
+        DabParams p = dab(glm::vec3(0.013f, 0, -0.021f), 0.1f);
+        p.alpha = &square;
+        p.alphaUp = glm::vec3(0, 0, 1);
+        CHECK(painter.dab(m, bvh, p, glm::vec3(0.0f), Symmetry{false, false, false}) > 0);
+        UndoRecord rec;
+        painter.end(rec);
+        result[i] = m.texture->pixels;
+    }
+    size_t differ = 0;
+    for (size_t k = 0; k < result[0].size(); ++k) differ += std::abs(int(result[0][k]) - int(result[1][k])) > 2;
+    CHECK(differ == 0);
+    // Along the row through the centre: white, a ramp of at most a few texels, then black (the alpha's edge).
+    PaintTexture t;
+    t.width = t.height = 1024;
+    t.pixels = result[0];
+    const int y = int((-0.021f + 1.0f) * 0.5f * 1024.0f);
+    int ramp = 0;
+    for (int x = 0; x < 1024; ++x) {
+        const uint8_t v = texel(t, x, y)[0];
+        ramp += v > 8 && v < 247;
+    }
+    std::printf("  square alpha at 1K: %d edge texels across the row (2 edges)\n", ramp);
+    CHECK(ramp <= 2 * 2);
 }

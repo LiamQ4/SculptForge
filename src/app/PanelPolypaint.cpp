@@ -139,6 +139,9 @@ void App::drawPalette_Color() {
             ImGui::TextDisabled("Paint into");
             ImGui::SameLine();
             ui::Segmented(*this, {"draw.paint_vertex", "draw.paint_texture"});
+        } else {
+            // No texture yet: one click starts texture painting (Auto UV first when there are no UVs).
+            ui::ActionButton(*this, "draw.new_texture", ImVec2(-1, 0));
         }
         if (paintsTexture(m)) {
             const PaintTexture& t = *m.texture;

@@ -8,6 +8,14 @@ symmetry, mask and paint layers with blend modes.
 
 ![Texture painting: a sharp texture stroke above a soft polypaint stroke, with the UV view in Tool > Texture Map](images/texture-painting.jpg)
 
+## Start in one click
+
+Press <kbd>P</kbd> for the Paint brush (or turn on **Rgb**). While the SubTool has no texture, **New Texture**
+appears on the top shelf and in the Color palette. Click it: if the model has no UVs, SculptForge runs **Auto
+UV** first (in the background; the status bar shows its progress), then gives it a white texture (2K, or the size
+chosen in Tool > Texture Map) and switches painting to **Texture**. Paint away. The steps below do the same thing
+by hand, with more choices.
+
 ## Paint a texture in four steps
 
 1. Open **Tool > Texture Map** in the right tray.
@@ -33,7 +41,10 @@ Paint Layers and Texture Map palettes). They choose where paint goes:
   the Paint Layers palette work on the texture.
 - **Vertex**: they work on the polypaint, exactly as before.
 
-The model shows both: the polypaint multiplied by the texture, over the material. Each SubTool keeps its own
+The model shows both: the polypaint multiplied by the texture, over the material. If paint looks as coarse as
+the mesh's polygons, it is going into the vertices: check that **Texture** is lit, and that the SubTool carries no
+old polypaint (Tool > Paint Layers, or **Polypaint > Texture** to move it into the texture). Texture paint itself
+is as sharp as the texture: a hard alpha gives the same texels on a two-triangle plane as on a dense mesh. Each SubTool keeps its own
 choice, saved in the project. **Show texture** (Texture Map, or the Color palette) hides the texture in the
 viewport without deleting it.
 
@@ -54,8 +65,9 @@ viewport without deleting it.
 - <kbd>Alt</kbd> paints back towards white on Base, and erases on a paint layer, as with polypaint.
 - <kbd>C</kbd> over the model picks the texture's colour under the cursor.
 
-> **Tip:** Painting stays fast with big textures on big meshes: only the triangles under the brush are visited and
-> only the changed part of the texture is sent to the graphics card. Memory is the limit: a 4K texture takes
+> **Tip:** Painting stays fast with big textures on big meshes: only the triangles under the brush are visited,
+> the texels are painted on every core, and only the changed 64x64 tiles of the texture are sent to the graphics
+> card. A big brush on a 4K texture takes a few milliseconds per dab. Memory is the limit: a 4K texture takes
 > 64 MB per layer, an 8K texture 256 MB.
 
 ## Paint layers on a texture

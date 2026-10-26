@@ -6,6 +6,18 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+### Texture painting (ZBrush tester feedback)
+- **New Texture** on the top shelf and in the Color palette whenever the Paint brush (or Rgb) is on and the
+  SubTool has no texture: one click starts texture painting, running Auto UV first (with its progress in the
+  status bar) when there are no UVs. Ctrl-hover help; also in F3 search.
+- Faster texture strokes: a dab paints its texels in parallel over 16-row bands with the same result on any
+  number of threads, and the view uploads only the 64x64 tiles that changed. A big-brush dab on a 4K texture
+  went from 29 to 6 ms (1.3K triangles) and from 47 to 11 ms (328K triangles) on an M1 Pro
+  (docs/performance.md).
+- Checked that texture paint doesn't depend on the mesh density: a hard stamp gives the same texels on a
+  2-triangle plane as on an 8K-triangle one (new unit test). Paint that looks as coarse as the mesh is polypaint:
+  the Vertex target, or polypaint shown multiplied over the texture.
+
 ## [0.8.0] - 2026-10-25
 
 Dynamic topology (Sculptris Pro), vector displacement brushes, QRemesh Guides, sculpt layers on every

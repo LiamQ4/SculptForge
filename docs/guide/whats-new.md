@@ -5,6 +5,15 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Next version (in development)
+
+### Texture painting: one click to start, and faster
+
+With the Paint brush on, a SubTool without a texture now shows **New Texture** on the top shelf and in the Color
+palette: click it and SculptForge unwraps the model if it has no UVs (Auto UV, in the background) and gives it a
+texture, so the next stroke paints texels. Big brushes on 4K textures paint four to five times faster. See
+[Texture painting](texture-painting.md).
+
 ## Version 0.8
 
 Dynamic topology, vector displacement brushes, QRemesh Guides, and sculpt layers on every subdivision level.

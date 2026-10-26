@@ -169,6 +169,7 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
   polypaint <-> texture, PNG next to OBJ / glTF / USD / FBX / GoZ exports (v0.4.2)
 - ✅ Textures survive Auto UV, voxel remesh, QRemesh, Decimate and merges (Keep Texture, v0.5); textured
   exports validated with the Khronos glTF validator, OpenUSD and ufbx (v0.5)
+- ✅ One-click **New Texture** while painting (Auto UV first), parallel texture dabs: 4-5x faster at 4K (0.8.1)
 - 📋 UV editing (seams, relax, pack options), UDIM tiles; ✅ texture baking (normal/displacement, v0.5)
 - ✅ STL import (binary and ASCII) and binary export
 - 📋 Binary USD (usdc), SPZ-compressed splats, USD references/payloads
