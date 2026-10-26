@@ -100,7 +100,8 @@ def main():
             print("error:", e)
         if errors:
             return 1
-    files = {"__init__.py": init, "exchange.py": read("exchange.py")}
+    files = {"__init__.py": init}
+    files.update({name: read(name) for name in FILES if name != "__init__.py"})
     with open(LICENSE, "r", encoding="utf-8") as f:
         files["LICENSE"] = f.read()
     os.makedirs(args.out, exist_ok=True)
