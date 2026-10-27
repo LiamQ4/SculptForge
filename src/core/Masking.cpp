@@ -8,6 +8,7 @@
 #include "core/ThreadPool.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <functional>
 
@@ -161,12 +162,18 @@ bool maskByPolygroup(Mesh& mesh, uint32_t group, bool add) {
     });
 }
 
-bool maskInShape(Mesh& mesh, const glm::mat4& viewProj, const ScreenPolygon& shape, float strength, bool unmask) {
+bool maskInShape(Mesh& mesh, const glm::mat4& viewProj, const ScreenPolygon& shape, float strength, bool unmask,
+                 const std::vector<glm::vec3>& mirrors) {
     if (mesh.vertexCount() == 0 || !shape.valid()) return false;
     const float s = std::clamp(strength, 0.0f, 1.0f);
+    const std::vector<glm::vec3> passes = mirrors.empty() ? std::vector<glm::vec3>{glm::vec3(1.0f)} : mirrors;
     return maskPass(mesh, [&](const std::vector<float>& m, uint32_t v) {
-        glm::vec2 ndc;
-        if (!projectToNdc(viewProj, mesh.positions[v], ndc) || !shape.contains(ndc)) return m[v];
+        bool inside = false;
+        for (const glm::vec3& mirror : passes) {
+            glm::vec2 ndc;
+            if (projectToNdc(viewProj, mesh.positions[v] * mirror, ndc) && shape.contains(ndc)) { inside = true; break; }
+        }
+        if (!inside) return m[v];
         return unmask ? m[v] * (1.0f - s) : m[v] + (1.0f - m[v]) * s;
     });
 }
@@ -262,6 +269,8 @@ void registerMaskingCommands(CommandRegistry& registry) {
     const ParamSpec strength{"strength", T::Number, "How much to mask or unmask (0-1). Default 1.", false};
     const ParamSpec viewProj{"view_proj", T::String, "Optional 16 numbers: column-major view-projection matrix.",
                              false};
+    const ParamSpec symmetry{"symmetry", T::String, "Also mask the mirror image across these axes, e.g. \"x\" (default none).",
+                             false};
     auto selection = [&registry](std::string name, std::string description, std::vector<ParamSpec> params,
                                  std::function<bool(const Args&, std::vector<glm::vec2>&, std::string&)> shape) {
         registry.add(
@@ -275,7 +284,16 @@ void registerMaskingCommands(CommandRegistry& registry) {
                  const bool unmask = argBool(a, "unmask", false);
                  const std::string label = unmask ? "Unmask" : "Mask";
                  UndoRecord record = UndoRecord::captureMask(doc.mesh, label);
-                 if (!maskInShape(doc.mesh, vp, ScreenPolygon(points), float(argNumber(a, "strength", 1.0)), unmask))
+                 Symmetry sym{false, false, false};
+                 for (char c : argString(a, "symmetry")) {
+                     const char l = char(std::tolower(static_cast<unsigned char>(c)));
+                     if (l == 'x') sym.x = true;
+                     else if (l == 'y') sym.y = true;
+                     else if (l == 'z') sym.z = true;
+                     else return {false, "symmetry takes the axes x, y and z"};
+                 }
+                 if (!maskInShape(doc.mesh, vp, ScreenPolygon(points), float(argNumber(a, "strength", 1.0)), unmask,
+                                  Sculptor::mirrors(sym)))
                      return {true, label + ": mask unchanged"};
                  doc.undo.push(std::move(record));
                  doc.modified = true;
@@ -293,7 +311,8 @@ void registerMaskingCommands(CommandRegistry& registry) {
          {"y1", T::Number, "Rectangle top (-1..1). Default 1.", false},
          unmask,
          strength,
-         viewProj},
+         viewProj,
+         symmetry},
         [](const Args& a, std::vector<glm::vec2>& points, std::string&) {
             const float x0 = float(argNumber(a, "x0", -1)), y0 = float(argNumber(a, "y0", -1));
             const float x1 = float(argNumber(a, "x1", 1)), y1 = float(argNumber(a, "y1", 1));
@@ -308,7 +327,8 @@ void registerMaskingCommands(CommandRegistry& registry) {
         {{"points", T::String, "The lasso: at least 3 points as \"x0 y0 x1 y1 ...\" (-1..1, y up).", true},
          unmask,
          strength,
-         viewProj},
+         viewProj,
+         symmetry},
         lassoArg);
 }
 

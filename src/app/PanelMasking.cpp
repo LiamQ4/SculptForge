@@ -92,7 +92,9 @@ void App::maskSelectMouseUp() {
         return;
     }
     // Mask the inside, or unmask it with Alt (Mask Strength sets how much).
-    runSelection("mask_rect", "mask_lasso", {{"unmask", alt}, {"strength", double(maskStrength_)}});
+    // CRKW: with the symmetry axes on, the shape masks both sides, like a MaskPen stroke.
+    const std::string axes = std::string(symmetry_.x ? "x" : "") + (symmetry_.y ? "y" : "") + (symmetry_.z ? "z" : "");
+    runSelection("mask_rect", "mask_lasso", {{"unmask", alt}, {"strength", double(maskStrength_)}, {"symmetry", axes}});
 }
 
 App::HeldBrush App::heldBrush() const {

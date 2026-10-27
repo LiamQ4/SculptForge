@@ -141,6 +141,7 @@ private:
     std::string comfyDefaultWorkflow(bool text);
     void setComfyWorkflow(const std::string& path, bool text);
     bool loadReferenceImage(const std::string& path);
+    bool pasteReferenceImage(); // CRKW: Generate 3D's paste box (Ctrl+V while hovering it)
     void projectImageFromView();
     void startGenerator();
     void pollGenerator();
@@ -245,6 +246,8 @@ private:
     char textPrompt_[512] = "";
     Image refImage_;
     std::string refImagePath_;
+    std::string pastedImagePath_;      // the temp PNG the last paste wrote (removed when replaced)
+    int imagePasteHoverFrame_ = -10;   // last frame the paste box was hovered: Ctrl+V there isn't Paste brush
     GLuint refTexture_ = 0;
     float inflateThickness_ = 1.0f;
     int inflateDetail_ = 160;

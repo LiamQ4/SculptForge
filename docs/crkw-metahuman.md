@@ -72,6 +72,6 @@ test. The full CTest suite passed 46/48 tests; the existing `ui_lightbox`
 QuickSave help-text and `ui_zbrush_feel` negative Focal Shift failures remain.
 Logs and local asset validation output are under ignored `out/`.
 
-This rebuild is installed at `out/crkw-metahuman-app/bin/sculptforge.exe`, with
-the desktop and Start menu CRKW shortcuts pointing there. It was installed
-alongside the previous build to preserve an open session with unsaved work.
+CRKW installs to `out/crkw-app` only (see CKW_WORKFLOW.md); since 2026-10-26
+`out/crkw-metahuman-app` is a junction to it, so older shortcuts and taskbar pins
+open the same latest build.

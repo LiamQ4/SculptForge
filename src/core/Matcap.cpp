@@ -26,6 +26,9 @@ struct MatcapStyle {
     float roughness; // blurs the environment for metals
     bool sculpt = false; // the readability-first sculpting light (shadeSculpt) instead of the shared model
     MatcapCavity cavity{};
+    // CRKW toon: > 1 shades in that many hard light bands (shadeToon); `subsurface` is then the shadow tint.
+    int bands = 0;
+    float toonRim = 0.0f; // > 0 a hard light rim, < 0 a dark ink outline
 };
 
 const MatcapStyle kStyles[] = {
@@ -36,6 +39,24 @@ const MatcapStyle kStyles[] = {
     {"Chrome", {0.95f, 0.96f, 1.0f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, 1.0f, 0.05f},
     {"White", {0.78f, 0.78f, 0.76f}, 0.3f, {0.04f, 0.04f, 0.05f}, 0.3f, 45.0f, {0.12f, 0.13f, 0.15f}, 0.0f, 0.0f},
     {"Bronze", {0.80f, 0.50f, 0.25f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, 1.0f, 0.35f},
+    // CRKW materials (appended, so saved projects keep the material they had).
+    // Sculpt-reading greys: the Sculpt light on neutral albedos, and a softer satin grey.
+    {"Gray", {0.40f, 0.40f, 0.40f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, true, {0.75f, 0.35f}},
+    {"Blue Gray", {0.33f, 0.37f, 0.44f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, true, {0.75f, 0.35f}},
+    {"Basic", {0.45f, 0.45f, 0.46f}, 0.15f, {0.02f, 0.02f, 0.03f}, 0.35f, 35.0f, {0.14f, 0.15f, 0.17f}, 0.0f, 0.0f, false, {0.65f, 0.3f}},
+    // Warm clays.
+    {"Terracotta", {0.52f, 0.20f, 0.10f}, 0.2f, {0.25f, 0.06f, 0.02f}, 0.05f, 8.0f, {0.12f, 0.08f, 0.07f}, 0.0f, 0.0f, false, {0.6f, 0.25f}},
+    {"Plasticine", {0.62f, 0.50f, 0.36f}, 0.35f, {0.20f, 0.10f, 0.04f}, 0.12f, 18.0f, {0.14f, 0.12f, 0.10f}, 0.0f, 0.0f, false, {0.6f, 0.25f}},
+    {"Sculpey", {0.72f, 0.58f, 0.48f}, 0.45f, {0.35f, 0.12f, 0.06f}, 0.10f, 22.0f, {0.16f, 0.13f, 0.12f}, 0.0f, 0.0f, false, {0.6f, 0.25f}},
+    // Toon: hard bands, a cool shadow tint, a crisp highlight.
+    {"Toon 2-Tone", {0.50f, 0.40f, 0.34f}, 0.0f, {0.30f, 0.30f, 0.45f}, 0.35f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, false, {0.45f, 0.15f}, 2, 0.45f},
+    {"Toon 3-Tone", {0.48f, 0.42f, 0.38f}, 0.0f, {0.28f, 0.27f, 0.42f}, 0.3f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, false, {0.45f, 0.15f}, 3, 0.3f},
+    {"Toon Ink", {0.56f, 0.50f, 0.44f}, 0.0f, {0.38f, 0.36f, 0.48f}, 0.25f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, false, {0.5f, 0.1f}, 2, -1.0f},
+    // Shiny and metal.
+    {"Gloss Plastic", {0.06f, 0.22f, 0.45f}, 0.05f, {0.0f, 0.0f, 0.0f}, 1.4f, 220.0f, {0.30f, 0.34f, 0.40f}, 0.0f, 0.0f},
+    {"Jade", {0.10f, 0.40f, 0.24f}, 0.6f, {0.10f, 0.45f, 0.20f}, 0.9f, 140.0f, {0.10f, 0.25f, 0.16f}, 0.0f, 0.0f},
+    {"Gold", {1.00f, 0.76f, 0.33f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, 1.0f, 0.18f},
+    {"Gunmetal", {0.34f, 0.36f, 0.39f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, 1.0f, 0.3f},
 };
 constexpr int kStyleCount = int(sizeof kStyles / sizeof kStyles[0]);
 
@@ -79,8 +100,29 @@ glm::vec3 shadeSculpt(const MatcapStyle& m, const glm::vec3& n) {
     return m.albedo * light + glm::vec3(spec) + glm::vec3(0.8f, 0.85f, 0.95f) * (fillSpec + rim);
 }
 
+// CRKW toon: the key light cut into `bands` flat tones (narrow soft steps, so edges don't alias) from the
+// shadow tint up to the albedo, a hard highlight, and a hard rim -- light, or a dark ink outline.
+glm::vec3 shadeToon(const MatcapStyle& m, const glm::vec3& n) {
+    const glm::vec3 v(0.0f, 0.0f, 1.0f);
+    // The key is nearly frontal, so the bands are cut across N.L in [-0.2, 0.9]: the shadow takes the lower right.
+    const float d = std::clamp((glm::dot(n, kKey) + 0.2f) / 1.1f, 0.0f, 0.9999f);
+    const float s = d * float(m.bands), base = std::floor(s), frac = s - base;
+    const float t = std::clamp(frac / 0.06f - (1.0f / 0.06f - 1.0f), 0.0f, 1.0f);
+    const float level = std::min(base + t * t * (3.0f - 2.0f * t), float(m.bands - 1)) / float(m.bands - 1);
+    glm::vec3 c = glm::mix(m.albedo * m.subsurface * 1.6f, m.albedo, level);
+    const float nh = glm::dot(n, glm::normalize(kKey + v));
+    c += glm::vec3(m.specular) * std::clamp((nh - 0.965f) / 0.01f, 0.0f, 1.0f);
+    const float nz = std::max(n.z, 0.0f);
+    if (m.toonRim > 0.0f) // a light rim on the lit side only
+        c += glm::vec3(m.toonRim) * std::clamp((0.3f - nz) / 0.04f, 0.0f, 1.0f) * std::clamp(d * 2.0f - 0.6f, 0.0f, 1.0f);
+    else if (m.toonRim < 0.0f) // a wide ink band: it draws the silhouettes and side-facing folds
+        c = glm::mix(c, glm::vec3(0.02f), std::clamp((0.42f - nz) / 0.05f, 0.0f, 1.0f) * -m.toonRim);
+    return c;
+}
+
 glm::vec3 shade(const MatcapStyle& m, const glm::vec3& n) {
     if (m.sculpt) return shadeSculpt(m, n);
+    if (m.bands > 1) return shadeToon(m, n);
     const glm::vec3 v(0.0f, 0.0f, 1.0f);
     const float nv = std::max(n.z, 0.0f);
     if (m.metal > 0.0f) {

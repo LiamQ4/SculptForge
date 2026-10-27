@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
 #include <filesystem>
@@ -825,6 +826,8 @@ void App::onMouseUp() {
 void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
     if (captureShortcutKey(key, mod)) return; // Ctrl+Alt+click a button, then press its new key
     if (lightBoxKey(key, mod)) return;        // , LightBox, B / M pickers, S / I pop-ups (LightBox.cpp)
+    // CRKW: Ctrl+V over Generate 3D's image box pastes an image there (drawImageTo3D does it), not a brush.
+    if (key == SDLK_V && (mod & SDL_KMOD_CTRL) && imagePasteHoverFrame_ >= ImGui::GetFrameCount() - 1) return;
     actions_.handleKey(key, mod);             // the shortcut map: Config.cpp initActions()
 }
 
@@ -1851,6 +1854,60 @@ bool App::loadReferenceImage(const std::string& path) {
     return true;
 }
 
+// CRKW: Generate 3D's paste box. An image on the clipboard (PNG where the system offers one, the Windows bitmap
+// otherwise), or the path of an image file copied as text, is saved as a temporary PNG and loaded like a chosen
+// file -- the generators read the picture from a file.
+bool App::pasteReferenceImage() {
+    Image img;
+    std::string err;
+    bool found = false;
+    for (const char* mime : {"image/png", "image/bmp"}) {
+        if (!SDL_HasClipboardData(mime)) continue;
+        size_t size = 0;
+        void* data = SDL_GetClipboardData(mime, &size);
+        if (!data) continue;
+        found = Image::decode(static_cast<const unsigned char*>(data), size, img, err);
+        SDL_free(data);
+        if (found) break;
+    }
+    if (!found && SDL_HasClipboardText()) {
+        char* text = SDL_GetClipboardText();
+        std::string path = text ? text : "";
+        SDL_free(text);
+        const auto trim = [](char c) { return std::isspace(static_cast<unsigned char>(c)) || c == '"'; };
+        while (!path.empty() && trim(path.back())) path.pop_back();
+        while (!path.empty() && trim(path.front())) path.erase(path.begin());
+        std::error_code ec;
+        if (!path.empty() && std::filesystem::is_regular_file(std::filesystem::path(std::u8string(path.begin(), path.end())), ec))
+            return loadReferenceImage(path);
+    }
+    if (!found) {
+        status_ = err.empty() ? "No image on the clipboard - copy an image (or an image file's path) first"
+                              : "Couldn't read the pasted image: " + err;
+        return false;
+    }
+    // Some copies (screenshots, browsers) carry a 32-bit bitmap whose alpha is all zero: that means opaque.
+    bool anyAlpha = false;
+    for (size_t i = 3; i < img.rgba.size() && !anyAlpha; i += 4) anyAlpha = img.rgba[i] != 0;
+    if (!anyAlpha)
+        for (size_t i = 3; i < img.rgba.size(); i += 4) img.rgba[i] = 255;
+    const auto stem = (std::filesystem::temp_directory_path() /
+                       ("sculptforge_pasted_" + std::to_string(SDL_GetTicksNS()) + ".png")).u8string();
+    const std::string path(stem.begin(), stem.end());
+    if (!img.savePng(path, err)) {
+        status_ = "Couldn't save the pasted image: " + err;
+        return false;
+    }
+    if (!loadReferenceImage(path)) return false;
+    // The previous paste is no longer needed -- unless a generation still reads it.
+    std::error_code ec;
+    if (!pastedImagePath_.empty() && !pendingGenerator_.valid())
+        std::filesystem::remove(std::filesystem::path(std::u8string(pastedImagePath_.begin(), pastedImagePath_.end())), ec);
+    pastedImagePath_ = path;
+    status_ = "Pasted image " + std::to_string(img.width) + "x" + std::to_string(img.height);
+    return true;
+}
+
 void App::projectImageFromView() {
     if (refImage_.empty()) return;
     const CanvasRect view = canvasRect();
@@ -2033,21 +2090,39 @@ void App::drawImageTo3D() {
         ImGui::TextWrapped("Describe one object: \"a stylised dragon head with curled horns\", \"a cartoon fox sitting\".");
         ImGui::PopStyleColor();
     } else {
-        if (ImGui::Button(refImage_.empty() ? "Choose image..." : "Change image...", ImVec2(-1, 0)))
+        // CRKW: the picture box -- hover it and press Ctrl+V to paste, click it to browse, or drop a file on the window.
+        const float boxW = ImGui::GetContentRegionAvail().x;
+        const float boxH = refImage_.empty() ? 120.0f * scale : std::min(boxW / refImage_.aspect(), 180.0f * scale);
+        const ImVec2 p0 = ImGui::GetCursorScreenPos(), p1(p0.x + boxW, p0.y + boxH);
+        const bool clicked = ImGui::InvisibleButton("##imagebox", ImVec2(boxW, boxH));
+        const bool hovered = ImGui::IsItemHovered();
+        if (hovered) imagePasteHoverFrame_ = ImGui::GetFrameCount();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        if (!refImage_.empty()) {
+            const float drawW = boxH * refImage_.aspect(), x = p0.x + (boxW - drawW) * 0.5f;
+            dl->AddImage(ImTextureID(uintptr_t(refTexture_)), ImVec2(x, p0.y), ImVec2(x + drawW, p1.y));
+        } else {
+            dl->AddRectFilled(p0, p1, ImGui::GetColorU32(ImGuiCol_FrameBg), 4 * scale);
+            const char* lines[] = {"Paste an image here", "hover + Ctrl+V", "or click to browse, or drop a file"};
+            const float lineH = ImGui::GetTextLineHeightWithSpacing();
+            float y = p0.y + (boxH - lineH * 3) * 0.5f;
+            for (int i = 0; i < 3; ++i, y += lineH) {
+                const float w = ImGui::CalcTextSize(lines[i]).x;
+                dl->AddText(ImVec2(p0.x + (boxW - w) * 0.5f, y),
+                            ImGui::GetColorU32(i == 0 ? ImGuiCol_Text : ImGuiCol_TextDisabled), lines[i]);
+            }
+        }
+        dl->AddRect(p0, p1, ImGui::GetColorU32(hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Border), 4 * scale, 0,
+                    (hovered ? 2.0f : 1.0f) * scale);
+        if (hovered && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) pasteReferenceImage();
+        if (clicked)
             SDL_ShowOpenFileDialog(onFileChosen, &dialogRequests_[int(FileAction::OpenImage)], window_, kImageFilters, 2,
                                    nullptr, false);
+        if (hovered && !refImage_.empty()) ImGui::SetTooltip("Ctrl+V: paste another image  -  click: choose a file");
         if (refImage_.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::TextWrapped("Or drop a sketch, concept, logo, photo or height map onto the window.");
-            ImGui::PopStyleColor();
             ImGui::End();
             return;
         }
-        const float thumbW = ImGui::GetContentRegionAvail().x;
-        const float thumbH = std::min(thumbW / refImage_.aspect(), 180.0f * scale);
-        const float drawW = thumbH * refImage_.aspect();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (thumbW - drawW) * 0.5f);
-        ImGui::Image(ImTextureID(uintptr_t(refTexture_)), ImVec2(drawW, thumbH));
         auto fileName = std::filesystem::path(std::u8string(refImagePath_.begin(), refImagePath_.end())).filename().u8string();
         ImGui::TextDisabled("%s  (%dx%d)", std::string(fileName.begin(), fileName.end()).c_str(), refImage_.width,
                             refImage_.height);

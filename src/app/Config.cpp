@@ -148,7 +148,16 @@ constexpr Gesture kGestures[] = {
 
 void App::initUiConfig(bool deterministic) {
     uiConfigDeterministic_ = deterministic;
-    if (char* pref = SDL_GetPrefPath("SculptForge", "SculptForge")) {
+    if (!options_.uiTest.empty()) {
+        // CRKW: UI tests keep their config (Store Config's ui.json, console history, recent actions) in their
+        // own folder, never the artist's -- help_console's Store Config used to overwrite the real ui.json.
+        const std::filesystem::path dir = (options_.uiOutDir.empty()
+            ? std::filesystem::temp_directory_path() / "sculptforge-ui-test" : fsPath(options_.uiOutDir)) / "config";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        const std::u8string u8 = (dir / "").u8string();
+        configDir_.assign(u8.begin(), u8.end());
+    } else if (char* pref = SDL_GetPrefPath("SculptForge", "SculptForge")) {
         configDir_ = pref;
         SDL_free(pref);
     }

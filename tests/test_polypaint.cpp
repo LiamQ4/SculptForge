@@ -275,7 +275,7 @@ TEST(polypaint_commands_in_schema) {
 }
 
 TEST(matcap_builtin_materials) {
-    CHECK(matcapCount() >= 4 && matcapCount() <= 8);
+    CHECK(matcapCount() >= 4 && matcapCount() <= 24);
     for (int i = 0; i < matcapCount(); ++i) {
         CHECK(std::string(matcapName(i)).size() > 0);
         CHECK(findMatcap(matcapName(i)) == i);
