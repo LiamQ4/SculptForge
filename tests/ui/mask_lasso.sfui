@@ -3,6 +3,10 @@
 run new_sphere subdivisions=5
 expect_value masked == 0
 
+# CRKW shapes follow symmetry; this test measures a one-sided selection.
+# Mirrored selections are covered by crkw_mask_symmetry.sfui.
+click "X##transform.symmetry_x"
+
 # The shapes sit at the top of Tool > Masking, with Ctrl-hover help.
 click "Masking"
 click "MaskLasso##mask.lasso"

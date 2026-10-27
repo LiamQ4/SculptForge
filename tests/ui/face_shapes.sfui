@@ -51,7 +51,7 @@ shot head-wink-console
 run face_preset name=Neutral
 
 # A take recorded by the phone link plays, and bakes for export.
-run face_take_play path=$SCRIPT_DIR/data/face/take.json
+run face_take_play path="$SCRIPT_DIR/data/face/take.json"
 expect_status "Playing take 'take'"
 expect_value face_take_playing == 1
 wait 0.75
@@ -67,7 +67,7 @@ click "Facial Shapes/Clear Baked Take"
 expect_no_text "Baked: take"
 
 # A real head: the marble bust (different topology, a little turned, closed mouth, blank eyes).
-run open path=$SCRIPT_DIR/../data/marble-bust.glb
+run open path="$SCRIPT_DIR/../data/marble-bust.glb"
 expect_value layers == 0
 camera 0 0
 key f

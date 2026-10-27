@@ -56,6 +56,21 @@ systems. Preserve upstream license and attribution files.
 
 ## Local app and build
 
+### Upstream 0.9.1 integration (2026-10-27)
+
+Local matcaps, symmetric mask shapes, clipboard image paste and isolated UI-test
+settings were saved in commit `24375d8` before merging upstream tag `v0.9.1`.
+The merge completed without textual conflicts. The Windows Release build succeeded
+with WebRTC enabled and upstream update notifications disabled.
+
+Validation: all 54,699 core checks and every CRKW UI test passed. Of the 55 CTest
+entries, 53 passed after two test compatibility fixes: the one-sided lasso test
+explicitly disables X symmetry, and the face-shape test quotes paths with spaces.
+The two previously documented UI failures remain: LightBox's QuickSave help-message
+expectation and negative Focal Shift keyboard input in `ui_zbrush_feel`.
+Logs: `out/crkw-091-build.log`, `out/crkw-091-tests.log`,
+`out/crkw-091-mask-retest.log`, and `out/crkw-091-face-retest.log`.
+
 The CRKW Windows Release build is staged in `out/crkw-app/`, the only install folder. Desktop and per-user
 Start menu shortcuts named **SculptForge CRKW** launch `out/crkw-app/bin/sculptforge.exe`.
 `out/crkw-metahuman-app` is a directory junction to `out/crkw-app` (2026-10-26), so a taskbar pin
