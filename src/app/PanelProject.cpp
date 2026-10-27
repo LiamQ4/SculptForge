@@ -6,6 +6,7 @@
 // Recent and autosave with crash recovery. Prompts only appear in interactive
 // sessions; --render, --record and demos run straight through.
 #include "app/App.h"
+#include "core/SplatCapture.h"
 #include "app/Ui.h"
 
 #include "ai/Http.h"
@@ -366,6 +367,10 @@ void App::openPathConfirmed(const std::string& path) {
     // Images go to the Image to 3D panel and brushes into the library: no scene change.
     std::string ext = fsPath(path).extension().string();
     for (auto& c : ext) c = char(std::tolower(static_cast<unsigned char>(c)));
+    if (capture::isVideoFile(path)) { // a phone video of an object: train a splat from it (PanelSplatTrain.cpp)
+        runCommand("splat_train", {{"source", path}});
+        return;
+    }
     if (Image::isImagePath(path) || ext == ".sfbrush" || ext == ".exr" || ext == ".sfvdm") openPath(path);
     else confirmDiscard([this, path] { openPath(path); });
 }
@@ -533,10 +538,15 @@ void App::drawUpdateBanner() {
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
                                    ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
     if (ImGui::Begin("##update_banner", nullptr, flags)) {
+        // Reading size (the guide's 17 px fonts), so the highlights are easy to read over the canvas.
+        if (ImFont* title = guide_.bodyBoldFont()) ImGui::PushFont(title);
         ImGui::Text("SculptForge %s is available", u.version.c_str());
+        if (guide_.bodyBoldFont()) ImGui::PopFont();
+        if (ImFont* body = guide_.bodyFont()) ImGui::PushFont(body);
         ImGui::SameLine();
         ImGui::TextDisabled("(you have %s)", SCULPTFORGE_VERSION);
         for (const auto& h : u.highlights) ImGui::BulletText("%s", h.c_str());
+        if (guide_.bodyFont()) ImGui::PopFont();
         ImGui::Spacing();
         bool close = false;
         if (ImGui::Button("What's new")) SDL_OpenURL(u.notesUrl.c_str());

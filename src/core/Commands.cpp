@@ -11,6 +11,7 @@
 #include "core/Decimate.h"
 #include "core/Dyntopo.h"
 #include "core/EnginePresets.h"
+#include "core/Face.h"
 #include "core/ImageTo3D.h"
 #include "core/Masking.h"
 #include "core/Multires.h"
@@ -22,6 +23,7 @@
 #include "core/Primitives.h"
 #include "core/Project.h"
 #include "core/QRemesh.h"
+#include "core/Sculptable.h"
 #include "core/Splats.h"
 #include "core/TextureTransfer.h"
 #include "core/Voxel.h"
@@ -385,15 +387,18 @@ CommandRegistry::CommandRegistry() {
 
     add({"export_glb",
          "Export a game-ready binary glTF (.glb), one node and mesh per visible SubTool. Sculpt layers become "
-         "morph targets (blend shapes). UVs are kept and SubTool textures are embedded.",
+         "morph targets (blend shapes). UVs are kept and SubTool textures are embedded. A baked face take "
+         "(face_take_bake) becomes an animation of the morph target weights.",
          {{"path", T::String, "Output .glb path (UTF-8).", true}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path");
              std::string err;
              const auto objects = visibleSubtoolObjects(doc);
              if (objects.empty()) return {false, "Nothing visible to export"};
-             if (!saveGlb(path, objects, doc.assetName(), err)) return {false, err};
-             return {true, "Exported " + path + objectCountText(objects)};
+             MorphAnimation take;
+             const bool animated = bakedFaceAnimation(doc, take);
+             if (!saveGlb(path, objects, doc.assetName(), err, animated ? &take : nullptr)) return {false, err};
+             return {true, "Exported " + path + objectCountText(objects) + (animated ? " with the take '" + take.name + "'" : "")};
          }});
 
     add({"export_usd",
@@ -401,7 +406,8 @@ CommandRegistry::CommandRegistry() {
          "SubTool. Sculpt layers become "
          "UsdSkel blend shapes with their current weights; loaded Gaussian splats are included as a "
          "ParticleField3DGaussianSplat prim. UVs are kept; a SubTool's texture becomes a UsdPreviewSurface texture "
-         "(packed into .usdz, else a PNG beside the file).",
+         "(packed into .usdz, else a PNG beside the file). A baked face take (face_take_bake) becomes time samples "
+         "of the blend shape weights.",
          {{"path", T::String, "Output .usda, .usd or .usdz path (UTF-8).", true},
           {"splats", T::Bool, "Include the loaded Gaussian splats. Default true.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
@@ -409,9 +415,12 @@ CommandRegistry::CommandRegistry() {
              std::string err;
              const SplatCloud* splats = argBool(a, "splats", true) && !doc.splats.empty() ? &doc.splats : nullptr;
              const auto objects = visibleSubtoolObjects(doc);
-             if (!saveUsd(path, objects, splats, doc.assetName(), err)) return {false, err};
+             MorphAnimation take;
+             const bool animated = bakedFaceAnimation(doc, take);
+             if (!saveUsd(path, objects, splats, doc.assetName(), err, animated ? &take : nullptr)) return {false, err};
              return {true, "Exported " + path + objectCountText(objects) +
-                               (splats ? " (mesh + " + std::to_string(splats->size()) + " splats)" : "")};
+                               (splats ? " (mesh + " + std::to_string(splats->size()) + " splats)" : "") +
+                               (animated ? " with the take '" + take.name + "'" : "")};
          }});
 
     add({"export_fbx",
@@ -704,28 +713,7 @@ CommandRegistry::CommandRegistry() {
              return {true, "Splats placed"};
          }});
 
-    add({"splat_to_mesh",
-         "Convert a Gaussian-splat capture into a watertight, sculptable mesh (replaces the sculpt; the splats "
-         "stay as a reference). Trim the capture first so only the subject remains.",
-         {{"resolution", T::Number, "Voxels across the subject (32-512). Default 192.", false},
-          {"min_opacity", T::Number, "Ignore splats fainter than this (0-1). Default 0.25.", false},
-          {"keep", T::Number, "Fraction of splats to keep per axis, trimming floaters (0.5-1). Default 0.97.", false},
-          {"close", T::Number, "Seal holes up to this many voxels (0-8). Default 2.", false},
-          {"smooth", T::Number, "Smoothing passes (0-50). Default 6.", false}},
-         [](Document& doc, const Args& a) -> CommandResult {
-             if (doc.splats.empty()) return {false, "No splats loaded"};
-             SplatToMeshOptions o;
-             o.resolution = int(argNumber(a, "resolution", o.resolution));
-             o.minOpacity = float(argNumber(a, "min_opacity", o.minOpacity));
-             o.keepFraction = float(argNumber(a, "keep", o.keepFraction));
-             o.closeRadius = int(argNumber(a, "close", o.closeRadius));
-             o.smoothIterations = int(argNumber(a, "smooth", o.smoothIterations));
-             std::string err;
-             Mesh m = splatsToMesh(doc.splats, o, &err);
-             if (m.triangleCount() == 0) return {false, err};
-             doc.replaceMeshUndoable(std::move(m), "Splats to Mesh");
-             return {true, "Built a " + std::to_string(doc.mesh.triangleCount()) + "-triangle mesh from the splats"};
-         }});
+    // splat_to_mesh (Make sculptable) and face_guides: core/Sculptable.cpp.
 
     add({"mesh_to_splats",
          "Turn the visible SubTools into Gaussian splats (flat oriented surfels with baked clay shading), replacing any "
@@ -782,12 +770,14 @@ CommandRegistry::CommandRegistry() {
     registerSubToolCommands(*this);
     registerSubdivCommands(*this); // subdiv_* (core/MultiresCommands.cpp)
     registerDyntopoCommands(*this); // dyntopo (core/DyntopoCommands.cpp)
+    registerSculptableCommands(*this); // splat_to_mesh, face_guides (core/Sculptable.h)
     registerTransformCommands(*this); // transform (core/MeshTransform.h)
     registerPerformanceCommands(*this); // perf_info, set_multithreading (core/Benchmark.cpp)
     registerPaintCommands(*this); // core/Polypaint.cpp
     registerGozCommands(*this); // goz_import/export/send/receive, export_stl (io/GozCommands.cpp)
     registerBlenderCommands(*this); // blender_send/receive (io/BlenderCommands.cpp)
     registerBakeCommands(*this); // bake (core/Bake.cpp)
+    registerFaceCommands(*this); // face_shapes_generate, face_weights, ... (core/FaceCommands.cpp)
     registerProjectCommands(*this); // keep last (core/Project.cpp)
 }
 

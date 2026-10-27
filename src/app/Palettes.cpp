@@ -244,6 +244,7 @@ void App::drawPalette_File() {
     ImGui::Separator();
     drawGozMenu();
     drawBlenderMenu(); // the Blender bridge (PanelBlender.cpp)
+    menuAction(*this, "file.capture_phone"); // the phone link (PanelPhone.cpp)
     ImGui::Separator();
     menuAction(*this, "file.quit");
 }
@@ -292,6 +293,7 @@ void App::drawPalette_Help() {
     menuAction(*this, "ui.command_palette");
     menuAction(*this, "help.website");
     menuAction(*this, "help.report");
+    menuAction(*this, "help.feedback");
     ImGui::Separator();
     menuAction(*this, "help.about");
 }
@@ -378,6 +380,11 @@ void App::drawPalette_Tool() {
     if (subpalette("tool.layers", "Layers")) {
         Demo::pushScope("Layers");
         drawLayersContents();
+        Demo::popScope();
+    }
+    if (subpalette("tool.face", "Facial Shapes")) {
+        Demo::pushScope("Facial Shapes");
+        drawFaceContents(); // PanelFace.cpp
         Demo::popScope();
     }
     if (subpalette("tool.paint_layers", "Paint Layers")) {

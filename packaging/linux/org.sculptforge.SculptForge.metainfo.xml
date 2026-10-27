@@ -16,17 +16,19 @@
     or turn an image or a description into a sculptable 3D model.</p>
   </description>
   <launchable type="desktop-id">org.sculptforge.SculptForge.desktop</launchable>
-  <url type="homepage">https://islandmed.github.io/SculptForge/</url>
+  <url type="homepage">https://sculptforge.app/</url>
   <url type="bugtracker">https://github.com/islandmed/SculptForge/issues</url>
   <url type="vcs-browser">https://github.com/islandmed/SculptForge</url>
   <screenshots>
     <screenshot type="default">
-      <image>https://islandmed.github.io/SculptForge/media/screenshot-sculpt.jpg</image>
+      <image>https://sculptforge.app/media/screenshot-sculpt.jpg</image>
       <caption>Sculpting a creature with symmetry</caption>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.9.1" date="2026-10-27"/>
+    <release version="0.9.0" date="2026-10-26"/>
     <release version="0.8.1" date="2026-10-25"/>
     <release version="0.8.0" date="2026-10-25"/>
     <release version="0.7.0" date="2026-10-25"/>

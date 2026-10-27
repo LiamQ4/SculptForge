@@ -147,6 +147,29 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
   Nostril, Create VDM from a VDM plane, Blender-compatible OpenEXR in and out
 - ✅ Blender add-on: ZBrush-style keys in Sculpt Mode (a preference)
 
+## In development for v0.9 — maquette to performance
+
+- ✅ Facial shapes: the 52 ARKit blend shapes generated on any sculpted humanoid head (template fit + deformation
+  transfer, eyes / teeth / tongue SubTools, symmetry, subdivision levels), Face test, export with ARKit names to
+  GLB / USD / FBX / Blender shape keys
+- ✅ Live face: `face_weights` (partial updates, no undo), takes played and baked to glTF animation / USD time samples
+- 📋 Next for faces: FBX blend-shape animation, take animation over the Blender bridge, an image-based landmark
+  detector, corrective combination shapes, eye rotations as bones for rigs that want them
+- ✅ Splat training from a phone video or photos with a live viewport preview (Brush, downloaded on request;
+  COLMAP camera positions, or the phone's AR poses; sharpest-frame selection; Good enough - stop / Cancel)
+- 📋 Splat training: background masking of the capture, resume a stopped training, a Brush build for Linux ARM
+- ✅ File > Capture from phone: QR pairing (or a 6-digit code), LAN only, only while the window is open
+- ✅ Capture page on the phone (no app): scan video or photo burst with coaching, one photo to 3D, splat .ply from
+  Scaniverse / Polycam / Luma; resumable chunked uploads into the Captures inbox with capture.json
+- ✅ View in AR on the desk: USDZ (AR Quick Look) and GLB (Scene Viewer), decimated, colour baked, re-exported
+  after strokes
+- ✅ Live face feed: MediaPipe on the phone, 52 ARKit weights + head rotation over a WebRTC data channel
+  (libdatachannel, optional at build time), face takes as JSON Lines
+- 📋 Play back and export face takes (with the facs feature); in-page video recording with live coaching where the
+  page is secure; a QR code back from the phone for networks without internet
+- ✅ Face page at https://sculptforge.app/link/ (one constant: kPhoneLinkSiteUrl)
+- 📋 Deploy the link relay Worker (`services/link-worker`, link.sculptforge.app); then consider dropping ntfy.sh
+
 ## Phase 3 — AI assistant, beyond brushes
 
 - 📋 Chat assistant that drives any SculptForge command (tool calling over the existing registry)
@@ -174,7 +197,10 @@ Ranked by what sculptors cite most on the ZBrush, Polycount, Blender and Mudbox 
 - 📋 UV editing (seams, relax, pack options), UDIM tiles; ✅ texture baking (normal/displacement, v0.5)
 - ✅ STL import (binary and ASCII) and binary export
 - 📋 Binary USD (usdc), SPZ-compressed splats, USD references/payloads
-- 📋 Splat editing: crop box, paint-select, sculpt deforming nearby splats
+- ✅ Make sculptable: splat capture → watertight surface → face-aware quads (eye, mouth and nasolabial loops) with
+  the capture's colours, crop box, Game / Film / Sculpt presets (v0.9)
+- 📋 Make sculptable: a learned face landmark model (bundled, permissive licence) for hard faces; ears and hands
+- 📋 Splat editing: paint-select, sculpt deforming nearby splats
 
 ## Phase 5 — Ecosystem (v1.0)
 

@@ -5,6 +5,63 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Version 0.9.1
+
+Fixes from the first day of 0.9.
+
+### Phone capture: when the phone can't open the page
+
+Recent versions of Chrome on Android can refuse to open any address on your home network and just say **This
+site can't be reached**. The **Capture from phone** window now says so and suggests Firefox, and its **The phone
+can't open the page?** list covers Linux firewalls too. See [Phone capture and AR](phone-capture.md).
+
+### Easier to read
+
+This guide, including What's New, and the update banner now use larger text.
+
+### Baking
+
+**Cancel** now stops small bakes too.
+
+## Version 0.9.0
+
+Maquette to performance: scan an object or a clay maquette with your phone, turn the scan into a clean mesh you
+can sculpt and animate, give a head the 52 ARKit facial shapes, and drive them live with your own face.
+
+### Facial shapes and live face
+
+**Tool > Facial Shapes > Generate Facial Shapes** gives a sculpted head the 52 Apple ARKit blend shapes
+(`eyeBlinkLeft`, `jawOpen`, `mouthSmileRight`, ...) as sculpt layers, fitted to its proportions from a template head
+with those shapes (ICT-FaceKit, MIT licence). Eyes, teeth and tongue SubTools get theirs too. Fix any shape by
+sculpting into its layer, check them with the **Face test** presets and sliders, and export them with their ARKit
+names to GLB, USD, FBX and Blender (as shape keys). `face_weights` drives them live from a face feed, and recorded
+takes play in the viewport and bake into a glTF animation or USD time samples. `new_head` starts a scene with a
+human head to sculpt on. See [Facial shapes and live face](facial-shapes.md).
+
+### Scan an object into a splat
+
+Film an object with your phone, or take photos all around it, and SculptForge trains a Gaussian splat from it on
+your own graphics card. The splat appears in the viewport after a few hundred steps and sharpens while it trains;
+you can orbit around it, stop when it's good enough, or cancel. Pick **Video...** or **Photos Folder...** under
+**Splats > Train from capture**, or drop a video onto the window. The free Brush trainer is offered as a one-click
+download the first time. See [Scan an object into a splat](scan-to-splat.md).
+
+### Make sculptable: from a scan to a production asset
+
+One click in the **Splats** palette turns a Gaussian-splat capture into a clean SubTool you can sculpt, rig and
+animate: a watertight surface with the floaters and background gone and open bottoms sealed, quad topology at a
+Game, Film or Sculpt budget, edge loops round the eyes and mouth and along the nasolabial folds when the capture
+is a head (mirrored across the face), and the capture's colours as polypaint or a texture. A crop box cuts away
+the table or the room; Review shows the face landmarks to nudge before remeshing. The splats stay, hidden. Five
+million splats take about ten seconds on a laptop. See [From scan to sculptable mesh](scan-to-sculptable.md).
+
+### Your phone as SculptForge's camera
+
+**File > Capture from phone** shows a QR code: scan it and your phone's browser can send SculptForge a scan (walk
+round an object for 20 to 60 seconds), a photo to turn into a model, or a splat file from a scanning app. Tap
+**View in AR** to see your sculpt standing on your desk, updated as you sculpt, and **Face capture** to drive a
+character's facial shapes with your own face, live. No app to install. See [Phone capture and AR](phone-capture.md).
+
 ## Version 0.8.1
 
 Fixes from a ZBrush artist's testing, and a way to bring your ZTools over.

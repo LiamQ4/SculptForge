@@ -19,6 +19,7 @@
 #include "core/Commands.h"
 #include "core/Image.h"
 #include "core/Document.h"
+#include "core/Face.h"
 #include "core/MeshTransform.h"
 #include "core/AutoUv.h"
 #include "core/QRemesh.h"
@@ -26,6 +27,9 @@
 #include "core/Tablet.h"
 #include "core/UpdateCheck.h"
 #include "core/Texture.h"
+#include "io/ArExport.h"
+#include "link/PhoneLink.h"
+#include "link/Qr.h"
 #include "render/Camera.h"
 #include "render/Renderer.h"
 
@@ -99,7 +103,7 @@ public:
     void queueFile(FileAction action, std::string path);
 
 private:
-    enum class Drag { None, Stroke, Orbit, Pan, Zoom, Roll, MaskCanvas, SubToolClick, Select, Gizmo, Guide };
+    enum class Drag { None, Stroke, Orbit, Pan, Zoom, Roll, MaskCanvas, SubToolClick, Select, Gizmo, Guide, Sculptable };
 
     void handleEvent(const SDL_Event& e);
     void onMouseDown(float x, float y, Uint8 button);
@@ -274,7 +278,6 @@ private:
     bool remeshGenerated_ = true;
     int voxelResolution_ = 200;
     bool keepTexture_ = true; // Keep Texture: remeshes carry a painted texture over (core/TextureTransfer.h)
-    int splatMeshResolution_ = 192;
     int remeshResolution_ = 256;
     std::future<ai::GeneratorResult> pendingGenerator_;
     std::shared_ptr<ai::GenerationProgress> generatorProgress_;
@@ -372,6 +375,28 @@ private:
     void registerVdmActions();
     void pollVdm(); // every frame: file dialog results, and the stroke follows the brush
     void afterVdmCommand(const std::string& name, const CommandResult& r);
+    // Facial shapes (PanelFace.cpp, core/Face.h): Tool > Facial Shapes (Generate, landmarks clicked on the canvas,
+    // the Face test, takes played with the frame clock).
+    void drawFaceContents();
+    void registerFaceUiActions();
+    void generateFaceShapesUi();
+    bool hasFaceShapes() const;
+    bool faceMouseDown(float x, float y, SDL_Keymod mod);
+    void drawFaceOverlay();
+    void animateFaceTake(float dt); // every frame (from animateLayers): file dialog results, take playback
+    static void SDLCALL onFaceTakeChosen(void* userdata, const char* const* files, int filter);
+    FaceFitLandmarks faceLandmarks_;
+    bool facePlacing_ = false;
+    int facePlaceIndex_ = 0;
+    int faceSymmetry_ = 0; // 0 Auto, 1 On, 2 Off
+    bool faceSubtools_ = true;
+    float facePresetAmount_ = 1.0f;
+    MorphAnimation faceTake_;
+    std::string faceTakePath_;
+    bool faceTakePlaying_ = false, faceTakeLoop_ = true;
+    float faceTakeTime_ = 0.0f;
+    std::mutex faceTakeMutex_;
+    std::string pendingFaceTake_; // set by the file dialog thread
     static void SDLCALL onVdmChosen(void* userdata, const char* const* files, int filter);
     static void SDLCALL onVdmExportChosen(void* userdata, const char* const* files, int filter);
     friend void drawVdmGrid(App&, GridMode);
@@ -455,6 +480,17 @@ private:
     // (1 when the active SubTool shows a baked normal map); NaN for other names.
     double bakeTestValue(const std::string& name);
     std::shared_ptr<struct BakeUiState> bake_;
+    // Splats > Train from capture (PanelSplatTrain.cpp, ai/SplatTrainer.h): Brush trains a splat from a phone
+    // capture in the background; each checkpoint replaces the splats in the viewport (live preview).
+    void registerSplatTrainUi();
+    void drawSplatTrainSection(); // top of the Splats palette
+    void drawSplatTrainOverlay(); // progress over the canvas, the tool download prompt
+    void pollSplatTrain();
+    bool splatTrainBusy() const;
+    // UI test values: splat_training, splat_previews, splat_train_prompt, splat_train_step, splat_train_stage,
+    // splat_train_psnr; NaN for other names.
+    double splatTrainTestValue(const std::string& name);
+    std::shared_ptr<struct SplatTrainUi> splatTrain_;
     std::string lastExportFolder_; // where the last export went: the default folder for baked maps
     // Cached UV wireframe of the active SubTool for the UV view: segments in 0..1 UV space.
     std::vector<glm::vec2> uvLines_;
@@ -480,6 +516,25 @@ private:
         int lastStrokeFrames = 0;
         bool gpuOutOfMemory = false;
     } perf_;
+    // Splats > Make sculptable (PanelSculptable.cpp, core/Sculptable.h): splat capture -> sculptable SubTool on a
+    // worker thread; the crop box and the face landmark review in the viewport.
+    void registerSculptableUiActions();
+    void drawSculptableSection();
+    void startSculptable(int stage); // 0 all, 1 the scan for review, 2 finish the reviewed scan
+    void pollSculptable();
+    bool sculptableBusy() const;
+    Args sculptableArgs(int stage) const;
+    void setSculptableCrop(bool on);
+    void runSculptableGuides(Args args); // face_guides, keeping the landmarks it reports
+    void drawSculptableOverlay();
+    bool sculptableMouseDown(float x, float y); // true if it took the click (a landmark, a crop handle)
+    void sculptableMouseMove(float x, float y);
+    void sculptableMouseUp();
+    bool sculptableReviewActive() const;
+    bool sculptableHot() const; // the cursor is on a landmark dot or crop handle (no brush ring), or placing landmarks
+    bool sculptableLandmarkScreen(int i, ImVec2& out) const; // UI tests: where landmark i is drawn
+    double sculptableTestValue(const std::string& name);     // NaN for names it doesn't know
+    std::shared_ptr<struct SculptableUiState> sculptable_;
     // Geometry > QRemesh (quad retopology on a worker thread) and SubTool > Project (ProjectAll); PanelRetopo.cpp.
     void registerRetopoUiActions();
     void drawQRemeshContents();
@@ -572,6 +627,42 @@ private:
     bool blenderAutoReceive_ = true;   // load whatever Blender sends while SculptForge runs
     int64_t blenderSeenRevision_ = -1; // revision last loaded (or present at start, which is not loaded)
     Uint64 blenderLastPollNs_ = 0, blenderLastBeatNs_ = 0;
+
+    // Phone link (PanelPhone.cpp, link/PhoneLink.h): File > Capture from phone. The server runs only while the
+    // window is open; captures land in <library>/Captures and run the command for their kind; AR models are
+    // exported on a worker; face frames drive face_weights.
+    void initPhoneActions();
+    void drawPhoneWindow();
+    void pollPhone(); // every frame: events, face frames, AR re-exports
+    void setPhoneLinkOpen(bool open);
+    void handlePhoneCapture(const link::PhoneEvent& e);
+    void startPhoneArExport();
+    void drawFacePreview(ImVec2 size);
+    bool phoneBusy() const; // an AR export is running (UI tests' wait_idle)
+    std::unique_ptr<link::PhoneLink> phone_;
+    bool showPhone_ = false;
+    std::string phoneError_;          // why the link couldn't start
+    std::string phoneQrText_;         // what phoneQr_ encodes
+    link::QrCode phoneQr_;
+    int phoneAddress_ = 0;            // which local address the QR code uses
+    bool phoneAutoGenerate_ = true;   // a photo starts Image to 3D at once
+    bool phoneLiveAr_ = true;         // re-export after edits while the phone views the model
+    bool phoneMirror_ = false;        // swap left and right face shapes
+    struct PhoneArJob {
+        bool ok = false;
+        ArExportResult result;
+        std::string error;
+    };
+    std::future<PhoneArJob> phoneArJob_;
+    bool phoneArScene_ = false;       // the last request: whole scene, size
+    float phoneArSizeCm_ = 20.0f;
+    bool phoneArRequested_ = false;   // the phone asked at least once this session
+    uint64_t phoneArSignature_ = 0;   // the scene state the last export was made from
+    double phoneArStartedAt_ = -1e9;
+    link::FaceFrame phoneFace_;       // the newest face frame (preview)
+    uint64_t phoneFaceSerial_ = 0;
+    bool phoneFaceCommandMissing_ = false; // face_weights isn't registered (the facs feature isn't merged)
+    std::vector<std::string> phoneCaptures_; // folders received this session, newest last
     // Projects, unsaved-changes safety, recent files and autosave (PanelProject.cpp).
     bool interactive() const; // false for --render, --record and demos: never prompt
     void initProject();       // end of init(): recent files, autosave restore offer

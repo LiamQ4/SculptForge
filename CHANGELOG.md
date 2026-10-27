@@ -6,6 +6,97 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-27
+
+Help for phone capture when the phone can't open the page, and bigger text in the guide and the update banner.
+
+### Changed
+- Easier reading: the User Guide (and its What's New chapter) and the update banner use 17 px text instead of
+  the 15 px interface font, with larger headings.
+
+### Fixed
+- Capture from phone tells you what to do when the phone can't open the page: Android Chrome can refuse every
+  home-network address ("This site can't be reached", ERR_TOO_MANY_RETRIES), so use Firefox on the phone; and Linux
+  firewalls (ufw, firewalld) need the port allowed. In the window and in the guide's Phone capture chapter.
+- Baking: Cancel is honoured on small bakes too.
+
+## [0.9.0] - 2026-10-26
+
+Maquette to performance: scan with your phone, make the scan sculptable, give a head its facial shapes and
+drive them with your own face.
+
+### Make sculptable (splat capture -> sculptable, animation-ready mesh)
+- Splats palette > **From scan > Make sculptable**: one click turns the capture into a new SubTool next to the
+  splats (which are hidden, not deleted): a watertight, manifold surface (opacity-weighted Gaussian density on a
+  voxel grid, built in parallel z slabs with the same result on any thread count; gaps closed; floater shells
+  dropped; space boxed in on 5 of 6 sides filled, which seals open bottoms; largest piece kept), QRemesh quads at
+  a **Game** (4,000), **Film** (12,000) or **Sculpt** (2,000 + 2 subdivision levels with the scan projected onto
+  the top) budget, and the capture's colours as polypaint or an Auto UV texture (splats inside the subject are
+  faded out). A hidden "<name> Scan" SubTool keeps the dense surface for ProjectAll.
+- **Face loops**: a face is looked for on the scan from the current view (depth and colour, no ML model, no
+  download): eye corners, nose tip, mouth corners and chin become QRemesh Guides (rings round the eyes and the
+  orbits, the lips, the nasolabial loop), mirrored, with QRemesh symmetry. **Review** stops after the scan to
+  drag the landmarks (the mirror follows) or **Place by hand**, then **Finish**.
+- **Crop Box** with draggable face handles in the viewport; options for Detail, Min Opacity, Close Gaps, Fill
+  holes, All pieces, Keep scan. Progress bar and Cancel; Ctrl-hover help; F3 entries.
+- Commands: `splat_to_mesh` now runs the whole pipeline (`detail`, `preset`, `target`, `levels`, `face_guides`,
+  `landmarks`, `front`, `up`, `color`, `texture_size`, `crop`, `fill_holes`, `keep_parts`, `keep_scan`, `stage`
+  scan/finish, ...; `resolution` still works) and adds SubTools instead of replacing the sculpt; `face_guides`;
+  `splat_test_capture` (a built-in test head or mug capture, no download).
+- 5 million splats to Film quads with face loops in about 9 s, 0.9 GB (M1 Pro).
+- Guide chapter "From scan to sculptable mesh"; UI test `make_sculptable.sfui`; UI tests: `drag_landmark` verb,
+  `hover` scrolls a panel to the item as `click` does.
+
+### Added
+- Facial shapes (Tool > Facial Shapes, `face_shapes_generate`): the 52 Apple ARKit blend shapes, exactly named, as
+  sculpt layers on the active SubTool, from a built-in template head (ICT-FaceKit's ICT Face Model Light, MIT):
+  automatic or landmark-guided fit (similarity + non-rigid ICP), deformation transfer (Sumner and Popovic 2004) so
+  the shapes follow the sculpt's proportions, mirrored Left/Right on symmetric sculpts, made on a low subdivision
+  level and carried up with the detail. Eye SubTools get eyeLook rotations, teeth and tongue the lower jaw's motion,
+  brows and lashes follow the skin. Face test presets and a slider per shape; `face_landmarks_detect`,
+  `face_preset`.
+- Live face: `face_weights json={...}` sets ARKit-named shape weights on every SubTool, re-evaluating only the
+  vertices they move (no undo step, partial GPU upload; about 9 ms for all 52 on a 700k-vertex head on an M1 Pro).
+- Face takes: play recorded face feeds (JSON frames, `face_take_play`), bake them (`face_take_bake`) into a glTF
+  animation of the morph target weights (GLB) and USD blend shape weight time samples; saved with the project.
+- `new_head`: a new scene with a life-size human head (with mouth and eye sockets) and its eyes.
+- Blender bridge: sculpt layers arrive as shape keys with their names and weights (a `.shapes` file beside each
+  .GoZ, which now holds the base shape when the mesh has layers).
+- UI tests: `zoom` and `look` steps; `run` expands `$SCRIPT_DIR`.
+- Splat training from captures (Splats > Train from capture): a phone video, a folder of photos, a phone-link
+  capture or a COLMAP / nerfstudio dataset becomes a Gaussian splat that appears in the viewport after the first
+  checkpoint and sharpens while it trains (worker thread; orbit freely). Progress over the canvas: step, PSNR,
+  elapsed and remaining time, Good enough - stop, Cancel. Presets Fast preview and Quality. Uses Brush 0.3.0
+  (Apache-2.0, WebGPU: NVIDIA, AMD, Intel, Apple), downloaded on request from its GitHub release with a pinned
+  SHA-256, or a path / `SCULPTFORGE_BRUSH`; COLMAP (BSD; downloaded on request on Windows) for camera positions,
+  skipped for captures with AR poses in `capture.json`; ffmpeg for video, keeping the sharpest frame of each
+  stretch. The result is centred and levelled from the camera positions, saved next to the capture and copied to
+  the LightBox Splats tab. Dropping a video onto the window trains it. Commands `splat_train` and
+  `splat_train_cancel` (blocking in sculptforge-cli, Python and MCP). Guide chapter "Scan an object into a splat";
+  a generated CC0 test capture (tools/splat/make_test_capture.py, tests/data/splat_capture).
+- **Capture from phone** (File > Capture from phone, or the phone button in the LightBox; guide chapter "Phone capture
+  and AR", design in docs/phone-link.md): scan the QR code and the phone's browser becomes SculptForge's camera,
+  with no app and no account. Send a scan video or a photo burst (with coaching; for splat training), one photo
+  (to Image to 3D), or a splat .ply from Scaniverse, Polycam or Luma; uploads are chunked and resume after Wi-Fi
+  drops, and land in `<library>/Captures/<date_time>-<kind>/` with a `capture.json`. **View in AR** shows the
+  active SubTool or the scene on your desk (USDZ for iPhone AR Quick Look, GLB for Android Scene Viewer; reduced to
+  80k triangles, polypaint and textures baked, re-exported after strokes). **Face capture** tracks 52 ARKit
+  expressions and the head on the phone (MediaPipe Face Landmarker) and streams them to SculptForge at about 30 fps
+  over a WebRTC data channel, for `face_weights`; **Record face take** saves them as JSON Lines. LAN only, a new
+  token per session, size limits, safe file names; nothing listens while the window is closed.
+- Build: WebRTC through libdatachannel (MPL-2.0) and Mbed TLS (Apache-2.0), fetched and linked statically;
+  `-DSCULPTFORGE_WEBRTC=OFF` builds without the live face feed.
+- Website: the face capture page (`website/link/`), which needs HTTPS for the phone's camera.
+- Services: `services/link-worker`, a Cloudflare Worker (free plan) that relays the face page's one encrypted
+  connection message to the desktop at `link.sculptforge.app`; ntfy.sh stays as the fallback. Not deployed yet.
+- "Fixes & suggestions" in the LightBox header (shown at startup) and the Help menu: opens the bug report and
+  feature request forms on GitHub.
+
+### Changed
+- The website moved to https://sculptforge.app (old islandmed.github.io/SculptForge links redirect). The
+  app, update check, user guide, packages and Blender add-on link there.
+- Website: the tagline now reads "the free, open-source alternative to ZBrush and Mudbox".
+
 ## [0.8.1] - 2026-10-25
 
 Fixes from a ZBrush artist's testing, and ZTools from ZBrush.
@@ -700,7 +791,9 @@ First public release.
 - Rez package (`packaging/rez`).
 - Headless thumbnail/turntable rendering and scripted demo recording.
 
-[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/islandmed/SculptForge/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/islandmed/SculptForge/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/islandmed/SculptForge/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/islandmed/SculptForge/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/islandmed/SculptForge/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/islandmed/SculptForge/compare/v0.6.0...v0.7.0

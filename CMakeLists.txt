@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(SculptForge VERSION 0.8.1 LANGUAGES C CXX)
+project(SculptForge VERSION 0.9.1 LANGUAGES C CXX)
 include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -55,6 +55,8 @@ add_library(sculptforge_core STATIC
   src/core/Image.cpp
   src/core/ImageTo3D.cpp
   src/core/Splats.cpp
+  src/core/SplatCapture.cpp
+  src/core/Sculptable.cpp
   src/core/Voxel.cpp
   src/core/EnginePresets.cpp
   src/core/Masking.cpp
@@ -100,7 +102,15 @@ add_library(sculptforge_core STATIC
   src/io/BlenderBridge.cpp
   src/io/BlenderCommands.cpp
   src/io/StlIO.cpp
+  src/io/ArExport.cpp
 )
+# Facial shapes (core/Face.h): the template head with the 52 ARKit shapes, built from ICT-FaceKit (MIT) by
+# tools/face/build_ict_template.py, embedded so the app, the CLI and the tests all have it.
+include(cmake/EmbedFile.cmake)
+embed_files(${CMAKE_CURRENT_BINARY_DIR}/EmbeddedFace.cpp sf::assets
+  faceTemplateData ${CMAKE_CURRENT_SOURCE_DIR}/assets/face/ict-arkit.sfface)
+target_sources(sculptforge_core PRIVATE src/core/Face.cpp src/core/FaceCommands.cpp
+  ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedFace.cpp)
 target_include_directories(sculptforge_core PUBLIC src PRIVATE third_party/stb third_party/ufbx third_party/xatlas third_party/mikktspace third_party/tinyexr)
 # Third-party C code: compile quietly.
 if(MSVC)
@@ -122,7 +132,7 @@ endif()
 # --- Bring-your-own-AI (brush assistant). HTTPS via WinHTTP or libcurl. ---
 add_library(sculptforge_ai STATIC src/ai/Http.cpp src/ai/BrushAssistant.cpp src/ai/Generator3D.cpp
   src/ai/ImageTo3DService.cpp src/ai/GradioClient.cpp src/ai/ComfyUI.cpp src/ai/AiCommands.cpp src/ai/BrushGalleryClient.cpp src/link/Socket.cpp
-  src/link/UnrealLink.cpp)
+  src/link/UnrealLink.cpp src/ai/Process.cpp src/ai/SplatTrainer.cpp)
 # Lets a build run from its tree find the bundled ComfyUI workflows (integrations/comfyui/workflows).
 target_compile_definitions(sculptforge_ai PRIVATE SF_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 find_package(Threads REQUIRED)
@@ -142,6 +152,31 @@ if(MSVC)
   target_compile_options(sculptforge_ai PRIVATE /W4 /utf-8 /permissive-)
 else()
   target_compile_options(sculptforge_ai PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+
+# --- Phone link (src/link/PhoneLink.h, docs/phone-link.md): the capture page server, AR export, live face feed ---
+option(SCULPTFORGE_WEBRTC "Live face feed over WebRTC (fetches libdatachannel and Mbed TLS; OFF: capture and AR only)" ON)
+include(cmake/EmbedFile.cmake)
+embed_files(${CMAKE_CURRENT_BINARY_DIR}/EmbeddedPhone.cpp sf::phone_assets
+  capturePage ${CMAKE_CURRENT_SOURCE_DIR}/assets/phone/capture.html
+  facePage ${CMAKE_CURRENT_SOURCE_DIR}/website/link/index.html)
+add_library(sculptforge_phone STATIC ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedPhone.cpp src/link/HttpServer.cpp
+  src/link/PhoneLink.cpp src/link/FaceFeed.cpp src/link/PhoneRtc.cpp src/link/Qr.cpp third_party/qrcodegen/qrcodegen.cpp)
+target_include_directories(sculptforge_phone PRIVATE third_party/qrcodegen)
+target_link_libraries(sculptforge_phone PUBLIC sculptforge_ai)
+if(SCULPTFORGE_WEBRTC)
+  include(cmake/WebRTC.cmake)
+  target_link_libraries(sculptforge_phone PRIVATE LibDataChannel::LibDataChannelStatic MbedTLS::MbedTLS)
+  target_compile_definitions(sculptforge_phone PRIVATE SF_HAVE_WEBRTC=1)
+else()
+  target_compile_definitions(sculptforge_phone PRIVATE SF_HAVE_WEBRTC=0)
+endif()
+if(MSVC)
+  target_compile_options(sculptforge_phone PRIVATE /W4 /utf-8 /permissive-)
+  set_source_files_properties(third_party/qrcodegen/qrcodegen.cpp PROPERTIES COMPILE_OPTIONS "/w")
+else()
+  target_compile_options(sculptforge_phone PRIVATE -Wall -Wextra -Wno-unused-parameter)
+  set_source_files_properties(third_party/qrcodegen/qrcodegen.cpp PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
 # --- Headless command-line tool (pipelines, build farms, AI agents) ---
@@ -190,6 +225,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/Selection.cpp
     src/app/PanelBrushes.cpp
     src/app/PanelVdm.cpp
+    src/app/PanelFace.cpp
     src/app/PanelBrushLibrary.cpp
     src/app/PanelBrushGallery.cpp
     src/app/PanelPolypaint.cpp
@@ -199,9 +235,12 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/Gizmo.cpp
     src/app/PanelBake.cpp
     src/app/PanelRetopo.cpp
+    src/app/PanelSplatTrain.cpp
+    src/app/PanelSculptable.cpp
     src/app/PanelPerformance.cpp
     src/app/PanelGoz.cpp
     src/app/PanelBlender.cpp
+    src/app/PanelPhone.cpp
     src/app/PanelProject.cpp
     src/app/PanelSubTools.cpp
     src/app/Tablet.cpp
@@ -211,7 +250,7 @@ if(SCULPTFORGE_BUILD_APP)
     src/render/Clusters.cpp
     src/render/Renderer.cpp
   )
-  target_link_libraries(sculptforge PRIVATE sculptforge_core sculptforge_ai imgui SDL3::SDL3)
+  target_link_libraries(sculptforge PRIVATE sculptforge_core sculptforge_ai sculptforge_phone imgui SDL3::SDL3)
   target_include_directories(sculptforge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lucide)
   target_compile_definitions(sculptforge PRIVATE SCULPTFORGE_VERSION="${PROJECT_VERSION}"
                                                  CRKW_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
@@ -301,7 +340,7 @@ set(CPACK_PACKAGE_NAME "sculptforge")
 set(CPACK_PACKAGE_VENDOR "The SculptForge contributors")
 set(CPACK_PACKAGE_CONTACT "https://github.com/islandmed/SculptForge/issues")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Free and open-source digital sculpting with game-engine pipelines")
-set(CPACK_PACKAGE_HOMEPAGE_URL "https://islandmed.github.io/SculptForge/")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://sculptforge.app/")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_RESOURCE_FILE_LICENSE ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE)
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "SculptForge")
@@ -330,14 +369,14 @@ set(CPACK_DEBIAN_PACKAGE_MAINTAINER "The SculptForge contributors <https://githu
 set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
 set(CPACK_RPM_PACKAGE_LICENSE "GPL-3.0-or-later")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Multimedia")
-set(CPACK_RPM_PACKAGE_URL "https://islandmed.github.io/SculptForge/")
+set(CPACK_RPM_PACKAGE_URL "https://sculptforge.app/")
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
 # Windows installer
 set(CPACK_NSIS_DISPLAY_NAME "SculptForge")
 set(CPACK_NSIS_PACKAGE_NAME "SculptForge")
 set(CPACK_NSIS_MUI_ICON ${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/sculptforge.ico)
 set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\\\sculptforge.exe")
-set(CPACK_NSIS_URL_INFO_ABOUT "https://islandmed.github.io/SculptForge/")
+set(CPACK_NSIS_URL_INFO_ABOUT "https://sculptforge.app/")
 set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
 set(CPACK_NSIS_CREATE_ICONS_EXTRA "CreateShortCut '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\SculptForge.lnk' '$INSTDIR\\\\bin\\\\sculptforge.exe'")
 # macOS disk image
@@ -392,7 +431,7 @@ if(SCULPTFORGE_BUILD_TESTS)
                                    src/render/Clusters.cpp)
   target_include_directories(sculptforge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_compile_definitions(sculptforge_tests PRIVATE SF_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
-  target_link_libraries(sculptforge_tests PRIVATE sculptforge_core sculptforge_ai)
+  target_link_libraries(sculptforge_tests PRIVATE sculptforge_core sculptforge_ai sculptforge_phone)
   if(SCULPTFORGE_BUILD_APP) # the action registry (key chords, shortcut overrides) needs SDL's key names
     target_sources(sculptforge_tests PRIVATE src/app/Actions.cpp)
     target_link_libraries(sculptforge_tests PRIVATE SDL3::SDL3)
@@ -402,6 +441,12 @@ if(SCULPTFORGE_BUILD_TESTS)
     target_compile_options(sculptforge_tests PRIVATE /utf-8)
   endif()
   add_test(NAME sculptforge_tests COMMAND sculptforge_tests)
+  # A stand-in for Brush, COLMAP and ffmpeg (tests/tools/fake_splat_tools.cpp): splat training is tested without a GPU.
+  add_executable(sf_fake_splat_tools tests/tools/fake_splat_tools.cpp)
+  target_include_directories(sf_fake_splat_tools PRIVATE third_party/stb)
+  target_link_libraries(sf_fake_splat_tools PRIVATE sculptforge_core)
+  add_dependencies(sculptforge_tests sf_fake_splat_tools)
+  target_compile_definitions(sculptforge_tests PRIVATE SF_FAKE_SPLAT_TOOLS="$<TARGET_FILE:sf_fake_splat_tools>")
 
   # Tests that launch our programs from Python get a path they can run directly. When cross-compiling
   # (e.g. a Windows build tested under Wine, tools/wintest.sh) that is a script calling the emulator.
@@ -449,6 +494,13 @@ if(SCULPTFORGE_BUILD_TESTS)
                                      --out ${CMAKE_CURRENT_BINARY_DIR}/guide-site)
   endif()
 
+  # The phone link's relay (services/link-worker, a Cloudflare Worker) under plain Node, when Node 20+ is installed.
+  find_program(SCULPTFORGE_NODE node)
+  if(SCULPTFORGE_NODE)
+    add_test(NAME link_worker COMMAND ${SCULPTFORGE_NODE} --test test/relay.test.mjs
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/services/link-worker)
+  endif()
+
   # UI tests: each tests/ui/*.sfui script drives the real app headless (needs an
   # OpenGL 3.3 context; CI runs them on Linux under Xvfb with Mesa). Label "ui".
   if(SCULPTFORGE_BUILD_APP)
@@ -457,6 +509,13 @@ if(SCULPTFORGE_BUILD_TESTS)
       get_filename_component(name ${script} NAME_WE)
       add_test(NAME ui_${name} COMMAND sculptforge --ui-test ${script} --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/${name})
       set_tests_properties(ui_${name} PROPERTIES LABELS ui TIMEOUT 300)
+    endforeach()
+    # Splat training (also started by a phone scan) runs the fake Brush / COLMAP / ffmpeg.
+    foreach(t ui_splat_train ui_phone_link)
+      if(TEST ${t})
+        set_tests_properties(${t} PROPERTIES ENVIRONMENT
+          "SCULPTFORGE_BRUSH=$<TARGET_FILE:sf_fake_splat_tools>;SCULPTFORGE_COLMAP=$<TARGET_FILE:sf_fake_splat_tools>;SCULPTFORGE_FFMPEG=$<TARGET_FILE:sf_fake_splat_tools>")
+      endif()
     endforeach()
     # The shell layout again on a 1920x1080 window (docs/ui-design.md §2.3).
     add_test(NAME ui_shell_layout_1080 COMMAND sculptforge --ui-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/shell_layout.sfui

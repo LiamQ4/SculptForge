@@ -312,10 +312,14 @@ void App::initActions() {
         "(Preferences > Updates).");
     add("help.about", "About SculptForge", "Help", nullptr, [this] { showAbout_ = true; }, ICON_LC_INFO, nullptr, nullptr, nullptr,
         "Version, licence and the open-source components SculptForge is built with.");
-    add("help.website", "Website & documentation", "Help", nullptr, [] { SDL_OpenURL("https://islandmed.github.io/SculptForge/"); },
+    add("help.website", "Website & documentation", "Help", nullptr, [] { SDL_OpenURL("https://sculptforge.app/"); },
         ICON_LC_BOOK_OPEN, nullptr, nullptr, nullptr, "Open the SculptForge website and user guide in your browser.");
     add("help.report", "Report a problem", "Help", nullptr, [] { SDL_OpenURL("https://github.com/islandmed/SculptForge/issues"); },
         ICON_LC_CIRCLE_ALERT, nullptr, nullptr, nullptr, "Open the issue tracker in your browser.");
+    add("help.feedback", "Fixes & suggestions", "Help", nullptr,
+        [] { SDL_OpenURL("https://github.com/islandmed/SculptForge/issues/new/choose"); }, ICON_LC_MESSAGE_SQUARE_PLUS,
+        nullptr, nullptr, nullptr,
+        "Submit a request for a fix or a suggestion: opens the bug report and feature request forms in your browser.");
 
     // --- Command palette and console ---
     add("ui.command_palette", "Command palette", "Help", "F3 / Ctrl+Shift+P", [this] { palette_.open(); }, ICON_LC_SEARCH, nullptr,
@@ -370,7 +374,10 @@ void App::initActions() {
     registerGizmoActions();     // Q W E R: Draw, and the Gizmo 3D's Move, Scale, Rotate (Gizmo.cpp)
     registerBakeUiActions();    // Tool > Bake (PanelBake.cpp)
     registerRetopoUiActions(); // Geometry > QRemesh, SubTool > ProjectAll (PanelRetopo.cpp)
+    registerSplatTrainUi();    // Splats > Train from capture (PanelSplatTrain.cpp)
+    registerSculptableUiActions(); // Splats > Make sculptable (PanelSculptable.cpp)
     registerVdmActions();      // Brush > Vector Displacement (PanelVdm.cpp)
+    registerFaceUiActions();   // Tool > Facial Shapes, face_take_play / face_take_stop (PanelFace.cpp)
     registerPerformanceUiActions(); // Preferences > Performance (PanelPerformance.cpp)
     registerInputActions();     // ZBrush keys: U I O, Space, L, V, Ctrl+A / I / H / W..., the input style (Input.cpp)
 

@@ -24,14 +24,17 @@
 //                            move_view rotate_x rotate_y rotate_z rotate_view scale_x scale_y scale_z scale_uniform;
 //                            keep: leave the button down (a shot mid-drag), then `release`
 //   gizmo_hover HANDLE       move the mouse onto a Gizmo 3D handle (it lights up, for screenshots)
+//   drag_landmark N DX DY [S] left-drag Make sculptable's face landmark N (0-7, FaceLandmarks order) by DX DY pixels
 //   orbit DX DY              right-drag on the background, in pixels (with the held modifiers)
 //   camera YAW PITCH         set the view's angles in degrees (0 0 = the front view), e.g. for guide screenshots
-//   run COMMANDS             sculptforge-cli commands, e.g. run new_sphere subdivisions=4
+//   zoom FACTOR / look X Y Z  move the camera FACTOR times closer / turn it about (and look at) the point X Y Z
+//   run COMMANDS             sculptforge-cli commands, e.g. run new_sphere subdivisions=4 ($SCRIPT_DIR: the script's folder)
 //   drop FILE                as if FILE were dropped onto the window (relative to the script's folder)
 //   env NAME VALUE           set an environment variable; $SCRIPT_DIR is the script's folder
 //   copy SRC DST             copy a file or folder (SRC relative to the script's folder, DST to the working
 //                            directory), e.g. to stage what another program would write (the Blender bridge)
 //   wait SECONDS / wait_idle [TIMEOUT] (AI requests, thumbnails, update checks and other background jobs) / wait_for LABEL [TIMEOUT]
+//   wait_value NAME OP N [TIMEOUT]  wait (real time, default 30 s) until expect_value NAME OP N would pass
 //   expect LABEL / expect_not LABEL
 //   expect_text TEXT / expect_no_text TEXT   any text drawn this frame contains TEXT
 //   expect_status TEXT       the status bar message contains TEXT
@@ -41,7 +44,7 @@
 //   click_subtool NAME [U V] left-click SubTool NAME in the viewport (with the held modifiers, e.g.
 //                            hold alt to select it); U V: fractions of its on-screen bounds
 //   expect_value NAME OP N   triangles, vertices, layers, brushes, masked, hidden, groups, colored,
-//                            can_undo, dirty, splats, show_polygroups, show_mask, wireframe,
+//                            can_undo, dirty, splats, show_polygroups, show_mask, show_mesh, wireframe,
 //                            subtools (count), active_subtool (index, 0 = top), visible_subtools,
 //                            edited_subtools (SubTools with undo history), user_brushes (brushes in the
 //                            user library), library_files (.sfbrush files in it; UI tests get an empty
@@ -84,12 +87,26 @@
 //                            center_x / center_y / center_z and size_x / size_y / size_z (active mesh bounds)
 //                            bake_running, baked_maps (maps in the last bake), bake_size, bake_files (files it wrote),
 //                            normal_map_preview (1 when the active SubTool shows its baked normal map)
+//                            splat_training (1 while a splat trains), splat_previews (checkpoints shown), splat_train_step,
+//                            splat_train_stage (4 done, 5 failed, 6 cancelled), splat_train_psnr, splat_train_prompt
+//                            sculptable_running, sculptable_review, sculptable_landmarks (8 when placed),
+//                            sculptable_placing (next landmark to click, -1), sculptable_crop, sculptable_crop_height,
+//                            show_splats, landmark_x_N / landmark_y_N / landmark_z_N (face landmark N, mesh space)
+//                            phone_running (1 while the phone link listens), phone_uploads (uploads under way),
+//                            phone_captures (captures received), phone_face_frames, phone_face_fps, phone_recording,
+//                            phone_take_frames, phone_ar_version (AR models published), phone_ar_busy
 //   (mesh values are the active SubTool's)
 //   snapshot                 remember the active mesh's vertices (for the moved* values)
 //   remember VALUE NAME      keep VALUE's current value as $NAME
 //   shot NAME                save a screenshot NAME.png (to --ui-out)
 //   expect_guide FILE        the User Guide shows FILE ("masking.md", "index.md")
 //   dump_shortcuts NAME      write every default shortcut as a Markdown table to --ui-out/NAME
+// A scripted phone for File > Capture from phone (link/PhoneLink.h), over real HTTP to the link on 127.0.0.1:
+//   phone_upload KIND FILE... send files as the capture page does (KIND splat / photo / ply; FILE relative to the
+//                            script), in 64 KB chunks with one lost chunk resumed, then finish the capture
+//   phone_face NAME=W ... [frames=N]   N face messages (default 5) with these ARKit weights
+//   phone_request METHOD PATH STATUS [BODY]   any request with the session token; fails unless the answer has
+//                            STATUS (e.g. phone_request POST /api/ar 200 {"scope":"subtool","size":20})
 //                            (tools/guide/update_shortcuts.py puts it into docs/guide/shortcuts.md)
 //
 // Simulated graphics tablet: real SDL3 pen events, each followed by the mouse event SDL synthesizes
@@ -117,6 +134,7 @@
 #include "core/Multires.h"
 #include "core/Script.h"
 #include "core/ThreadPool.h"
+#include "link/HttpServer.h"
 
 #include <imgui_internal.h>
 
@@ -260,6 +278,8 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "active_texture_layer") return hasTexture(m) && !m.texture->layers.empty() ? double(m.texture->activeLayer) : -1.0;
     if (name == "auto_uv_running") return app_.autoUv_ ? 1.0 : 0.0;
     if (const double v = app_.bakeTestValue(name); !std::isnan(v)) return v;
+    if (const double v = app_.splatTrainTestValue(name); !std::isnan(v)) return v; // splat_training, ...
+    if (const double v = app_.sculptableTestValue(name); !std::isnan(v)) return v;
     if (name == "qremesh_running") return app_.qremesh_ ? 1.0 : 0.0;
     if (name == "qremesh_guides") return double(app_.doc_.qremeshGuides.size());
     if (name == "qremesh_guide_loops") {
@@ -293,9 +313,32 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "lazy_mouse") return app_.strokeType_ == StrokeType::LazyMouse ? 1.0 : 0.0;
     if (name == "stroke_type") return double(int(app_.strokeType_)); // 0 Dots, 1 DragRect, 2 DragDot, 3 Spray, 4 LazyMouse
     if (name == "vdms") return double(app_.doc_.vdms.size());
+    // Facial shapes (PanelFace.cpp): landmarks placed, placing them, a take playing, and face_<shape>: that layer's weight.
+    if (name == "face_landmarks") return double(app_.faceLandmarks_.count());
+    if (name == "face_placing") return app_.facePlacing_ ? 1.0 : 0.0;
+    if (name == "face_take_playing") return app_.faceTakePlaying_ ? 1.0 : 0.0;
+    if (name.rfind("face_", 0) == 0) {
+        for (const auto& l : m.layers)
+            if (l.name == name.substr(5)) return double(l.weight);
+        return -1.0; // no such layer
+    }
     if (name == "input_style") return double(app_.uiPrefs_.inputStyle);
     if (name == "mask_shape") return double(int(app_.maskShape_)); // 0 MaskPen, 1 MaskLasso, 2 MaskRect
     if (name == "hide_shape") return double(int(app_.hideShape_)); // 1 SelectLasso, 2 SelectRect
+    if (name.rfind("phone_", 0) == 0) {
+        const bool on = app_.phone_ && app_.phone_->running();
+        const link::PhoneLinkStatus st = on ? app_.phone_->status() : link::PhoneLinkStatus{};
+        if (name == "phone_running") return on ? 1.0 : 0.0;
+        if (name == "phone_uploads")
+            return double(std::count_if(st.uploads.begin(), st.uploads.end(), [](const auto& u) { return !u.finished; }));
+        if (name == "phone_captures") return double(st.capturesReceived);
+        if (name == "phone_face_frames") return double(st.faceFrames);
+        if (name == "phone_face_fps") return st.faceFps;
+        if (name == "phone_recording") return st.recording ? 1.0 : 0.0;
+        if (name == "phone_take_frames") return double(st.takeFrames);
+        if (name == "phone_ar_version") return double(st.arVersion);
+        if (name == "phone_ar_busy") return st.arBusy || app_.phoneBusy() ? 1.0 : 0.0;
+    }
     if (name == "dynamic") return app_.doc_.sculptor.dyntopo.enabled ? 1.0 : 0.0;
     if (name == "dynamic_detail") return std::round(app_.doc_.sculptor.dyntopo.detail * 100.0f);
     if (name == "brush_type") return app_.doc_.activeBrush >= 0 || app_.paintMode_ ? -1.0 : double(int(app_.brush_));
@@ -318,6 +361,7 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "splats") return double(app_.doc_.splats.size());
     if (name == "show_polygroups") return app_.renderSettings_.showPolygroups ? 1.0 : 0.0;
     if (name == "show_mask") return app_.renderSettings_.showMask ? 1.0 : 0.0;
+    if (name == "show_mesh") return app_.renderSettings_.showMesh ? 1.0 : 0.0;
     if (name == "wireframe") return app_.renderSettings_.wireframe ? 1.0 : 0.0;
     if (name == "shelves") return app_.layout_.shelvesVisible ? 1.0 : 0.0;
     if (name == "left_tray") return app_.layout_.leftTrayOpen ? double(app_.layout_.leftTray.size()) : -1.0;
@@ -537,7 +581,21 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
         const std::string label = w[1];
         steps_.push_back([this, line, label](float t) {
             ImVec2 to;
-            if (findItem(label, to)) {
+            bool visible = false;
+            ImVec4 clip;
+            if (findItem(label, to, &visible, &clip)) {
+                // Scrolled out of its panel: wheel the panel towards it first (as click does).
+                if (!visible && clip.z > clip.x && clip.w > clip.y && t <= 2.0f) {
+                    mouseMotion((clip.x + clip.z) * 0.5f, (clip.y + clip.w) * 0.5f);
+                    SDL_Event e{};
+                    e.type = SDL_EVENT_MOUSE_WHEEL;
+                    e.wheel.windowID = SDL_GetWindowID(app_.window_);
+                    e.wheel.y = to.y > clip.w ? -1.0f : 1.0f;
+                    e.wheel.mouse_x = mouse_.x;
+                    e.wheel.mouse_y = mouse_.y;
+                    app_.handleEvent(e);
+                    return false;
+                }
                 mouseMotion(to.x, to.y);
                 return true;
             }
@@ -652,6 +710,30 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
                 SDL_SetModState(SDL_KMOD_NONE);
             }
             mouseMotion(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u);
+            if (t >= seconds) {
+                mouseButton(false, SDL_BUTTON_LEFT);
+                return true;
+            }
+            return false;
+        });
+        wait(0.1f);
+    } else if (verb == "drag_landmark") {
+        if (!need(3)) return false;
+        const int index = int(num(1, 0));
+        const float dx = num(2, 0), dy = num(3, 0), seconds = num(4, 0.4f);
+        auto start = std::make_shared<ImVec2>();
+        steps_.push_back([this, line, index, dx, dy, seconds, start](float t) {
+            if (t == 0.0f) {
+                if (!app_.sculptableLandmarkScreen(index, *start)) {
+                    fail(line, "face landmark " + std::to_string(index) + " is not shown (Make sculptable's review)");
+                    return true;
+                }
+                mouseMotion(start->x, start->y);
+                return false;
+            }
+            if (!buttonDown_ && t < seconds) mouseButton(true, SDL_BUTTON_LEFT);
+            const float u = std::min(t / seconds, 1.0f);
+            mouseMotion(start->x + dx * u, start->y + dy * u);
             if (t >= seconds) {
                 mouseButton(false, SDL_BUTTON_LEFT);
                 return true;
@@ -797,6 +879,14 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             app_.camera_.roll = 0.0f;
         });
         wait(0.1f);
+    } else if (verb == "zoom") { // zoom FACTOR: the camera's distance divided by FACTOR
+        if (!need(1)) return false;
+        run([this, f = num(1, 1)] { app_.camera_.distance /= std::max(float(f), 1e-3f); });
+        wait(0.1f);
+    } else if (verb == "look") { // look X Y Z: the camera turns about (and looks at) this point
+        if (!need(3)) return false;
+        run([this, x = num(1, 0), y = num(2, 0), z = num(3, 0)] { app_.camera_.target = glm::vec3(float(x), float(y), float(z)); });
+        wait(0.1f);
     } else if (verb == "drop") {
         if (!need(1)) return false;
         auto file = std::filesystem::path(std::u8string(w[1].begin(), w[1].end()));
@@ -814,6 +904,99 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
             if (ec) SDL_Log("copy %s: %s", src.string().c_str(), ec.message().c_str());
         });
+    } else if (verb == "phone_upload" || verb == "phone_face" || verb == "phone_request") {
+        if (!need(verb == "phone_request" ? 3 : verb == "phone_upload" ? 2 : 1)) return false;
+        std::vector<std::string> args(w.begin() + 1, w.end());
+        const std::string body = verb == "phone_request" ? restOf(lineText_, 4) : std::string();
+        run([this, line, verb, args, body] {
+            if (!app_.phone_ || !app_.phone_->running()) {
+                fail(line, "the phone link isn't running (open File > Capture from phone first)");
+                return;
+            }
+            const uint16_t port = app_.phone_->port();
+            const std::vector<std::pair<std::string, std::string>> headers = {
+                {"X-SF-Token", app_.phone_->token()},
+                {"User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"}};
+            auto call = [&](const std::string& method, const std::string& target, const std::string& data) {
+                return link::httpLocalRequest("127.0.0.1", port, method, target, data, headers);
+            };
+            auto jsonOf = [](const std::string& text) {
+                Json j;
+                std::string err;
+                Json::parse(text, j, err);
+                return j;
+            };
+            if (verb == "phone_request") {
+                const link::HttpClientResponse r = call(args[0], args[1], body);
+                if (std::to_string(r.status) != args[2])
+                    fail(line, args[0] + " " + args[1] + " answered " + std::to_string(r.status) + " " + r.body + r.error);
+                return;
+            }
+            if (verb == "phone_face") {
+                int frames = 5;
+                std::string weights;
+                for (const std::string& a : args) {
+                    const size_t eq = a.find('=');
+                    if (eq == std::string::npos) continue;
+                    if (a.compare(0, eq, "frames") == 0) frames = std::atoi(a.c_str() + eq + 1);
+                    else weights += (weights.empty() ? "\"" : ",\"") + a.substr(0, eq) + "\":" + a.substr(eq + 1);
+                }
+                for (int i = 0; i < frames; ++i) {
+                    const std::string msg = "{\"type\":\"face\",\"t\":" + std::to_string(i * 33) + ",\"weights\":{" + weights +
+                                            "},\"head\":[0,0.1,0,0.995]}";
+                    const link::HttpClientResponse r = call("POST", "/api/face", msg);
+                    if (r.status != 200) {
+                        fail(line, "face frame refused: " + std::to_string(r.status) + " " + r.body + r.error);
+                        return;
+                    }
+                }
+                return;
+            }
+            // phone_upload KIND FILE...: the capture page's protocol, with a lost chunk to resume from.
+            link::HttpClientResponse r = call("POST", "/api/capture", "{\"kind\":\"" + args[0] + "\"}");
+            const std::string capture = jsonOf(r.body)["id"].asString();
+            if (r.status != 200 || capture.empty()) {
+                fail(line, "capture refused: " + std::to_string(r.status) + " " + r.body + r.error);
+                return;
+            }
+            for (size_t f = 1; f < args.size(); ++f) {
+                std::filesystem::path file(std::u8string(args[f].begin(), args[f].end()));
+                if (file.is_relative()) file = std::filesystem::path(std::u8string(scriptDir_.begin(), scriptDir_.end())) / file;
+                std::ifstream in(file, std::ios::binary);
+                const std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                if (data.empty()) {
+                    fail(line, "can't read " + args[f]);
+                    return;
+                }
+                const auto name = file.filename().u8string();
+                r = call("POST", "/api/capture/" + capture + "/file",
+                         "{\"name\":\"" + std::string(name.begin(), name.end()) + "\",\"size\":" + std::to_string(data.size()) + "}");
+                const std::string id = jsonOf(r.body)["id"].asString();
+                if (r.status != 200 || id.empty()) {
+                    fail(line, "file refused: " + std::to_string(r.status) + " " + r.body + r.error);
+                    return;
+                }
+                const size_t chunk = 64 * 1024;
+                size_t offset = 0;
+                bool skipped = false;
+                while (offset < data.size()) {
+                    size_t at = offset;
+                    if (!skipped && data.size() > 2 * chunk && offset >= chunk) { // this chunk "gets lost": send the next
+                        skipped = true;
+                        at = offset + chunk;
+                    }
+                    r = call("PUT", "/api/file/" + id + "?offset=" + std::to_string(at), data.substr(at, chunk));
+                    const double received = jsonOf(r.body)["received"].asNumber(-1);
+                    if ((r.status != 200 && r.status != 409) || received < 0) {
+                        fail(line, "chunk refused: " + std::to_string(r.status) + " " + r.body + r.error);
+                        return;
+                    }
+                    offset = size_t(received); // a 409 says where to resume
+                }
+            }
+            r = call("POST", "/api/capture/" + capture + "/finish", "");
+            if (r.status != 200) fail(line, "finish refused: " + std::to_string(r.status) + " " + r.body + r.error);
+        });
     } else if (verb == "env") {
         if (!need(2)) return false;
         std::string value = restOf(lineText_, 2);
@@ -829,7 +1012,12 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
     } else if (verb == "run") {
         if (!need(1)) return false;
         std::vector<ScriptStatement> statements;
-        if (!parseScript(restOf(lineText_, 1), statements, error)) return false;
+        std::string text = restOf(lineText_, 1);
+        for (size_t at = text.find("$SCRIPT_DIR"); at != std::string::npos; at = text.find("$SCRIPT_DIR", at)) {
+            text.replace(at, 11, scriptDir_);
+            at += scriptDir_.size();
+        }
+        if (!parseScript(text, statements, error)) return false;
         run([this, line, statements] {
             for (const auto& st : statements) {
                 app_.runCommand(st.command, st.args);
@@ -852,7 +1040,8 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             const bool idle = !busy(app_.pendingBrush_) && !busy(app_.pendingGenerator_) && !busy(app_.pendingModels_) &&
                               !busy(app_.pendingUnreal_) && !busy(app_.pendingComfyCheck_) && !app_.galleryBusy() &&
                               !app_.thumbs_.busy() && !app_.libraryScanner_.busy() && !app_.autoUv_ &&
-                              !app_.bakeBusy() && !app_.qremesh_ && !app_.voxelRemesh_ && !app_.updateJob_;
+                              !app_.bakeBusy() && !app_.qremesh_ && !app_.voxelRemesh_ && !app_.updateJob_ &&
+                              !app_.splatTrainBusy() && !app_.sculptableBusy() && !app_.phoneBusy();
             *idleFrames = idle ? *idleFrames + 1 : 0;
             if (*idleFrames >= 4) return true;
             if (idle) return false;
@@ -952,6 +1141,25 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             bool k = false;
             const double v = query(name, k);
             if (!compare(v, op, want)) fail(line, name + " is " + number(v) + ", expected " + op + " " + number(want) + " (" + wantText + ")");
+        });
+    } else if (verb == "wait_value") { // wait (in real time) until a value holds, e.g. a background job's progress
+        if (!need(3)) return false;
+        bool known = false;
+        query(w[1], known);
+        if (!known) {
+            error = "unknown value '" + w[1] + "'";
+            return false;
+        }
+        const std::string name = w[1], op = w[2];
+        const double want = std::strtod(w[3].c_str(), nullptr);
+        const float timeout = num(4, 30.0f);
+        steps_.push_back([this, line, name, op, want, timeout](float t) {
+            bool k = false;
+            const double v = query(name, k);
+            if (compare(v, op, want)) return true;
+            SDL_Delay(10);
+            if (t > timeout) fail(line, name + " is " + number(v) + ", still not " + op + " " + number(want) + " after " + number(timeout) + " s");
+            return t > timeout;
         });
     } else if (verb == "expect_guide") {
         if (!need(1)) return false;

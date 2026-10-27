@@ -25,6 +25,8 @@ namespace sf {
 namespace assets {
 extern const unsigned char fontSemiBold[];
 extern const unsigned long long fontSemiBold_size;
+extern const unsigned char fontRegular[];
+extern const unsigned long long fontRegular_size;
 } // namespace assets
 
 namespace guide_data {
@@ -44,7 +46,7 @@ using guide::BlockKind;
 using guide::Span;
 using guide::Spans;
 
-constexpr const char* kWebsite = "https://islandmed.github.io/SculptForge/guide/";
+constexpr const char* kWebsite = "https://sculptforge.app/guide/";
 
 // Colours of the page (on the panel background).
 constexpr ImU32 kText = IM_COL32(0xd2, 0xd2, 0xd4, 0xff);
@@ -327,13 +329,18 @@ void UserGuide::addFonts(float scale) {
     ImFontConfig cfg;
     cfg.FontDataOwnedByAtlas = false;
     cfg.OversampleH = 2;
-    auto add = [&](float size) {
-        return io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontSemiBold), int(assets::fontSemiBold_size),
-                                              size * scale, &cfg);
+    auto add = [&](float size, bool bold = true) {
+        return bold ? io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontSemiBold),
+                                                     int(assets::fontSemiBold_size), size * scale, &cfg)
+                    : io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontRegular),
+                                                     int(assets::fontRegular_size), size * scale, &cfg);
     };
-    h1_ = add(27.0f);
-    h2_ = add(20.5f);
-    h3_ = add(16.5f);
+    // Reading text a step above the 15 px UI font (the guide, What's New, the update banner).
+    body_ = add(kReadingSize, false);
+    bodyBold_ = add(kReadingSize);
+    h1_ = add(30.0f);
+    h2_ = add(23.0f);
+    h3_ = add(19.0f);
 }
 
 bool UserGuide::ensureLoaded() {
@@ -415,6 +422,7 @@ std::string UserGuide::chapterFor(const std::string& palette, const std::string&
     if (starts("Tool > Geometry > QRemesh") || starts("Tool > SubTool > Project")) return "retopology.md";
     if (starts("Tool > SubTool")) return "subtools.md";
     if (starts("Tool > Layers")) return "layers.md";
+    if (starts("Tool > Facial Shapes")) return "facial-shapes.md";
     if (starts("Tool > Geometry") || starts("Tool > Remesh")) return "geometry.md";
     if (starts("Tool > Masking")) return "masking.md";
     if (starts("Tool > Polygroups") || starts("Tool > Visibility")) return "polygroups.md";
@@ -427,11 +435,13 @@ std::string UserGuide::chapterFor(const std::string& palette, const std::string&
     if (starts("Draw") || starts("Stroke") || starts("Alpha")) return "sculpting.md";
     if (starts("Color") || starts("Material")) return "polypaint.md";
     if (starts("File > Blender")) return "blender.md";
+    if (starts("File > Capture from phone") || actionId == "file.capture_phone") return "phone-capture.md";
     if (starts("File > Export") || idStarts("file.export") || actionId == "file.send_unreal" || actionId == "file.save_splats" ||
         starts("File > GoZ"))
         return "exporting.md";
     if (starts("File")) return "projects.md";
     if (starts("Generate")) return "generate-3d.md";
+    if (starts("Splats > Make sculptable")) return "scan-to-sculptable.md";
     if (starts("Splats")) return "splats.md";
     if (starts("Script")) return "scripting.md";
     if (starts("Transform > Gizmo") || idStarts("gizmo.") || actionId == "tool.draw" || actionId == "tool.move" ||
@@ -735,10 +745,10 @@ void UserGuide::drawSearchResults(App& app) {
 float UserGuide::drawBlock(App& app, const Block& b, int index, ImVec2 o, float width, bool draw) {
     const float s = app.uiScale_;
     ImDrawList* dl = draw ? ImGui::GetWindowDrawList() : nullptr;
-    ImFont* regular = ImGui::GetFont();
+    ImFont* regular = body_ ? body_ : ImGui::GetFont();
     FlowStyle st;
     st.regular = regular;
-    st.bold = app.boldFont() ? app.boldFont() : regular;
+    st.bold = bodyBold_ ? bodyBold_ : app.boldFont() ? app.boldFont() : regular;
     st.mono = app.consoleFont();
     st.lineHeight = std::round(regular->FontSize * 1.55f);
     LinkClick click;

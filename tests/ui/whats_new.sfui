@@ -4,12 +4,14 @@ click "Help##palette.help"
 click "What's New##help.whats_new"
 expect_value guide_open == 1
 expect_guide whats-new.md
+expect_text "Version 0.9.1"
+expect_text "Version 0.9.0"
 expect_text "Version 0.8.1"
 expect_text "Version 0.8"
 expect_text "Version 0.7"
 expect_text "Version 0.6"
 expect_text "Version 0.5"
 expect_text "Version 0.4.2"
-expect_text "More like ZBrush"
 # The newest section is on screen.
+expect_text "Phone capture: when the phone"
 shot whats-new
