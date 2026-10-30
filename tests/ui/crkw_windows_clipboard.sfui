@@ -1,0 +1,23 @@
+# Windows PNG and bitmap clipboard formats from Chromium/Codex. Bitmap size may legally be zero.
+run new_sphere subdivisions=2 ; uv_auto resolution=1024
+wait 0.2
+click "Texture Map##tool.texture"
+hover "Texture Map/##texturepaste"
+clipboard_png $SCRIPT_DIR/data/phone/photo.png
+key ctrl+v
+expect_status Pasted texture
+expect_value texture_size == 96
+expect_value texture_mean_r > 100
+remember texture_mean_r png_r
+remember texture_mean_b png_b
+clipboard_dib $SCRIPT_DIR/data/phone/photo.png
+key ctrl+v
+expect_status Pasted texture
+expect_value texture_mean_r == $png_r
+expect_value texture_mean_b == $png_b
+clipboard_dibv5 $SCRIPT_DIR/data/phone/photo.png
+key ctrl+v
+expect_status Pasted texture
+expect_value texture_mean_r == $png_r
+expect_value texture_mean_b == $png_b
+shot native-clipboard-colours

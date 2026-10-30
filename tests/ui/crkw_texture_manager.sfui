@@ -1,0 +1,53 @@
+# Per-SubTool texture cards target their own mesh and preserve independent undo histories.
+run new_sphere subdivisions=2 ; subtool_rename to=Head ; uv_auto resolution=1024
+run texture_import path="$SCRIPT_DIR/data/phone/photo.png"
+run subtool_append type=cube name=Body ; uv_auto resolution=1024
+run texture_import path="$SCRIPT_DIR/../../assets/demo/teddy-sketch.png"
+remember texture_size body_size
+wait 0.2
+click "Texture Map##tool.texture"
+click "Texture Map/Texture Manager##crkw.texture_manager"
+expect "CRKW Texture Manager/Head##texture.select.0"
+expect "CRKW Texture Manager/Body##texture.select.1"
+expect "CRKW Texture Manager/##texture.card.0"
+expect "CRKW Texture Manager/##texture.card.1"
+clipboard_image $SCRIPT_DIR/../../assets/demo/teddy-sketch.png
+hover "CRKW Texture Manager/##texture.card.0"
+key ctrl+v
+expect_value active_subtool == 0
+expect_value texture_size == $body_size
+expect_status Pasted texture
+clipboard_image $SCRIPT_DIR/data/phone/photo.png
+click "CRKW Texture Manager/Paste##texture.paste.1"
+expect_value active_subtool == 1
+expect_value texture_size == 96
+expect_value texture_guide_preview == 0
+shot texture-cards
+key ctrl+z
+expect_value texture_size == $body_size
+click "CRKW Texture Manager/Head##texture.select.0"
+expect_value active_subtool == 0
+expect_value texture_size == $body_size
+key ctrl+z
+expect_value texture_size == 96
+click "CRKW Texture Manager/Body##texture.select.1"
+expect_value texture_size == $body_size
+clipboard invalid texture
+click "CRKW Texture Manager/Paste##texture.paste.1"
+expect_status No image on the clipboard
+expect_value texture_size == $body_size
+shot independent-textures
+run subtool_visibility index=0 visible=false
+wait 0.2
+expect "CRKW Texture Manager/##texture.card.0"
+shot hidden-subtool-texture
+run subtool_delete index=0
+wait 0.2
+expect "CRKW Texture Manager/Body##texture.select.0"
+expect_not "CRKW Texture Manager/Head##texture.select.0"
+run new_sphere subdivisions=2
+wait 0.2
+hover "CRKW Texture Manager/##texture.card.0"
+key ctrl+v
+expect_status needs UVs
+expect_value texture_size == 0

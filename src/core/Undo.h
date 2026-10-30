@@ -10,6 +10,7 @@
 
 #include <deque>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -125,11 +126,12 @@ struct UndoRecord {
     std::unique_ptr<TextureStackUndo> texture;
     std::unique_ptr<Mesh> mesh;
     std::unique_ptr<SubdivUndo> subdiv;
+    std::optional<std::shared_ptr<const Json>> crkwMaskState;
     std::unique_ptr<TopologyUndo> topology;
 
     bool empty() const {
         return positions.empty() && mask.empty() && colors.empty() && paintAlpha.empty() && hidden.empty() &&
-               polygroups.empty() && !mesh && !paint && !textureTiles && !texture && !subdiv && !topology;
+               polygroups.empty() && !mesh && !paint && !textureTiles && !texture && !subdiv && !topology && !crkwMaskState;
     }
     size_t approxBytes() const;
 

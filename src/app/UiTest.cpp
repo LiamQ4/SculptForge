@@ -40,6 +40,8 @@
 //   expect_status TEXT       the status bar message contains TEXT
 //   expect_help TEXT         the Ctrl-hover help box shown this frame contains TEXT (hold ctrl, then hover)
 //   clipboard TEXT           put TEXT on the clipboard (to test pasting, e.g. a brush code)
+//   clipboard_image PATH     put a PNG image on the clipboard ($SCRIPT_DIR supported)
+//   clipboard_png / clipboard_dib / clipboard_dibv5 PATH   native Windows formats (PNG elsewhere)
 //   expect_clipboard TEXT    the clipboard contains TEXT (after a copy)
 //   click_subtool NAME [U V] left-click SubTool NAME in the viewport (with the held modifiers, e.g.
 //                            hold alt to select it); U V: fractions of its on-screen bounds
@@ -132,6 +134,7 @@
 
 #include "core/BrushLibrary.h"
 #include "core/Multires.h"
+#include "core/CrkwMaskManager.h"
 #include "core/Script.h"
 #include "core/ThreadPool.h"
 #include "link/HttpServer.h"
@@ -150,6 +153,10 @@
 #include <memory>
 #include <set>
 #include <sstream>
+#include <cstring>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace sf {
 
@@ -253,6 +260,8 @@ double Demo::query(const std::string& name, bool& known) const {
     known = true;
     if (name == "triangles") return double(m.triangleCount());
     if (name == "vertices") return double(m.vertexCount());
+    if (name == "mh_mask_active") return double(crkwMaskSettings(m)["active"].size());
+    if (name == "mh_mask_custom") return double(crkwMaskSettings(m)["custom"].members().size());
     if (name == "layers") return double(m.layers.size());
     if (name == "brushes") return double(app_.doc_.brushes.size());
     if (name == "colored") return m.hasColors() ? 1.0 : 0.0;
@@ -273,6 +282,9 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "multithreading") return ThreadPool::shared().serial() ? 0.0 : 1.0;
     if (name == "last_stroke_dabs") return double(app_.perf_.lastStroke.dabs);
     if (name == "texture_size") return hasTexture(m) ? double(m.texture->width) : 0.0;
+    if (name == "texture_guide_preview") return m.previewTexture ? 1.0 : 0.0;
+    if (name == "show_texture") return app_.renderSettings_.showTexture ? 1.0 : 0.0;
+    if (name == "show_polypaint") return app_.renderSettings_.showPolypaint ? 1.0 : 0.0;
     if (name == "paint_texture") return paintsTexture(m) ? 1.0 : 0.0;
     if (name == "texture_layers") return hasTexture(m) ? double(m.texture->layers.size()) : 0.0;
     if (name == "active_texture_layer") return hasTexture(m) && !m.texture->layers.empty() ? double(m.texture->activeLayer) : -1.0;
@@ -453,6 +465,13 @@ double Demo::query(const std::string& name, bool& known) const {
     if (name == "cursor_x") return app_.mouseX_;
     if (name == "cursor_y") return app_.mouseY_;
     if (name == "camera_yaw") return glm::degrees(app_.camera_.yaw);
+    if (name == "camera_ortho") return app_.camera_.orthographic ? 1 : 0;
+    if (name == "camera_fov") return glm::degrees(app_.camera_.fovY);
+    if (name == "camera_mm") return app_.camera_.focalLengthMm();
+    if (name == "camera_canvas_width") return app_.crkwCanvasWidth_;
+    if (name == "camera_canvas_height") return app_.crkwCanvasHeight_;
+    if (name == "camera_canvas_fixed") return app_.crkwCanvasFixed_ ? 1 : 0;
+    if (name == "camera_canvas_aspect") { const auto c = app_.canvasRect(); return c.w / c.h; }
     if (name == "camera_pitch") return glm::degrees(app_.camera_.pitch);
     if (name == "camera_roll") return glm::degrees(app_.camera_.roll);
     if (name == "camera_up") return (app_.camera_.orientation() * glm::vec3(0, 1, 0)).y;
@@ -1100,6 +1119,68 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
             else if (shown.find(text) == std::string::npos)
                 fail(line, "the Ctrl-help box says \"" + shown.substr(0, 120) + "\", expected \"" + text + "\"");
             return true;
+        });
+    } else if (verb == "clipboard_image" || verb == "clipboard_png" || verb == "clipboard_dib" || verb == "clipboard_dibv5") {
+        if (!need(1)) return false;
+        std::string path = restOf(lineText_, 1);
+        for (size_t at = path.find("$SCRIPT_DIR"); at != std::string::npos; at = path.find("$SCRIPT_DIR", at)) {
+            path.replace(at, 11, scriptDir_);
+            at += scriptDir_.size();
+        }
+        run([this, line, path, verb] {
+#if defined(_WIN32)
+            if (verb != "clipboard_image") {
+                Image image;
+                std::string error;
+                if (!Image::load(path, image, error)) { fail(line, error); return; }
+                std::vector<unsigned char> bytes;
+                UINT format = RegisterClipboardFormatW(L"PNG");
+                if (verb == "clipboard_png") image.encodePng(bytes);
+                else {
+                    const bool v5 = verb == "clipboard_dibv5";
+                    const size_t headerSize = v5 ? sizeof(BITMAPV5HEADER) : sizeof(BITMAPINFOHEADER);
+                    bytes.resize(headerSize + image.rgba.size(), 0);
+                    BITMAPINFOHEADER header{};
+                    header.biSize = DWORD(headerSize);
+                    header.biWidth = image.width; header.biHeight = image.height;
+                    header.biPlanes = 1; header.biBitCount = 32;
+                    header.biCompression = BI_RGB;
+                    header.biSizeImage = 0; // valid Windows clipboard images that broke SDL's converter
+                    std::memcpy(bytes.data(), &header, sizeof(header));
+                    for (int y = 0; y < image.height; ++y) for (int x = 0; x < image.width; ++x) {
+                        const size_t from = (size_t(image.height - 1 - y) * image.width + x) * 4;
+                        const size_t to = headerSize + (size_t(y) * image.width + x) * 4;
+                        bytes[to] = image.rgba[from + 2]; bytes[to + 1] = image.rgba[from + 1];
+                        bytes[to + 2] = image.rgba[from]; bytes[to + 3] = 0;
+                    }
+                    format = v5 ? CF_DIBV5 : CF_DIB;
+                }
+                HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes.size());
+                void* destination = memory ? GlobalLock(memory) : nullptr;
+                if (!destination) { if (memory) GlobalFree(memory); fail(line, "can't allocate clipboard image"); return; }
+                std::memcpy(destination, bytes.data(), bytes.size());
+                GlobalUnlock(memory);
+                const auto owner = static_cast<HWND>(SDL_GetPointerProperty(SDL_GetWindowProperties(app_.window_), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+                if (!OpenClipboard(owner)) { GlobalFree(memory); fail(line, "can't open clipboard"); return; }
+                const bool ok = EmptyClipboard() && SetClipboardData(format, memory) != nullptr;
+                CloseClipboard();
+                if (!ok) { GlobalFree(memory); fail(line, "can't set Windows clipboard image"); }
+                return;
+            }
+#endif
+            static std::vector<unsigned char> pixels;
+            size_t size = 0;
+            void* data = SDL_LoadFile(path.c_str(), &size);
+            if (!data) { fail(line, "can't read clipboard image: " + path); return; }
+            pixels.assign(static_cast<unsigned char*>(data), static_cast<unsigned char*>(data) + size);
+            SDL_free(data);
+            const char* types[] = {"image/png"};
+            if (!SDL_SetClipboardData([](void* user, const char*, size_t* count) -> const void* {
+                    const auto& bytes = *static_cast<std::vector<unsigned char>*>(user);
+                    *count = bytes.size();
+                    return bytes.data();
+                }, nullptr, &pixels, types, 1))
+                fail(line, std::string("can't set clipboard image: ") + SDL_GetError());
         });
     } else if (verb == "clipboard") {
         if (!need(1)) return false;

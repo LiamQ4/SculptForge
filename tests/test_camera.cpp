@@ -78,3 +78,41 @@ TEST(camera_turntable_after_free_rotation_stands_upright) {
     // The view direction is kept (clamped short of straight up / down).
     if (std::abs(f.y) < 0.99f) CHECK(near(c.forward(), f, 1e-3f));
 }
+
+TEST(camera_orthographic_rays_and_brush_scale) {
+    Camera c;
+    c.orthographic = true;
+    glm::vec3 a, b, da, db;
+    c.screenRay(100, 200, 800, 600, a, da);
+    c.screenRay(700, 400, 800, 600, b, db);
+    CHECK(near(da, db));
+    CHECK(glm::length(a - b) > 0.1f);
+    CHECK(std::abs(c.worldPerPixel(glm::vec3(0), 600) - c.worldPerPixel(glm::vec3(0, 0, -10), 600)) < 1e-6f);
+    c.orthographic = false;
+    c.screenRay(100, 200, 800, 600, a, da);
+    c.screenRay(700, 400, 800, 600, b, db);
+    CHECK(glm::length(da - db) > .1f);
+}
+
+TEST(camera_projection_toggle_preserves_target_plane_scale_and_lens) {
+    Camera c;
+    c.aspect = 16.0f / 9.0f;
+    c.setFocalLengthMm(50);
+    CHECK(std::abs(c.focalLengthMm() - 50) < 1e-4f);
+    CHECK(std::abs(glm::degrees(c.fovY) - 26.9915f) < .001f);
+    const glm::vec4 point(.4f, .5f, 0, 1);
+    glm::vec4 perspective = c.projection() * c.view() * point;
+    perspective /= perspective.w;
+    c.orthographic = true;
+    glm::vec4 ortho = c.projection() * c.view() * point;
+    ortho /= ortho.w;
+    CHECK(glm::length(glm::vec2(ortho) - glm::vec2(perspective)) < 1e-5f);
+    AABB box; box.expand(glm::vec3(-1)); box.expand(glm::vec3(1));
+    c.aspect = .5f;
+    c.frame(box);
+    for (float x : {-1.0f, 1.0f}) for (float y : {-1.0f, 1.0f}) {
+        const glm::vec4 projected = c.projection() * c.view() * glm::vec4(x, y, 0, 1);
+        CHECK(std::abs(projected.x / projected.w) < 1);
+        CHECK(std::abs(projected.y / projected.w) < 1);
+    }
+}

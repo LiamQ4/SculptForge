@@ -7,3 +7,7 @@ clipboard this is neither an image nor a file
 key ctrl+v
 expect_status No image on the clipboard
 shot paste-box
+clipboard_image $SCRIPT_DIR/../../assets/demo/teddy-sketch.png
+key ctrl+v
+expect_status Pasted image
+shot pasted-image

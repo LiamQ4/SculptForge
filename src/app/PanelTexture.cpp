@@ -17,8 +17,10 @@
 #include <IconsLucide.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <thread>
 #include <utility>
 #include <unordered_map>
@@ -36,22 +38,27 @@ enum TextureFile { kExportTexture, kImportTexture };
 struct TextureDialog {
     App* app = nullptr;
     TextureFile kind = kExportTexture;
+    uint32_t subtool = 0;
+    bool owned = false;
 };
 TextureDialog g_dialogs[2];
 std::mutex g_fileMutex;
-std::vector<std::pair<TextureFile, std::string>> g_files;
+struct TextureFileResult { TextureFile kind; std::string path; uint32_t subtool; };
+std::vector<TextureFileResult> g_files;
 
 const SDL_DialogFileFilter kPngFilter[] = {{"PNG image", "png"}};
 const SDL_DialogFileFilter kImageFilters[] = {{"Images", "png;jpg;jpeg;tga;bmp;psd"}, {"All files", "*"}};
 
 void SDLCALL onTextureFile(void* user, const char* const* files, int) {
-    if (!files || !files[0]) return;
     auto* d = static_cast<TextureDialog*>(user);
-    std::string path = files[0];
-    if (d->kind == kExportTexture && std::filesystem::path(std::u8string(path.begin(), path.end())).extension().empty())
-        path += ".png";
-    std::lock_guard lock(g_fileMutex);
-    g_files.push_back({d->kind, std::move(path)});
+    if (files && files[0]) {
+        std::string path = files[0];
+        if (d->kind == kExportTexture && std::filesystem::path(std::u8string(path.begin(), path.end())).extension().empty())
+            path += ".png";
+        std::lock_guard lock(g_fileMutex);
+        g_files.push_back({d->kind, std::move(path), d->subtool});
+    }
+    if (d->owned) delete d;
 }
 
 // Line segments of the UV layout in 0..1: every triangle edge on small meshes, only the UV island borders
@@ -209,13 +216,29 @@ void App::startAutoUv() {
 }
 
 void App::pollAutoUv() {
-    std::vector<std::pair<TextureFile, std::string>> files;
+    std::vector<TextureFileResult> files;
     {
         std::lock_guard lock(g_fileMutex);
         files.swap(g_files);
     }
-    for (const auto& [kind, path] : files)
+    for (const auto& [kind, path, subtool] : files) {
+        if (subtool) {
+            int index = -1;
+            for (int i = 0; i < doc_.subtoolCount(); ++i)
+                if (doc_.subtools[size_t(i)].id == subtool) index = i;
+            if (index < 0) { status_ = "Texture import skipped: the target SubTool was deleted"; continue; }
+            if (index != doc_.activeSubtool) runCommand("subtool_select", {{"index", double(index)}});
+        }
         runCommand(kind == kExportTexture ? "texture_export" : "texture_import", {{"path", path}});
+        if (kind == kImportTexture && lastCommandOk_) {
+            doc_.mesh.previewTexture.reset();
+            doc_.mesh.previewUvs.clear();
+            if (doc_.activeSubtoolInfo().crkwMetaHuman.isObject())
+                doc_.activeSubtoolInfo().crkwMetaHuman.set("preview", "OFF");
+            renderSettings_.showTexture = true;
+            renderSettings_.showPolypaint = true;
+        }
+    }
 
     if (!autoUv_) return;
     if (autoUv_->done.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
@@ -254,10 +277,156 @@ void App::pollAutoUv() {
     status_ = islands + (!note.empty() ? note : hasTexture(doc_.mesh) ? "" : ". Now make a texture: New Texture");
 }
 
+void App::pasteTextureImage() {
+    if (!doc_.mesh.hasUvs()) {
+        status_ = "The SubTool needs UVs before pasting a texture";
+        return;
+    }
+    Image image;
+    if (!readClipboardImage(image)) return;
+    const auto file = std::filesystem::temp_directory_path() /
+        ("sculptforge_texture_" + std::to_string(SDL_GetTicksNS()) + ".png");
+    const auto u8 = file.u8string();
+    std::string error;
+    if (!image.savePng(std::string(u8.begin(), u8.end()), error)) {
+        status_ = "Couldn't save the pasted texture: " + error;
+        return;
+    }
+    runCommand("texture_import", {{"path", std::string(u8.begin(), u8.end())}});
+    std::error_code ec;
+    std::filesystem::remove(file, ec); // texture_import has already read the pixels
+    if (!lastCommandOk_) return;
+    // A MetaHuman guide would otherwise cover the texture that was just pasted.
+    doc_.mesh.previewTexture.reset();
+    doc_.mesh.previewUvs.clear();
+    if (doc_.activeSubtoolInfo().crkwMetaHuman.isObject())
+        doc_.activeSubtoolInfo().crkwMetaHuman.set("preview", "OFF");
+    renderSettings_.showTexture = true;
+    renderSettings_.showPolypaint = true;
+    status_ = "Pasted texture " + std::to_string(image.width) + "x" + std::to_string(image.height) + " (Ctrl+Z to undo)";
+}
+
+void App::clearTextureManagerPreviews() {
+    for (auto& preview : textureManagerPreviews_)
+        if (preview.texture) gl::DeleteTextures(1, &preview.texture);
+    textureManagerPreviews_.clear();
+}
+
+void App::drawTextureManager() {
+    if (!showTextureManager_) {
+        clearTextureManagerPreviews();
+        return;
+    }
+    ImGui::SetNextWindowSize(ImVec2(480 * uiScale_, 620 * uiScale_), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(340 * uiScale_, 300 * uiScale_), ImVec2(FLT_MAX, FLT_MAX));
+    if (!ImGui::Begin("CRKW Texture Manager", &showTextureManager_)) { ImGui::End(); return; }
+    ImGui::TextWrapped("Hover a square and press Ctrl+V, or use Paste / Swap image. Each card controls one SubTool.");
+    ImGui::TextDisabled("Replaces texture layers. Ctrl+Z undoes the selected SubTool.");
+    ImGui::Separator();
+
+    // Separate small GPU previews work for inactive/hidden SubTools and don't depend on scene uploads.
+    std::erase_if(textureManagerPreviews_, [&](TextureManagerPreview& preview) {
+        const bool removed = std::none_of(doc_.subtools.begin(), doc_.subtools.end(),
+            [&](const SubTool& subtool) { return subtool.id == preview.subtool; });
+        if (removed && preview.texture) gl::DeleteTextures(1, &preview.texture);
+        return removed;
+    });
+    int paste = -1, browse = -1, select = -1;
+    const int columns = ImGui::GetContentRegionAvail().x >= 400 * uiScale_ ? 2 : 1;
+    if (ImGui::BeginTable("##texturecards", columns, ImGuiTableFlags_SizingStretchSame)) {
+        for (int i = 0; i < doc_.subtoolCount(); ++i) {
+            ImGui::TableNextColumn();
+            const auto& subtool = doc_.subtools[size_t(i)];
+            const Mesh& mesh = doc_.subtoolMesh(i);
+            const auto& source = mesh.previewTexture ? mesh.previewTexture : mesh.texture;
+            const std::string suffix = std::to_string(i);
+            if (ImGui::Selectable((subtool.name + "##texture.select." + suffix).c_str(), i == doc_.activeSubtool)) select = i;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s%s", subtool.name.c_str(), subtool.visible ? "" : " (hidden)");
+            if (source)
+                ImGui::TextDisabled("%s %dx%d", mesh.previewTexture ? "Guide" : "Texture", source->width, source->height);
+            else ImGui::TextDisabled("%s", mesh.hasUvs() ? "No texture" : "No UVs");
+
+            const float side = ImGui::GetContentRegionAvail().x;
+            const ImVec2 p = ImGui::GetCursorScreenPos(), end(p.x + side, p.y + side);
+            const bool visible = ImGui::IsRectVisible(ImVec2(side, side));
+            const bool clicked = ImGui::InvisibleButton(("##texture.card." + suffix).c_str(), ImVec2(side, side));
+            const bool hovered = ImGui::IsItemHovered();
+            if (hovered) {
+                imagePasteHoverFrame_ = ImGui::GetFrameCount();
+                ImGui::SetTooltip("%s: Ctrl+V to paste, click to swap image", subtool.name.c_str());
+                if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) paste = i;
+            }
+            if (clicked) browse = i;
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(p, end, ImGui::GetColorU32(ImGuiCol_FrameBg), 4 * uiScale_);
+            if (source && visible && source->width > 0 && source->height > 0 && !source->pixels.empty()) {
+                auto found = std::find_if(textureManagerPreviews_.begin(), textureManagerPreviews_.end(),
+                    [&](const TextureManagerPreview& preview) { return preview.subtool == subtool.id; });
+                if (found == textureManagerPreviews_.end()) {
+                    textureManagerPreviews_.push_back({subtool.id});
+                    found = std::prev(textureManagerPreviews_.end());
+                }
+                auto& preview = *found;
+                if (!preview.texture || preview.serial != source->serial || preview.revision != source->revision) {
+                    const float factor = std::min(1.0f, 256.0f / float(std::max(source->width, source->height)));
+                    const int w = std::max(1, int(source->width * factor)), h = std::max(1, int(source->height * factor));
+                    std::vector<uint8_t> pixels(size_t(w) * h * 4);
+                    for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+                        const size_t from = (size_t(y * source->height / h) * source->width + x * source->width / w) * 4;
+                        std::copy_n(source->pixels.data() + from, 4, pixels.data() + (size_t(y) * w + x) * 4);
+                    }
+                    if (!preview.texture) gl::GenTextures(1, &preview.texture);
+                    gl::BindTexture(GL_TEXTURE_2D, preview.texture);
+                    gl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                    gl::TexImage2D(GL_TEXTURE_2D, 0, GLint(GL_RGBA8), w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+                    gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(GL_LINEAR));
+                    gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(GL_LINEAR));
+                    gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE));
+                    gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE));
+                    gl::BindTexture(GL_TEXTURE_2D, 0);
+                    preview.serial = source->serial; preview.revision = source->revision;
+                }
+                const float aspect = float(source->width) / float(source->height);
+                const float h = std::min(side, side / aspect), w = h * aspect;
+                const ImVec2 start(p.x + (side - w) * .5f, p.y + (side - h) * .5f);
+                dl->AddImage(ImTextureID(uintptr_t(preview.texture)), start, ImVec2(start.x + w, start.y + h), ImVec2(0, 1), ImVec2(1, 0));
+            } else if (!source) {
+                const char* text = "Paste texture";
+                const ImVec2 size = ImGui::CalcTextSize(text);
+                dl->AddText(ImVec2(p.x + (side - size.x) * .5f, p.y + (side - size.y) * .5f), ImGui::GetColorU32(ImGuiCol_TextDisabled), text);
+            }
+            dl->AddRect(p, end, ImGui::GetColorU32(hovered || i == doc_.activeSubtool ? ImGuiCol_ButtonHovered : ImGuiCol_Border), 4 * uiScale_, 0, 2 * uiScale_);
+            ImGui::BeginDisabled(!mesh.hasUvs());
+            const float half = (side - ImGui::GetStyle().ItemSpacing.x) * .5f;
+            if (ImGui::Button(("Paste##texture.paste." + suffix).c_str(), ImVec2(half, 0))) paste = i;
+            ImGui::SameLine();
+            if (ImGui::Button(("Swap image...##texture.swap." + suffix).c_str(), ImVec2(-1, 0))) browse = i;
+            ImGui::EndDisabled();
+            ImGui::Spacing();
+        }
+        ImGui::EndTable();
+    }
+    // Defer selection until every card is drawn: switching SubTools moves their meshes.
+    const int target = paste >= 0 ? paste : browse >= 0 ? browse : select;
+    if (target >= 0) {
+        if (target != doc_.activeSubtool) runCommand("subtool_select", {{"index", double(target)}});
+        if (paste >= 0) pasteTextureImage();
+        if (browse >= 0) {
+            if (!doc_.mesh.hasUvs()) status_ = "The SubTool needs UVs before importing a texture";
+            else SDL_ShowOpenFileDialog(onTextureFile,
+                new TextureDialog{this, kImportTexture, doc_.activeSubtoolInfo().id, true}, window_, kImageFilters, 2, nullptr, false);
+        }
+    }
+    ImGui::Separator();
+    ImGui::TextWrapped("%s", status_.c_str());
+    ImGui::End();
+}
+
 void App::drawTextureMapContents() {
     const Mesh& m = doc_.mesh;
     const ImGuiStyle& style = ImGui::GetStyle();
     const float half = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
+    if (ImGui::Button("Texture Manager##crkw.texture_manager", ImVec2(-1, 0))) showTextureManager_ = true;
 
     // Status line: UVs, texture size, where paint goes.
     if (autoUv_) {
@@ -271,6 +440,35 @@ void App::drawTextureMapContents() {
         const PaintTexture& t = *m.texture;
         ImGui::TextDisabled("%dx%d texture, %d layer%s", t.width, t.height, int(t.layers.size()) + 1, t.layers.empty() ? "" : "s");
     }
+
+    // CRKW: the same hover + Ctrl+V interaction as Generate 3D's image box.
+    const float width = ImGui::GetContentRegionAvail().x, height = 100.0f * uiScale_;
+    const ImVec2 p = ImGui::GetCursorScreenPos(), end(p.x + width, p.y + height);
+    const bool clicked = ImGui::InvisibleButton("##texturepaste", ImVec2(width, height));
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered) imagePasteHoverFrame_ = ImGui::GetFrameCount();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, end, ImGui::GetColorU32(ImGuiCol_FrameBg), 4 * uiScale_);
+    const GLuint texture = hasTexture(m) && !m.previewTexture ? renderer_.paintTexture(doc_.activeSubtoolInfo().id) : 0;
+    if (texture) {
+        const float aspect = float(m.texture->width) / float(m.texture->height);
+        const float h = std::min(height, width / aspect), w = h * aspect;
+        const ImVec2 start(p.x + (width - w) * .5f, p.y + (height - h) * .5f);
+        dl->AddImage(ImTextureID(uintptr_t(texture)), start, ImVec2(start.x + w, start.y + h), ImVec2(0, 1), ImVec2(1, 0));
+    } else {
+        const char* text = "Paste a texture here";
+        const ImVec2 size = ImGui::CalcTextSize(text);
+        dl->AddText(ImVec2(p.x + (width - size.x) * .5f, p.y + (height - size.y) * .5f), ImGui::GetColorU32(ImGuiCol_Text), text);
+    }
+    dl->AddRect(p, end, ImGui::GetColorU32(hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Border), 4 * uiScale_);
+    if (hovered) {
+        ImGui::SetTooltip("Hover + Ctrl+V: paste texture. Click: import image. Replaces texture layers; Ctrl+Z undoes it.");
+        if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) pasteTextureImage();
+    }
+    if (clicked && m.hasUvs())
+        SDL_ShowOpenFileDialog(onTextureFile, &g_dialogs[kImportTexture], window_, kImageFilters, 2, nullptr, false);
+    ImGui::TextDisabled("Hover + Ctrl+V, or click to import");
+    if (m.previewTexture) ImGui::TextDisabled("MetaHuman guide preview is on");
 
     ui::ActionButton(*this, "texture.auto_uv", ImVec2(half, 0));
     ImGui::SameLine();

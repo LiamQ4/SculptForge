@@ -33,6 +33,22 @@ Real UVs and exported textures remain unchanged. Display maps are limited to
 2048 pixels per part. Projects remember the preview mode; external maps must
 remain accessible to restore it.
 
+In **Tool > Texture Map**, hover the texture box and press **Ctrl+V** to paste
+an image from the clipboard (or a copied image-file path). Click the box to
+browse for an image. This replaces the selected SubTool's paint texture and
+layers, using its existing UVs; **Ctrl+Z** restores the previous texture. Pasting
+or importing turns off that SubTool's guide preview and enables texture display
+so the result is visible immediately. Paste head and body maps onto their
+matching SubTools. Guide previews remain available from MetaHuman Sculpt.
+
+**Texture Manager** opens a compact floating panel from MetaHuman Sculpt,
+CrokedWillo, or Tool > Texture Map. Each SubTool has a large preview card,
+labelled **Guide** for a display map or **Texture** for an editable map. Hover a
+card and press Ctrl+V, use **Paste**, or click **Swap image...** to replace that
+SubTool's map. The target becomes selected, so Ctrl+Z restores its previous
+texture independently of the other SubTools. Meshes without UVs need UVs before
+importing. Previews include inactive and hidden SubTools.
+
 ## Export
 
 Select a MetaHuman SubTool and choose **Export for MetaHuman**. The active

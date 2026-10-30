@@ -206,6 +206,10 @@ void App::storeProjectSettings() {
     cam.set("pitch", double(camera_.pitch));
     cam.set("roll", double(camera_.roll));
     cam.set("fov_y", double(camera_.fovY));
+    cam.set("orthographic", camera_.orthographic);
+    cam.set("canvas_fixed", crkwCanvasFixed_);
+    cam.set("canvas_width", double(crkwCanvasWidth_));
+    cam.set("canvas_height", double(crkwCanvasHeight_));
     s.set("camera", std::move(cam));
 
     Json render = Json::object();
@@ -268,6 +272,12 @@ void App::applyProjectSettings() {
         readFloat(cam, "fov_y", camera_.fovY);
         camera_.distance = std::max(camera_.distance, 1e-4f);
         camera_.fovY = std::clamp(camera_.fovY, 0.05f, 3.0f);
+        camera_.orthographic = cam["orthographic"].asBool(false);
+        crkwCanvasFixed_ = cam["canvas_fixed"].asBool(false);
+        crkwCanvasWidth_ = std::clamp(int(cam["canvas_width"].asNumber(1920)), 64, 8192);
+        crkwCanvasHeight_ = std::clamp(int(cam["canvas_height"].asNumber(1080)), 64, 8192);
+        if (int64_t(crkwCanvasWidth_) * crkwCanvasHeight_ > 16777216) { crkwCanvasWidth_ = 1920; crkwCanvasHeight_ = 1080; }
+        crkwCanvasDraft_[0] = crkwCanvasWidth_; crkwCanvasDraft_[1] = crkwCanvasHeight_;
     }
     if (const Json& r = s["render"]; r.isObject()) {
         readBool(r, "wireframe", renderSettings_.wireframe);

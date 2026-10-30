@@ -939,6 +939,7 @@ void enterLevel(Mesh& mesh, int level, BVH* bvh, const SubdivLevel* leavingLevel
     if (!stack->cache) stack->cache = std::make_shared<SubdivLevelCache>();
     SubdivLevelCache& cache = *stack->cache;
     std::shared_ptr<PaintTexture> texture = mesh.texture;
+    const auto maskState = mesh.crkwMaskState;
     const bool toTexture = mesh.paintToTexture;
     const SubdivLevel& wantLevel = stack->levels[size_t(level)];
     const std::shared_ptr<Mesh> want = wantLevel.data;
@@ -988,6 +989,7 @@ void enterLevel(Mesh& mesh, int level, BVH* bvh, const SubdivLevel* leavingLevel
     }
     mesh.multires = std::move(stack);
     mesh.texture = std::move(texture);
+    mesh.crkwMaskState = maskState;
     mesh.paintToTexture = toTexture;
     if (!taken) {
         mesh.rebuildTopology();
@@ -2211,9 +2213,11 @@ void applySubdivUndo(SubdivUndo& r, Mesh& mesh, BVH& bvh) {
         return;
     } else if (r.plain) {
         std::shared_ptr<PaintTexture> texture = mesh.texture;
+        const auto maskState = mesh.crkwMaskState;
         const bool toTexture = mesh.paintToTexture;
         mesh = leanCopy(*r.plain);
         mesh.texture = std::move(texture);
+        mesh.crkwMaskState = maskState;
         mesh.paintToTexture = toTexture;
         mesh.rebuildTopology();
         mesh.recomputeAllNormals();

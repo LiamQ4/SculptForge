@@ -32,10 +32,16 @@
 #include <cctype>
 #include <cfloat>
 #include <cmath>
+#include <cstring>
+#include <climits>
 #include <filesystem>
 #include <iterator>
 #include <memory>
 #include <thread>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace sf {
 
@@ -71,6 +77,56 @@ const char* kExamplePrompts[] = {
 };
 
 bool ctrlDown(SDL_Keymod mod) { return (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0; }
+
+#if defined(_WIN32)
+bool readWindowsClipboardImage(Image& image, std::string& error) {
+    // Chromium publishes "PNG", not SDL's internal "image/png". Prefer that lossless original.
+    // SDL 3.2.10's DIB converter copies no pixels when biSizeImage is zero (valid for BI_RGB).
+    const UINT formats[] = {RegisterClipboardFormatW(L"PNG"), RegisterClipboardFormatW(L"image/png"), CF_DIBV5, CF_DIB};
+    for (const UINT format : formats) {
+        if (!format || !IsClipboardFormatAvailable(format) || !OpenClipboard(nullptr)) continue;
+        std::vector<unsigned char> bytes;
+        if (HANDLE handle = GetClipboardData(format)) {
+            const SIZE_T size = GlobalSize(handle);
+            if (size > 0 && size < SIZE_T(INT_MAX - 14)) {
+                if (const void* data = GlobalLock(handle)) {
+                    const auto* first = static_cast<const unsigned char*>(data);
+                    bytes.assign(first, first + size);
+                    GlobalUnlock(handle);
+                }
+            }
+        }
+        CloseClipboard();
+        if (bytes.empty()) continue;
+        if (format == CF_DIB || format == CF_DIBV5) {
+            if (bytes.size() < 40) continue;
+            auto word = [&](size_t offset) {
+                uint32_t value = 0;
+                std::memcpy(&value, bytes.data() + offset, sizeof(value));
+                return value;
+            };
+            const uint32_t header = word(0), compression = word(16), used = word(32);
+            if (header < 40 || header > bytes.size()) continue;
+            const uint16_t bits = uint16_t(bytes[14]) | (uint16_t(bytes[15]) << 8);
+            const uint64_t colors = used ? used : bits <= 8 ? uint64_t(1) << bits : 0;
+            // BITMAPV4/V5 carry their masks inside the header; BITMAPINFOHEADER appends them.
+            const uint64_t masks = header == 40 ? (compression == BI_BITFIELDS ? 12 : compression == 6 ? 16 : 0) : 0;
+            const uint64_t offset = 14 + uint64_t(header) + masks + colors * 4;
+            if (offset > bytes.size() + 14) continue;
+            std::vector<unsigned char> bmp(bytes.size() + 14, 0);
+            bmp[0] = 'B'; bmp[1] = 'M';
+            const uint32_t size = uint32_t(bmp.size()), pixelOffset = uint32_t(offset);
+            std::memcpy(bmp.data() + 2, &size, sizeof(size));
+            std::memcpy(bmp.data() + 10, &pixelOffset, sizeof(pixelOffset));
+            // Copy the entire allocation, including pixels, regardless of biSizeImage.
+            std::copy(bytes.begin(), bytes.end(), bmp.begin() + 14);
+            bytes = std::move(bmp);
+        }
+        if (Image::decode(bytes.data(), bytes.size(), image, error)) return true;
+    }
+    return false;
+}
+#endif
 
 } // namespace
 
@@ -272,6 +328,7 @@ void App::shutdown() {
     if (blenderInitialised_) writeBridgeHeartbeat(blenderExchangeRoot(), true); // the add-on starts a new one
 
     if (refTexture_) gl::DeleteTextures(1, &refTexture_);
+    clearTextureManagerPreviews();
     gallery_.reset(); // its preview textures need the GL context
     thumbs_.clear();
     ImGui_ImplOpenGL3_Shutdown();
@@ -1314,6 +1371,9 @@ void App::drawUi() {
     drawLightBoxUi(); // thumbnails, the LightBox over the canvas, pickers, size / strength pop-ups
     drawQuickMenu();  // Space (Input.cpp)
     drawCrkwMetaHuman();
+    drawMhMaskManager();
+    drawTextureManager();
+    drawCameraController();
     drawSubToolPopups();
     if (showBrushLab_) drawBrushLab();
     drawBrushGallery();
@@ -1876,14 +1936,16 @@ bool App::loadReferenceImage(const std::string& path) {
     return true;
 }
 
-// CRKW: Generate 3D's paste box. An image on the clipboard (PNG where the system offers one, the Windows bitmap
-// otherwise), or the path of an image file copied as text, is saved as a temporary PNG and loaded like a chosen
-// file -- the generators read the picture from a file.
-bool App::pasteReferenceImage() {
-    Image img;
+// CRKW: shared by the Generate 3D and Texture Map paste boxes. Accept clipboard PNG/bitmap data
+// or an image-file path copied as text.
+bool App::readClipboardImage(Image& img) {
     std::string err;
     bool found = false;
+#if defined(_WIN32)
+    found = readWindowsClipboardImage(img, err);
+#endif
     for (const char* mime : {"image/png", "image/bmp"}) {
+        if (found) break;
         if (!SDL_HasClipboardData(mime)) continue;
         size_t size = 0;
         void* data = SDL_GetClipboardData(mime, &size);
@@ -1901,7 +1963,7 @@ bool App::pasteReferenceImage() {
         while (!path.empty() && trim(path.front())) path.erase(path.begin());
         std::error_code ec;
         if (!path.empty() && std::filesystem::is_regular_file(std::filesystem::path(std::u8string(path.begin(), path.end())), ec))
-            return loadReferenceImage(path);
+            found = Image::load(path, img, err);
     }
     if (!found) {
         status_ = err.empty() ? "No image on the clipboard - copy an image (or an image file's path) first"
@@ -1913,6 +1975,13 @@ bool App::pasteReferenceImage() {
     for (size_t i = 3; i < img.rgba.size() && !anyAlpha; i += 4) anyAlpha = img.rgba[i] != 0;
     if (!anyAlpha)
         for (size_t i = 3; i < img.rgba.size(); i += 4) img.rgba[i] = 255;
+    return true;
+}
+
+bool App::pasteReferenceImage() {
+    Image img;
+    if (!readClipboardImage(img)) return false;
+    std::string err;
     const auto stem = (std::filesystem::temp_directory_path() /
                        ("sculptforge_pasted_" + std::to_string(SDL_GetTicksNS()) + ".png")).u8string();
     const std::string path(stem.begin(), stem.end());

@@ -1,0 +1,38 @@
+# Real clipboard PNG -> texture, shortcut routing, replacement, and undo.
+run new_sphere subdivisions=3
+click "Texture Map##tool.texture"
+expect "Texture Map/##texturepaste"
+hover "Texture Map/##texturepaste"
+clipboard_image $SCRIPT_DIR/../../assets/demo/teddy-sketch.png
+key ctrl+v
+expect_status needs UVs
+expect_value texture_size == 0
+click "Texture Map/Auto UV"
+wait_idle 120
+expect_value uvs == 1
+hover "Texture Map/##texturepaste"
+clipboard not an image
+key ctrl+v
+expect_status No image on the clipboard
+expect_value texture_size == 0
+clipboard_image $SCRIPT_DIR/../../assets/demo/teddy-sketch.png
+key ctrl+v
+expect_status Pasted texture
+expect_value texture_size > 0
+expect_value paint_texture == 1
+expect_value show_texture == 1
+expect_value show_polypaint == 1
+expect_value texture_painted > 100
+remember texture_size pasted_size
+shot pasted-texture
+key ctrl+z
+expect_value texture_size == 0
+key ctrl+shift+z
+expect_value texture_size == $pasted_size
+clipboard_image $SCRIPT_DIR/data/phone/photo.png
+hover "Texture Map/##texturepaste"
+key ctrl+v
+expect_status Pasted texture
+key ctrl+z
+expect_value texture_size == $pasted_size
+shot restored-texture

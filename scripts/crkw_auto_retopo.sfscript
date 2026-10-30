@@ -1,0 +1,6 @@
+# Active SubTool -> preserved original/history + a new quad base with projected subdivision levels.
+# target=0 chooses the base budget automatically. For a specific budget use target=2500, for example.
+# distance is a fraction of the bounding-box diagonal. Smaller values reduce cross-surface projection.
+# The whole SubTool is used; masks and hidden faces do not exclude detail. Original layers/history remain intact.
+# New topology is not suitable for MetaHuman template conform; that original stays on the source SubTool.
+crkw_retopo_project target=0 distance=0.05 max_points=8000000 keep_texture=true keep_groups=true

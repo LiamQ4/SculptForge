@@ -146,6 +146,23 @@ private:
     void setComfyWorkflow(const std::string& path, bool text);
     bool loadReferenceImage(const std::string& path);
     bool pasteReferenceImage(); // CRKW: Generate 3D's paste box (Ctrl+V while hovering it)
+    bool readClipboardImage(Image& image);
+    void pasteTextureImage();
+    void drawTextureManager();
+    void initCameraController();
+    void drawCameraController();
+    CanvasRect fitCameraCanvas(CanvasRect rect) const;
+    bool showCameraController_ = false, crkwCanvasFixed_ = false;
+    int crkwCanvasWidth_ = 1920, crkwCanvasHeight_ = 1080;
+    int crkwCanvasDraft_[2]{1920, 1080};
+    void clearTextureManagerPreviews();
+    bool showTextureManager_ = false;
+    struct TextureManagerPreview {
+        uint32_t subtool = 0;
+        unsigned texture = 0;
+        uint64_t serial = 0, revision = 0;
+    };
+    std::vector<TextureManagerPreview> textureManagerPreviews_;
     void projectImageFromView();
     void startGenerator();
     void pollGenerator();
@@ -804,6 +821,10 @@ private:
     void drawPalette_Ckw();
     void initCrkwMetaHuman();
     void drawCrkwMetaHuman();
+    void drawMhMaskManager();
+    bool showMhMaskManager_ = false;
+    char mhMaskCustomName_[65] = "Custom";
+    std::shared_ptr<const Json> mhMaskUiState_;
     bool showCrkwMetaHuman_ = false;
     char crkwMhAssets_[1024]{}, crkwMhExport_[1024]{};
     int crkwMhLayout_ = 0, crkwMhMap_ = 1;

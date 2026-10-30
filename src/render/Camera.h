@@ -20,6 +20,9 @@ public:
     float roll = 0.0f;  // radians around the view direction; only free orbiting makes it non-zero
     float fovY = glm::radians(35.0f);
     float aspect = 1.0f;
+    bool orthographic = false;
+    float focalLengthMm() const; // full-frame equivalent using a 24 mm sensor height
+    void setFocalLengthMm(float mm);
 
     glm::quat orientation() const;
     glm::vec3 position() const;

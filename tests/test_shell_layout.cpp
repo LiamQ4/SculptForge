@@ -9,6 +9,7 @@
 #include "app/ShellGeometry.h"
 
 #include <cmath>
+#include <algorithm>
 
 using namespace sf;
 
@@ -119,4 +120,21 @@ TEST(shell_camera_notch_inset) {
     CHECK(g.canvas.y == plain.canvas.y + 37.0f && g.canvas.h == plain.canvas.h - 37.0f);
     CHECK(g.rightTray.y == plain.rightTray.y + 37.0f);
     CHECK(computeShell(l, 1728, 1117, 1.0f, 5000.0f).notchBand.h <= 1117.0f * 0.25f); // never eats the window
+}
+
+TEST(shell_camera_upgrade_preserves_custom_shelf) {
+    UiLayout original = standardLayout();
+    original.rightShelf = {"widget.nav.zoom", "view.frame", "view.mask"};
+    Json old = toJson(original);
+    old.set("version", 2.0);
+    UiLayout upgraded;
+    std::string error;
+    CHECK(fromJson(old, upgraded, error));
+    CHECK(upgraded.version == 4);
+    CHECK(upgraded.rightShelf == std::vector<std::string>({"widget.nav.zoom", "view.frame", "crkw.camera", "crkw.mask_manager", "view.mask"}));
+    // Once upgraded, deliberately removing the button remains a valid customization.
+    upgraded.rightShelf = original.rightShelf;
+    UiLayout restored;
+    CHECK(fromJson(toJson(upgraded), restored, error));
+    CHECK(restored.rightShelf == original.rightShelf);
 }

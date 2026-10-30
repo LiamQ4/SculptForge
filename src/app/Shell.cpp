@@ -515,8 +515,8 @@ ShellGeometry App::shellGeometry() const {
 CanvasRect App::canvasRect() const {
     int w = 0, h = 0;
     SDL_GetWindowSize(window_, &w, &h);
-    if (hideUi_) return {0.0f, 0.0f, float(std::max(w, 1)), float(std::max(h, 1))};
-    return computeShell(layout_, float(w), float(h), uiScale_, topInset()).canvas;
+    if (hideUi_) return fitCameraCanvas({0.0f, 0.0f, float(std::max(w, 1)), float(std::max(h, 1))});
+    return fitCameraCanvas(computeShell(layout_, float(w), float(h), uiScale_, topInset()).canvas);
 }
 
 void App::canvasRay(float x, float y, glm::vec3& origin, glm::vec3& dir) const {
@@ -525,7 +525,7 @@ void App::canvasRay(float x, float y, glm::vec3& origin, glm::vec3& dir) const {
 }
 
 Renderer::Viewport App::canvasViewport(int fbWidth, int fbHeight) const {
-    if (hideUi_) return {};
+    if (hideUi_ && !crkwCanvasFixed_) return {};
     int w = 0, h = 0;
     SDL_GetWindowSize(window_, &w, &h);
     if (w <= 0 || h <= 0) return {};
@@ -614,6 +614,7 @@ void App::drawCanvasFrame() {
 void App::drawShell() {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     shell_ = computeShell(layout_, vp->Size.x, vp->Size.y, uiScale_, topInset());
+    shell_.canvas = fitCameraCanvas(shell_.canvas);
     if (shell_.notchBand.h > 0.0f) // the band beside the camera: plain shell colour, so it reads as part of the bezel
         ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2(shell_.notchBand.w, shell_.notchBand.h),
                                                       theme::u32(theme::shellBg));

@@ -21,6 +21,8 @@ void App::drawCrkwMetaHuman() {
     ImGui::SetNextWindowSize(ImVec2(480 * uiScale_, std::min(740 * uiScale_, ImGui::GetIO().DisplaySize.y - 50)), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("CRKW MetaHuman Sculpt", &showCrkwMetaHuman_)) {
         ImGui::TextUnformatted("Native template sculpting");
+        if (ImGui::Button("Mask Manager##crkw.mh_masks", ImVec2(-1, 0))) showMhMaskManager_ = true;
+        if (ImGui::Button("Texture Manager##crkw.texture_manager", ImVec2(-1, 0))) showTextureManager_ = true;
         ImGui::TextWrapped("Create a character, sculpt base proportions, then export its head, body, eyes and teeth.");
         ImGui::Separator();
         ImGui::TextUnformatted("Local template assets folder");

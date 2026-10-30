@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/IndexBits.h"
+#include "core/Json.h"
 #include "core/PaintLayer.h"
 
 #include <glm/glm.hpp>
@@ -80,6 +81,7 @@ struct SculptLayer {
 class Mesh {
 public:
     std::vector<glm::vec3> positions;
+    std::shared_ptr<const Json> crkwMaskState; // immutable per-SubTool region selections and saved seeds
     std::vector<glm::vec3> normals;
     std::vector<glm::uvec3> triangles;
 

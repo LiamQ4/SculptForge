@@ -7,6 +7,8 @@
 #include "core/Projection.h"
 #include "core/QRemesh.h"
 #include "core/TextureTransfer.h"
+#include "core/Multires.h"
+#include "core/Texture.h"
 
 #include <algorithm>
 #include <cmath>
@@ -64,6 +66,80 @@ std::string applyQRemesh(Document& doc, Mesh result, bool keepOriginal, const QR
 }
 
 void registerRetopoCommands(CommandRegistry& reg) {
+    reg.add({"crkw_retopo_project",
+        "Preserve the active SubTool and its undo history, QRemesh a new base, subdivide near the source point count "
+        "and project from the frozen source at each level. Publishes a separate SubTool only on success.",
+        {{"target", T::Number, "Base quad target; 0 = automatic (source points / 16, at most 2500)", false},
+         {"distance", T::Number, "Projection search distance / bounding-box diagonal (0.001-1), default .05", false},
+         {"max_points", T::Number, "Point limit, default 8000000; stops rather than silently losing detail", false},
+         {"keep_groups", T::Bool, "Preserve polygroup IDs and guide topology along their borders, default true", false},
+         {"keep_texture", T::Bool, "Transfer the editable texture onto new base UVs, default true", false}},
+        [](Document& doc, const Args& args) -> CommandResult {
+            const size_t sourcePoints = doc.mesh.vertexCount();
+            const double targetArg = argNumber(args, "target", 0), limit = argNumber(args, "max_points", 8000000);
+            const double distance = argNumber(args, "distance", .05);
+            if (sourcePoints < 128 || doc.mesh.triangleCount() < 128)
+                return {false, "Auto Retopo needs a sculpt with at least 128 points and triangles"};
+            if (!std::isfinite(targetArg) || (targetArg != 0 && (targetArg < 16 || targetArg > 2000000)) ||
+                std::floor(targetArg) != targetArg || !std::isfinite(limit) || limit < 128 || limit > 32000000 ||
+                !std::isfinite(distance) || distance < .001 || distance > 1)
+                return {false, "Use target=0 or 16-2000000, max_points=128-32000000, distance=.001-1"};
+            if (sourcePoints > size_t(limit)) return {false, "Source exceeds max_points; raise the limit explicitly"};
+            const int sourceIndex = doc.activeSubtool;
+            const std::string sourceName = doc.activeSubtoolInfo().name;
+            // Freeze the displayed sculpt. Its original layers, levels, masks, visibility and history remain in doc.
+            Mesh reference = doc.mesh;
+            reference.multires.reset(); reference.layers.clear(); reference.base.clear();
+            reference.mask.clear(); reference.hidden.clear();
+            reference.previewTexture.reset(); reference.previewUvs.clear();
+            QRemeshOptions remesh;
+            remesh.keepGroups = argBool(args, "keep_groups", true);
+            remesh.targetQuads = targetArg == 0 ? int(std::clamp(sourcePoints / 16, size_t(16), size_t(2500))) : int(targetArg);
+            remesh.guides = doc.qremeshGuides;
+            Mesh result;
+            QRemeshStats remeshStats;
+            std::string error;
+            if (!qremesh(reference, remesh, result, error, {}, &remeshStats)) return {false, error};
+            if (result.vertexCount() >= sourcePoints) return {false, "QRemesh did not create a lower base; choose a smaller target"};
+            result.mask.clear(); result.hidden.clear();
+            if (hasTexture(reference) && argBool(args, "keep_texture", true) && !carryTexture(reference, result, error))
+                return {false, "Texture transfer failed; original unchanged: " + error};
+            const size_t basePoints = result.vertexCount();
+            ProjectOptions projection;
+            projection.distance = float(distance);
+            ProjectStats stats;
+            int divisions = 0;
+            for (;;) {
+                std::vector<glm::vec3> positions, colors;
+                if (!computeProjection(result, {&reference}, projection, positions, &colors, stats, error)) return {false, error};
+                if (stats.projected == 0) return {false, "No projection hits; increase distance. Original unchanged"};
+                result.positions = std::move(positions);
+                if (stats.colors) result.colors = std::move(colors);
+                result.recomputeAllNormals(); result.markAllDirty();
+                if (!subdivCommit(result)) return {false, "Subdivision reconciliation failed; original unchanged"};
+                // Predict the next level without allocating a potentially enormous candidate.
+                size_t edges = 0;
+                for (uint32_t v = 0; v < result.vertexCount(); ++v) edges += result.neighbors(v).size();
+                edges /= 2;
+                const size_t quads = result.quadCount();
+                const size_t next = result.vertexCount() + edges + (quads ? result.triangleCount() - 2 * quads : 0);
+                auto difference = [&](size_t n) { return n > sourcePoints ? n - sourcePoints : sourcePoints - n; };
+                if (next <= result.vertexCount() || difference(next) >= difference(result.vertexCount())) break;
+                if (next > size_t(limit) || divisions == 8)
+                    return {false, "Required subdivision exceeds the limit; original unchanged (raise max_points)"};
+                if (!subdivDivide(result, true, error, nullptr, size_t(limit) * 4)) return {false, error};
+                ++divisions;
+            }
+            const size_t finalPoints = result.vertexCount();
+            const int output = doc.addSubtool(std::move(result), sourceName + " Retopo", true);
+            doc.subtools[size_t(sourceIndex)].visible = false;
+            doc.subtools[size_t(output)].visible = true;
+            doc.sculptor.dyntopo.enabled = false;
+            return {true, "Auto Retopo: source/history kept in '" + sourceName + "'; base " + std::to_string(basePoints) +
+                " points, " + std::to_string(divisions + 1) + " levels, " + std::to_string(finalPoints) +
+                " / " + std::to_string(sourcePoints) + " source points; final projection " +
+                std::to_string(stats.projected) + " hit, " + std::to_string(stats.missed) + " missed"};
+        }});
     reg.add({"qremesh",
              "QRemesh (like ZBrush's ZRemesher): automatic quad retopology of the active SubTool. Builds clean, "
              "all-quad topology with edge loops that follow the form, close to the target polygon count. Sculpt "

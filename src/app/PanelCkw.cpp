@@ -128,7 +128,16 @@ void App::applyCkwWindow(bool save) {
 }
 
 void App::registerCkwActions() {
+    initCameraController();
+    actions_.add({"crkw.mask_manager", "Masks", ICON_LC_SCAN_FACE,
+        "Mask Manager: toggle MetaHuman sculpt regions, isolate with Ctrl+click, and save custom regions.",
+        "CrokedWillo", "", "", [this] { showMhMaskManager_ = !showMhMaskManager_; },
+        [this] { return showMhMaskManager_; }, nullptr});
     initCrkwMetaHuman();
+    actions_.add({"crkw.auto_retopo", "Auto Retopo + Project", ICON_LC_LAYERS,
+        "Preserve source/history, create a low quad base, subdivide near the original point count and project detail at each level.",
+        "Script", "", "crkw_retopo_project", [this] { runCommand("crkw_retopo_project"); }, nullptr,
+        [this] { return doc_.mesh.vertexCount() >= 128; }});
     actions_.add({"ckw.clay_polish", "CRKW Clay Polish", ICON_LC_WAND_SPARKLES,
         "Smooth the visible unmasked surface, then sharpen curvature. One undo step; topology is preserved.",
         "CrokedWillo", "", "crkw_clay_polish", [this] {
@@ -196,6 +205,8 @@ void App::drawPalette_Ckw() {
     ImGui::TextWrapped("Works on the current subdivision level. Respects masks and hidden vertices.");
     ImGui::Separator();
     if (ImGui::Button("MetaHuman Sculpt##crkw.metahuman", ImVec2(-1, 0))) showCrkwMetaHuman_ = true;
+    if (ImGui::Button("MH Mask Manager##crkw.mh_masks", ImVec2(-1, 0))) showMhMaskManager_ = true;
+    if (ImGui::Button("Texture Manager##crkw.texture_manager", ImVec2(-1, 0))) showTextureManager_ = true;
     ImGui::Separator();
     ImGui::TextUnformatted("Background");
     bool appearanceChanged = ImGui::Checkbox("Gradient##crkw.background_gradient", &renderSettings_.backgroundGradient);

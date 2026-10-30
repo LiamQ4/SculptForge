@@ -42,6 +42,7 @@ add_library(sculptforge_core STATIC
   src/core/CkwPolish.cpp
   src/core/CkwMeshSharpen.cpp
   src/core/CrkwMetaHuman.cpp
+  src/core/CrkwMaskManager.cpp
   src/core/Polygroups.cpp
   src/core/ScreenSelect.cpp
   src/core/SubTools.cpp
@@ -201,7 +202,9 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/Bench.cpp
     src/app/App.cpp
     src/app/PanelCkw.cpp
+    src/app/PanelCamera.cpp
     src/app/PanelMetaHuman.cpp
+    src/app/PanelMhMask.cpp
     src/app/CkwHuion.cpp
     src/app/Demo.cpp
     src/app/UiTest.cpp
@@ -325,6 +328,7 @@ else()
   set(SF_DOC_DIR ${CMAKE_INSTALL_DOCDIR})
 endif()
 install(FILES LICENSE THIRD_PARTY_NOTICES.md README.md CHANGELOG.md DESTINATION ${SF_DOC_DIR})
+install(FILES scripts/crkw_auto_retopo.sfscript DESTINATION ${CMAKE_INSTALL_DATADIR}/sculptforge/scripts)
 install(FILES docs/ai-services.md docs/unreal.md docs/generators.md docs/comfyui.md DESTINATION ${SF_DOC_DIR}/docs)
 # Bundled ComfyUI workflows, where the Generate 3D window looks for them (see src/ai/ComfyUI.cpp).
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/integrations/comfyui/workflows)

@@ -12,6 +12,7 @@ size_t UndoRecord::approxBytes() const {
                    (textureTiles ? textureTiles->bytes() : 0) + (texture ? texture->bytes() : 0) +
                    (subdiv ? subdiv->bytes() : 0) + (topology ? topology->bytes() : 0);
     for (const auto& l : layerOffsets) bytes += l.bytes();
+    if (crkwMaskState && *crkwMaskState) bytes += (*crkwMaskState)->dump().size();
     if (mesh)
         bytes += mesh->vertexCount() * ((2 + (mesh->base.empty() ? 0 : 1 + mesh->layers.size())) * sizeof(glm::vec3) +
                                         8 * sizeof(uint32_t)) +
@@ -185,6 +186,7 @@ void UndoStack::apply(UndoRecord& r, Mesh& mesh, BVH& bvh) {
         r.mask.swapWith(mesh.ensureMask());
         for (uint32_t v : r.mask.indices) mesh.markDirty(v);
     }
+    if (r.crkwMaskState) std::swap(*r.crkwMaskState, mesh.crkwMaskState);
     if (r.paint) r.paint->swapWith(mesh);
     if (r.texture) r.texture->swapWith(mesh);
     if (r.textureTiles) r.textureTiles->swapWith(mesh);

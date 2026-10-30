@@ -1,0 +1,13 @@
+# Panel is available without distributing MetaHuman template files.
+run new_sphere subdivisions=3
+snapshot
+expect "Masks##crkw.mask_manager"
+click "Masks##crkw.mask_manager"
+expect_text Select a native MetaHuman head
+expect "CRKW MH Mask Manager/Both##mhmask.both"
+expect "CRKW MH Mask Manager/Eye##mhmask.Eye"
+expect "CRKW MH Mask Manager/Forehead##mhmask.Forehead"
+expect "CRKW MH Mask Manager/Save custom region##mhmask.save"
+expect_value masked == 0
+expect_value moved == 0
+shot mask-manager-panel

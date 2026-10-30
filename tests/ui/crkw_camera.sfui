@@ -1,0 +1,51 @@
+run new_sphere subdivisions=4
+expect "Camera##crkw.camera"
+click "Camera##crkw.camera"
+expect "CRKW Camera/Persp##camera.persp"
+type "CRKW Camera/Lens mm##camera.mm" 50
+key enter
+expect_value camera_mm > 49.99
+expect_value camera_mm < 50.01
+type "CRKW Camera/FOV vertical##camera.fov" 60
+key enter
+expect_value camera_fov > 59.99
+expect_value camera_fov < 60.01
+click "CRKW Camera/Ortho##camera.ortho"
+expect_value camera_ortho == 1
+click "CRKW Camera/1K square##camera.square"
+expect_value camera_canvas_width == 1024
+expect_value camera_canvas_height == 1024
+expect_value camera_canvas_aspect == 1
+camera 0 0
+key f
+snapshot
+stroke 0.3 0.5 0.7 0.5
+expect_value moved > 50
+key ctrl+z
+expect_value moved == 0
+click "CRKW Camera/1080p##camera.hd"
+expect_value camera_canvas_aspect > 1.77
+expect_value camera_canvas_aspect < 1.78
+click "CRKW Camera/Swap W / H##camera.swap"
+expect_value camera_canvas_width == 1080
+expect_value camera_canvas_height == 1920
+expect_value camera_canvas_aspect > 0.56
+expect_value camera_canvas_aspect < 0.57
+shot camera-controller-portrait
+run crkw_camera width=640 height=360 fixed=true perspective=false mm=85
+key f
+run save_project path="$SCRIPT_DIR/../../out/crkw-camera-test.sfproj"
+click "CRKW Camera/Reset camera settings##camera.reset"
+expect_value camera_ortho == 0
+expect_value camera_canvas_fixed == 0
+run open path="$SCRIPT_DIR/../../out/crkw-camera-test.sfproj"
+expect_value camera_ortho == 1
+expect_value camera_mm > 84.99
+expect_value camera_mm < 85.01
+expect_value camera_canvas_width == 640
+expect_value camera_canvas_height == 360
+run crkw_camera_export path="$SCRIPT_DIR/../../out/crkw-camera-test.png"
+expect_status Saved canvas 640x360
+click "CRKW Camera/Persp##camera.persp"
+expect_value camera_ortho == 0
+shot camera-controller-perspective

@@ -79,6 +79,15 @@ The application window and About display identify it as CRKW.
 
 ### CrokedWillo workspace
 
+The right shelf's **Camera** button opens the compact CRKW camera controller.
+Persp/Ortho preserves the target-plane framing; orthographic picking and brush
+size use parallel projection. Lens mm and vertical FOV are linked using a
+24 mm full-frame sensor height. Fixed canvas fits the chosen aspect into the
+available viewport; width/height define exact PNG export pixels (64-8192 per
+side, at most 16 megapixels). Presets, portrait swap, Frame, and reset are in the
+same panel. Camera projection, lens, canvas size and fixed mode save in projects.
+Older stored shelf layouts gain the Camera button without replacing custom items.
+
 The CrokedWillo tab is immediately after Help, last in the left-aligned palette
 bar. CRKW Clay Polish offers smoothing and curvature sharpening with independent
 strengths and pass counts, shape correction, and tangential edge smoothing.

@@ -346,6 +346,7 @@ void App::drawPalette_Script() {
     const bool any = actions_.find("ui.console") || actions_.find("script.run_file");
     actionRow(*this, {"ui.console"});
     actionRow(*this, {"script.run_file"});
+    actionRow(*this, {"crkw.auto_retopo"});
     actionRow(*this, {"script.copy_session", "script.clear_console"});
     if (!any)
         hint("Every action is a script command: run them with --script \"subdivide; remesh resolution=200\" or the "

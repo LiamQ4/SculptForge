@@ -3,6 +3,7 @@
 #include "app/UiLayout.h"
 
 #include <algorithm>
+#include <iterator>
 
 namespace sf {
 
@@ -36,7 +37,7 @@ UiLayout standardLayout() {
                   "transform.symmetry_x",   "transform.symmetry_y", "transform.symmetry_z",    "sep",                 "draw.pressure_strength",
                   "draw.pressure_size", "widget.points"};
     l.leftShelf = {"widget.tile.brush", "widget.tile.stroke", "widget.tile.alpha", "widget.tile.material", "widget.color"};
-    l.rightShelf = {"view.frame", "widget.nav.move", "widget.nav.zoom", "widget.nav.rotate", "sep",
+    l.rightShelf = {"view.frame", "crkw.camera", "crkw.mask_manager", "widget.nav.move", "widget.nav.zoom", "widget.nav.rotate", "sep",
                     "view.polyf", "view.polygroups", "view.mask",       "view.polypaint",    "sep",
                     "subtool.solo", "view.splats"};
     l.bottomShelf = {"brush.standard", "brush.clay",    "brush.claybuildup", "brush.damstandard", "brush.move",
@@ -99,7 +100,19 @@ bool fromJson(const Json& j, UiLayout& l, std::string& error) {
     }
     readStrings(j["leftShelf"], out.leftShelf);
     readStrings(j["rightShelf"], out.rightShelf);
+    if (int(j["version"].asNumber(1)) < 3 &&
+        std::find(out.rightShelf.begin(), out.rightShelf.end(), "crkw.camera") == out.rightShelf.end()) {
+        auto at = std::find(out.rightShelf.begin(), out.rightShelf.end(), "view.frame");
+        out.rightShelf.insert(at == out.rightShelf.end() ? at : std::next(at), "crkw.camera");
+    }
     readStrings(j["bottomShelf"], out.bottomShelf);
+    if (int(j["version"].asNumber(1)) < 4) {
+        auto contains = [](const auto& shelf) { return std::find(shelf.begin(),shelf.end(),"crkw.mask_manager")!=shelf.end(); };
+        if (!contains(out.topShelf)&&!contains(out.leftShelf)&&!contains(out.rightShelf)&&!contains(out.bottomShelf)) {
+            auto at=std::find(out.rightShelf.begin(),out.rightShelf.end(),"crkw.camera");
+            out.rightShelf.insert(at==out.rightShelf.end()?at:std::next(at),"crkw.mask_manager");
+        }
+    }
     flag("consoleOpen", out.consoleOpen);
     number("consoleHeight", out.consoleHeight);
     flag("lightboxOpen", out.lightboxOpen);

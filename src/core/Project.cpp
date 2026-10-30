@@ -766,6 +766,7 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
         st.set("name", s.name);
         st.set("visible", s.visible);
         if (s.crkwMetaHuman.isObject()) st.set("crkw_metahuman", s.crkwMetaHuman);
+        if (doc.subtoolMesh(i).crkwMaskState) st.set("crkw_mask_manager", *doc.subtoolMesh(i).crkwMaskState);
         writeMesh(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i), st);
         st.set("active_layer", active ? doc.activeLayer : s.activeLayer);
         if (hasPaintLayers(doc.subtoolMesh(i)))
@@ -893,6 +894,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
             if (!readPaintLayers(r, sj["paint_layers"], s.mesh, error)) return false;
             if (!readTexture(r, sj["texture"], s.mesh, error)) return false;
             if (!readSubdiv(r, sj["subdiv"], s.mesh, error, version < 5)) return false;
+            if (sj["crkw_mask_manager"].isObject()) s.mesh.crkwMaskState = std::make_shared<Json>(sj["crkw_mask_manager"]);
             s.mesh.rebuildTopology();
             s.finishBvh();
             r.parallelReads = true;

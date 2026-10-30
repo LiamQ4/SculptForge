@@ -20,7 +20,7 @@ struct CanvasRect {
 };
 
 struct UiLayout {
-    int version = 2; // 2: the top shelf has Dynamic (older stored layouts get it on load)
+    int version = 4; // 4: direct MetaHuman mask manager button on the right shelf
     bool shelvesVisible = true, paletteBarVisible = true, leftHanded = false;
     bool leftTrayOpen = false, rightTrayOpen = true;
     float leftTrayWidth = 300, rightTrayWidth = 300; // logical px
