@@ -24,7 +24,8 @@ struct MatcapStyle {
     glm::vec3 rim;
     float metal; // 0 = dielectric, 1 = pure environment reflection
     float roughness; // blurs the environment for metals
-    bool sculpt = false; // the readability-first sculpting light (shadeSculpt) instead of the shared model
+    // The shared model (shade), or a light of its own: shadeSculpt (readability first) or shadeSoftClay.
+    enum class Light { Shared, Sculpt, SoftClay } light = Light::Shared;
     MatcapCavity cavity{};
     // CRKW toon: > 1 shades in that many hard light bands (shadeToon); `subsurface` is then the shadow tint.
     int bands = 0;
@@ -32,31 +33,35 @@ struct MatcapStyle {
 };
 
 const MatcapStyle kStyles[] = {
-    {"Sculpt", {0.56f, 0.44f, 0.36f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, true, {0.8f, 0.35f}},
+    {"Sculpt", {0.54f, 0.46f, 0.39f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f,
+     MatcapStyle::Light::Sculpt, {0.8f, 0.35f}},
     {"Red Wax", {0.50f, 0.045f, 0.03f}, 0.55f, {0.55f, 0.06f, 0.03f}, 0.55f, 70.0f, {0.25f, 0.08f, 0.06f}, 0.0f, 0.0f},
-    {"Clay", {0.46f, 0.38f, 0.33f}, 0.25f, {0.05f, 0.03f, 0.02f}, 0.06f, 10.0f, {0.10f, 0.10f, 0.11f}, 0.0f, 0.0f},
+    {"Clay", {0.50f, 0.27f, 0.17f}, 0.25f, {0.05f, 0.03f, 0.02f}, 0.06f, 10.0f, {0.10f, 0.10f, 0.11f}, 0.0f, 0.0f},
     {"Skin", {0.68f, 0.38f, 0.28f}, 0.6f, {0.6f, 0.16f, 0.08f}, 0.16f, 28.0f, {0.22f, 0.16f, 0.15f}, 0.0f, 0.0f},
     {"Chrome", {0.95f, 0.96f, 1.0f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, 1.0f, 0.05f},
     {"White", {0.78f, 0.78f, 0.76f}, 0.3f, {0.04f, 0.04f, 0.05f}, 0.3f, 45.0f, {0.12f, 0.13f, 0.15f}, 0.0f, 0.0f},
     {"Bronze", {0.80f, 0.50f, 0.25f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, 1.0f, 0.35f},
     // CRKW materials (appended, so saved projects keep the material they had).
     // Sculpt-reading greys: the Sculpt light on neutral albedos, and a softer satin grey.
-    {"Gray", {0.40f, 0.40f, 0.40f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, true, {0.75f, 0.35f}},
-    {"Blue Gray", {0.33f, 0.37f, 0.44f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, true, {0.75f, 0.35f}},
-    {"Basic", {0.45f, 0.45f, 0.46f}, 0.15f, {0.02f, 0.02f, 0.03f}, 0.35f, 35.0f, {0.14f, 0.15f, 0.17f}, 0.0f, 0.0f, false, {0.65f, 0.3f}},
+    {"Gray", {0.40f, 0.40f, 0.40f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, MatcapStyle::Light::Sculpt, {0.75f, 0.35f}},
+    {"Blue Gray", {0.33f, 0.37f, 0.44f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, MatcapStyle::Light::Sculpt, {0.75f, 0.35f}},
+    {"Basic", {0.45f, 0.45f, 0.46f}, 0.15f, {0.02f, 0.02f, 0.03f}, 0.35f, 35.0f, {0.14f, 0.15f, 0.17f}, 0.0f, 0.0f, MatcapStyle::Light::Shared, {0.65f, 0.3f}},
     // Warm clays.
-    {"Terracotta", {0.52f, 0.20f, 0.10f}, 0.2f, {0.25f, 0.06f, 0.02f}, 0.05f, 8.0f, {0.12f, 0.08f, 0.07f}, 0.0f, 0.0f, false, {0.6f, 0.25f}},
-    {"Plasticine", {0.62f, 0.50f, 0.36f}, 0.35f, {0.20f, 0.10f, 0.04f}, 0.12f, 18.0f, {0.14f, 0.12f, 0.10f}, 0.0f, 0.0f, false, {0.6f, 0.25f}},
-    {"Sculpey", {0.72f, 0.58f, 0.48f}, 0.45f, {0.35f, 0.12f, 0.06f}, 0.10f, 22.0f, {0.16f, 0.13f, 0.12f}, 0.0f, 0.0f, false, {0.6f, 0.25f}},
+    {"Terracotta", {0.52f, 0.20f, 0.10f}, 0.2f, {0.25f, 0.06f, 0.02f}, 0.05f, 8.0f, {0.12f, 0.08f, 0.07f}, 0.0f, 0.0f, MatcapStyle::Light::Shared, {0.6f, 0.25f}},
+    {"Plasticine", {0.62f, 0.50f, 0.36f}, 0.35f, {0.20f, 0.10f, 0.04f}, 0.12f, 18.0f, {0.14f, 0.12f, 0.10f}, 0.0f, 0.0f, MatcapStyle::Light::Shared, {0.6f, 0.25f}},
+    {"Sculpey", {0.72f, 0.58f, 0.48f}, 0.45f, {0.35f, 0.12f, 0.06f}, 0.10f, 22.0f, {0.16f, 0.13f, 0.12f}, 0.0f, 0.0f, MatcapStyle::Light::Shared, {0.6f, 0.25f}},
     // Toon: hard bands, a cool shadow tint, a crisp highlight.
-    {"Toon 2-Tone", {0.50f, 0.40f, 0.34f}, 0.0f, {0.30f, 0.30f, 0.45f}, 0.35f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, false, {0.45f, 0.15f}, 2, 0.45f},
-    {"Toon 3-Tone", {0.48f, 0.42f, 0.38f}, 0.0f, {0.28f, 0.27f, 0.42f}, 0.3f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, false, {0.45f, 0.15f}, 3, 0.3f},
-    {"Toon Ink", {0.56f, 0.50f, 0.44f}, 0.0f, {0.38f, 0.36f, 0.48f}, 0.25f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, false, {0.5f, 0.1f}, 2, -1.0f},
+    {"Toon 2-Tone", {0.50f, 0.40f, 0.34f}, 0.0f, {0.30f, 0.30f, 0.45f}, 0.35f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, MatcapStyle::Light::Shared, {0.45f, 0.15f}, 2, 0.45f},
+    {"Toon 3-Tone", {0.48f, 0.42f, 0.38f}, 0.0f, {0.28f, 0.27f, 0.42f}, 0.3f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, MatcapStyle::Light::Shared, {0.45f, 0.15f}, 3, 0.3f},
+    {"Toon Ink", {0.56f, 0.50f, 0.44f}, 0.0f, {0.38f, 0.36f, 0.48f}, 0.25f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, MatcapStyle::Light::Shared, {0.5f, 0.1f}, 2, -1.0f},
     // Shiny and metal.
     {"Gloss Plastic", {0.06f, 0.22f, 0.45f}, 0.05f, {0.0f, 0.0f, 0.0f}, 1.4f, 220.0f, {0.30f, 0.34f, 0.40f}, 0.0f, 0.0f},
     {"Jade", {0.10f, 0.40f, 0.24f}, 0.6f, {0.10f, 0.45f, 0.20f}, 0.9f, 140.0f, {0.10f, 0.25f, 0.16f}, 0.0f, 0.0f},
     {"Gold", {1.00f, 0.76f, 0.33f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, 1.0f, 0.18f},
     {"Gunmetal", {0.34f, 0.36f, 0.39f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 1.0f, {0.0f, 0.0f, 0.0f}, 1.0f, 0.3f},
+    // The default (defaultMatcap()). Last, so the indices of the others stay put.
+    {"Soft Clay", {0.50f, 0.455f, 0.41f}, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, {0.0f, 0.0f, 0.0f}, 0.0f, 0.0f,
+     MatcapStyle::Light::SoftClay, {0.3f, 0.08f}},
 };
 constexpr int kStyleCount = int(sizeof kStyles / sizeof kStyles[0]);
 
@@ -120,8 +125,37 @@ glm::vec3 shadeToon(const MatcapStyle& m, const glm::vec3& n) {
     return c;
 }
 
+// The default: matte studio clay, a warm light grey, built so a sculpted stroke reads at once. One key from the
+// upper left with little wrap and a steep falloff (brightness turns quickly with the slope, so the two sides of a
+// ridge part clearly), a form shadow on the lower right that goes well down without going black, a cool fill and
+// sky/ground ambient, a broad low sheen that runs along ridges (no hot spot), and a cool rim strongest on the
+// lower right so the silhouette holds against the charcoal background where the key doesn't reach.
+glm::vec3 shadeSoftClay(const MatcapStyle& m, const glm::vec3& n) {
+    const glm::vec3 v(0.0f, 0.0f, 1.0f);
+    const glm::vec3 key = glm::normalize(glm::vec3(-0.55f, 0.68f, 0.55f));
+    const glm::vec3 fill = glm::normalize(glm::vec3(0.85f, -0.2f, 0.35f));
+    const float k = std::max(glm::dot(n, key) * 0.92f + 0.08f, 0.0f);
+    const float diff = std::pow(k, 2.4f);
+    // A real fill from the right, about a third of the key: the shadow side stays a mid value, and slopes there
+    // turn towards or away from it, so strokes read on that side too.
+    const float fd = std::max((glm::dot(n, fill) + 0.25f) / 1.25f, 0.0f);
+    // Sky above, a warm bounce from the ground below: the lower left, where neither light reaches, stays clay.
+    const float up = 0.5f + 0.5f * n.y;
+    const glm::vec3 ambient = glm::mix(glm::vec3(0.13f, 0.115f, 0.1f), glm::vec3(0.07f, 0.075f, 0.085f), std::sqrt(up));
+    const glm::vec3 light = 1.3f * diff * glm::vec3(1.0f, 0.97f, 0.93f) + 0.3f * fd * fd * glm::vec3(0.9f, 0.93f, 1.0f) + ambient;
+    const float nh = std::max(glm::dot(n, glm::normalize(key + v)), 0.0f);
+    const float sheen = (0.03f * std::pow(nh, 8.0f) + 0.09f * std::pow(nh, 30.0f)) * std::min(1.0f, k * 3.0f);
+    // Rim: grazing normals, weighted towards the lower right (the side the key leaves dark).
+    const float grazing = std::pow(1.0f - std::max(n.z, 0.0f), 3.0f);
+    const float len = std::sqrt(n.x * n.x + n.y * n.y);
+    const float side = len > 1e-4f ? std::clamp((n.x * 0.8f - n.y * 0.6f) / len, 0.0f, 1.0f) : 0.0f;
+    const glm::vec3 rim = (0.05f + 0.2f * side) * grazing * glm::vec3(0.82f, 0.88f, 1.0f);
+    return m.albedo * light + glm::vec3(sheen) + rim;
+}
+
 glm::vec3 shade(const MatcapStyle& m, const glm::vec3& n) {
-    if (m.sculpt) return shadeSculpt(m, n);
+    if (m.light == MatcapStyle::Light::Sculpt) return shadeSculpt(m, n);
+    if (m.light == MatcapStyle::Light::SoftClay) return shadeSoftClay(m, n);
     if (m.bands > 1) return shadeToon(m, n);
     const glm::vec3 v(0.0f, 0.0f, 1.0f);
     const float nv = std::max(n.z, 0.0f);
@@ -156,6 +190,17 @@ std::string squash(const std::string& s) {
 } // namespace
 
 int matcapCount() { return kStyleCount; }
+
+int defaultMatcap() {
+    static const int index = findMatcap("Soft Clay");
+    return index;
+}
+
+int matcapInListOrder(int k) {
+    if (k < 0 || k >= kStyleCount) return -1;
+    const int d = defaultMatcap();
+    return k == 0 ? d : k <= d ? k - 1 : k;
+}
 
 const char* matcapName(int index) { return index >= 0 && index < kStyleCount ? kStyles[index].name : ""; }
 

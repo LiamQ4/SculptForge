@@ -92,7 +92,7 @@ void dashedRect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float dash) {
 // A shaded clay ball with a mark that hints at what the brush does: the placeholder until a rendered
 // thumbnail is ready (ThumbnailCache).
 void drawBrushIcon(ImDrawList* dl, ImVec2 c, float r, int type) {
-    const ImVec4 clay(0.80f, 0.55f, 0.45f, 1.0f);
+    const ImVec4 clay(0.62f, 0.57f, 0.52f, 1.0f); // the Soft Clay look, while the rendered thumbnail is pending
     constexpr int kLayers = 14;
     for (int k = 0; k < kLayers; ++k) {
         const float t = float(k) / float(kLayers - 1);
@@ -102,7 +102,7 @@ void drawBrushIcon(ImDrawList* dl, ImVec2 c, float r, int type) {
         dl->AddCircleFilled(o, rr, theme::u32(ImVec4(clay.x * shade, clay.y * shade, clay.z * shade, 1.0f)), 32);
     }
     if (type < 0) return;
-    const ImU32 hi = IM_COL32(255, 236, 222, 150), lo = IM_COL32(60, 30, 20, 150);
+    const ImU32 hi = IM_COL32(245, 240, 232, 150), lo = IM_COL32(40, 36, 32, 150);
     auto curve = [&](float dy, ImU32 col, float thick) {
         ImVec2 pts[12];
         for (int i = 0; i < 12; ++i) {
@@ -160,9 +160,12 @@ std::string elide(ImFont* font, const std::string& text, float width) {
     return s + "...";
 }
 
+constexpr float kPointsReadoutW = 190.0f; // the ActiveTris / TotalTris readout at the right of the top shelf, unscaled
+
 bool segmentPair(const std::string& a, const std::string& b) {
     auto group = [](const std::string& id) {
         if (id == "draw.sculpt" || id == "draw.paint") return 1;
+        if (id == "tool.draw" || id == "tool.move" || id == "tool.scale" || id == "tool.rotate") return 5;
         if (id == "draw.zadd" || id == "draw.zsub") return 2;
         if (id.rfind("transform.symmetry_", 0) == 0) return 3;
         if (id.rfind("draw.pressure_", 0) == 0) return 4;
@@ -201,10 +204,16 @@ bool drawShelfTile(App& app, const Action& a, ImVec2 size) {
     ImFont* caption = look == int(ui::Look::IconLabel) ? app.fontTiny_ : app.fontSmall_;
     const float capH = caption ? caption->FontSize + 2.0f * s : 14.0f * s;
     if (look == int(ui::Look::IconLabel)) {
-        const ImVec4 bg = on ? (hovered ? theme::accentHover : theme::accent)
+        // Right-shelf toggles are options (Mask, Paint, PolyF): on is a raised grey with an accent bar down the
+        // side that faces the canvas, off is quiet; only a mode action gets the accent fill.
+        const bool mode = ui::IsModeAction(a.id);
+        const ImVec4 bg = on ? (mode ? (hovered ? theme::accentHover : theme::accent) : hovered ? theme::toggleOnHover : theme::toggleOn)
                              : held ? theme::buttonPressed : hovered ? theme::buttonHover : theme::frame;
         dl->AddRectFilled(p0, p1, theme::u32(bg, alpha), 4.0f * s);
-        const ImU32 fg = theme::u32(on ? theme::textOnAccent : theme::text, alpha);
+        if (on && !mode) ui::DrawOnMark(dl, p0, p1, true);
+        // Two text levels only: actions and hovered items in text, options that are off in textOff (readable, so
+        // off doesn't look disabled); disabled items are faded by alpha.
+        const ImU32 fg = theme::u32(on ? (mode ? theme::textOnAccent : theme::textBright) : hovered || !a.checked ? theme::text : theme::textOff, alpha);
         centredText(dl, app.fontIcons_, p0, ImVec2(p1.x, p1.y - capH + 2.0f * s), fg, a.icon ? a.icon : "?");
         centredText(dl, caption, ImVec2(p0.x, p1.y - capH), ImVec2(p1.x, p1.y - 1.0f * s), fg,
                     elide(caption ? caption : ImGui::GetFont(), a.label, size.x - 2.0f * s).c_str());
@@ -693,10 +702,11 @@ void App::drawTitleStrip(const ShellGeometry& g) {
     if (quickSave) rightW += buttonW("QuickSave") + 8.0f * s;
     const float rightX = g.title.w - 8.0f * s - rightW;
 
-    // Info readout and the status message, elided to fit.
+    // Info readout and the status message, elided to fit: secondary, so in the 12 px font.
     ImGui::SameLine(0.0f, 14.0f * s);
     const float infoX = ImGui::GetCursorPosX();
-    ImGui::SetCursorPosY(textY);
+    if (fontSmall_) ImGui::PushFont(fontSmall_);
+    ImGui::SetCursorPosY(std::floor((h - ImGui::GetTextLineHeight()) * 0.5f));
     size_t tris = 0, verts = 0;
     for (int i = 0; i < doc_.subtoolCount(); ++i) {
         tris += doc_.subtoolMesh(i).triangleCount();
@@ -731,18 +741,29 @@ void App::drawTitleStrip(const ShellGeometry& g) {
         ImGui::SetCursorPosX(slotX + fpsSlot);
         const std::string& msg = layout_.customize ? std::string("Customize: Ctrl+Alt+drag to move or remove items") : status_;
         if (!msg.empty() && avail - infoW > 60.0f * s) {
+            // The status message is what just happened, so it stands out from the readout: the regular font, in
+            // the bright text colour (still elided to the space the small-font readout leaves).
             ImGui::SameLine(0.0f, 20.0f * s);
+            if (fontSmall_) ImGui::PopFont();
+            ImGui::SetCursorPosY(std::floor((h - ImGui::GetTextLineHeight()) * 0.5f));
             const bool error = !layout_.customize && !lastCommandOk_ && ImGui::GetTime() - statusSince_ < 6.0;
-            ImGui::PushStyleColor(ImGuiCol_Text, layout_.customize ? theme::accent : error ? theme::danger : theme::text);
+            ImGui::PushStyleColor(ImGuiCol_Text, layout_.customize ? theme::accent : error ? theme::danger : theme::textBright);
             ImGui::TextUnformatted(elide(ImGui::GetFont(), msg, avail - infoW - 20.0f * s).c_str());
             ImGui::PopStyleColor();
             if (ImGui::IsItemHovered() && msg.size() > 40) ImGui::SetTooltip("%s", msg.c_str());
+            if (fontSmall_) ImGui::PushFont(fontSmall_);
         }
     } else {
         ImGui::TextDisabled("%s", elide(ImGui::GetFont(), info, std::max(0.0f, avail)).c_str());
     }
+    if (fontSmall_) ImGui::PopFont();
 
+    // QuickSave, the layout presets and Menus are small dark chips with readable labels: buttons, but quieter than
+    // the shelves (Menus on is an option: raised grey with an underline). 1 2 3 are segments of one control.
     ImGui::SetCursorPos(ImVec2(rightX, (h - buttonH) * 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_Button, theme::toggleOff);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::toggleOffHover);
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::textOff);
     if (quickSave) {
         ui::ActionButton(*this, "file.quicksave", ImVec2(0, buttonH));
         ImGui::SameLine(0.0f, 8.0f * s);
@@ -750,10 +771,11 @@ void App::drawTitleStrip(const ShellGeometry& g) {
     for (int i = 1; i <= 3; ++i) {
         ui::ActionButton(*this, ("ui.preset." + std::to_string(i)).c_str(), ImVec2(buttonH + 2.0f * s, buttonH));
         ui::HelpAction(*this, ("ui.preset." + std::to_string(i)).c_str());
-        ImGui::SameLine(0.0f, 2.0f * s);
+        ImGui::SameLine(0.0f, i < 3 ? 1.0f * s : 4.0f * s); // 6 px in all, as rightW counts
     }
     ImGui::SameLine(0.0f, 8.0f * s);
     ui::ActionButton(*this, "ui.menus", ImVec2(0, buttonH), ui::Look::IconLabel);
+    ImGui::PopStyleColor(3);
     ImGui::SameLine(0.0f, 8.0f * s);
     // Search: a field-looking button that opens the command palette (F3).
     {
@@ -887,7 +909,7 @@ bool App::paletteHeader(const char* id, bool inTray, bool right) {
     else
         ui::HelpText("Move to the tray", nullptr,
                      "Keep this palette in the right tray (Shift+click: left tray), or drag the icon onto a tray.", def->name);
-    centredText(dl, nullptr, p, ImVec2(p.x + h, p.y + h), theme::u32(iconHovered ? theme::accentHover : theme::accent),
+    centredText(dl, nullptr, p, ImVec2(p.x + h, p.y + h), theme::u32(iconHovered ? theme::accentHover : theme::textDim),
                 inTray ? (right ? ICON_LC_PANEL_RIGHT : ICON_LC_PANEL_LEFT) : ICON_LC_PANEL_RIGHT);
     ImGui::SameLine();
     const bool titleClicked = ImGui::InvisibleButton("##title", ImVec2(std::max(1.0f, w - 2.0f * h), h));
@@ -954,9 +976,12 @@ void App::drawPaletteDropdown() {
     const float s = uiScale_;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const float w = 300.0f * s;
-    ImGui::SetNextWindowPos(ImVec2(std::clamp(dropdownX_, 4.0f * s, vp->Size.x - w - 4.0f * s),
-                                   shell_.paletteBar.y + shell_.paletteBar.h));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0), ImVec2(w, vp->Size.y - 60.0f * s));
+    // Below the top shelf, not over it: the palette drops past the tool rows onto the canvas, so Draw | Move |
+    // Sculpt and the sliders stay visible and usable while it is open (Tab hides the shelves: then under the bar).
+    const CanvasRect& top = shell_.topShelf;
+    const float y = top.h > 0.0f ? top.y + top.h + 2.0f * s : shell_.paletteBar.y + shell_.paletteBar.h;
+    ImGui::SetNextWindowPos(ImVec2(std::clamp(dropdownX_, 4.0f * s, vp->Size.x - w - 4.0f * s), y));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0), ImVec2(w, vp->Size.y - y - 8.0f * s));
     // Whole-pixel padding: auto-fit truncates sizes, and a fraction of a pixel too little shows a scrollbar.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(std::round(6.0f * s), std::round(6.0f * s)));
     const bool open = ImGui::BeginPopup("##palettedropdown");
@@ -1089,7 +1114,8 @@ void App::drawShelf(int shelf, const CanvasRect& r) {
     if (shelf == kShelfBottom) {
         const int tiles = int(std::count_if(list.begin(), list.end(), [](const std::string& id) { return id != "sep" && id != "row"; }));
         const float avail = r.w - 2.0f * pad.x - 48.0f * s; // the [+] tile is narrower
-        bottomTileW_ = std::clamp(avail / float(std::max(tiles - 1, 1)) - 4.0f * s, 44.0f * s, 58.0f * s);
+        const shell::BottomShelfSize size = shell::bottomShelfSize(layout_.shelfTiles);
+        bottomTileW_ = std::clamp(avail / float(std::max(tiles - 1, 1)) - 4.0f * s, size.tileMinW * s, size.tileMaxW * s);
     }
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * s, 4.0f * s));
     bool lineStart = true;
@@ -1106,7 +1132,7 @@ void App::drawShelf(int shelf, const CanvasRect& r) {
             ImGui::SameLine(0.0f, prev == "sep" || item == "sep" ? 0.0f : segmentPair(prev, item) ? 1.0f * s : 4.0f * s);
         }
         if (!vertical && item == "widget.points") { // right-aligned readout
-            const float w = 170.0f * s;
+            const float w = kPointsReadoutW * s;
             ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - w));
         }
         lineStart = false;
@@ -1240,18 +1266,26 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
             }
         }
         const size_t active = activeTris_;
+        // One line on the row's centre line, right-aligned to the shelf edge: "ActiveTris 20.5k   TotalTris 20.5k".
         ImGui::BeginGroup();
         if (fontSmall_) ImGui::PushFont(fontSmall_);
-        const float lineH = ImGui::GetTextLineHeight();
         const ImVec2 p = ImGui::GetCursorScreenPos();
-        ImGui::Dummy(ImVec2(170.0f * s, rowH));
+        ImGui::Dummy(ImVec2(kPointsReadoutW * s, rowH));
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        const float y0 = p.y + (rowH - 2.0f * lineH) * 0.5f;
-        dl->AddText(ImVec2(p.x, y0), theme::u32(theme::textDim), "ActiveTris");
-        dl->AddText(ImVec2(p.x, y0 + lineH), theme::u32(theme::textDim), "TotalTris");
         const std::string a = shortCount(active), t = shortCount(total);
-        dl->AddText(ImVec2(p.x + 70.0f * s, y0), theme::u32(theme::text), a.c_str());
-        dl->AddText(ImVec2(p.x + 70.0f * s, y0 + lineH), theme::u32(theme::text), t.c_str());
+        const float gap = 5.0f * s, groupGap = 14.0f * s;
+        const float w = ImGui::CalcTextSize("ActiveTris").x + ImGui::CalcTextSize(a.c_str()).x + ImGui::CalcTextSize("TotalTris").x +
+                        ImGui::CalcTextSize(t.c_str()).x + 2.0f * gap + groupGap;
+        float x = std::floor(p.x + kPointsReadoutW * s - w);
+        const float y = std::floor(p.y + (rowH - ImGui::GetTextLineHeight()) * 0.5f);
+        auto put = [&](const char* text, const ImVec4& col, float after) {
+            dl->AddText(ImVec2(x, y), theme::u32(col), text);
+            x += ImGui::CalcTextSize(text).x + after;
+        };
+        put("ActiveTris", theme::textDim, gap);
+        put(a.c_str(), theme::text, groupGap);
+        put("TotalTris", theme::textDim, gap);
+        put(t.c_str(), theme::text, 0.0f);
         ImGui::LogText("ActiveTris %s TotalTris %s", a.c_str(), t.c_str());
         if (fontSmall_) ImGui::PopFont();
         ImGui::EndGroup();
@@ -1278,7 +1312,7 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
                         mode == 0 ? ICON_LC_HAND : mode == 1 ? ICON_LC_ZOOM_IN : ICON_LC_ROTATE_3D,
                         mode == 0 ? "Move" : mode == 1 ? "Zoom" : "Rotate", mode);
     } else if (item == "widget.add_brush") {
-        const ImVec2 size(48.0f * s, 54.0f * s);
+        const ImVec2 size(48.0f * s, shell::bottomShelfSize(layout_.shelfTiles).tileH * s);
         if (ImGui::InvisibleButton("##addbrush", size)) // the brush picker in "add to shelf" mode (Pickers.cpp)
             openBrushPickerForShelf(ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y - 8.0f * s));
         const bool hovered = ImGui::IsItemHovered();
@@ -1295,7 +1329,7 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
         int found = -1;
         for (int i = 0; i < int(doc_.brushes.size()); ++i)
             if (doc_.brushes[size_t(i)].name == name) found = i;
-        const ImVec2 size(bottomTileW_, 54.0f * s);
+        const ImVec2 size(bottomTileW_, shell::bottomShelfSize(layout_.shelfTiles).tileH * s);
         const bool clicked = ImGui::InvisibleButton((name + "##" + item).c_str(), size);
         const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1325,13 +1359,35 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
         const ui::Look look = shelf != kShelfTop ? ui::Look::Tile : a->icon ? ui::Look::IconLabel : ui::Look::Label;
         const ImVec2 size = shelf == kShelfTop      ? ImVec2(0.0f, rowH)
                             : shelf == kShelfRight  ? ImVec2(44.0f * s, 40.0f * s)
-                            : shelf == kShelfBottom ? ImVec2(bottomTileW_, 54.0f * s)
+                            : shelf == kShelfBottom ? ImVec2(bottomTileW_, shell::bottomShelfSize(layout_.shelfTiles).tileH * s)
                                                     : ImVec2(winW - 2.0f * padX, 60.0f * s);
         centre(size.x);
-        if (shelf == kShelfTop) ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * s, (rowH - ImGui::GetFontSize()) * 0.5f));
+        // Top shelf hierarchy, by meaning (docs/ui-design.md §10). Every item is the full row height in the same
+        // font, so both rows share one baseline. Mode groups (Draw | Move | Scale | Rotate, Sculpt | Paint) and
+        // choices (Zadd | Zsub) are segments a step above the shelf: the current mode in the accent, the chosen
+        // side of a choice a raised grey. Options (X, Rgb, Pressure...) are separate dark chips with a readable
+        // label, raised with an accent underline when on. The rest (LightBox, AI Brush) are plain buttons.
+        const bool segment = ui::IsModeAction(a->id) || ui::IsChoiceAction(a->id);
+        const bool option = !segment && a->checked && a->id.rfind("ui.", 0) != 0;
+        int colors = 0;
+        if (shelf == kShelfTop) {
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2((option ? 8.0f : 10.0f) * s, (rowH - ImGui::GetFontSize()) * 0.5f));
+            if (option) {
+                ImGui::PushStyleColor(ImGuiCol_Button, theme::toggleOff);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::toggleOffHover);
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::textOff);
+                colors = 3;
+            } else if (segment) {
+                ImGui::PushStyleColor(ImGuiCol_Button, theme::trough);
+                colors = 1;
+            }
+        }
         ui::SetNextItemOrigin(shelf, index); // ActionButton is the Ctrl+Alt drag source, from this shelf slot
         ui::ActionButton(*this, a->id.c_str(), size, look);
-        if (shelf == kShelfTop) ImGui::PopStyleVar();
+        if (shelf == kShelfTop) {
+            ImGui::PopStyleColor(colors);
+            ImGui::PopStyleVar();
+        }
     } else {
         ImGui::Dummy(ImVec2(0, 0)); // an id this version doesn't know: keep its place in the list
     }
@@ -1343,6 +1399,12 @@ void App::drawShelfItem(int shelf, int index, const std::string& item, bool vert
                                                 : layout_.bottomShelf;
             if (index < int(list.size()) && list[size_t(index)] == item) list.erase(list.begin() + index);
             noteLayoutChanged();
+        }
+        if (shelf == kShelfBottom && ImGui::BeginMenu("Tile size")) { // also in Preferences > Interface
+            static const char* kTiles[] = {"Small", "Medium", "Large"};
+            for (int i = 0; i < 3; ++i)
+                if (ImGui::MenuItem(kTiles[i], nullptr, layout_.shelfTiles == i)) layout_.shelfTiles = i;
+            ImGui::EndMenu();
         }
         ImGui::EndPopup();
     }
@@ -1634,29 +1696,6 @@ void App::drawMaterialTile(const char* id, ImVec2 size) {
     ui::HelpText("Material", "M", "How the model is shaded in the view. Click for the material picker.", "Left shelf");
 }
 
-void App::drawColorWidget(float width) {
-    const float s = uiScale_;
-    ImGui::BeginGroup();
-    glm::vec3 srgb = linearToSrgb(doc_.paintColor);
-    ImGui::SetNextItemWidth(width);
-    if (ImGui::ColorPicker3("##shelfcolor", glm::value_ptr(srgb),
-                            ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel |
-                                ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_PickerHueBar))
-        doc_.paintColor = srgbToLinear(srgb);
-    ui::HelpText("Colour", "C", "The polypaint colour (C over the model picks one).", "Left shelf");
-    // Two swatches, like ZBrush's main and secondary colour: clicking swaps them ("Alternate").
-    const float sw = (width - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-    const glm::vec3 second = linearToSrgb(secondaryColor_);
-    bool swap = ImGui::ColorButton("##primary", ImVec4(srgb.x, srgb.y, srgb.z, 1.0f), ImGuiColorEditFlags_NoTooltip, ImVec2(sw, 22.0f * s));
-    ui::HelpText("Main colour", nullptr, "Click to swap with the second colour.", "Left shelf");
-    ImGui::SameLine();
-    swap |= ImGui::ColorButton("##secondary", ImVec4(second.x, second.y, second.z, 1.0f), ImGuiColorEditFlags_NoTooltip,
-                               ImVec2(sw, 22.0f * s));
-    ui::HelpText("Second colour", nullptr, "Click to swap it with the main colour (ZBrush Alternate).", "Left shelf");
-    if (swap) std::swap(doc_.paintColor, secondaryColor_);
-    ui::ActionButton(*this, "color.fill", ImVec2(width, 0), ui::Look::IconLabel);
-    ui::HelpAction(*this, "color.fill");
-    ImGui::EndGroup();
-}
+// drawColorWidget (the left tray's colour field) is in Pickers.cpp.
 
 } // namespace sf

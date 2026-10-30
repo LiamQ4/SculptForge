@@ -577,6 +577,135 @@ TEST(face_link_over_webrtc) {
     link.stop();
 }
 
+// Android AR: Scene Viewer can't load a model from the desktop's plain-HTTP address, so the website's AR page gets
+// it over the WebRTC link (reliable channel): the page asks, the app exports, the GLB arrives in chunks, intact.
+TEST(ar_link_sends_the_model_over_webrtc) {
+    if (!webrtcAvailable()) return;
+    const fs::path inbox = freshDir("sf_phone_ar_rtc");
+    PhoneLink link;
+    std::string err;
+    CHECK(link.start(testOptions(inbox), err));
+    HttpRequest r = request("GET", "/api/face-link", link.token());
+    r.query = "mode=ar&scope=scene&size=35";
+    const std::string url = parseJson(link.handle(r).body)["url"].asString();
+    CHECK(url.rfind("https://example.org/link/ar.html?v=5#v=1&", 0) == 0);
+    const std::string fragment = url.substr(url.find('#') + 1);
+    CHECK(queryParameter(fragment, "m") == "ar");
+    CHECK(queryParameter(fragment, "s") == "scene");
+    CHECK(queryParameter(fragment, "z") == "35");
+    std::string offer;
+    CHECK(base64UrlDecode(queryParameter(fragment, "o"), offer));
+
+    std::mutex m;
+    std::vector<std::pair<std::string, bool>> received;
+    FaceRtc phone(FaceRtc::Mode::Ar);
+    phone.onTestMessage = [&](const std::string& data, bool binary) {
+        std::lock_guard lock(m);
+        received.emplace_back(data, binary);
+    };
+    std::string answer;
+    CHECK(phone.answerForTest(offer, answer, err));
+    CHECK(link.acceptFaceAnswer(answer, err));
+    // The page asks for the model (as soon as its channel is open).
+    bool asked = false;
+    for (int i = 0; i < 100 && !asked; ++i) {
+        phone.sendFromTestPeer("{\"type\":\"ar\",\"scope\":\"scene\",\"size\":35}");
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        for (const PhoneEvent& e : link.takeEvents())
+            if (e.type == PhoneEvent::Type::ArRequested) {
+                asked = true;
+                CHECK(e.wholeScene);
+                CHECK(std::abs(e.sizeCm - 35.0f) < 1e-4f);
+            }
+    }
+    CHECK(asked);
+    CHECK(link.secondsSinceArViewed() >= 0);
+    // The app publishes a model: it goes down the channel.
+    std::string glb = "glTF";
+    for (int i = 0; glb.size() < 300000; ++i) glb += char(i * 131 % 251);
+    link.publishArModel(glb, "usdz", "1,000 triangles");
+    std::string got, header, end;
+    for (int i = 0; i < 200 && end.empty(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        std::lock_guard lock(m);
+        got.clear();
+        header.clear();
+        for (const auto& [data, binary] : received) {
+            if (binary) got += data;
+            else if (data.find("\"model\"") != std::string::npos) header = data;
+            else if (data.find("\"end\"") != std::string::npos) end = data;
+        }
+    }
+    CHECK(!end.empty());
+    CHECK(parseJson(header)["bytes"].asNumber() == double(glb.size()));
+    CHECK(parseJson(header)["summary"].asString() == "1,000 triangles");
+    CHECK(got == glb);
+    // An export error reaches the page too.
+    link.setArError("Nothing to show");
+    bool error = false;
+    for (int i = 0; i < 100 && !error; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        std::lock_guard lock(m);
+        for (const auto& [data, binary] : received) error = error || (!binary && data.find("Nothing to show") != std::string::npos);
+    }
+    CHECK(error);
+    CHECK(!link.status().faceConnected); // an AR link is not a face feed
+    phone.close();
+    link.stop();
+}
+
+// Android Chrome may not reach the computer at all: the AR link also carries a relay URL, and each model goes
+// there encrypted with the link's key (only the page can read it).
+TEST(ar_link_uploads_the_model_encrypted_to_the_relay) {
+    if (!webrtcAvailable()) return;
+    std::mutex m;
+    std::vector<std::pair<std::string, std::string>> posted; // query, body
+    HttpServer relay;
+    HttpServer::Options ro;
+    ro.port = 0;
+    ro.bindAddress = "127.0.0.1";
+    std::string err;
+    CHECK(relay.start(ro, [&](const HttpRequest& r) {
+        std::lock_guard lock(m);
+        if (r.method == "POST" && r.path.rfind("/blob/sculptforge-", 0) == 0) posted.emplace_back(r.query, r.body);
+        return HttpResponse::json(200, "{}");
+    }, err));
+    if (ai::httpRequest("GET", "http://127.0.0.1:" + std::to_string(relay.port()) + "/blob/x", {}, {}, 5).status != 200) {
+        relay.stop(); // no HTTP client in this build
+        return;
+    }
+    const fs::path inbox = freshDir("sf_phone_ar_blob");
+    PhoneLinkOptions o = testOptions(inbox);
+    o.relayUrl = "http://127.0.0.1:" + std::to_string(relay.port()) + "/relay/";
+    PhoneLink link;
+    CHECK(link.start(o, err));
+    std::string url;
+    CHECK(link.createFaceLink(url, err, true, "subtool", 20.0f));
+    const std::string fragment = url.substr(url.find('#') + 1);
+    const std::string blobUrl = percentDecode(queryParameter(fragment, "b"));
+    CHECK(blobUrl.rfind("http://127.0.0.1:" + std::to_string(relay.port()) + "/blob/sculptforge-", 0) == 0);
+    std::string key;
+    CHECK(base64UrlDecode(queryParameter(fragment, "x"), key));
+    bool asked = false;
+    for (const PhoneEvent& e : link.takeEvents()) asked = asked || e.type == PhoneEvent::Type::ArRequested;
+    CHECK(asked); // the app makes a fresh model for the page
+    std::string glb = "glTF";
+    for (int i = 0; glb.size() < 200000; ++i) glb += char(i * 37 % 253);
+    link.publishArModel(glb, "usdz", "summary");
+    std::string query, body;
+    for (int i = 0; i < 200 && body.empty(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        std::lock_guard lock(m);
+        if (!posted.empty()) std::tie(query, body) = posted.front();
+    }
+    CHECK(query == "v=1");
+    std::string plain;
+    CHECK(aesGcmDecrypt(key, base64UrlEncode(body), plain, err));
+    CHECK(plain == glb);
+    link.stop();
+    relay.stop();
+}
+
 // The phone's answer through the relays (services/link-worker's protocol, which ntfy.sh also speaks): the first
 // relay is down, the second, a fake one here, carries the message; the desktop polls both and connects.
 TEST(face_link_answer_through_the_relays) {

@@ -219,8 +219,10 @@ void main() {
         vec3 by = cross(v, bx);
         vec2 uv = vec2(dot(bx, n), dot(by, n)) * 0.495 + 0.5;
         vec3 mc = pow(texture(uMatcapTex, uv).rgb, vec3(2.2));
-        float mcrease = smoothstep(0.0, 0.16, curvature);
-        float mridge = smoothstep(0.0, 0.2, -curvature);
+        // Starts above the curvature of a smooth sphere's own facets, so only real creases darken and a broad
+        // stroke doesn't pool into a smear.
+        float mcrease = smoothstep(0.03, 0.18, curvature);
+        float mridge = smoothstep(0.03, 0.2, -curvature);
         vec3 c = mc * tint * (1.0 - uMatcapCavity.x * mcrease) * (1.0 + uMatcapCavity.y * mridge);
         if (uShowMask == 1) c *= 1.0 - 0.75 * clamp(V_MASK, 0.0, 1.0);
         fragColor = finish(c);
@@ -1981,7 +1983,7 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
     }
     const int fbWidth = inset ? viewport.w : targetWidth, fbHeight = inset ? viewport.h : targetHeight;
     if (thumbnailPass_) gl::ClearColor(0.0f, 0.0f, 0.0f, 0.0f); // renderMeshThumbnail: transparent background
-    else gl::ClearColor(0.1f, 0.1f, 0.11f, 1.0f);
+    else gl::ClearColor(0.075f, 0.075f, 0.08f, 1.0f);
     gl::Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     gl::Enable(GL_MULTISAMPLE);
     struct ScissorOff {
@@ -1991,7 +1993,7 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
         }
     } scissorOff{inset};
 
-    // Background gradient.
+    // CRKW configurable solid or gradient background.
     gl::Disable(GL_DEPTH_TEST);
     gl::UseProgram(bgProgram_);
     gl::Uniform3fv(bgTop_, 1, glm::value_ptr(settings.backgroundTop));

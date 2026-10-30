@@ -48,6 +48,7 @@ test("topics, messages, sizes and origins are checked", async () => {
     const pre = await worker.fetch(new Request(`${BASE}/relay/${TOPIC}`, { method: "OPTIONS", headers: { Origin: PAGE } }), env);
     assert.equal(pre.status, 204);
     assert.equal(pre.headers.get("Access-Control-Allow-Origin"), PAGE);
+    assert.equal(pre.headers.get("Access-Control-Allow-Headers"), "Content-Type");
     assert.equal((await worker.fetch(new Request(`${BASE}/`), env)).status, 200);
 });
 
@@ -66,4 +67,45 @@ test("messages are deleted ten minutes after the first", async () => {
     await env.fireAlarms(Date.now() + TTL_MS + 1000);
     assert.equal((await lines(await poll(env, TOPIC))).length, 0);
     assert.equal((await post(env, TOPIC, "again")).status, 200); // the topic works again (a new alarm)
+});
+
+test("an encrypted AR model: SculptForge posts it, the page reads the version and downloads it", async () => {
+    const env = fakeEnv();
+    const blob = (query = "", init = {}) => worker.fetch(new Request(`${BASE}/blob/${TOPIC}${query}`, init), env);
+    assert.equal((await blob("", { headers: { Origin: PAGE } })).status, 404); // nothing yet
+    const model = new Uint8Array(2.5 * 1024 * 1024).map((_, i) => (i * 131) % 251); // spans three chunks
+    assert.equal((await blob("?v=2", { method: "POST", body: model })).status, 200);
+    // A page may not post; an older version doesn't replace a newer one; tiny or unversioned bodies are refused.
+    assert.equal((await blob("?v=3", { method: "POST", body: model, headers: { Origin: PAGE } })).status, 403);
+    assert.equal(await (await blob("?v=1", { method: "POST", body: new Uint8Array(100) })).json().then((j) => j.stale), true);
+    assert.equal((await blob("?v=4", { method: "POST", body: new Uint8Array(10) })).status, 400);
+    assert.equal((await blob("", { method: "POST", body: model })).status, 400);
+    const meta = await blob("", { headers: { Origin: PAGE } });
+    assert.equal(meta.status, 200);
+    assert.equal(meta.headers.get("Access-Control-Allow-Origin"), PAGE);
+    assert.deepEqual(await meta.json(), { version: 2, bytes: model.byteLength, chunks: 3 });
+    const got = await blob("?data=1", { headers: { Origin: PAGE } });
+    assert.equal(got.headers.get("X-Version"), "2");
+    assert.deepEqual(new Uint8Array(await got.arrayBuffer()), model);
+    // Gone after the TTL.
+    await env.fireAlarms(Date.now() + TTL_MS + 1000);
+    assert.equal((await blob("", { headers: { Origin: PAGE } })).status, 404);
+});
+
+test("a readable copy for Google's AR viewer: only the page posts it, only for a live link, anyone with the URL reads it", async () => {
+    const env = fakeEnv();
+    const share = (query = "", init = {}) => worker.fetch(new Request(`${BASE}/share/${TOPIC}/model.glb${query}`, init), env);
+    const glb = new Uint8Array([0x67, 0x6c, 0x54, 0x46, 1, 2, 3, 4, 5, 6, 7, 8]); // "glTF..."
+    assert.equal((await share("?v=1", { method: "POST", body: glb, headers: { Origin: PAGE } })).status, 404); // no link yet
+    await worker.fetch(new Request(`${BASE}/blob/${TOPIC}?v=1`, { method: "POST", body: new Uint8Array(64) }), env);
+    assert.equal((await share("?v=1", { method: "POST", body: glb })).status, 403); // not from the page
+    assert.equal((await share("?v=1", { method: "POST", body: new Uint8Array(40), headers: { Origin: PAGE } })).status, 400);
+    assert.equal((await share("?v=1", { method: "POST", body: glb, headers: { Origin: PAGE } })).status, 200);
+    const got = await share();
+    assert.equal(got.status, 200);
+    assert.equal(got.headers.get("Content-Type"), "model/gltf-binary");
+    assert.equal(got.headers.get("Access-Control-Allow-Origin"), "*");
+    assert.deepEqual(new Uint8Array(await got.arrayBuffer()), glb);
+    await env.fireAlarms(Date.now() + TTL_MS + 1000);
+    assert.equal((await share()).status, 404);
 });

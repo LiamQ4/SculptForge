@@ -15,6 +15,10 @@
   <meta property="og:description" content="ZBrush-style sculpting for VFX, animation and games. VFX Reference Platform CY2026 and CY2027 builds, OpenUSD, a Python API and Send to Unreal. Free built-in AI: describe a brush and get it, or turn a sketch into a model.">
   <meta property="og:image" content="https://sculptforge.app/img/social-preview.png?v=3">
   <meta property="og:url" content="https://sculptforge.app/">
+  <link rel="canonical" href="https://sculptforge.app/">
+  <script type="application/ld+json">
+  {"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "SculptForge", "url": "https://sculptforge.app/", "applicationCategory": "MultimediaApplication", "applicationSubCategory": "3D sculpting", "operatingSystem": "Windows 10, Windows 11, macOS, Linux", "softwareVersion": "0.9.3", "description": "Free, open-source digital sculpting: an alternative to ZBrush and Mudbox for VFX, animation and game studios.", "license": "https://www.gnu.org/licenses/gpl-3.0.html", "isAccessibleForFree": true, "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "downloadUrl": "https://github.com/islandmed/SculptForge/releases/latest", "image": "https://sculptforge.app/img/social-preview.png?v=3", "sameAs": ["https://github.com/islandmed/SculptForge"]}
+  </script>
   <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="style.css?v=17">
   <script src="motion.js?v=10" defer></script>
@@ -62,14 +66,14 @@
           </ul>
         </div>
         <figure class="hero-video">
-          <video id="hero-video" poster="media/poster-showcase.jpg?v=2" autoplay muted loop playsinline preload="metadata"
+          <video id="hero-video" poster="media/poster-showcase.jpg?v=3" autoplay muted loop playsinline preload="metadata"
                  aria-label="Weathering a detailed lion head and turning it to stone in SculptForge">
-            <source src="media/showcase-mobile.mp4?v=2" type="video/mp4" media="(max-width: 620px)">
-            <source src="media/showcase.mp4?v=2" type="video/mp4">
+            <source src="media/showcase-mobile.mp4?v=3" type="video/mp4" media="(max-width: 620px)">
+            <source src="media/showcase.mp4?v=3" type="video/mp4">
           </video>
           <script>
             if (matchMedia("(max-width: 620px)").matches)
-              document.getElementById("hero-video").poster = "media/poster-showcase-mobile.jpg?v=2";
+              document.getElementById("hero-video").poster = "media/poster-showcase-mobile.jpg?v=3";
           </script>
           <figcaption>Real recording of SculptForge, scripted demo at 1080p.</figcaption>
         </figure>
@@ -93,10 +97,23 @@
     <section id="whats-new" class="section alt">
       <div class="wrap">
         <h2>What's new in 0.9</h2>
-        <p class="section-lede">Maquette to performance: scan a clay maquette with your phone, sculpt on the scan,
+        <p class="section-lede">New in 0.9.3: a cleaner look, made for reading your sculpt. Before that, maquette to performance: scan a clay maquette with your phone, sculpt on the scan,
           give the head its facial shapes and drive them with your own face. <a href="guide/whats-new.html">Everything that changed</a> ·
           <a href="https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md">changelog</a></p>
         <div class="grid">
+          <article class="card">
+            <h3>A cleaner look <small>new in 0.9.3</small></h3>
+            <p>The new default material, Soft Clay, is matte with a clear light and shadow side, so every stroke reads
+              at a glance. Orange now marks only the tool you're using, and every brush has its own icon.
+              <a href="press.html">See the screenshots</a></p>
+          </article>
+          <article class="card">
+            <h3>Your shelf, your size <small>new in 0.9.3</small></h3>
+            <p>Bigger brush tiles on the bottom shelf. Right-click a brush and choose Tile size: Small, Medium or
+              Large. Plus File &gt; Export STL for 3D printing, and one-command install on a Mac:
+              <code>brew install --cask islandmed/tap/sculptforge</code>.
+              <a href="guide/interface.html#bottom-shelf">The bottom shelf</a></p>
+          </article>
           <article class="card">
             <h3>Your phone is the scanner <small>new in 0.9</small></h3>
             <p>Scan the QR code in File &gt; Capture from phone, walk round an object for half a minute, and the
@@ -402,7 +419,7 @@ rez-env sculptforge -- sculptforge troll.usda \
         </div>
 
         <div class="demo">
-          <video aria-label="Sculpting a snarl on a lion as a blend shape, generating LODs and sending to Unreal" src="media/game-ready.mp4?v=2" poster="media/poster-game-ready.jpg?v=2" muted loop playsinline preload="none" data-inview tabindex="0"></video>
+          <video aria-label="Sculpting a snarl on a lion as a blend shape, generating LODs and sending to Unreal" src="media/game-ready.mp4?v=3" poster="media/poster-game-ready.jpg?v=3" muted loop playsinline preload="none" data-inview tabindex="0"></video>
           <div>
             <h3>Blend shapes, LODs and Unreal</h3>
             <p>Sculpt a snarl on its own layer and play it back. Generate a LOD chain in one click: even the
@@ -412,7 +429,7 @@ rez-env sculptforge -- sculptforge troll.usda \
         </div>
 
         <div class="demo reverse">
-          <video aria-label="Converting between a sculpt and Gaussian splats" src="media/splats.mp4" poster="media/poster-splats.jpg" muted loop playsinline preload="none" data-inview tabindex="0"></video>
+          <video aria-label="Converting between a sculpt and Gaussian splats" src="media/splats.mp4?v=2" poster="media/poster-splats.jpg?v=2" muted loop playsinline preload="none" data-inview tabindex="0"></video>
           <div>
             <h3>Gaussian splats, both ways</h3>
             <p>Turn a sculpt into Gaussian splats for web viewers and engines, and turn splat captures into
@@ -463,8 +480,8 @@ rez-env sculptforge -- sculptforge troll.usda \
               </tbody>
             </table>
           </div>
-          <p class="fine">SculptForge is young. It doesn't yet have retopology, UVs or texture painting.
-            <a href="https://github.com/islandmed/SculptForge/blob/main/ROADMAP.md">See the roadmap</a>.</p>
+          <p class="fine">SculptForge is young: UDIMs, Ptex and separate texture channels aren't there yet.
+          <a href="https://github.com/islandmed/SculptForge/blob/main/ROADMAP.md">See the roadmap</a>.</p>
         </div>
       </div>
     </section>
@@ -472,7 +489,7 @@ rez-env sculptforge -- sculptforge troll.usda \
     <section id="download" class="section alt">
       <div class="wrap">
         <h2>Download</h2>
-        <p class="section-lede">Version 0.9.0. All builds come from the
+        <p class="section-lede">Version 0.9.3. All builds come from the
           <a href="https://github.com/islandmed/SculptForge/releases/latest">latest GitHub release</a>, with
           SHA-256 checksums.</p>
         <div class="downloads">
@@ -488,8 +505,8 @@ rez-env sculptforge -- sculptforge troll.usda \
             <strong>Any Linux</strong><span>AppImage · x86_64, runs anywhere</span></a>
           <a class="dl" href="https://github.com/islandmed/SculptForge/releases/latest/download/sculptforge_bridge.zip">
             <strong>Blender add-on</strong><span>Blender 4.2+ · send to SculptForge and back</span></a>
-          <div class="dl static">
-            <strong>Arch Linux</strong><span><code>yay -S sculptforge</code></span></div>
+          <a class="dl" href="https://github.com/islandmed/SculptForge/tree/main/packaging/arch">
+            <strong>Arch Linux</strong><span>PKGBUILD · <code>makepkg -si</code></span></a>
           <a class="dl vfx-dl" href="https://github.com/islandmed/SculptForge/releases/latest">
             <strong>VFX Reference Platform</strong><span>CY2026 (Rocky 8) &amp; CY2027 (Rocky 9) · .tar.gz with Python module</span></a>
           <a class="dl" href="https://github.com/islandmed/SculptForge/blob/main/docs/studios.md#deploying-with-rez">
@@ -497,7 +514,8 @@ rez-env sculptforge -- sculptforge troll.usda \
         </div>
         <p class="fine">Each button downloads the newest version.
           <a href="https://github.com/islandmed/SculptForge/tree/main/install#install-sculptforge">All downloads</a>
-          (ARM64, portable .zip, one-command install) ·
+          (ARM64, portable .zip, one-command install) · on macOS also
+          <code>brew install --cask islandmed/tap/sculptforge</code> ·
           <a href="https://github.com/islandmed/SculptForge/releases">older versions</a>.</p>
         <p class="fine">The builds aren't code-signed yet. On macOS, right-click the app and choose <em>Open</em>
           the first time. On Windows, if SmartScreen appears, choose <em>More info → Run anyway</em>.
@@ -532,10 +550,10 @@ rez-env sculptforge -- sculptforge troll.usda \
           <p>For sculpting, largely yes. Autodesk ends new Mudbox subscription sales on 7 November 2026, and its
             releases since 2019 have added no new features. SculptForge is free, open source, actively developed
             and runs natively on Windows, macOS and Linux (including RHEL and Rocky). It opens OBJ, FBX, glTF and
-            USD exported from Mudbox, and has layers, masking, polypaint and Send to Unreal. Mudbox's strength
-            was painting textures on UV-mapped models; SculptForge doesn't have UVs or texture painting yet
-            (they're on the <a href="https://github.com/islandmed/SculptForge/blob/main/ROADMAP.md">roadmap</a>),
-            and it has no multiresolution subdivision levels yet. It's an independent project, not affiliated
+            USD exported from Mudbox, and has layers, masking, polypaint and Send to Unreal. It also has what
+            Mudbox users rely on: subdivision levels, sculpt layers, texture painting with paint layers and blend
+            modes, normal and displacement baking, and quad retopology. It doesn't have UDIMs, Ptex or separate
+            texture channels yet. <a href="mudbox-alternative.html">SculptForge for Mudbox users</a>. It's an independent project, not affiliated
             with Autodesk.</p></details>
         <details><summary>Does it fit a VFX studio pipeline?</summary>
           <p>Yes. Every release includes VFX Reference Platform CY2026 and CY2027 builds (Rocky Linux 8 and 9, GCC
@@ -559,6 +577,9 @@ rez-env sculptforge -- sculptforge troll.usda \
       </div>
       <div class="links">
         <a href="guide/index.html">User guide</a>
+        <a href="zbrush-alternative.html">For ZBrush users</a>
+        <a href="mudbox-alternative.html">For Mudbox users</a>
+        <a href="zbrush-linux.html">Sculpting on Linux</a>
         <a href="https://github.com/islandmed/SculptForge">Source code</a>
         <a href="https://github.com/islandmed/SculptForge/blob/main/THIRD_PARTY_NOTICES.md">Third-party notices</a>
         <a href="https://github.com/islandmed/SculptForge/blob/main/docs/ai-services.md">AI services &amp; privacy</a>

@@ -250,6 +250,11 @@ void App::initActions() {
     add("file.export_glb", "Export GLB...", "File > Export", "Ctrl+E", [this] { saveFileDialog(FileAction::ExportGlb); },
         ICON_LC_PACKAGE, nullptr, nullptr, nullptr,
         "Export the model as glTF binary, with sculpt layers as blend shapes (morph targets).");
+    add("file.export_stl", "Export STL...", "File > Export", nullptr, [this] {
+            static const SDL_DialogFileFilter filters[] = {{"STL", "stl"}, {"All files", "*"}};
+            SDL_ShowSaveFileDialog(onGozFileChosen, &gozDialogs_[int(GozFile::ExportStl)], window_, filters, 2, nullptr);
+        },
+        nullptr, nullptr, nullptr, nullptr, "Save the visible SubTools as one binary STL, for 3D printing.");
     add("file.send_unreal", "Send to Unreal", "File > Export", "Ctrl+U", [this] { sendToUnreal(); }, ICON_LC_SEND, nullptr,
         nullptr, [this] { return !pendingUnreal_.valid(); },
         "Export a game-ready FBX and import it into the running Unreal Editor (Python remote execution).");
@@ -788,6 +793,18 @@ void drawInterfaceSection(App& app) {
     ImGui::Checkbox("Left-handed layout", &app.layout().leftHanded);
     ui::HelpText("Left-handed layout", nullptr, "Mirror the shelves and trays: tools on the left, navigation on the right.",
                  "Preferences > Interface");
+    {
+        static const char* kTiles[] = {"Small", "Medium", "Large"};
+        int& tiles = app.layout().shelfTiles;
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::BeginCombo("##shelf_tiles", (std::string("Shelf tiles: ") + kTiles[std::clamp(tiles, 0, 2)]).c_str())) {
+            for (int i = 0; i < 3; ++i)
+                if (ImGui::Selectable(kTiles[i], tiles == i)) tiles = i;
+            ImGui::EndCombo();
+        }
+        ui::HelpText("Shelf tiles", nullptr, "How big the brush tiles on the bottom shelf are. Small leaves the most room for the model.",
+                     "Preferences > Interface");
+    }
     static const char* kScales[] = {"Automatic", "100%", "125%", "150%", "175%", "200%"};
     static const float kScaleValues[] = {0.0f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f};
     int current = 0;

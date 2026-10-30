@@ -1,0 +1,44 @@
+# Every hour (at :41; GitHub delays schedules at busy minutes): GitHub release download totals -> a per-day history for the stats page (sculptforge.app/stats/),
+# by tools/download-stats.py. counts.json (last totals) and history.json live on the download-stats branch.
+name: Download stats
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: download-stats
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: tools/download-stats.py
+          sparse-checkout-cone-mode: false
+      - name: Saved totals and history
+        run: |
+          mkdir -p "$RUNNER_TEMP/state"
+          if git fetch --depth=1 origin download-stats 2>/dev/null; then
+            for f in counts.json history.json; do
+              git show "FETCH_HEAD:$f" > "$RUNNER_TEMP/state/$f" 2>/dev/null || rm -f "$RUNNER_TEMP/state/$f"
+            done
+          fi
+      - name: Count new downloads
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/download-stats.py --dir "$RUNNER_TEMP/state"
+      - name: Save
+        run: |
+          cd "$RUNNER_TEMP/state"
+          git init -q -b download-stats
+          git add counts.json history.json
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "Download totals $(date -u +%FT%RZ)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" download-stats

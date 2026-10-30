@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "core/Matcap.h"
 #include "core/Mesh.h"
 #include "core/Splats.h"
 #include "core/UploadOrder.h"
@@ -22,12 +23,12 @@ struct RenderSettings {
     bool backgroundGradient = true;
     bool silhouette = false; // internal flat-black preview pass
     bool wireframe = false;
-    glm::vec3 baseColor{0.80f, 0.55f, 0.45f}; // clay
+    glm::vec3 baseColor{0.62f, 0.58f, 0.53f}; // Studio's colour: a warm clay grey, like the default Soft Clay
     bool showPolypaint = true;   // vertex colours replace baseColor when the mesh has them
     bool showTexture = true;     // with showPolypaint: a SubTool's painted texture (core/Texture.h) multiplies in
     bool showMask = true;        // masked areas render darker (ZBrush style)
     bool showPolygroups = false; // colour each polygroup (see polygroupColor)
-    int matcap = 0;              // built-in MatCap material (core/Matcap.h), 0 = Sculpt; -1 = studio clay lighting
+    int matcap = defaultMatcap(); // built-in MatCap material (core/Matcap.h), Soft Clay; -1 = studio clay lighting
     bool showMesh = true;
     bool showSplats = true;
     float splatOpacity = 1.0f; // global fade for using a capture as reference

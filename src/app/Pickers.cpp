@@ -35,6 +35,15 @@ constexpr ImU32 kGlyph = IM_COL32(140, 140, 144, 255);
 constexpr ImU32 kText = IM_COL32(216, 216, 216, 255);
 constexpr ImU32 kTextDim = IM_COL32(140, 140, 144, 255);
 constexpr ImU32 kPanelBg = IM_COL32(37, 37, 40, 252); // #252528, pop-ups
+// The left tray's colour field. These should become theme tokens (Theme.h) once the theme settles.
+constexpr ImU32 kFieldEdge = IM_COL32(14, 14, 16, 255);       // 1 px around the SV square, hue strip and swatches
+constexpr ImU32 kFieldHairline = IM_COL32(255, 255, 255, 28); // inner highlight that lifts a swatch off the tray
+constexpr ImU32 kFieldHover = IM_COL32(255, 255, 255, 90);    // outline of the swatch under the mouse
+constexpr ImU32 kMarkerLight = IM_COL32(255, 255, 255, 245);  // SV ring and hue notch
+constexpr ImU32 kMarkerDark = IM_COL32(0, 0, 0, 150);         // their outline, readable on white
+constexpr float kFieldGap = 4.0f;   // one gap between every part of the colour field (square, strip, swatches, Fill)
+constexpr float kHueStripW = 10.0f; // wide enough to read as a control next to the square
+constexpr float kSwatchH = 18.0f;
 
 const SDL_DialogFileFilter kAlphaFilters[] = {{"Images", "png;jpg;jpeg;bmp;tga;psd;gif"}, {"All files", "*"}};
 
@@ -131,9 +140,23 @@ void quickInfo(ImTextureID tex, const char* glyph, const std::string& title, con
     if (!ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_NoSharedDelay) ||
         ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId) || ImGui::GetIO().KeyCtrl)
         return;
+    // Beside the window the tile is in (right of it, else left), level with the tile: at the mouse it covered
+    // the grid it describes, clipping the labels and the next rows.
+    const float big = 192.0f * 0.75f;
+    {
+        constexpr float kCardW = 356.0f, kCardH = 300.0f, kGap = 6.0f; // the card's largest size, with padding
+        const ImGuiWindow* host = ImGui::GetCurrentWindow()->RootWindow;
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImVec2 pos(host->Pos.x + host->Size.x + kGap, ImGui::GetItemRectMin().y), pivot(0.0f, 0.0f);
+        if (pos.x + kCardW > vp->Pos.x + vp->Size.x && host->Pos.x - kGap - kCardW >= vp->Pos.x) {
+            pos.x = host->Pos.x - kGap;
+            pivot.x = 1.0f;
+        }
+        pos.y = std::clamp(pos.y, vp->Pos.y + 4.0f, std::max(vp->Pos.y + 4.0f, vp->Pos.y + vp->Size.y - kCardH));
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(340, FLT_MAX));
     ImGui::BeginTooltip();
-    const float big = 192.0f * 0.75f;
     if (tex)
         ImGui::Image(tex, ImVec2(big, big));
     else if (glyph) {
@@ -856,7 +879,7 @@ void drawMaterialGrid(App& app, GridMode mode) {
     int hovered = -2;
     const int active = s.previewing ? s.savedMatcap : app.renderSettings_.matcap;
     for (int k = 0; k <= matcapCount(); ++k) {
-        const int i = k < matcapCount() ? k : -1; // the MatCaps (Sculpt first), then Studio
+        const int i = k < matcapCount() ? matcapInListOrder(k) : -1; // the MatCaps (the default first), then Studio
         tileGrid(column, columns);
         const char* name = i < 0 ? "Studio" : matcapName(i);
         const ImTextureID tex = app.thumbs_.material(i);
@@ -868,9 +891,11 @@ void drawMaterialGrid(App& app, GridMode mode) {
         }
         if (ImGui::IsItemHovered()) hovered = i;
         ui::HelpText(name, nullptr,
-                     i < 0    ? "Soft studio lighting with cavity shading, in the Base colour."
-                     : i == 0 ? "Made for sculpting (the default): a strong key light, crisp highlights and deep "
-                                "cavities so every stroke reads."
+                     i < 0                ? "Soft studio lighting with cavity shading, in the Base colour."
+                     : i == defaultMatcap() ? "The default: a matte warm clay with a clear key light and a soft "
+                                              "rim, so strokes read without glare."
+                     : i == 0 ? "Made for sculpting: a strong key light, crisp highlights and deep cavities so "
+                                "every stroke reads."
                               : "MatCap material: the whole lit look in one image.",
                      "Material");
     }
@@ -1140,6 +1165,156 @@ void drawPickers(App& app) {
         ImGui::PopStyleVar(2);
         if (close) s.slider = -1;
     }
+}
+
+// ---------------------------------------------------------------------------
+// The left tray's colour field: a saturation/value square, a slim hue strip and the main/second swatches. Drawn
+// by hand rather than with ImGui::ColorPicker3 so its markers and corners match the rest of the shell.
+
+namespace {
+
+// Fills a rounded rect, then gives its vertices a linear gradient from `c0` at `p0` to `c1` at `p1` (colour and alpha;
+// the anti-aliased fringe stays transparent).
+void gradientRect(ImDrawList* dl, ImVec2 a, ImVec2 b, ImVec2 p0, ImVec2 p1, ImU32 c0, ImU32 c1, float rounding,
+                  ImDrawFlags flags) {
+    const int start = dl->VtxBuffer.Size;
+    dl->AddRectFilled(a, b, IM_COL32_WHITE, rounding, flags);
+    const ImVec2 d(p1.x - p0.x, p1.y - p0.y);
+    const float len2 = std::max(d.x * d.x + d.y * d.y, 1e-6f);
+    const ImVec4 f0 = ImGui::ColorConvertU32ToFloat4(c0), f1 = ImGui::ColorConvertU32ToFloat4(c1);
+    for (int i = start; i < dl->VtxBuffer.Size; ++i) {
+        ImDrawVert& v = dl->VtxBuffer[i];
+        const float t = std::clamp(((v.pos.x - p0.x) * d.x + (v.pos.y - p0.y) * d.y) / len2, 0.0f, 1.0f);
+        const float fringe = float((v.col >> IM_COL32_A_SHIFT) & 0xff) / 255.0f; // 0 on the anti-aliased edge
+        v.col = ImGui::ColorConvertFloat4ToU32(ImVec4(f0.x + (f1.x - f0.x) * t, f0.y + (f1.y - f0.y) * t,
+                                                      f0.z + (f1.z - f0.z) * t, (f0.w + (f1.w - f0.w) * t) * fringe));
+    }
+}
+
+// The SV square's marker: a light ring with a dark outline inside and out, readable on any colour.
+void ringMarker(ImDrawList* dl, ImVec2 c, float r, float s) {
+    dl->AddCircle(c, r + 1.0f * s, kMarkerDark, 20, 1.0f * s);
+    dl->AddCircle(c, r, kMarkerLight, 20, 1.5f * s);
+    dl->AddCircle(c, r - 1.25f * s, kMarkerDark, 20, 0.75f * s);
+}
+
+// A colour swatch with a 1 px edge and an inner hairline.
+void swatch(ImDrawList* dl, ImVec2 a, ImVec2 b, ImVec4 colour, float rounding, float s, bool hovered) {
+    dl->AddRectFilled(a, b, ImGui::ColorConvertFloat4ToU32(colour), rounding);
+    dl->AddRect(ImVec2(a.x + 1.0f * s, a.y + 1.0f * s), ImVec2(b.x - 1.0f * s, b.y - 1.0f * s),
+                hovered ? kFieldHover : kFieldHairline, std::max(0.0f, rounding - 1.0f * s), 0, 1.0f * s);
+    dl->AddRect(a, b, kFieldEdge, rounding, 0, 1.0f * s);
+}
+
+} // namespace
+
+void App::drawColorWidget(float width) {
+    const float s = uiScale_;
+    const float rounding = 3.0f * s;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGui::BeginGroup(); // the whole widget, one item for the shelf
+    ImGui::BeginGroup(); // the field, one item for its help
+    ImGui::PushID("##shelfcolor");
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
+
+    // Hue and saturation are kept between frames: a grey or black has none of its own, and dragging through one must
+    // not lose the hue the user chose.
+    glm::vec3 srgb = linearToSrgb(doc_.paintColor);
+    ImGuiStorage* store = ImGui::GetStateStorage();
+    const ImGuiID hueKey = ImGui::GetID("hue.kept"), satKey = ImGui::GetID("sat.kept");
+    float h = 0.0f, sat = 0.0f, val = 0.0f;
+    ImGui::ColorConvertRGBtoHSV(srgb.x, srgb.y, srgb.z, h, sat, val);
+    if (sat <= 1e-4f || val <= 1e-4f) h = store->GetFloat(hueKey, h);
+    if (val <= 1e-4f) sat = store->GetFloat(satKey, sat);
+
+    const float stripW = kHueStripW * s, gap = kFieldGap * s;
+    const float squareW = width - stripW - gap, squareH = squareW;
+    bool changed = false;
+
+    // Saturation across, value down.
+    const ImVec2 sq = ImGui::GetCursorScreenPos();
+    const ImVec2 sqMax(sq.x + squareW, sq.y + squareH);
+    ImGui::InvisibleButton("sv", ImVec2(squareW, squareH));
+    if (ImGui::IsItemActive()) {
+        const ImVec2 m = ImGui::GetIO().MousePos;
+        sat = std::clamp((m.x - sq.x) / squareW, 0.0f, 1.0f);
+        val = 1.0f - std::clamp((m.y - sq.y) / squareH, 0.0f, 1.0f);
+        changed = true;
+    }
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImGui::SameLine(0.0f, gap * 0.5f);
+
+    // Hue, red at the top. Its hit area takes the half of the gap beside it too.
+    const ImVec2 hs(ImGui::GetCursorScreenPos().x + gap * 0.5f, ImGui::GetCursorScreenPos().y);
+    const ImVec2 hsMax(hs.x + stripW, hs.y + squareH);
+    ImGui::InvisibleButton("hue", ImVec2(stripW + gap * 0.5f, squareH));
+    if (ImGui::IsItemActive()) {
+        h = std::clamp((ImGui::GetIO().MousePos.y - hs.y) / squareH, 0.0f, 0.9999f);
+        changed = true;
+    }
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
+    if (changed) {
+        store->SetFloat(hueKey, h);
+        store->SetFloat(satKey, sat);
+        ImGui::ColorConvertHSVtoRGB(h, sat, val, srgb.x, srgb.y, srgb.z);
+        doc_.paintColor = srgbToLinear(srgb);
+    }
+
+    // The square: white to the pure hue across, then clear to black down.
+    float hr = 0, hg = 0, hb = 0;
+    ImGui::ColorConvertHSVtoRGB(h, 1.0f, 1.0f, hr, hg, hb);
+    gradientRect(dl, sq, sqMax, sq, ImVec2(sqMax.x, sq.y), IM_COL32_WHITE, ImGui::ColorConvertFloat4ToU32(ImVec4(hr, hg, hb, 1)),
+                 rounding, ImDrawFlags_RoundCornersAll);
+    gradientRect(dl, sq, sqMax, sq, ImVec2(sq.x, sqMax.y), IM_COL32(0, 0, 0, 0), IM_COL32_BLACK, rounding,
+                 ImDrawFlags_RoundCornersAll);
+    dl->AddRect(sq, sqMax, kFieldEdge, rounding, 0, 1.0f * s);
+    ringMarker(dl, ImVec2(sq.x + sat * squareW, sq.y + (1.0f - val) * squareH), 4.0f * s, s);
+
+    // The strip: six bands, the end ones rounded, and a thin bar across it that stays inside its ends.
+    const float band = squareH / 6.0f;
+    for (int i = 0; i < 6; ++i) {
+        float r0, g0, b0, r1, g1, b1;
+        ImGui::ColorConvertHSVtoRGB(float(i) / 6.0f, 1, 1, r0, g0, b0);
+        ImGui::ColorConvertHSVtoRGB(float(i + 1) / 6.0f, 1, 1, r1, g1, b1);
+        const ImVec2 a(hs.x, hs.y + band * float(i)), b(hsMax.x, i == 5 ? hsMax.y : hs.y + band * float(i + 1));
+        gradientRect(dl, a, b, a, ImVec2(a.x, b.y), ImGui::ColorConvertFloat4ToU32(ImVec4(r0, g0, b0, 1)),
+                     ImGui::ColorConvertFloat4ToU32(ImVec4(r1, g1, b1, 1)), stripW * 0.5f,
+                     i == 0 ? ImDrawFlags_RoundCornersTop : i == 5 ? ImDrawFlags_RoundCornersBottom : ImDrawFlags_RoundCornersNone);
+    }
+    dl->AddRect(hs, hsMax, kFieldEdge, stripW * 0.5f, 0, 1.0f * s);
+    const float ny = std::clamp(hs.y + h * squareH, hs.y + 2.5f * s, hsMax.y - 2.5f * s);
+    const ImVec2 na(hs.x - 1.0f * s, ny - 1.5f * s), nb(hsMax.x + 1.0f * s, ny + 1.5f * s);
+    dl->AddRect(ImVec2(na.x - 1.0f * s, na.y - 1.0f * s), ImVec2(nb.x + 1.0f * s, nb.y + 1.0f * s), kMarkerDark, 2.0f * s, 0,
+                1.0f * s);
+    dl->AddRectFilled(na, nb, kMarkerLight, 1.5f * s);
+
+    ImGui::PopStyleVar();
+    ImGui::PopID();
+    ImGui::EndGroup();
+    ui::HelpText("Colour", "C", "The polypaint colour (C over the model picks one).", "Left shelf");
+
+    // Two swatches, like ZBrush's main and secondary colour: clicking either swaps them ("Alternate"). Equal halves of
+    // the column, main on the left, the same gap as between the square and the strip.
+    const float swH = kSwatchH * s;
+    const float mainW = std::floor((width - gap) * 0.5f), secondW = width - gap - mainW;
+    const glm::vec3 second = linearToSrgb(secondaryColor_);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
+    const ImVec2 pa = ImGui::GetCursorScreenPos();
+    bool swap = ImGui::InvisibleButton("##primary", ImVec2(mainW, swH));
+    swatch(dl, pa, ImVec2(pa.x + mainW, pa.y + swH), ImVec4(srgb.x, srgb.y, srgb.z, 1.0f), rounding, s, ImGui::IsItemHovered());
+    ui::HelpText("Main colour", nullptr, "Click to swap with the second colour.", "Left shelf");
+    ImGui::SameLine();
+    const ImVec2 pb = ImGui::GetCursorScreenPos();
+    swap |= ImGui::InvisibleButton("##secondary", ImVec2(secondW, swH));
+    swatch(dl, pb, ImVec2(pb.x + secondW, pb.y + swH), ImVec4(second.x, second.y, second.z, 1.0f),
+           rounding, s, ImGui::IsItemHovered());
+    ui::HelpText("Second colour", nullptr, "Click to swap it with the main colour (ZBrush Alternate).", "Left shelf");
+    if (swap) std::swap(doc_.paintColor, secondaryColor_);
+    ui::ActionButton(*this, "color.fill", ImVec2(width, 0), ui::Look::IconLabel);
+    ImGui::PopStyleVar();
+    ui::HelpAction(*this, "color.fill");
+    ImGui::EndGroup();
 }
 
 } // namespace sf

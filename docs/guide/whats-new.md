@@ -5,6 +5,47 @@ chapter opens by itself the first time you start a new version; you can always f
 **Help > What's New**. Every detail is in the
 [changelog](https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md).
 
+## Version 0.9.4
+
+### Fixes and packaging
+
+Exports without a material of their own (FBX, USD) and splats made from an unpainted sculpt use the Soft Clay
+grey instead of the old peach. Linux AppImages are now named `SculptForge-0.9.4-x86_64.AppImage` (and
+`-aarch64`) and carry update information for AppImageUpdate. On macOS you can install with Homebrew:
+`brew install --cask islandmed/tap/sculptforge`.
+
+## Version 0.9.3
+
+### A cleaner look
+
+The default material is now **Soft Clay**: matte, with a clear light and shadow side, so sculpted detail reads at
+a glance. Orange marks only the current tool; options that are on are a lighter grey with a thin orange line.
+Every brush icon is drawn the same way, with a mark that shows what the brush does. A material you picked
+before is kept: choose **Soft Clay** in the Material menu to see the new look. See [The interface](interface.md).
+
+### Bigger brush tiles, your size
+
+The brush tiles on the bottom shelf are bigger. Right-click any brush on the shelf and choose **Tile size**:
+Small, Medium or Large (also in **Preferences > Interface > Shelf tiles**).
+
+### Export STL from the File menu
+
+**File > Export STL...** is its own menu item, for 3D printing.
+
+## Version 0.9.2
+
+### View in AR on Android
+
+On Android, **View in AR** used to just download a file. It now opens an AR page in **Chrome**: your sculpt comes
+to it encrypted through SculptForge's relay, so it works even when Chrome can't reach your computer, and it updates
+as you sculpt. Show it with Chrome's AR or with Google's AR viewer. If the capture page is open in Firefox, tap
+**Open in Chrome**. See [Phone capture and AR](phone-capture.md).
+
+### One port for the phone link
+
+Face capture and AR now use the same network port as the capture page. On Linux with a firewall, allow that port
+for both TCP and UDP from your home network.
+
 ## Version 0.9.1
 
 Fixes from the first day of 0.9.

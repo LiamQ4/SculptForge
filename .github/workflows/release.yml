@@ -26,7 +26,7 @@ jobs:
           - { arch: x86_64, os: ubuntu-22.04, ld: x86_64 }
           - { arch: arm64, os: ubuntu-22.04-arm, ld: aarch64 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { ref: '${{ env.TAG }}' }
       - run: sudo ./packaging/linux/install-build-deps.sh
       - name: Build and test
@@ -46,18 +46,23 @@ jobs:
           DESTDIR=$PWD/AppDir cmake --install build
           curl -fsSLo linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.ld }}.AppImage
           chmod +x linuxdeploy
+          # Named the AppImage way (SculptForge-1.2.3-x86_64.AppImage, no "linux"), with update information so
+          # AppImageUpdate and similar tools can update it from the newest GitHub release (the .zsync file).
+          export LDAI_OUTPUT="SculptForge-${TAG#v}-${{ matrix.ld }}.AppImage"
+          export LDAI_UPDATE_INFORMATION="gh-releases-zsync|islandmed|SculptForge|latest|SculptForge-*-${{ matrix.ld }}.AppImage.zsync"
           VERSION=${TAG#v} ./linuxdeploy --appimage-extract-and-run --appdir AppDir \
             --desktop-file AppDir/usr/share/applications/org.sculptforge.SculptForge.desktop \
             --icon-file assets/branding/sculptforge-256.png --icon-filename org.sculptforge.SculptForge \
             --output appimage
-          mv SculptForge-*.AppImage build/SculptForge-${TAG#v}-linux-${{ matrix.arch }}.AppImage
-      - uses: actions/upload-artifact@v4
+          mv "$LDAI_OUTPUT" "$LDAI_OUTPUT.zsync" build/
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
           path: |
             build/*.deb
             build/*.tar.gz
             build/*.AppImage
+            build/*.AppImage.zsync
 
   vfx:
     name: ${{ matrix.label }} ${{ matrix.arch }}
@@ -74,7 +79,7 @@ jobs:
           - { label: 'VFX CY2027', suffix: vfx2027, generators: 'TGZ', image: 'rockylinux:9', arch: arm64, os: ubuntu-24.04-arm }
     steps:
       - run: dnf -y install git
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { ref: '${{ env.TAG }}' }
       - run: ./packaging/linux/install-build-deps.sh
       - name: Python 3.13
@@ -94,7 +99,7 @@ jobs:
           cd build
           cpack -G TGZ -D CPACK_PACKAGE_FILE_NAME=SculptForge-${TAG#v}-linux-${{ matrix.arch }}-${{ matrix.suffix }}
           if [ "${{ matrix.generators }}" = "RPM;TGZ" ]; then cpack -G RPM; fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vfx-${{ matrix.suffix }}-${{ matrix.arch }}
           path: |
@@ -105,7 +110,7 @@ jobs:
     name: macOS (universal .dmg)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { ref: '${{ env.TAG }}' }
       - name: Build and test
         run: |
@@ -116,7 +121,7 @@ jobs:
           ctest --test-dir build --output-on-failure -LE ui
       - name: Package (signed ad-hoc inside CPack, see cmake/MacSign.cmake)
         run: cd build && cpack -G DragNDrop
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: build/*.dmg
@@ -125,7 +130,7 @@ jobs:
     name: Windows x64 (installer, .zip)
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { ref: '${{ env.TAG }}' }
       - name: Build and test
         run: |
@@ -135,7 +140,7 @@ jobs:
           ctest --test-dir build -C Release --output-on-failure -LE ui
       - name: Package
         run: cd build && cpack -C Release -G "NSIS;ZIP"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: |
@@ -147,9 +152,9 @@ jobs:
     needs: [linux, vfx, macos, windows]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { ref: '${{ env.TAG }}' }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: dist, merge-multiple: true }
       - name: Version-less copies (fixed links such as releases/latest/download/SculptForge-macos.dmg)
         run: |
@@ -158,8 +163,8 @@ jobs:
           cp "SculptForge-$V-windows-x86_64.exe" SculptForge-windows-x86_64-setup.exe
           cp "SculptForge-$V-windows-x86_64.zip" SculptForge-windows-x86_64-portable.zip
           cp "SculptForge-$V-darwin-universal.dmg" SculptForge-macos.dmg
-          cp "SculptForge-$V-linux-x86_64.AppImage" SculptForge-linux-x86_64.AppImage
-          cp "SculptForge-$V-linux-arm64.AppImage" SculptForge-linux-arm64.AppImage
+          cp "SculptForge-$V-x86_64.AppImage" SculptForge-linux-x86_64.AppImage
+          cp "SculptForge-$V-aarch64.AppImage" SculptForge-linux-arm64.AppImage
           cp "sculptforge_${V}_amd64.deb" sculptforge_amd64.deb
           cp "sculptforge_${V}_arm64.deb" sculptforge_arm64.deb
           cp "sculptforge-$V-1.x86_64.rpm" sculptforge.x86_64.rpm

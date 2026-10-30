@@ -6,7 +6,10 @@
 // the ZBrush viewport gesture Alt+click to select a SubTool. Every action goes
 // through the subtool_* commands (core/SubTools.cpp).
 #include "app/App.h"
+#include "app/Theme.h"
 #include "core/Multires.h"
+
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +22,11 @@ namespace {
 
 constexpr float kClickSlopPx = 4.0f; // movement that turns an Alt+click into a drag
 constexpr int kListRows = 6;         // the list scrolls beyond this many SubTools
+// The SubTool list's colours; should become theme tokens (Theme.h).
+constexpr ImVec4 kListWell = theme::rgb(0x1c1c1f);          // the recessed area behind the rows, a step below panelBg
+constexpr ImVec4 kRowSelected = theme::rgb(0xffffff, 0.09f); // the active row: lighter neutral, plus the accent bar
+constexpr ImVec4 kRowHover = theme::rgb(0xffffff, 0.11f);
+constexpr ImVec4 kRowPressed = theme::rgb(0xffffff, 0.14f);
 
 const SDL_DialogFileFilter kAppendFilters[] = {
     {"Models and projects", "obj;fbx;glb;gltf;ply;stl;GoZ;goz;usda;usd;usdz;sfproj"}, {"All files", "*"}};
@@ -124,8 +132,17 @@ void App::drawSubToolsContents() {
     const float rowH = ImGui::GetTextLineHeight() + 2.0f * cellPad.y;
     const float listH = rowH * float(std::min(count, kListRows)) + 2.0f;
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, cellPad);
-    if (ImGui::BeginTable("##subtools", 4, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter,
-                          ImVec2(-1, listH))) {
+    // The list sits in a recessed well, no outline. The active row is a lighter neutral with the accent only as the
+    // 2 px bar at its left edge (docs/ui-design.md §10), so it doesn't read as a dimmed orange fill.
+    {
+        const ImVec2 w0 = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->AddRectFilled(w0, ImVec2(w0.x + ImGui::GetContentRegionAvail().x, w0.y + listH),
+                                                  ImGui::ColorConvertFloat4ToU32(kListWell), style.FrameRounding);
+    }
+    ImGui::PushStyleColor(ImGuiCol_Header, kRowSelected);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kRowHover);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, kRowPressed);
+    if (ImGui::BeginTable("##subtools", 4, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX, ImVec2(-1, listH))) {
         const float eyeW = ImGui::GetTextLineHeight() * 1.2f;
         ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch);
         // Subdivision levels, as ZBrush lists them ("SDiv 3/5"); empty for meshes without levels.
@@ -165,6 +182,12 @@ void App::drawSubToolsContents() {
                     !isActive)
                     selectIndex = i;
                 if (!s.visible) ImGui::PopStyleColor();
+                if (isActive) {
+                    const ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+                    const float x = ImGui::TableGetCellBgRect(ImGui::GetCurrentTable(), 0).Min.x;
+                    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x, r0.y), ImVec2(x + 2.0f * scale, r1.y),
+                                                              theme::u32(theme::accent));
+                }
                 if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     renamingSubtool_ = s.id;
                     focusRename_ = true;
@@ -218,6 +241,7 @@ void App::drawSubToolsContents() {
         }
         ImGui::EndTable();
     }
+    ImGui::PopStyleColor(3);
     ImGui::PopStyleVar();
 
     if (renameIndex >= 0 && !renameTo.empty() && renameTo != doc_.subtools[size_t(renameIndex)].name)
@@ -262,6 +286,8 @@ void App::drawSubToolsContents() {
         confirm("Delete SubTool?", "Delete \"" + activeName + "\"? This can't be undone.", "Delete", "subtool_delete");
     ImGui::EndDisabled();
 
+    const float half2 = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
+    const float arrowW = ImGui::GetFrameHeight();
     ImGui::BeginDisabled(active <= 0);
     if (ImGui::ArrowButton("##up", ImGuiDir_Up)) runCommand("subtool_move", {{"direction", std::string("up")}});
     ImGui::EndDisabled();
@@ -274,11 +300,10 @@ void App::drawSubToolsContents() {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayNormal))
         ImGui::SetTooltip("Move down the list");
     ImGui::SameLine();
-    const float half2 = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
     const bool solo = count > 1 && visibleCount == 1 && doc_.activeSubtoolInfo().visible;
     ImGui::BeginDisabled(count < 2);
     if (solo) ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
-    if (ImGui::Button("Solo", ImVec2(half2, 0))) runCommand("subtool_solo");
+    if (ImGui::Button("Solo", ImVec2(half2 - 2.0f * (arrowW + style.ItemSpacing.x), 0))) runCommand("subtool_solo");
     if (solo) ImGui::PopStyleColor();
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
@@ -327,7 +352,9 @@ void App::drawSubToolsContents() {
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayNormal))
         ImGui::SetTooltip("One SubTool per disconnected piece");
+    if (fontSmall_) ImGui::PushFont(fontSmall_);
     ImGui::TextDisabled("Alt+click a SubTool to select it");
+    if (fontSmall_) ImGui::PopFont();
 }
 
 void App::drawSubToolPopups() {

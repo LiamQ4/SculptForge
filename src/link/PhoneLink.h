@@ -8,7 +8,8 @@
 //      <user library>/Captures/<yyyy-mm-dd_hhmmss>-<kind>/   (kind = splat | photo | ply)
 //    with a capture.json (kind, device, files, times); the app then runs the command for that kind;
 //  - AR requests: the active SubTool (or the scene), decimated and coloured, as USDZ (iPhone AR Quick Look) and
-//    GLB (Android Scene Viewer), re-exported after strokes while the phone is looking;
+//    GLB (Android: sent over the WebRTC link to the website's WebXR page), re-exported after strokes while the
+//    phone is looking;
 //  - the live face feed: link/FaceFeed.h messages over WebRTC (link/PhoneRtc.h) or HTTP, and face takes.
 // Security: everything but the page itself needs the session token (in the QR code's URL; the page also pairs
 // with a 6-digit code typed on the phone). The token changes every time the window opens and expires if no
@@ -188,8 +189,14 @@ public:
     bool receiveFaceMessage(const std::string& text, const std::string& transport, std::string& error);
     // Applies a WebRTC answer for the pending face link (the relay and the direct /rtc-answer path use it).
     bool acceptFaceAnswer(const std::string& sdp, std::string& error);
-    // The face page URL with the pending offer (creates one); for tests too.
-    bool createFaceLink(std::string& faceUrl, std::string& error);
+    // The face page URL with the pending offer (creates one); for tests too. With `ar`, the link is for the AR page
+    // (website/link/ar.html) instead: the phone asks for the sculpt over it, and each model published while it is
+    // open goes down it (`arScope` "subtool"/"scene" and `arSizeCm` are passed to the page, which asks with them).
+    bool createFaceLink(std::string& faceUrl, std::string& error, bool ar = false, const std::string& arScope = "subtool",
+                        float arSizeCm = 20.0f);
+    // An AR page message ({"type":"ar","scope","size"} asks for a model, {"type":"ar-ping"} says it's still
+    // looking); public for tests.
+    bool receiveArMessage(const std::string& text, std::string& error);
     // Relay message handling, exposed for tests: decrypts and applies an answer posted to the relay.
     bool acceptRelayMessage(const std::string& packed, std::string& error);
 
@@ -213,7 +220,9 @@ private:
     HttpResponse pair(const HttpRequest& request);
     HttpResponse requestAr(const HttpRequest& request);
     HttpResponse serveArModel(bool usdz);
-    HttpResponse faceLink();
+    HttpResponse faceLink(const HttpRequest& request);
+    void sendArModelToPage(); // the latest model (or error) to the AR page, if one is connected
+    void uploadArModel();     // the latest model, encrypted, to the relay for the AR page (Android Chrome)
     HttpResponse directAnswer(const HttpRequest& request);
     void relayLoop(std::string topic, std::string key, int64_t sinceUnix);
     std::vector<std::string> relayUrls() const;
@@ -248,6 +257,12 @@ private:
     std::unique_ptr<FaceRtc> rtc_;
     std::mutex faceLinkMutex_; // createFaceLink
     std::mutex rtcMutex_;      // rtc_: creating / answering the peer connection
+    uint64_t arSentVersion_ = 0; // the model version the AR page has (rtcMutex_)
+    // The AR page's copy on the relay (mutex_): Android Chrome can't reach this computer at all, so the model goes
+    // through the internet, encrypted with a key only the page has.
+    std::string arBlobUrl_, arBlobKey_;
+    uint64_t arBlobVersion_ = 0;
+    Clock::time_point arBlobUntil_{};
     std::string faceTransport_;
     bool faceConnected_ = false;
     FaceFrame face_;

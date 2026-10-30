@@ -62,7 +62,7 @@ All sizes are logical px at `uiScale_ = 1` and get multiplied by `uiScale_`. She
 | Top shelf | h 64 (two rows of 26 + padding) | from left-tray edge to right-tray edge |
 | Left shelf | w 88 (tiles 76x76 + 12 label) | between top and bottom shelf |
 | Right shelf | w 52 (buttons 44x40, icon + 10 px label) | between top and bottom shelf |
-| Bottom shelf | h 60 (tiles 40 icon + 12 label) | same span as top shelf |
+| Bottom shelf | h 78 (Medium tiles; Small h 60, Large h 96 - Preferences > Interface > Shelf tiles) | same span as top shelf |
 | Console (closed by default) | h 160, drag 100-400 | above bottom shelf, same span |
 | Tray divider | w 8 each side, always visible | top of palette bar to bottom |
 | Right tray | w 300 (1600 wide) / 320 (>=1920), drag 240-480 | palette bar bottom to window bottom |
@@ -130,7 +130,7 @@ CanvasRect canvasRect() const;                     // from Layout, recomputed ev
 - `pick`, `onMouseDown/Move`, the brush cursor, `onScreen`, `hide_rect` and polygroup overlays all convert window -> canvas coordinates in one helper.
 - Mouse events outside the canvas never start strokes or orbits, even when ImGui doesn't capture them (e.g. on gaps between shelf items).
 - Recording, `--render`, demos and `hideUi_` keep using the full window (`canvasRect()` returns the whole viewport when `hideUi_` is set).
-- The area outside the canvas is cleared to `shellBg`. The canvas itself keeps the current gradient background and gets a 1 px `#0e0e10` border.
+- The area outside the canvas is cleared to `shellBg`. The canvas itself has a neutral charcoal background with a soft radial vignette (no coloured gradient) and gets a 1 px `#0e0e10` border.
 
 ---
 
@@ -219,7 +219,7 @@ Icon + tiny label, 44x40 each. Groups are separated by 8 px.
 
 Toggles that are on get an accent background.
 
-### 3.6 Bottom shelf (h 60): quick brushes (ZBrush Core / Blender asset shelf)
+### 3.6 Bottom shelf (h 78, Medium tiles): quick brushes (ZBrush Core / Blender asset shelf)
 Default contents, in order: Standard, Clay, ClayBuildup, DamStandard, Move, Smooth, Inflate, Pinch, Flatten, Crease, Trim, SnakeHook, Layer, Nudge, Paint. Then any custom brushes the user adds, and a `[+]` tile that opens the brush picker in "add to shelf" mode.
 
 Tiles are 40 px brush thumbnails with the name under them. The active brush gets an accent outline. Hotkey digits (1-9, 0) are drawn small in the tile's top-left. Right-click a tile: "Remove from shelf", "Assign shortcut...". Right-click in the brush picker: "Add to bottom shelf".
@@ -305,12 +305,12 @@ Each tab shows a "Built-in" and a "User" folder at its root, as ZBrush shows Max
 
 `ThumbnailCache` gives every visual asset an `ImTextureID`:
 
-- **Meshes and projects**: rendered offscreen. Use `Renderer::renderToImage`, or a new `Renderer::renderMeshThumbnail(const Mesh&, matcap, size, rgba&)` if `renderToImage` is tied to the synced scene. Size 192x192 (displayed at 96, crisp on HiDPI), studio material, transparent background, camera framed on the bounds from a 3/4 front view (yaw 30, pitch 15).
+- **Meshes and projects**: rendered offscreen. Use `Renderer::renderToImage`, or a new `Renderer::renderMeshThumbnail(const Mesh&, matcap, size, rgba&)` if `renderToImage` is tied to the synced scene. Size 192x192 (displayed at 96, crisp on HiDPI), the default material (Soft Clay), transparent background, camera framed on the bounds from a 3/4 front view (yaw 30, pitch 15).
   - Mesh loading uses the existing importers on a worker thread. GL rendering happens on the main thread, **at most 2 thumbnails per frame**.
   - Projects: `saveProject` also writes `thumbnail.png` (256x256, current camera) into the `.sfproj` ZIP. The LightBox reads that instead of loading the whole project. Older projects without it are loaded on the worker and rendered once.
-- **Brushes**: on a worker, sculpt one S-curve stroke with the brush on a fresh `makePlane(96)` (or an icosphere sdiv 4 for Inflate/Pinch-type brushes) using the same `Sculptor`/recipe code as real strokes. Then render it with clay material, side-lit. Key = brush type or recipe JSON hash.
-- **Alphas**: the alpha's grayscale samples straight into a texture.
-- **Materials**: a sphere rendered with that matcap.
+- **Brushes**: on a worker, sculpt a mark of each brush's own shape on the front of a fresh clay ball (icosphere sdiv 6) using the same `Sculptor`/recipe code as real strokes, so brushes tell apart at shelf size: Standard an S, Clay three strips, ClayBuildup a hash of bars, DamStandard a diagonal cut, Crease a curved groove, Inflate a puffed ring, Pinch a sharp chevron, Smooth a bumpy ridge smoothed on one half, Flatten a planed dome, Trim a cut-down ridge, Layer a raised square frame, Nudge an upright ridge slid sideways, Move and SnakeHook pulls at the silhouette, recipes an S. The ball fills 97% of the tile. Every brush, Paint included, is the same ball, camera and material (Soft Clay), so the shelf reads as one icon set. Key = brush type or recipe JSON hash plus `kThumbnailVersion` (bump it whenever thumbnails are made differently, so stale disk-cached ones are remade).
+- **Alphas**: the alpha's samples, from the tile's charcoal (none) to the clay's lit grey (full effect), not white on black.
+- **Materials**: the same ball as the brushes, rendered with that matcap. Pickers list the default (Soft Clay) first (`matcapInListOrder`), then the others, then Studio.
 - **Images**: stb-decoded, downscaled to 192.
 - **Disk cache**: `<prefDir>/thumbs/<fnv1a64(kind|absPath|size|mtime|version)>.png` (stb_image_write is in third_party). In-memory LRU of 256 GL textures.
 - **Placeholder**: while a thumbnail is pending, the tile shows the Lucide glyph for its kind (`box`, `brush`, `circle-dashed`, `palette`, `image`, `sparkles`, `folder`) on `#2a2a2e`.
@@ -476,26 +476,38 @@ Clicking a preset applies it (layout only). Store Config makes it stick.
 
 ## 10. Theme
 
-Keep the existing orange accent. Make it denser and greyer, like ZBrush. Put this in `applyStyle()` (to be moved to `src/app/Theme.cpp`) as named constants:
+Keep the existing orange accent, but only for **one thing per group**: the current tool or mode (`ui::IsModeAction`). Everything else is charcoal grey. Put this in `applyStyle()` (to be moved to `src/app/Theme.cpp`) as named constants:
 
 | Token | Value | Use |
 |---|---|---|
-| `shellBg` | `#1e1e20` | shelves, trays, title strip, area around the canvas |
-| `panelBg` | `#252528` | palette drop-downs, tray contents, pop-ups (`WindowBg`, `PopupBg` at 98%) |
-| `header` | `#2e2e32` / hover `#3a3a3f` | palette and sub-palette headers |
-| `frame` | `#2b2b2f` / hover `#36363b` | slider and input frames |
-| `button` | `#38383c` / hover `#47474c` / pressed `#e8812a` | buttons |
-| `accent` | `#f0882e` (hover `#ff9a45`) | toggled-on buttons (bg accent, text `#ffffff`), slider grab, check marks, selected outline, LightBox active tab |
-| `text` / `textDim` | `#d8d8d8` / `#8c8c90` | |
-| `border` | `#121214` | 1 px between regions |
+| `shellBg` | `#1b1b1d` | shelves, trays, title strip, area around the canvas |
+| `panelBg` | `#222225` | palette drop-downs, tray contents, pop-ups (`WindowBg`, `PopupBg` at 98%) |
+| `header` | `#2b2b2f` / hover `#37373c` | palette and sub-palette headers |
+| `frame` | `#28282c` / hover `#323237` | slider and input frames |
+| `button` | `#333337` / hover `#414146` / pressed `#4e4e55` | buttons |
+| `accent` | `#f0882e` (hover `#ff9a45`) | the **current tool or mode** of a group (bg accent, text `#ffffff`): Draw/Move/Scale/Rotate, Sculpt/Paint, the brush, MaskPen/MaskLasso...; the 2 px underline of an option that is on; a slider bar only while dragging; LightBox active tab |
+| `toggleOff` | `#29292e` (hover `#36363c`), text `textOff` `#b4b4b9` (6.9:1) | options that are off: a dark chip with a readable label, so off never looks disabled (disabled is faded by alpha) |
+| `toggleOn` | `#4c4c53` (hover `#58585f`), text `textBright` `#f2f2f2` | options that are on (X, Rgb, Pressure > Strength, Mask, Menus): raised grey with a 2 px accent underline (a side bar on the right shelf), never a solid accent fill. Also the chosen side of a **choice** (`ui::IsChoiceAction`: Zadd \| Zsub), without the underline |
+| `trough` | `#2c2c31` | unselected segments of a mode or choice group |
+| `selection` | `#3a3a41` (active `#45454c`) | selected list rows (`ImGuiCol_Header`): a lighter neutral row, with a 2 px accent bar on the left where the list draws one |
+| `sliderFill` / `sliderBar` | white 9% / `#85858c` | the filled part of a `SliderInside` and the thin bar along its bottom (accent while dragging); plain slider grabs are `sliderBar` too |
+| `checkMark` / `checkBorder` | `#e6e6e8` / `#55555c` | check marks (neutral); the outline of an unchecked box (`ui::Checkbox`) |
+| `text` / `textOff` / `textDim` | `#d8d8d8` / `#b4b4b9` / `#8c8c90` | |
+| `border` | `#111113` | 1 px between regions |
 | `danger` | `#e5604a` | errors |
-| canvas | the existing gradient; 1 px `#0e0e10` frame | |
+| canvas | neutral charcoal, soft radial vignette (`kBgFS`); 1 px `#0e0e10` frame; vignette down to `shellBg` at the edges (no step at the seams); default material Soft Clay (matte warm grey: a steep upper-left key, a fill from the right, a warm ground bounce, a broad sheen along ridges and a cool rim on the lower right; light cavity, only above a smooth sphere's own curvature) | |
 
 Style:
 - Rounding: `WindowRounding 0` (shells), `PopupRounding 6`, `FrameRounding 3`, `GrabRounding 2`.
 - Spacing: `FramePadding (6,3)`, `ItemSpacing (4,4)`, `ItemInnerSpacing (4,4)`.
 - `ScrollbarSize 10`, `GrabMinSize 6`.
+- Top shelf hierarchy, by meaning: every item is the full row height in the 15 px font, so both rows share one baseline. Modes (Draw \| Move \| Scale \| Rotate, Sculpt \| Paint) and choices (Zadd \| Zsub) are 1 px-gap segments on `trough`; options (Front, Dynamic, X/Y/Z, Rgb, Pressure...) are separate `toggleOff` chips; LightBox / AI Brush plain buttons. The ActiveTris / TotalTris readout is one 12 px line on the row's centre line. The Draw palette uses the same looks (Pressure toggles are buttons there too) and 12 px dim section labels with a hairline.
+- Title strip: QuickSave, 1 2 3 and Menus are `toggleOff` chips; the readout is 12 px `textDim`, the status message 15 px `textBright` so it stands out.
+- Palette drop-downs open below the top shelf (under the palette bar when Tab hides the shelves), never over the tool rows.
 - Font: Inter Regular 15 x scale (as now). Shelf labels and tile captions 12 px (a second Inter size), help titles Inter SemiBold 15, console ProggyClean 13.
+- Trays (helpers in `src/app/Palettes.h`): two header levels only. A palette header is a filled bar (icon, bold title, chevron at the right). A sub-palette header is 22 px and quiet: title 8 px in, chevron at the right, no fill until hovered or open, an opaque hairline under it, no accent. The open section's content is indented 8 px (`tray::Section`), so it lines up with the header title. A group inside a section ("Project", "QRemesh", "Tablet") is `tray::GroupLabel`: 12 px `textDim` flush with the content, then a hairline; not `ImGui::SeparatorText`.
+- Tray controls: every slider is a `ui::SliderInside` (ints through `tray::SliderInt`), never a stock grab over its label. Check marks in palettes are the text colour (`tray::Style`), not the accent. A row of controls fills the line in equal halves or thirds; a number beside a button is a drag field of the same size (no tiny - / + buttons). The active row of a list (SubTools) is a lighter neutral (white ~9%) with a 2 px accent bar on its left, in a recessed well with no outline. Helper text is 12 px `textDim`.
+- The left tray's colour field is drawn by hand (`App::drawColorWidget`, Pickers.cpp): a rounded saturation/value square with a ring marker, a 10 px hue strip with a thin bar marker that stays inside its ends, and the main/second swatches as equal halves with a 1 px edge. One 4 px gap between all of them. The default main colour is a mid grey (second: white), so the swatches are neutral until the user picks a colour.
 
 ---
 

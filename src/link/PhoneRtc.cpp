@@ -1,5 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <cstdio>
+#include <cstdlib>
 #include "link/PhoneRtc.h"
 
 #include <condition_variable>
@@ -162,24 +164,39 @@ struct FaceRtc::Impl {
 
 namespace {
 
-rtc::DataChannelInit faceChannelInit() {
+rtc::DataChannelInit channelInit(FaceRtc::Mode mode) {
     rtc::DataChannelInit init;
     init.negotiated = true; // both sides open channel 0 themselves: no in-band announcement to lose
     init.id = 0;
-    init.reliability.unordered = true;
-    init.reliability.maxRetransmits = 0;
+    if (mode == FaceRtc::Mode::Face) {
+        init.reliability.unordered = true;
+        init.reliability.maxRetransmits = 0;
+    }
     return init;
 }
 
-rtc::Configuration localConfiguration() {
-    return rtc::Configuration(); // no STUN or TURN servers: the phone and this computer share a network
+const char* channelLabel(FaceRtc::Mode mode) { return mode == FaceRtc::Mode::Ar ? "ar" : "face"; }
+
+rtc::Configuration localConfiguration(uint16_t port = 0) {
+    rtc::Configuration config; // no STUN or TURN servers: the phone and this computer share a network
+    if (port) {
+        config.portRangeBegin = config.portRangeEnd = port;
+        config.enableIceUdpMux = true;
+    }
+    return config;
 }
 
 } // namespace
 
-FaceRtc::FaceRtc() : impl_(std::make_unique<Impl>()) {
+FaceRtc::FaceRtc(Mode mode, uint16_t icePort) : impl_(std::make_unique<Impl>()), mode_(mode), icePort_(icePort) {
     static std::once_flag logging;
-    std::call_once(logging, [] { rtc::InitLogger(rtc::LogLevel::None); });
+    // SCULPTFORGE_RTC_LOG=1 (2: every packet): WebRTC's own log (ICE candidates and checks) on stderr, for connection problems.
+    std::call_once(logging, [] {
+        const char* log = std::getenv("SCULPTFORGE_RTC_LOG");
+        rtc::InitLogger(!log || !*log || *log == '0' ? rtc::LogLevel::None
+                        : *log == '2'                    ? rtc::LogLevel::Verbose
+                                                         : rtc::LogLevel::Debug);
+    });
 }
 
 FaceRtc::~FaceRtc() { close(); }
@@ -192,7 +209,13 @@ FaceRtc::State FaceRtc::state() const {
 bool FaceRtc::createOffer(std::string& sdp, std::string& error, int timeoutMs) {
     close();
     try {
-        auto pc = std::make_shared<rtc::PeerConnection>(localConfiguration());
+        std::shared_ptr<rtc::PeerConnection> pc;
+        try {
+            pc = std::make_shared<rtc::PeerConnection>(localConfiguration(icePort_));
+        } catch (const std::exception&) {
+            if (!icePort_) throw;
+            pc = std::make_shared<rtc::PeerConnection>(localConfiguration()); // the port is taken: any port
+        }
         Impl* impl = impl_.get();
         auto setState = [this, impl](State s) {
             {
@@ -214,7 +237,7 @@ bool FaceRtc::createOffer(std::string& sdp, std::string& error, int timeoutMs) {
             else if (s == S::Failed) setState(State::Failed);
             else if (s == S::Disconnected || s == S::Closed) setState(State::Closed);
         });
-        auto channel = pc->createDataChannel("face", faceChannelInit());
+        auto channel = pc->createDataChannel(channelLabel(mode_), channelInit(mode_));
         channel->onOpen([setState] { setState(State::Connected); });
         channel->onClosed([setState] { setState(State::Closed); });
         channel->onMessage([this](rtc::message_variant m) {
@@ -237,6 +260,8 @@ bool FaceRtc::createOffer(std::string& sdp, std::string& error, int timeoutMs) {
             return false;
         }
         sdp = std::string(*description);
+        if (const char* log = std::getenv("SCULPTFORGE_RTC_LOG"); log && *log && *log != '0')
+            std::fprintf(stderr, "Offer:\n%s\n", sdp.c_str());
         if (sdp.find("a=candidate:") == std::string::npos) {
             error = "This computer has no network address the phone could reach";
             return false;
@@ -244,6 +269,13 @@ bool FaceRtc::createOffer(std::string& sdp, std::string& error, int timeoutMs) {
         impl->state = State::Offered;
         return true;
     } catch (const std::exception& e) {
+        if (icePort_) { // the fixed port is taken (another SculptForge): any port
+            const uint16_t port = icePort_;
+            icePort_ = 0;
+            const bool ok = createOffer(sdp, error, timeoutMs);
+            icePort_ = port;
+            return ok;
+        }
         error = std::string("WebRTC: ") + e.what();
         return false;
     }
@@ -260,6 +292,8 @@ bool FaceRtc::setAnswer(const std::string& sdp, std::string& error) {
         }
         impl_->state = State::Connecting;
     }
+    if (const char* log = std::getenv("SCULPTFORGE_RTC_LOG"); log && *log && *log != '0')
+        std::fprintf(stderr, "Phone's answer:\n%s\n", sdp.c_str());
     try {
         pc->setRemoteDescription(rtc::Description(sdp, rtc::Description::Type::Answer));
         return true;
@@ -279,6 +313,21 @@ bool FaceRtc::send(const std::string& text) {
     }
     try {
         return channel && channel->isOpen() && channel->send(text);
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool FaceRtc::sendBinary(const std::string& bytes) {
+    std::shared_ptr<rtc::DataChannel> channel;
+    {
+        std::lock_guard lock(impl_->mutex);
+        channel = impl_->channel;
+    }
+    try {
+        if (!channel || !channel->isOpen()) return false;
+        channel->send(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()); // false = queued, still sent
+        return true;
     } catch (const std::exception&) {
         return false;
     }
@@ -319,7 +368,13 @@ bool FaceRtc::answerForTest(const std::string& offerSdp, std::string& answerSdp,
         pc->onGatheringStateChange([done, once](rtc::PeerConnection::GatheringState s) {
             if (s == rtc::PeerConnection::GatheringState::Complete) std::call_once(*once, [&] { done->set_value(); });
         });
-        auto channel = pc->createDataChannel("face", faceChannelInit());
+        auto channel = pc->createDataChannel(channelLabel(mode_), channelInit(mode_));
+        if (onTestMessage)
+            channel->onMessage([handler = onTestMessage](rtc::message_variant m) {
+                if (const auto* text = std::get_if<std::string>(&m)) handler(*text, false);
+                else if (const auto* binary = std::get_if<rtc::binary>(&m))
+                    handler(std::string(reinterpret_cast<const char*>(binary->data()), binary->size()), true);
+            });
         pc->setRemoteDescription(rtc::Description(offerSdp, rtc::Description::Type::Offer));
         done->get_future().wait_for(std::chrono::milliseconds(timeoutMs));
         const auto description = pc->localDescription();
@@ -357,7 +412,7 @@ bool webrtcAvailable() { return false; }
 
 struct FaceRtc::Impl {};
 
-FaceRtc::FaceRtc() : impl_(std::make_unique<Impl>()) {}
+FaceRtc::FaceRtc(Mode mode, uint16_t icePort) : impl_(std::make_unique<Impl>()), mode_(mode), icePort_(icePort) {}
 FaceRtc::~FaceRtc() = default;
 FaceRtc::State FaceRtc::state() const { return State::Idle; }
 
@@ -370,6 +425,7 @@ bool FaceRtc::setAnswer(const std::string&, std::string& error) {
     return false;
 }
 bool FaceRtc::send(const std::string&) { return false; }
+bool FaceRtc::sendBinary(const std::string&) { return false; }
 void FaceRtc::close() {}
 bool FaceRtc::answerForTest(const std::string&, std::string&, std::string& error, int) {
     error = "Built without WebRTC";

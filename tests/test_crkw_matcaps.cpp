@@ -12,6 +12,12 @@ TEST(crkw_matcaps_are_listed_and_toon_is_banded) {
     for (const char* name : {"Gray", "Blue Gray", "Basic", "Terracotta", "Plasticine", "Sculpey", "Toon 2-Tone",
                              "Toon 3-Tone", "Toon Ink", "Gloss Plastic", "Jade", "Gold", "Gunmetal"})
         CHECK(findMatcap(name) > 6); // after the upstream seven, so saved indices keep their material
+    // v0.9.4 adds Soft Clay: keep all existing CRKW project material indices stable.
+    int savedIndex = 7;
+    for (const char* name : {"Gray", "Blue Gray", "Basic", "Terracotta", "Plasticine", "Sculpey", "Toon 2-Tone",
+                             "Toon 3-Tone", "Toon Ink", "Gloss Plastic", "Jade", "Gold", "Gunmetal"})
+        CHECK(findMatcap(name) == savedIndex++);
+    CHECK(defaultMatcap() == savedIndex);
     const int size = 128;
     // Share of the sphere's face covered by its `n` most common colours.
     auto flatness = [&](const char* name, size_t n) {

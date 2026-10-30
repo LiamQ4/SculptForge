@@ -56,6 +56,34 @@ systems. Preserve upstream license and attribution files.
 
 ## Local app and build
 
+### Upstream 0.9.4 integration (2026-10-30)
+
+Current CRKW camera, mask manager, automatic retopology, MetaHuman and texture
+work was checkpointed in `eb094f7` before merging release tag `v0.9.4` on
+`ckw/update-upstream-2026-10-30`.
+
+The material conflict combines upstream Soft Clay with all CRKW materials and
+toon shading. Soft Clay is appended after the existing CRKW materials, preserving
+all previously saved material indices; the picker lists Soft Clay first.
+The background conflict keeps CRKW's editable solid/gradient shader, colours
+and reset behavior. Upstream shelf sizes, interface changes, phone/AR fixes and
+0.9.4 build/export fixes are included. Update notifications remain disabled.
+
+Validation: the Windows Release build succeeded with WebRTC enabled. All 57,402
+core checks passed, as did every CRKW UI test. CTest passed 59/61 entries; only
+the previously documented `ui_lightbox` QuickSave help-text check and
+`ui_zbrush_feel` negative Focal Shift input check failed, at the same assertions
+as before. All six phone/AR relay tests also passed.
+
+Installed to `out/crkw-app` and verified that the installed executable is
+byte-identical to the validated build and reports file/product version 0.9.4.
+An installed-app UI smoke test passed with isolated settings; screenshots verify
+the CRKW workspace and the 0.9.4 What's New chapter. The prior executable is
+backed up at `out/sculptforge-crkw-pre-094.exe`.
+Logs: `out/crkw-094-configure.log`, `out/crkw-094-build.log`,
+`out/crkw-094-tests.log`, `out/crkw-094-link-tests.log`,
+`out/crkw-094-install.log`, and `out/crkw-094-installed-smoke.log`.
+
 ### Upstream 0.9.1 integration (2026-10-27)
 
 Local matcaps, symmetric mask shapes, clipboard image paste and isolated UI-test
