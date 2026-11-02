@@ -217,6 +217,29 @@ std::unique_ptr<Mesh> sculptBrushPreview(const BrushRecipe* recipe, int type) {
     case BrushType::Vdm: // one stamp of the built-in Horn
         stroke(d, nullptr, bt, {glm::vec3(0.0f, -0.05f, 2.0f)}, 0.45f, 0.5f, false);
         break;
+    case BrushType::KelvinGrab: // the silhouette pulled out into a smooth, bulging lobe
+        d.sculptor.kelvinlet.squash = 1.0f;
+        stroke(d, nullptr, bt, line({-0.45f, 0.45f, 2.0f}, {-0.8f, 0.8f, 2.0f}), 0.45f, 0.5f, false);
+        break;
+    case BrushType::KelvinTwist: // a raised bar twisted into an S
+        stroke(d, nullptr, BrushType::Standard, line({-0.5f, 0.0f, 2.0f}, {0.5f, 0.0f, 2.0f}), 0.16f, 1.0f, false);
+        stroke(d, nullptr, BrushType::Standard, line({-0.5f, 0.0f, 2.0f}, {0.5f, 0.0f, 2.0f}), 0.16f, 1.0f, false);
+        stroke(d, nullptr, bt, line({0.0f, 0.0f, 2.0f}, {0.45f, 0.0f, 2.0f}), 0.45f, 0.5f, false);
+        break;
+    case BrushType::KelvinScale: // a ring of bumps pinched toward the middle
+        for (int i = 0; i < 6; ++i) {
+            const float a = float(i) * kPi / 3.0f;
+            for (int pass = 0; pass < 3; ++pass)
+                stroke(d, nullptr, BrushType::Standard, {glm::vec3(0.4f * std::cos(a), 0.4f * std::sin(a), 2.0f)}, 0.12f, 1.0f, false);
+        }
+        stroke(d, nullptr, bt, line({0.0f, 0.0f, 2.0f}, {-0.5f, 0.0f, 2.0f}), 0.4f, 0.5f, false);
+        break;
+    case BrushType::KelvinSnake: // a tapering horn pulled out past the silhouette
+        stroke(d, nullptr, bt, line({0.3f, 0.3f, 2.0f}, {1.1f, 0.85f, 2.0f}), 0.24f, 0.5f, false);
+        break;
+    case BrushType::DetailClone: // a row of horns along a curve
+        stroke(d, nullptr, bt, arc(0.0f, -0.25f, 0.55f, kPi * 0.15f, kPi * 0.85f), 0.12f, 0.5f);
+        break;
     default: // Standard: a soft rounded S
         stroke(d, nullptr, bt, frontCurve(1.15f), 0.19f, 1.0f);
         break;
@@ -404,7 +427,7 @@ ImTextureID ThumbnailCache::alpha(const BrushAlpha& alpha) {
 ImTextureID ThumbnailCache::material(int matcap) {
     // By name: the built-in list can grow or change order between versions.
     const std::string key =
-        "material|" + std::string(matcap < 0 ? "Studio" : matcapName(matcap)) + "|" + std::to_string(kThumbnailVersion);
+        "material|" + (matcap < 0 ? std::string("Studio") : matcapKey(matcap)) + "|" + std::to_string(kThumbnailVersion);
     return request(
         hex64(fnv1a64(key)),
         [matcap] {

@@ -1,3 +1,5 @@
+run ui_look look=classic layout=zbrush
+input_style zbrush
 # Windows PNG and bitmap clipboard formats from Chromium/Codex. Bitmap size may legally be zero.
 run new_sphere subdivisions=2 ; uv_auto resolution=1024
 wait 0.2

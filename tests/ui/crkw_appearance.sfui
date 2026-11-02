@@ -1,3 +1,5 @@
+run ui_look look=classic layout=zbrush
+input_style zbrush
 # CRKW: GPU silhouette, editable background, compact settings, and reset-only controls.
 run new_sphere subdivisions=3
 run subtool_append type=cube name=Box

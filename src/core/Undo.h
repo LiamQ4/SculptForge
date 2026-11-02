@@ -5,8 +5,10 @@
 #include "core/BVH.h"
 #include "core/Dyntopo.h"
 #include "core/Mesh.h"
+#include "core/Micro.h"
 #include "core/Multires.h"
 #include "core/ThreadPool.h"
+#include "core/TileImage.h"
 
 #include <deque>
 #include <memory>
@@ -68,11 +70,21 @@ struct PackedTexels {
 
 // Old texels of the 64x64 tiles a texture-paint stroke touched in one layer (core/Texture.h);
 // applying swaps them with the texture.
+// Material channels (core/TextureChannels.h) are kept per (layer, channel) as the old tile pointers of the
+// channel's TileImage: nothing is copied, the tiles are shared with the image until it overwrites them.
+struct TextureChannelTiles {
+    int layer = -1;      // -1 = Base
+    uint8_t channel = 0; // Channel
+    std::vector<uint32_t> tiles;
+    std::vector<std::shared_ptr<TileImage::Tile>> old; // per tile; null = the image's fill
+    size_t bytes() const;
+};
 struct TextureTileUndo {
     int layer = -1;
-    PackedTexels texels;
+    PackedTexels texels; // base colour (no tiles when the stroke painted only material channels)
+    std::vector<TextureChannelTiles> channels;
     void swapWith(Mesh& mesh);
-    size_t bytes() const { return texels.bytes(); }
+    size_t bytes() const;
 };
 
 // The texture before a texture edit (create, delete, layer edits, conversions, fills). captureTexture
@@ -90,6 +102,32 @@ struct TextureStackUndo {
     size_t bytes() const;
 };
 
+// The UVs and UV flags (seams, pins; core/Uv.h) before a UV edit. capture() holds the whole arrays; commit()
+// (with the mesh after the edit) keeps only the corners that changed when that is smaller. Applying swaps them
+// with the mesh's, so the record then holds the inverse.
+struct UvUndo {
+    bool sparse = false;
+    std::vector<glm::vec2> uvs;      // whole: the old array (empty = the mesh had none)
+    std::vector<uint8_t> flags;      // whole: the old flags (empty = none)
+    UndoChannel<glm::vec2> uvCorners; // sparse: old UVs of changed corners
+    UndoChannel<uint8_t> flagCorners; // sparse: old flags of changed corners
+    static std::unique_ptr<UvUndo> capture(const Mesh& mesh);
+    void commit(const Mesh& mesh);
+    void swapWith(Mesh& mesh);
+    size_t bytes() const;
+};
+
+// The Selection Sets list before a set was stored, renamed, deleted or picked as the Morph target
+// (core/SelectionSets.h); applying swaps it with the mesh's. Sets are immutable and shared, so this holds pointers.
+struct SelectionSetsUndo {
+    std::shared_ptr<const SelectionSetList> list;
+    size_t bytes() const; // what only this step keeps alive
+};
+
+// Adding or removing a whole SubTool (Extract's Accept; core/Document.h). Applied by the undo / redo commands,
+// which see the whole scene: the record itself leaves the mesh alone.
+struct SubtoolStep;
+
 // "The active paint layer" for UndoRecord::captureColors.
 inline constexpr int kActivePaintLayer = -2;
 
@@ -106,6 +144,10 @@ inline constexpr int kActivePaintLayer = -2;
 //  - textureTiles / texture: texture-paint tiles of one layer, or the whole texture
 //  - subdiv: a subdivision level step or level edit (core/Multires.h), applied on its own
 //  - topology: the slots a dynamic-topology stroke changed (core/Dyntopo.h), applied before the channels
+//  - subtool: a SubTool added to the scene (Extract), taken out on undo and put back on redo
+//  - micro: the grid tiles a stroke on a micro level changed, or a whole micro level (core/Micro.h)
+//  - uvs: per triangle corner texture coordinates (restoring a selection set's UVs)
+//  - sets: the Selection Sets list (core/SelectionSets.h)
 // Record old values before changing them (ensureX() the attribute first);
 // undo allocates a missing attribute so values can always be restored.
 struct UndoRecord {
@@ -128,10 +170,16 @@ struct UndoRecord {
     std::unique_ptr<SubdivUndo> subdiv;
     std::optional<std::shared_ptr<const Json>> crkwMaskState;
     std::unique_ptr<TopologyUndo> topology;
+    std::shared_ptr<SubtoolStep> subtool; // (shared: SubtoolStep is defined in core/Document.h)
+    std::unique_ptr<UvUndo> uv;           // UVs, seams and pins (UV Editor, core/Uv.h)
+    std::unique_ptr<MicroUndo> micro;     // micro-displacement tiles of a stroke, or a micro level added / removed (core/Micro.h)
+    UndoChannel<glm::vec2> uvs;           // per corner (index = triangle * 3 + corner)
+    std::unique_ptr<SelectionSetsUndo> sets;
 
     bool empty() const {
         return positions.empty() && mask.empty() && colors.empty() && paintAlpha.empty() && hidden.empty() &&
-               polygroups.empty() && !mesh && !paint && !textureTiles && !texture && !subdiv && !topology && !crkwMaskState;
+               polygroups.empty() && !mesh && !paint && !textureTiles && !texture && !subdiv && !topology && !crkwMaskState && !subtool && !micro &&
+               uvs.empty() && !sets && !uv;
     }
     size_t approxBytes() const;
 
@@ -145,7 +193,24 @@ struct UndoRecord {
     static UndoRecord capturePolygroups(const Mesh& mesh, std::string label, std::span<const uint32_t> tris = {});
 };
 
+// Watches an UndoStack: the Sculpt Timeline (core/Timeline.h) keeps its history tree in step with it. Held by the
+// stack (UndoStack::listener), so it moves with it (each SubTool's history has its own).
+struct UndoListener {
+    virtual ~UndoListener() = default;
+    // A step was pushed (it is the stack's last undo step); `discardedRedo` holds the redo steps the push is about
+    // to drop (redo_.back() is the next redo) and may be moved from.
+    virtual void undoPushed(UndoRecord& pushed, std::deque<UndoRecord>& discardedRedo) = 0;
+    // Around UndoStack::undo / redo applying `r` to `mesh`.
+    virtual void undoApplying(UndoRecord& r, Mesh& mesh, bool isUndo) = 0;
+    virtual void undoApplied(UndoRecord& r, Mesh& mesh, bool isUndo) = 0;
+    virtual void undoDroppedOldest() = 0; // the byte budget dropped the oldest undo step
+    virtual void undoCleared() = 0;
+};
+
+class Timeline;
+
 class UndoStack {
+    friend class Timeline; // moves steps between undo and redo without applying them (core/Timeline.h)
 public:
     UndoStack() = default;
     UndoStack(UndoStack&&) = default; // move-only (records own mesh snapshots)
@@ -158,6 +223,11 @@ public:
     const std::string& undoLabel() const { return undo_.back().label; }
     const std::string& redoLabel() const { return redo_.back().label; }
     size_t undoCount() const { return undo_.size(); }
+    // The step the next undo / redo applies (null if none): after undo() the undone step is lastRedo().
+    UndoRecord* lastUndo() { return undo_.empty() ? nullptr : &undo_.back(); }
+    UndoRecord* lastRedo() { return redo_.empty() ? nullptr : &redo_.back(); }
+    // The undo step BACK places below the top (0 = the next undo), or null.
+    const UndoRecord* undoStep(size_t back) const { return back < undo_.size() ? &undo_[undo_.size() - 1 - back] : nullptr; }
 
     // Both rebuild/refit the BVH as needed.
     bool undo(Mesh& mesh, BVH& bvh);
@@ -169,6 +239,7 @@ public:
     size_t undoBytes() const;
 
     size_t byteBudget = size_t(1) << 30; // 1 GiB
+    std::shared_ptr<UndoListener> listener; // the Sculpt Timeline (core/Timeline.h), if one watches this history
 
 private:
     static void apply(UndoRecord& r, Mesh& mesh, BVH& bvh);

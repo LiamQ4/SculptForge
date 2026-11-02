@@ -7,14 +7,19 @@
 // through the subtool_* commands (core/SubTools.cpp).
 #include "app/App.h"
 #include "app/Theme.h"
+#include "app/I18n.h"
 #include "core/Multires.h"
+#include "render/GL.h"
 
+#include <cctype>
 #include <imgui_internal.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace sf {
 
@@ -23,15 +28,19 @@ namespace {
 constexpr float kClickSlopPx = 4.0f; // movement that turns an Alt+click into a drag
 constexpr int kListRows = 6;         // the list scrolls beyond this many SubTools
 // The SubTool list's colours; should become theme tokens (Theme.h).
-constexpr ImVec4 kListWell = theme::rgb(0x1c1c1f);          // the recessed area behind the rows, a step below panelBg
+// The recessed area behind the rows, a step below panelBg (the Classic look's #1c1c1f; other looks their shelf shade).
+ImVec4 listWell() { return theme::look.id == 0 ? theme::rgb(0x1c1c1f) : theme::shellBg; }
 constexpr ImVec4 kRowSelected = theme::rgb(0xffffff, 0.09f); // the active row: lighter neutral, plus the accent bar
 constexpr ImVec4 kRowHover = theme::rgb(0xffffff, 0.11f);
 constexpr ImVec4 kRowPressed = theme::rgb(0xffffff, 0.14f);
+constexpr ImVec4 kThumbWell = theme::rgb(0x000000, 0.22f); // behind a SubTool thumbnail (#43)
 
 const SDL_DialogFileFilter kAppendFilters[] = {
     {"Models and projects", "obj;fbx;glb;gltf;ply;stl;GoZ;goz;usda;usd;usdz;sfproj"}, {"All files", "*"}};
+const SDL_DialogFileFilter kInsertFilters[] = {{"Meshes (OBJ, PLY, GLB)", "obj;ply;glb;gltf"}, {"All files", "*"}};
 
 void SDLCALL onAppendChosen(void* userdata, const char* const* files, int) {
+    wakeMainLoop(); // a file dialog answered (maybe on another thread): redraw now
     if (!files || !files[0]) return;
     auto* req = static_cast<App::DialogRequest*>(userdata);
     req->app->queueFile(req->action, files[0]);
@@ -119,7 +128,62 @@ void App::subtoolClickRelease() {
     subtoolClickFrame_ = false;
 }
 
+void App::updateSubtoolThumbnails() {
+    // #43: what each SubTool looks like now; the schedule picks at most one to render this frame, from the GPU
+    // buffers syncScene just brought up to date (never a CPU render, never a re-upload: cheap on 30M+ meshes).
+    std::vector<uint32_t> ids;
+    ids.reserve(doc_.subtools.size());
+    const double now = double(SDL_GetTicksNS()) * 1e-9; // (the main loop's clock, as redrawAt_)
+    for (int i = 0; i < doc_.subtoolCount(); ++i) {
+        const SubTool& s = doc_.subtools[size_t(i)];
+        const Mesh& m = doc_.subtoolMesh(i);
+        const UndoStack& undo = i == doc_.activeSubtool ? doc_.undo : s.undo;
+        uint64_t key = undo.revision();
+        for (uint64_t part : {uint64_t(m.triangleCount()), uint64_t(m.vertexCount()), uint64_t(s.visible),
+                              uint64_t(s.shading), uint64_t(renderSettings_.matcap + 1), uint64_t(renderSettings_.showPolypaint)})
+            key = key * 1099511628211ull ^ part;
+        subtoolThumbSchedule_.observe(s.id, key, now);
+        ids.push_back(s.id);
+    }
+    for (uint32_t gone : subtoolThumbSchedule_.keepOnly(ids))
+        if (auto it = subtoolThumbs_.find(gone); it != subtoolThumbs_.end()) {
+            gl::DeleteTextures(1, &it->second);
+            subtoolThumbs_.erase(it);
+        }
+    const bool busy = drag_ != Drag::None || strokeFinishing_ || solverBusy() || doc_.sculptor.strokeActive();
+    uint32_t id = 0;
+    double wakeAt = 0.0;
+    if (subtoolThumbSchedule_.due(now, busy, id, wakeAt)) {
+        constexpr int kPixels = 96; // shown at about 34 px: crisp on HiDPI
+        std::vector<uint8_t> rgba;
+        std::string error;
+        if (renderer_.renderSubtoolThumbnail(id, 30.0f, -15.0f, kPixels, renderSettings_, rgba, error)) {
+            unsigned& tex = subtoolThumbs_[id];
+            if (!tex) gl::GenTextures(1, &tex);
+            gl::BindTexture(GL_TEXTURE_2D, tex);
+            gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            gl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            gl::TexImage2D(GL_TEXTURE_2D, 0, GLint(GL_RGBA8), kPixels, kPixels, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            gl::BindTexture(GL_TEXTURE_2D, 0);
+        }
+        subtoolThumbSchedule_.rendered(id); // (one that couldn't render, e.g. hidden before its first upload, waits for a change)
+        uint32_t next = 0;
+        if (subtoolThumbSchedule_.due(now, busy, next, wakeAt)) wakeAt = now; // another waiting: the next frame
+    }
+    if (wakeAt > 0.0) redrawAt_ = redrawAt_ > 0.0 ? std::min(redrawAt_, wakeAt) : wakeAt;
+}
+
+void App::clearSubtoolThumbnails() {
+    for (auto& [id, tex] : subtoolThumbs_) gl::DeleteTextures(1, &tex);
+    subtoolThumbs_.clear();
+    subtoolThumbSchedule_.keepOnly({});
+}
+
 void App::drawSubToolsContents() {
+    subtoolPanelShown_ = true; // its thumbnails keep up while it shows (updateSubtoolThumbnails)
     const float scale = uiScale_;
     const int count = doc_.subtoolCount();
     const int active = doc_.activeSubtool;
@@ -129,7 +193,10 @@ void App::drawSubToolsContents() {
     int selectIndex = -1, toggleIndex = -1, deleteIndex = -1, duplicateIndex = -1, renameIndex = -1;
     std::string renameTo;
     const ImVec2 cellPad(6.0f * scale, 4.0f * scale);
-    const float rowH = ImGui::GetTextLineHeight() + 2.0f * cellPad.y;
+    // Each row starts with the SubTool's thumbnail (#43); the text is centred on its height.
+    const float thumb = 30.0f * scale, lineH = ImGui::GetTextLineHeight();
+    const float innerH = std::max(lineH, thumb), textDy = (innerH - lineH) * 0.5f;
+    const float rowH = innerH + 2.0f * cellPad.y;
     const float listH = rowH * float(std::min(count, kListRows)) + 2.0f;
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, cellPad);
     // The list sits in a recessed well, no outline. The active row is a lighter neutral with the accent only as the
@@ -137,7 +204,7 @@ void App::drawSubToolsContents() {
     {
         const ImVec2 w0 = ImGui::GetCursorScreenPos();
         ImGui::GetWindowDrawList()->AddRectFilled(w0, ImVec2(w0.x + ImGui::GetContentRegionAvail().x, w0.y + listH),
-                                                  ImGui::ColorConvertFloat4ToU32(kListWell), style.FrameRounding);
+                                                  ImGui::ColorConvertFloat4ToU32(listWell()), style.FrameRounding);
     }
     ImGui::PushStyleColor(ImGuiCol_Header, kRowSelected);
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kRowHover);
@@ -157,7 +224,10 @@ void App::drawSubToolsContents() {
             ImGui::PushID(int(s.id));
             ImGui::TableNextRow(ImGuiTableRowFlags_None, rowH);
             ImGui::TableSetColumnIndex(0);
+            const ImVec2 thumbAt = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + thumb + 6.0f * scale);
             if (renamingSubtool_ == s.id) {
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + textDy);
                 ImGui::SetNextItemWidth(-1);
                 if (focusRename_) {
                     ImGui::SetKeyboardFocusHere();
@@ -176,11 +246,14 @@ void App::drawSubToolsContents() {
                 }
             } else {
                 if (!s.visible) ImGui::PushStyleColor(ImGuiCol_Text, style.Colors[ImGuiCol_TextDisabled]);
+                ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.0f, 0.5f));
                 if (ImGui::Selectable(s.name.c_str(), isActive,
                                       ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap |
-                                          ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_NoAutoClosePopups) &&
+                                          ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_NoAutoClosePopups,
+                                      ImVec2(0.0f, innerH)) &&
                     !isActive)
                     selectIndex = i;
+                ImGui::PopStyleVar();
                 if (!s.visible) ImGui::PopStyleColor();
                 if (isActive) {
                     const ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
@@ -194,19 +267,19 @@ void App::drawSubToolsContents() {
                     std::snprintf(renameBuffer_, sizeof renameBuffer_, "%s", s.name.c_str());
                 }
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-                    ImGui::SetTooltip("%s\n%zu vertices, %zu triangles%s%s\nClick to select, double-click to rename",
+                    ImGui::SetTooltip(tr("%s\n%zu vertices, %zu triangles%s%s\nClick to select, double-click to rename"),
                                       s.name.c_str(), doc_.subtoolMesh(i).vertexCount(), doc_.subtoolMesh(i).triangleCount(),
                                       subdivLevelCount(doc_.subtoolMesh(i)) ? ", " : "",
                                       subdivLevelText(doc_.subtoolMesh(i)).c_str());
                 if (ImGui::BeginPopupContextItem("##row")) {
                     ImGui::TextDisabled("%s", s.name.c_str());
-                    if (ImGui::MenuItem("Rename")) {
+                    if (ImGui::MenuItem(tr("Rename"))) {
                         renamingSubtool_ = s.id;
                         focusRename_ = true;
                         std::snprintf(renameBuffer_, sizeof renameBuffer_, "%s", s.name.c_str());
                     }
-                    if (ImGui::MenuItem("Duplicate")) duplicateIndex = i;
-                    if (ImGui::MenuItem("Delete...", nullptr, false, count > 1)) deleteIndex = i;
+                    if (ImGui::MenuItem(tr("Duplicate"))) duplicateIndex = i;
+                    if (ImGui::MenuItem(tr("Delete..."), nullptr, false, count > 1)) deleteIndex = i;
                     ImGui::EndPopup();
                 }
                 if (isActive && listedActiveSubtool_ != s.id) {
@@ -214,19 +287,35 @@ void App::drawSubToolsContents() {
                     listedActiveSubtool_ = s.id;
                 }
             }
+            {
+                // The thumbnail, or a quiet placeholder until it's rendered (updateSubtoolThumbnails).
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 t1(thumbAt.x + thumb, thumbAt.y + thumb);
+                dl->AddRectFilled(thumbAt, t1, ImGui::ColorConvertFloat4ToU32(kThumbWell), theme::rounding(3.0f * scale));
+                const auto tex = subtoolThumbs_.find(s.id);
+                if (tex != subtoolThumbs_.end() && tex->second)
+                    dl->AddImageRounded(ImTextureID(uintptr_t(tex->second)), thumbAt, t1, ImVec2(0, 0), ImVec2(1, 1),
+                                        IM_COL32(255, 255, 255, s.visible ? 255 : 110), theme::rounding(3.0f * scale));
+                else
+                    dl->AddCircle(ImVec2(thumbAt.x + thumb * 0.5f, thumbAt.y + thumb * 0.5f), thumb * 0.28f,
+                                  ImGui::GetColorU32(style.Colors[ImGuiCol_TextDisabled]), 0, 1.0f * scale);
+            }
             ImGui::TableSetColumnIndex(1);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + textDy);
             if (const std::string sdiv = subdivLevelText(doc_.subtoolMesh(i)); !sdiv.empty()) {
                 ImVec4 col = style.Colors[isActive ? ImGuiCol_Text : ImGuiCol_TextDisabled];
                 if (isActive) col.w *= 0.75f;
                 ImGui::TextColored(col, "%s", sdiv.c_str());
             }
             ImGui::TableSetColumnIndex(2);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + textDy);
             const std::string tris = shortCount(doc_.subtoolMesh(i).triangleCount());
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(tris.c_str()).x);
             ImVec4 trisCol = style.Colors[isActive ? ImGuiCol_Text : ImGuiCol_TextDisabled];
             if (isActive) trisCol.w *= 0.75f; // readable on the highlight
             ImGui::TextColored(trisCol, "%s", tris.c_str());
             ImGui::TableSetColumnIndex(3);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + textDy);
             const ImVec2 eyePos = ImGui::GetCursorScreenPos();
             const ImVec2 eyeSize(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeight());
             if (ImGui::InvisibleButton(("##eye " + s.name).c_str(), eyeSize)) toggleIndex = i;
@@ -262,28 +351,68 @@ void App::drawSubToolsContents() {
     };
     if (deleteIndex >= 0) {
         if (deleteIndex != doc_.activeSubtool) runCommand("subtool_select", {{"index", double(deleteIndex)}});
-        confirm("Delete SubTool?", "Delete \"" + doc_.activeSubtoolInfo().name + "\"? This can't be undone.", "Delete",
+        confirm("Delete Part?", "Delete \"" + doc_.activeSubtoolInfo().name + "\"? This can't be undone.", "Delete",
                 "subtool_delete");
     }
     const float third = (ImGui::GetContentRegionAvail().x - 2 * style.ItemSpacing.x) / 3.0f;
-    if (ImGui::Button("Append", ImVec2(third, 0))) ImGui::OpenPopup("##append");
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("Add a new SubTool beside the model");
+    if (ImGui::Button(tr("Append"), ImVec2(third, 0))) ImGui::OpenPopup("##append");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("%s", tr("Add a new Part beside the model"));
     if (ImGui::BeginPopup("##append")) {
-        if (ImGui::MenuItem("Sphere")) runCommand("subtool_append", {{"type", std::string("sphere")}});
-        if (ImGui::MenuItem("Cube")) runCommand("subtool_append", {{"type", std::string("cube")}});
-        if (ImGui::MenuItem("Plane")) runCommand("subtool_append", {{"type", std::string("plane")}});
+        if (ImGui::MenuItem(tr("Sphere"))) runCommand("subtool_append", {{"type", std::string("sphere")}});
+        if (ImGui::MenuItem(tr("Cube"))) runCommand("subtool_append", {{"type", std::string("cube")}});
+        if (ImGui::MenuItem(tr("Plane"))) runCommand("subtool_append", {{"type", std::string("plane")}});
+        for (const char* t : {"cylinder", "cone", "torus", "capsule", "icosphere", "quadsphere"}) { // #31
+            std::string label = t;
+            label[0] = char(std::toupper(static_cast<unsigned char>(label[0])));
+            if (label == "Quadsphere") label = "Quad Sphere";
+            if (ImGui::MenuItem(label.c_str())) runCommand("subtool_append", {{"type", std::string(t)}});
+        }
         ImGui::Separator();
-        if (ImGui::MenuItem("From file..."))
+        if (ImGui::BeginMenu(tr("Insert on the model"))) { // #34: drag on the surface to place it
+            for (const char* t : {"sphere", "cube", "cylinder", "cone", "torus", "capsule", "quadsphere"}) {
+                std::string label = t;
+                label[0] = char(std::toupper(static_cast<unsigned char>(label[0])));
+                if (label == "Quadsphere") label = "Quad Sphere";
+                if (ImGui::MenuItem((label + "##insert").c_str(), nullptr, insertType_ == t)) { // (Append's own Cone is beside it)
+                    insertType_ = t;
+                    status_ = "Insert " + label + ": drag on the model (the drag sets its size). Esc stops.";
+                }
+            }
+            ImGui::Separator();
+            // Your own mesh (#34): a copy of another SubTool, or a model file you choose.
+            if (ImGui::BeginMenu(tr("Active Part's copy..."), count > 1)) {
+                for (int i = 0; i < count; ++i) {
+                    if (i == active) continue;
+                    const std::string& name = doc_.subtools[size_t(i)].name;
+                    const bool chosen = insertType_ == "mesh" && insertMeshKey_ == "subtool" && insertMeshValue_ == name;
+                    if (ImGui::MenuItem((name + "##insertcopy" + std::to_string(i)).c_str(), nullptr, chosen)) {
+                        insertType_ = "mesh";
+                        insertMeshKey_ = "subtool";
+                        insertMeshValue_ = name;
+                        status_ = "Insert a copy of " + name + ": drag on the model (the drag sets its size). Esc stops.";
+                    }
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayNormal))
+                ImGui::SetTooltip(count > 1 ? "Insert a copy of another Part into the active one"
+                                            : "Append another Part first");
+            if (ImGui::MenuItem(tr("From file...##insert")))
+                SDL_ShowOpenFileDialog(onAppendChosen, &dialogRequests_[int(FileAction::InsertMesh)], window_,
+                                       kInsertFilters, 2, nullptr, false);
+            ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem(tr("From file...")))
             SDL_ShowOpenFileDialog(onAppendChosen, &dialogRequests_[int(FileAction::AppendSubtool)], window_,
                                    kAppendFilters, 2, nullptr, false);
         ImGui::EndPopup();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Duplicate", ImVec2(third, 0))) runCommand("subtool_duplicate");
+    if (ImGui::Button(tr("Duplicate"), ImVec2(third, 0))) runCommand("subtool_duplicate");
     ImGui::SameLine();
     ImGui::BeginDisabled(count < 2);
-    if (ImGui::Button("Delete...", ImVec2(third, 0)))
-        confirm("Delete SubTool?", "Delete \"" + activeName + "\"? This can't be undone.", "Delete", "subtool_delete");
+    if (ImGui::Button(tr("Delete..."), ImVec2(third, 0)))
+        confirm("Delete Part?", "Delete \"" + activeName + "\"? This can't be undone.", "Delete", "subtool_delete");
     ImGui::EndDisabled();
 
     const float half2 = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
@@ -292,42 +421,42 @@ void App::drawSubToolsContents() {
     if (ImGui::ArrowButton("##up", ImGuiDir_Up)) runCommand("subtool_move", {{"direction", std::string("up")}});
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("Move up the list");
+        ImGui::SetTooltip("%s", tr("Move up the list"));
     ImGui::SameLine();
     ImGui::BeginDisabled(active >= count - 1);
     if (ImGui::ArrowButton("##down", ImGuiDir_Down)) runCommand("subtool_move", {{"direction", std::string("down")}});
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("Move down the list");
+        ImGui::SetTooltip("%s", tr("Move down the list"));
     ImGui::SameLine();
     const bool solo = count > 1 && visibleCount == 1 && doc_.activeSubtoolInfo().visible;
     ImGui::BeginDisabled(count < 2);
     if (solo) ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
-    if (ImGui::Button("Solo", ImVec2(half2 - 2.0f * (arrowW + style.ItemSpacing.x), 0))) runCommand("subtool_solo");
+    if (ImGui::Button(tr("Solo"), ImVec2(half2 - 2.0f * (arrowW + style.ItemSpacing.x), 0))) runCommand("subtool_solo");
     if (solo) ImGui::PopStyleColor();
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip(solo ? "Show the other SubTools again" : "Show only the active SubTool");
+        ImGui::SetTooltip(solo ? "Show the other Parts again" : "Show only the active Part");
     ImGui::SameLine();
     ImGui::BeginDisabled(visibleCount == count);
-    if (ImGui::Button("Unhide all", ImVec2(half2, 0))) runCommand("subtool_show_all");
+    if (ImGui::Button(tr("Unhide all"), ImVec2(half2, 0))) runCommand("subtool_show_all");
     ImGui::EndDisabled();
 
     const float half = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
     ImGui::BeginDisabled(active >= count - 1);
-    if (ImGui::Button("Merge down...", ImVec2(half, 0)))
+    if (ImGui::Button(tr("Merge down..."), ImVec2(half, 0)))
         confirm("Merge Down?",
                 "Merge \"" + doc_.subtools[size_t(std::min(active + 1, count - 1))].name + "\" into \"" + activeName +
                     "\"? This can't be undone,\nbut Split groups separates them again.",
                 "Merge", "subtool_merge_down");
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("Merge the active SubTool with the one below it");
+        ImGui::SetTooltip("%s", tr("Merge the active Part with the one below it"));
     ImGui::SameLine();
     ImGui::BeginDisabled(visibleCount < 2);
-    if (ImGui::Button("Merge visible...", ImVec2(half, 0)))
+    if (ImGui::Button(tr("Merge visible..."), ImVec2(half, 0)))
         confirm("Merge Visible?",
-                "Merge the " + std::to_string(visibleCount) + " visible SubTools into one? This can't be undone,\n"
+                "Merge the " + std::to_string(visibleCount) + " visible Parts into one? This can't be undone,\n"
                 "but Split groups separates them again.",
                 "Merge", "subtool_merge_visible");
     ImGui::EndDisabled();
@@ -342,18 +471,18 @@ void App::drawSubToolsContents() {
                                std::any_of(g.begin(), g.end(), [&](uint32_t id) { return id != g.front(); });
     }
     ImGui::BeginDisabled(!splitGroupsPossible_);
-    if (ImGui::Button("Split groups", ImVec2(half, 0))) runCommand("subtool_split_groups");
+    if (ImGui::Button(tr("Split groups"), ImVec2(half, 0))) runCommand("subtool_split_groups");
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("One SubTool per polygroup");
+        ImGui::SetTooltip("%s", tr("One Part per face group"));
     ImGui::SameLine();
     ImGui::BeginDisabled(doc_.mesh.triangleCount() == 0);
-    if (ImGui::Button("Split parts", ImVec2(half, 0))) runCommand("subtool_split_parts");
+    if (ImGui::Button(tr("Split parts"), ImVec2(half, 0))) runCommand("subtool_split_parts");
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("One SubTool per disconnected piece");
+        ImGui::SetTooltip("%s", tr("One Part per disconnected piece"));
     if (fontSmall_) ImGui::PushFont(fontSmall_);
-    ImGui::TextDisabled("Alt+click a SubTool to select it");
+    ImGui::TextDisabled("%s", tr("Alt+click a Part to select it"));
     if (fontSmall_) ImGui::PopFont();
 }
 
@@ -373,7 +502,7 @@ void App::drawSubToolPopups() {
         runCommand(subtoolConfirm_.command);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(w, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+    if (ImGui::Button(tr("Cancel"), ImVec2(w, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
 }
 

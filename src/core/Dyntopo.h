@@ -23,9 +23,11 @@
 
 #include "core/BVH.h"
 #include "core/Mesh.h"
+#include "core/Symmetry.h"
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -41,7 +43,16 @@ struct DyntopoSettings {
     // true: one detail size for the whole mesh, relative to its size.
     bool constantDetail = false;
     float detail = 0.5f; // 0 (coarse) .. 1 (fine)
+    // How much Smooth (Shift) remeshes while dynamic topology is on (from the discussions): 0 = smooth only, the
+    // topology stays; 1 (the default, as before) = it remeshes toward twice the edge length, so smoothing also
+    // simplifies. In between it remeshes toward 1 + smoothRemesh times the edge length.
+    float smoothRemesh = 1.0f;
 };
+
+// The edge-length scale Smooth remeshes with (0 = it doesn't remesh): 1 + smoothRemesh, as above.
+inline float dyntopoSmoothScale(const DyntopoSettings& s) {
+    return s.smoothRemesh <= 0.005f ? 0.0f : 1.0f + std::min(s.smoothRemesh, 1.0f);
+}
 
 // The edge length dabs of world radius `radius` remesh towards, on a mesh whose bounding box diagonal is `diagonal`.
 float dyntopoEdgeLength(const DyntopoSettings& s, float radius, float diagonal);
@@ -95,10 +106,11 @@ struct DyntopoStats {
 // starts recording, finish() ends the stroke.
 class DynamicTopology {
 public:
-    // Remeshes within `radius` of `center` and of its mirror images (`mirrors` as Sculptor::mirrors makes them,
-    // the identity first) towards edges of `edgeLength`. Returns false when nothing changed.
+    // Remeshes within `radius` of `center` and of its symmetric copies (`mirrors` as Sculptor::copies makes them:
+    // mirror images and radial turns, the identity first) towards edges of `edgeLength`. Returns false when
+    // nothing changed.
     bool remesh(Mesh& mesh, BVH& bvh, const glm::vec3& center, float radius, float edgeLength,
-                std::span<const glm::vec3> mirrors);
+                std::span<const SymCopy> mirrors);
     // The vertices the last remesh renumbered (old slot, new slot), for per-vertex stroke state.
     std::span<const std::pair<uint32_t, uint32_t>> movedVertices() const { return moved_; }
     // The vertex slots the last remesh added to the stroke's undo record (their stroke-start state is there).
@@ -157,6 +169,9 @@ private:
     bool boundaryVertex(uint32_t v) const;
     float len2(uint32_t a, uint32_t b) const;
     bool inside(uint32_t a, uint32_t b, bool mirrored = false) const;
+    // An edge to remesh: under the brush, or under a mirror image of it with no image on the brush's side (an
+    // asymmetric mesh: that side is remeshed on its own).
+    bool candidate(uint32_t a, uint32_t b) const;
     glm::vec3 faceNormalAt(uint32_t v) const;
     // Symmetry: the mirror images of vertex v (kNone where unknown).
     uint32_t mirrorOf(size_t mirror, uint32_t v) const;
@@ -189,7 +204,8 @@ private:
     // The current remesh.
     glm::vec3 center_{0.0f};
     float radius_ = 0.0f, target_ = 0.0f, splitLen2_ = 0.0f, collapseLen2_ = 0.0f, eps_ = 0.0f;
-    std::vector<glm::vec3> mirrorSigns_; // without the identity
+    std::vector<SymCopy> mirrorSigns_; // the symmetric copies, without the identity
+    std::vector<size_t> mirrorInverse_; // per copy, the index (in mirrorSigns_) of its inverse
     // Per mirror: each vertex's image (valid where stamp == mirrorStamp_, so a new remesh forgets them all).
     struct MirrorMap {
         std::vector<uint32_t> to, stamp;
@@ -202,11 +218,13 @@ private:
     std::vector<uint8_t> deadV_, deadT_;
     std::vector<uint32_t> freeV_, freeT_;
     std::vector<uint32_t> changedV_, changedT_, regionTris_, slivers_;
+    std::vector<uint32_t> mirrorTris_; // the triangles under the brush's mirror images (queryRegion)
     std::vector<uint8_t> changedVFlag_;
     std::vector<Edge> heap_;
     std::vector<std::pair<uint32_t, uint32_t>> moved_;
     std::vector<uint32_t> recordedNow_;
     mutable bool orbitIncomplete_ = false; // the last orbit() missed a mirror image
+    mutable std::vector<std::pair<uint32_t, uint32_t>> orbitScratch_; // candidate()
     size_t ops_ = 0, maxOps_ = 0;
     mutable std::vector<uint32_t> scratch_, scratch2_, ringA_, ringB_, ringC_, lockScratch_;
 };

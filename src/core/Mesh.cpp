@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Mesh.h"
 #include "core/Multires.h"
+#include "core/Micro.h"
 #include "core/AtomicRef.h"
 #include "core/Prefetch.h"
 #include "core/ThreadPool.h"
@@ -154,6 +155,7 @@ void Mesh::sanitizeAttributes() {
     if (!polygroups.empty() && polygroups.size() != triangles.size()) clearPolygroups();
     if (!hidden.empty() && hidden.size() != triangles.size()) clearHidden();
     if (!uvs.empty() && uvs.size() != triangles.size() * 3) std::vector<glm::vec2>().swap(uvs);
+    if (!uvFlags.empty() && uvFlags.size() != triangles.size() * 3) std::vector<uint8_t>().swap(uvFlags);
     if (!quadPartners.empty() && quadPartners.size() != triangles.size()) clearQuads();
     // Quad pairs must be mutual and share an edge: unpair anything an edit or a malformed file left behind.
     bool anyQuad = false;
@@ -171,6 +173,7 @@ void Mesh::sanitizeAttributes() {
     if (!anyQuad) clearQuads();
     sanitizePaintLayers(*this);
     if (multires && !subdivMatches(*this)) multires.reset();
+    if (micro && !microMatches(*this)) micro.reset();
 }
 
 void Mesh::rebuildTopology() {
@@ -451,6 +454,33 @@ IndexRing Mesh::implicitTriangles(uint32_t v) const {
     return r;
 }
 
+IndexRing Mesh::quadNeighbors(uint32_t v) const {
+    const IndexRing ring = neighbors(v);
+    if (ring.size() > IndexRing::kCapacity) return ring; // (a fan this wide is no quad mesh)
+    // The far ends of the diagonals at v (at most one per triangle around it).
+    uint32_t skip[IndexRing::kCapacity];
+    uint32_t ns = 0;
+    for (uint32_t t : vertexTriangles(v)) {
+        const uint32_t u = quadPartnerAt(t);
+        if (u == kNoQuad) continue;
+        const int e = quadDiagonal(t, u);
+        if (e < 0) continue;
+        const glm::uvec3& tri = triangles[t];
+        const uint32_t a = tri[e], b = tri[(e + 1) % 3];
+        if (a == v || b == v) skip[ns++ % IndexRing::kCapacity] = a == v ? b : a;
+    }
+    if (ns == 0) return ring;
+    IndexRing r;
+    uint32_t n = 0;
+    for (uint32_t w : ring) {
+        bool diagonal = false;
+        for (uint32_t i = 0; i < std::min<uint32_t>(ns, IndexRing::kCapacity) && !diagonal; ++i) diagonal = skip[i] == w;
+        if (!diagonal) r.buf_[n++] = w;
+    }
+    r.size_ = n;
+    return n ? r : ring;
+}
+
 IndexRing Mesh::implicitNeighbors(uint32_t v) const {
     // The ring follows from the same layout: Catmull-Clark joins a corner to the edge points of its edges and the
     // face points of its polygons, an edge point to the edge's ends and face points, and a face point to the
@@ -470,7 +500,10 @@ IndexRing Mesh::implicitNeighbors(uint32_t v) const {
         if (tp.catmullClark && ia.sides) { // one corner per polygon around v, ascending
             for (uint32_t k = ia.cornerOffsets[v]; k < ia.cornerOffsets[v + 1]; ++k) out[n++] = nf + ia.corners[k] / 4;
         } else if (tp.catmullClark) {
-            uint32_t* faces = out + n;
+            // Each polygon is listed by both its edges at v: gathered apart (up to 2 x valence) and made unique
+            // before joining the ring, which then holds valence + polygons <= 2 x valence (#16: gathered after
+            // the edge points, a fan centre of 22 triangles needed 66 slots and overran the ring).
+            uint32_t faces[IndexRing::kCapacity];
             uint32_t m = 0;
             for (uint32_t k = k0; k < k1; ++k) {
                 const glm::uvec2 f = tp.edgeFaces[tp.vertEdges[k]];
@@ -478,7 +511,9 @@ IndexRing Mesh::implicitNeighbors(uint32_t v) const {
                 if (f.y != kNone) faces[m++] = nf + f.y;
             }
             sortSmall(faces, m);
-            n += uniqueSmall(faces, m);
+            m = uniqueSmall(faces, m);
+            std::copy(faces, faces + m, out + n);
+            n += m;
         }
     } else if (v < nf) {
         const uint32_t e = v - nv;
@@ -579,6 +614,22 @@ void Mesh::clearDirty() {
 void Mesh::recomputeAllNormals() {
     // Area-weighted face normals summed in triangle order (each vertex's sum in the same order as
     // updateNormals adds them); the faces and the normalising run in parallel.
+    const bool listed = vtOffsets_.size() == positions.size() + 1 && (!vtEnds_.empty() || vtList_.size() == triangles.size() * 3);
+    if (implicit_ || listed) {
+        // With the topology: each vertex sums its own triangles (listed in ascending order, so in the same order
+        // as the serial sum below, and to the same bits), in parallel, without a face array (12 bytes a triangle).
+        normals.resize(positions.size());
+        poolFor(positions.size(), [&](size_t b, size_t e) {
+            for (size_t v = b; v < e; ++v) {
+                glm::vec3 sum(0.0f);
+                for (uint32_t t : vertexTriangles(uint32_t(v))) sum += faceNormal(positions, triangles[t]);
+                const float len = glm::length(sum);
+                normals[v] = len > 1e-20f ? sum / len : glm::vec3(0, 1, 0);
+            }
+        }, 1 << 14);
+        markAllDirty();
+        return;
+    }
     std::vector<glm::vec3> faces(triangles.size());
     poolFor(triangles.size(), [&](size_t b, size_t e) {
         for (size_t i = b; i < e; ++i) faces[i] = faceNormal(positions, triangles[i]);
@@ -596,14 +647,11 @@ void Mesh::recomputeAllNormals() {
     markAllDirty();
 }
 
-void Mesh::updateNormals(std::span<const uint32_t> verts) {
+void Mesh::updateNormals(std::span<const uint32_t> verts, float* curvature) {
     // The vertices whose normal changes: the moved ones and every neighbour, gathered as a set and listed in
     // index order; then each one's normal from its faces, in its triangle order (as recomputeAllNormals sums
     // them). The set, and every normal computed from it, doesn't depend on the thread count.
-    const size_t nv = positions.size();
-    if (!implicit_ && adjOffsets_.size() != nv + 1) return; // no topology
-    growDirtyBlocks((nv + kDirtyBlock - 1) / kDirtyBlock);
-    if (normalBits_.capacity() < nv) normalBits_.resize(nv);
+    if (!beginNormalSet()) return;
     normalBits_.insertParallel(verts.size(), 4096, [&](size_t b, size_t e, IndexBits& set) {
         for (size_t i = b; i < e; ++i) {
             const uint32_t v = verts[i];
@@ -611,6 +659,50 @@ void Mesh::updateNormals(std::span<const uint32_t> verts) {
             for (uint32_t u : neighbors(v)) set.insertLocal(u);
         }
     });
+    finishNormals(curvature);
+}
+
+void Mesh::updateNormalsAround(size_t count, size_t grain, const std::function<void(size_t, size_t, IndexBits&)>& fill,
+                               float* curvature) {
+    if (!beginNormalSet()) return;
+    normalBits_.insertParallel(count, grain, fill);
+    finishNormals(curvature);
+}
+
+void Mesh::markDirtyAround(size_t count, size_t grain, const std::function<void(size_t, size_t, IndexBits&)>& fill) {
+    if (!beginNormalSet()) return;
+    normalBits_.insertParallel(count, grain, fill);
+    finishNormals(nullptr, false);
+}
+
+float Mesh::curvatureAt(uint32_t v) const {
+    if (v >= positions.size() || v >= normals.size()) return 0.0f;
+    const glm::vec3 p = positions[v];
+    glm::vec3 around(0.0f);
+    float edges = 0.0f;
+    uint32_t corners = 0;
+    for (uint32_t ti : vertexTriangles(v)) {
+        const glm::uvec3& t = triangles[ti];
+        for (int k = 0; k < 3; ++k)
+            if (t[k] != v) {
+                const glm::vec3& q = positions[t[k]];
+                around += q;
+                edges += glm::distance(q, p);
+                ++corners;
+            }
+    }
+    return corners && edges > 0.0f ? glm::dot(normals[v], around - p * float(corners)) / edges : 0.0f;
+}
+
+bool Mesh::beginNormalSet() {
+    const size_t nv = positions.size();
+    if (!implicit_ && adjOffsets_.size() != nv + 1) return false; // no topology
+    growDirtyBlocks((nv + kDirtyBlock - 1) / kDirtyBlock);
+    if (normalBits_.capacity() < nv) normalBits_.resize(nv);
+    return true;
+}
+
+void Mesh::finishNormals(float* curvature, bool computeNormals) {
     // Listing the set also marks it dirty: its words are laid out like dirtyBits, and each 2048-vertex dirty
     // block lies in one of its chunks (so no two threads write the same word).
     static_assert(IndexBits::kChunk % kDirtyBlock == 0);
@@ -622,6 +714,7 @@ void Mesh::updateNormals(std::span<const uint32_t> verts) {
     if (scratchVerts_.empty()) return;
     dirtyBegin = std::min(dirtyBegin, scratchVerts_.front());
     dirtyEnd = std::max(dirtyEnd, scratchVerts_.back() + 1);
+    if (!computeNormals) return;
     poolFor(scratchVerts_.size(), [&](size_t b, size_t e) {
         for (size_t i = b; i < e; ++i) {
             // The faces around later vertices are scattered over memory: ask for them ahead (their triangles
@@ -637,9 +730,31 @@ void Mesh::updateNormals(std::span<const uint32_t> verts) {
                 }
             const uint32_t v = scratchVerts_[i];
             glm::vec3 sum(0.0f);
-            for (uint32_t ti : vertexTriangles(v)) sum += faceNormal(positions, triangles[ti]);
+            if (!curvature) {
+                for (uint32_t ti : vertexTriangles(v)) sum += faceNormal(positions, triangles[ti]);
+                const float len = glm::length(sum);
+                if (len > 1e-20f) normals[v] = sum / len;
+                continue;
+            }
+            // With the cavity term (curvatureAt) from the same corners.
+            const glm::vec3 p = positions[v];
+            glm::vec3 around(0.0f);
+            float edges = 0.0f;
+            uint32_t corners = 0;
+            for (uint32_t ti : vertexTriangles(v)) {
+                const glm::uvec3& t = triangles[ti];
+                sum += faceNormal(positions, t);
+                for (int k = 0; k < 3; ++k)
+                    if (t[k] != v) {
+                        const glm::vec3& q = positions[t[k]];
+                        around += q;
+                        edges += glm::distance(q, p);
+                        ++corners;
+                    }
+            }
             const float len = glm::length(sum);
             if (len > 1e-20f) normals[v] = sum / len;
+            curvature[v] = corners && edges > 0.0f ? glm::dot(normals[v], around - p * float(corners)) / edges : 0.0f;
         }
     }, 4096);
 }
@@ -707,7 +822,7 @@ AABB Mesh::bounds() const {
 size_t Mesh::memoryBytes() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(v[0]); };
     size_t n = bytes(positions) + bytes(normals) + bytes(triangles) + bytes(mask) + bytes(colors) + bytes(polygroups) +
-               bytes(hidden) + bytes(uvs) + bytes(quadPartners) + bytes(base) + bytes(paintBase) + bytes(adjOffsets_) +
+               bytes(hidden) + bytes(uvs) + bytes(uvFlags) + bytes(quadPartners) + bytes(base) + bytes(paintBase) + bytes(adjOffsets_) +
                bytes(adjList_) + bytes(vtOffsets_) + bytes(vtList_) + bytes(adjEnds_) + bytes(adjCaps_) + bytes(vtEnds_) + bytes(vtCaps_) + normalBits_.memoryBytes() + bytes(scratchVerts_) + bytes(dirtyBlocks) + bytes(dirtyBits);
     for (const auto& l : layers) n += bytes(l.delta);
     for (const auto& l : paintLayers) n += bytes(l.color) + bytes(l.alpha);

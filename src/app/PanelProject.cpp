@@ -5,9 +5,14 @@
 // prompt (Save / Don't Save / Cancel) before new, open and quit, File > Open
 // Recent and autosave with crash recovery. Prompts only appear in interactive
 // sessions; --render, --record and demos run straight through.
+#include "app/SettingsPath.h"
 #include "app/App.h"
+#include "app/Support.h"
+#include "app/LookSchemes.h"
+#include "app/CrashLog.h"
 #include "core/SplatCapture.h"
 #include "app/Ui.h"
+#include "app/I18n.h"
 
 #include "ai/Http.h"
 
@@ -17,6 +22,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
@@ -59,7 +65,15 @@ void readBool(const Json& j, const char* key, bool& v) { v = j[key].asBool(v); }
 
 // Save As dialog: a cancelled dialog is reported as an empty path so a pending
 // "save, then quit/open/new" is dropped instead of firing on a later save.
+// "matcaps/<name>.png" with the characters project attachment names allow.
+std::string matcapAttachmentName(const std::string& name) {
+    std::string safe;
+    for (unsigned char c : name) safe += std::isalnum(c) || c == ' ' || c == '_' || c == '-' || c >= 0x80 ? char(c) : '_';
+    return "matcaps/" + (safe.empty() ? std::string("MatCap") : safe) + ".png";
+}
+
 void SDLCALL onProjectChosen(void* userdata, const char* const* files, int) {
+    wakeMainLoop(); // a file dialog answered (maybe on another thread): redraw now
     auto* req = static_cast<App::DialogRequest*>(userdata);
     req->app->queueFile(req->action, files && files[0] ? std::string(files[0]) : std::string());
 }
@@ -70,7 +84,7 @@ bool App::interactive() const { return options_.renderPath.empty() && options_.r
 
 void App::initProject() {
     if (!interactive()) return;
-    if (char* pref = SDL_GetPrefPath("SculptForge", "SculptForge")) {
+    if (char* pref = appPrefPath()) {
         prefDir_ = pref;
         SDL_free(pref);
     }
@@ -78,7 +92,12 @@ void App::initProject() {
     std::ifstream f(fsPath(prefDir_ + "project.json"), std::ios::binary);
     Json prefs;
     std::string err;
-    if (f && Json::parse(std::string(std::istreambuf_iterator<char>(f), {}), prefs, err)) {
+    const bool hadPrefs = f && Json::parse(std::string(std::istreambuf_iterator<char>(f), {}), prefs, err);
+    if (hadPrefs) {
+        // An install from before SculptForge-style keys were the default, that never stored its key style: it had
+        // the ZBrush-style keys, and keeps them (initActions applies the style).
+        if (prefs["input_style"].isNumber()) startInputStyle_ = std::clamp(int(prefs["input_style"].asNumber(1)), 0, 3);
+        if (!uiPrefs_.inputStyleSaved && !uiConfigDeterministic_) uiPrefs_.inputStyle = startInputStyle_ >= 0 ? startInputStyle_ : 0;
         for (const auto& p : prefs["recent_files"].items())
             if (p.isString()) recentFiles_.push_back(p.asString());
         autosaveMinutes_ = std::clamp(int(prefs["autosave_minutes"].asNumber(autosaveMinutes_)), 0, 120);
@@ -88,9 +107,41 @@ void App::initProject() {
         checkUpdates_ = prefs["check_updates"].asBool(checkUpdates_);
         updateCheckedAt_ = int64_t(prefs["update_checked_at"].asNumber(0));
         if (prefs["update_skipped"].isString()) updateSkipped_ = prefs["update_skipped"].asString();
+        sculptSeconds_ = addSculptTime(prefs["sculpt_seconds"].asNumber(0.0), 0.0);
+        supportReminderDone_ = prefs["support_reminder_done"].asBool(false);
+        supportCardPrefs_.enabled = prefs["support_card"].asBool(true);
+        supportCardPrefs_.supporter = prefs["supporter"].asBool(false);
+        supportCardPrefs_.shownAt = int64_t(prefs["support_card_shown_at"].asNumber(0));
+        supportCardPrefs_.laterAt = int64_t(prefs["support_card_later_at"].asNumber(0));
+        if (prefs["support_card_version"].isString()) supportCardPrefs_.shownVersion = prefs["support_card_version"].asString();
+        // The look (0.10.7): what the last session used, unless ui.json names one. An install from before 0.10.7
+        // remembers neither and keeps the Classic look with the ZBrush-style layout; the new-look card offers the
+        // new default once (PanelSupport.cpp).
+        newLookCardDone_ = prefs["new_look_card_done"].asBool(false);
+        if (!uiPrefs_.lookSaved && !uiConfigDeterministic_) {
+            UiPrefs saved = uiPrefs_;
+            if (!lookFromJson(prefs["ui_look"], saved)) {
+                saved.look.look = int(looks::LookId::Classic);
+                saved.shellLayout = 0;
+            }
+            uiPrefs_.look = saved.look;
+            setShellLayout(saved.shellLayout);
+            lookDirty_ = true;
+        }
+        const bool onNewLook = uiPrefs_.look.look == int(looks::LookId::ForgeTerminal) && uiPrefs_.shellLayout == 1;
+        newLookCard_ = !newLookCardDone_ && !onNewLook && !uiConfigDeterministic_;
+    } else {
+        showWelcome_ = options_.uiTest.empty() && options_.demo.empty() && !options_.benchmark; // the first start: no prefs yet
+        startInputStyle_ = uiPrefs_.inputStyle; // a new install: SculptForge's keys until the welcome's choice
+        newLookCardDone_ = true; // a new install starts in the new look (or ui.json's): nothing to announce
     }
     recentFiles_ = pruneRecentFiles(std::move(recentFiles_), fileExists);
     saveProjectPrefs(); // records this version, so What's New shows once
+    // The support card: decided here, while starting, and never again this session (Support.h). Its picture is
+    // decoded on a worker thread only if it shows.
+    launchSupportCard(!hadPrefs,
+                      std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count(),
+                      supportCardTestMode());
 
 #if SF_UPDATE_CHECK
     const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -121,10 +172,24 @@ void App::saveProjectPrefs() {
     for (const auto& p : recentFiles_) recent.push(p);
     prefs.set("recent_files", std::move(recent));
     prefs.set("autosave_minutes", autosaveMinutes_);
+    if (startInputStyle_ >= 0) prefs.set("input_style", startInputStyle_);
     prefs.set("last_seen_version", std::string(SCULPTFORGE_VERSION));
     prefs.set("check_updates", checkUpdates_);
     prefs.set("update_checked_at", double(updateCheckedAt_));
     if (!updateSkipped_.empty()) prefs.set("update_skipped", updateSkipped_);
+    prefs.set("sculpt_seconds", std::floor(sculptSeconds_)); // for the one support reminder (Support.h); stays here
+    prefs.set("support_reminder_done", supportReminderDone_);
+    prefs.set("support_card", supportCardPrefs_.enabled); // the support card at launch (Support.h)
+    prefs.set("supporter", supportCardPrefs_.supporter);
+    prefs.set("support_card_shown_at", double(supportCardPrefs_.shownAt));
+    prefs.set("support_card_later_at", double(supportCardPrefs_.laterAt));
+    if (!supportCardPrefs_.shownVersion.empty()) prefs.set("support_card_version", supportCardPrefs_.shownVersion);
+    if (!uiConfigDeterministic_) {
+        Json look = Json::object();
+        lookToJson(uiPrefs_, look);
+        prefs.set("ui_look", std::move(look));
+    }
+    prefs.set("new_look_card_done", newLookCardDone_);
     std::ofstream(fsPath(prefDir_ + "project.json"), std::ios::binary | std::ios::trunc) << prefs.dump(true);
 }
 
@@ -141,6 +206,15 @@ void App::rememberRecent(const std::string& path) {
 void App::tickProject(float dt) {
     updateTitle();
     if (!interactive() || prefDir_.empty()) return;
+    // Sculpting time, for the one optional support reminder (Support.h): counted here, kept in project.json.
+    const bool stroking = doc_.sculptor.strokeActive();
+    if (stroking) sculptSeconds_ = addSculptTime(sculptSeconds_, double(dt));
+    if (supportReminderDue(sculptSeconds_, double(SDL_GetTicks()) * 1e-3, stroking, supportReminderDone_)) {
+        supportReminderDone_ = true; // once only
+        supportReminderOpen_ = true;
+        saveProjectPrefs();
+        redrawAt_ = double(SDL_GetTicksNS()) * 1e-9; // (a frame to show it, asleep or not)
+    }
     if (!doc_.dirty()) {
         autosaveTimer_ = 0.0f;
         if (autosaveWritten_) { // nothing left to recover
@@ -206,7 +280,7 @@ void App::storeProjectSettings() {
     cam.set("pitch", double(camera_.pitch));
     cam.set("roll", double(camera_.roll));
     cam.set("fov_y", double(camera_.fovY));
-    cam.set("orthographic", camera_.orthographic);
+    cam.set("orthographic", camera_.ortho);
     cam.set("canvas_fixed", crkwCanvasFixed_);
     cam.set("canvas_width", double(crkwCanvasWidth_));
     cam.set("canvas_height", double(crkwCanvasHeight_));
@@ -221,7 +295,35 @@ void App::storeProjectSettings() {
     render.set("show_mesh", renderSettings_.showMesh);
     render.set("show_splats", renderSettings_.showSplats);
     render.set("splat_opacity", double(renderSettings_.splatOpacity));
+    render.set("flat_shading", renderSettings_.flatShading);
+    render.set("backface_culling", renderSettings_.backfaceCulling);
+    render.set("background", std::string(renderSettings_.gradientBackground ? "gradient" : "flat"));
+    render.set("background_color", vec3Json(renderSettings_.backgroundColor));
     render.set("matcap", renderSettings_.matcap < 0 ? std::string() : std::string(matcapName(renderSettings_.matcap)));
+    // Viewport shading (Material > Viewport Shading): Lit Sphere or PBR with its environment.
+    {
+        const RenderSettings& v = renderSettings_;
+        Json pbr = Json::object();
+        pbr.set("shading", std::string(v.pbr() ? "pbr" : "lit_sphere"));
+        pbr.set("environment", environments()[size_t(std::clamp(v.environment, 0, environmentCount() - 1))].id);
+        pbr.set("rotation", double(v.environmentRotation));
+        pbr.set("exposure", double(v.exposure));
+        pbr.set("tone_map", std::string(toneMapId(v.toneMap)));
+        pbr.set("background", v.environmentBackground);
+        pbr.set("background_blur", double(v.backgroundBlur));
+        pbr.set("roughness", double(v.pbrRoughness));
+        pbr.set("metallic", double(v.pbrMetallic));
+        pbr.set("cavity", double(v.pbrCavity));
+        render.set("viewport", std::move(pbr));
+    }
+    // A custom MatCap travels inside the project (a PNG attachment), so the project opens with it on any machine.
+    for (auto it = doc_.projectFiles.begin(); it != doc_.projectFiles.end();)
+        it = it->first.rfind("matcaps/", 0) == 0 ? doc_.projectFiles.erase(it) : std::next(it);
+    if (std::vector<uint8_t> png; isCustomMatcap(renderSettings_.matcap) && encodeMatcapPng(renderSettings_.matcap, png)) {
+        const std::string file = matcapAttachmentName(matcapName(renderSettings_.matcap));
+        doc_.projectFiles[file] = std::move(png);
+        render.set("matcap_file", file);
+    }
     s.set("render", std::move(render));
 
     Json brush = Json::object();
@@ -229,15 +331,19 @@ void App::storeProjectSettings() {
     brush.set("radius_px", double(radiusPx_));
     brush.set("strength", double(strength_));
     brush.set("smooth_strength", double(smoothStrength_));
+    brush.set("smooth_keep_volume", smoothKeepVolume_);
     brush.set("rgb_intensity", double(rgbIntensity_));
     brush.set("focal_shift", double(focalShift_));
     brush.set("invert", invertToggle_);
     brush.set("front_faces_only", frontFacesOnly_);
+    brush.set("connected_only", uiPrefs_.connectedOnly);
+    brush.set("view_falloff", uiPrefs_.viewFalloff);
     brush.set("pressure_strength", pressureStrength_);
     brush.set("pressure_size", pressureSize_);
     brush.set("paint_color", vec3Json(doc_.paintColor));
     brush.set("dynamic", doc_.sculptor.dyntopo.enabled); // dynamic topology (core/Dyntopo.h)
     brush.set("dynamic_detail", double(doc_.sculptor.dyntopo.detail));
+    brush.set("dynamic_smooth_remesh", double(doc_.sculptor.dyntopo.smoothRemesh));
     brush.set("vdm", doc_.brushVdm ? doc_.brushVdm->name : std::string()); // by name: the map stays in the library
     s.set("brush", std::move(brush));
 
@@ -245,6 +351,10 @@ void App::storeProjectSettings() {
     sym.set("x", symmetry_.x);
     sym.set("y", symmetry_.y);
     sym.set("z", symmetry_.z);
+    sym.set("radial", symmetry_.radialEnabled); // radial symmetry (#63): on, its count and axis
+    sym.set("radial_count", double(symmetry_.radial));
+    sym.set("radial_axis", double(symmetry_.radialAxis));
+    sym.set("local", symmetry_.local); // around the active Part's centre
     s.set("symmetry", std::move(sym));
 
     Json gizmo = Json::object(); // Gizmo 3D (Gizmo.cpp): where the pivot is and the options
@@ -272,7 +382,7 @@ void App::applyProjectSettings() {
         readFloat(cam, "fov_y", camera_.fovY);
         camera_.distance = std::max(camera_.distance, 1e-4f);
         camera_.fovY = std::clamp(camera_.fovY, 0.05f, 3.0f);
-        camera_.orthographic = cam["orthographic"].asBool(false);
+        camera_.ortho = cam["orthographic"].asBool(false);
         crkwCanvasFixed_ = cam["canvas_fixed"].asBool(false);
         crkwCanvasWidth_ = std::clamp(int(cam["canvas_width"].asNumber(1920)), 64, 8192);
         crkwCanvasHeight_ = std::clamp(int(cam["canvas_height"].asNumber(1080)), 64, 8192);
@@ -288,10 +398,58 @@ void App::applyProjectSettings() {
         readBool(r, "show_mesh", renderSettings_.showMesh);
         readBool(r, "show_splats", renderSettings_.showSplats);
         readFloat(r, "splat_opacity", renderSettings_.splatOpacity);
+        // Projects from before the setting: the preferred shading.
+        renderSettings_.flatShading = r["flat_shading"].asBool(uiPrefs_.flatShading);
+        renderSettings_.backfaceCulling = r["backface_culling"].asBool(uiPrefs_.backfaceCulling);
+        // Viewport shading; projects from before it: Lit Sphere.
+        {
+            RenderSettings& v = renderSettings_;
+            const RenderSettings defaults;
+            const Json& pbr = r["viewport"];
+            auto num = [&](const char* key, float def, float lo, float hi) {
+                return pbr.isObject() && pbr[key].isNumber() ? std::clamp(float(pbr[key].asNumber()), lo, hi) : def;
+            };
+            v.shading = pbr.isObject() && pbr["shading"].isString() && pbr["shading"].asString() == "pbr"
+                            ? RenderSettings::Shading::Pbr
+                            : RenderSettings::Shading::LitSphere;
+            const int env = pbr.isObject() && pbr["environment"].isString() ? findEnvironment(pbr["environment"].asString()) : -1;
+            v.environment = env >= 0 ? env : 0;
+            v.environmentRotation = num("rotation", defaults.environmentRotation, -360.0f, 360.0f);
+            v.exposure = num("exposure", defaults.exposure, -10.0f, 10.0f);
+            v.toneMap = defaults.toneMap;
+            if (pbr.isObject() && pbr["tone_map"].isString()) parseToneMap(pbr["tone_map"].asString(), v.toneMap);
+            v.environmentBackground = pbr.isObject() && pbr["background"].isBool() ? pbr["background"].asBool() : defaults.environmentBackground;
+            v.backgroundBlur = num("background_blur", defaults.backgroundBlur, 0.0f, 1.0f);
+            v.pbrRoughness = num("roughness", defaults.pbrRoughness, 0.0f, 1.0f);
+            v.pbrMetallic = num("metallic", defaults.pbrMetallic, 0.0f, 1.0f);
+            v.pbrCavity = num("cavity", defaults.pbrCavity, 0.0f, 1.0f);
+        }
+        // The background (#21); projects from before it: the preferred one.
+        renderSettings_.gradientBackground =
+            r["background"].isString() ? r["background"].asString() != "flat" : uiPrefs_.gradientBackground;
+        renderSettings_.backgroundColor = uiPrefs_.backgroundColor;
+        readVec3(r["background_color"], renderSettings_.backgroundColor);
+        renderSettings_.backgroundColor = glm::clamp(renderSettings_.backgroundColor, 0.0f, 1.0f);
         // Unknown, empty or missing (projects from before MatCaps): studio lighting, as they were saved.
         renderSettings_.matcap = -1;
+        const std::string name = r["matcap"].isString() ? r["matcap"].asString() : std::string();
         for (int i = 0; i < matcapCount(); ++i)
-            if (r["matcap"].isString() && r["matcap"].asString() == matcapName(i)) renderSettings_.matcap = i;
+            if (!name.empty() && name == matcapName(i)) renderSettings_.matcap = i;
+        // A custom MatCap the project carries: the one with the same pixels if this machine has it, else added for
+        // the session (renamed when a different MatCap here already has its name).
+        const auto file = r["matcap_file"].isString() ? doc_.projectFiles.find(r["matcap_file"].asString())
+                                                      : doc_.projectFiles.end();
+        CustomMatcap m;
+        std::string err;
+        if (file != doc_.projectFiles.end() && decodeMatcapImage(file->second.data(), file->second.size(), m, err)) {
+            int index = findMatcapByHash(m.hash);
+            if (index < 0) {
+                m.name = name.empty() ? std::string("Lit Sphere") : name;
+                for (int n = 2; findMatcap(m.name) >= 0; ++n) m.name = name + " " + std::to_string(n);
+                index = addCustomMatcap(std::move(m));
+            }
+            renderSettings_.matcap = index;
+        }
     }
     if (const Json& b = s["brush"]; b.isObject()) {
         for (int i = 0; i < int(BrushType::Count); ++i)
@@ -307,13 +465,18 @@ void App::applyProjectSettings() {
         rgbIntensity_ = std::clamp(rgbIntensity_, 0.0f, 1.0f);
         focalShift_ = std::clamp(focalShift_, -1.0f, 1.0f);
         readBool(b, "invert", invertToggle_);
+        readBool(b, "smooth_keep_volume", smoothKeepVolume_);
         readBool(b, "front_faces_only", frontFacesOnly_);
+        readBool(b, "connected_only", uiPrefs_.connectedOnly);
+        readBool(b, "view_falloff", uiPrefs_.viewFalloff);
         readBool(b, "pressure_strength", pressureStrength_);
         readVec3(b["paint_color"], doc_.paintColor);
         readBool(b, "pressure_size", pressureSize_);
         readBool(b, "dynamic", doc_.sculptor.dyntopo.enabled);
         readFloat(b, "dynamic_detail", doc_.sculptor.dyntopo.detail);
         doc_.sculptor.dyntopo.detail = std::clamp(doc_.sculptor.dyntopo.detail, 0.0f, 1.0f);
+        readFloat(b, "dynamic_smooth_remesh", doc_.sculptor.dyntopo.smoothRemesh);
+        doc_.sculptor.dyntopo.smoothRemesh = std::clamp(doc_.sculptor.dyntopo.smoothRemesh, 0.0f, 1.0f);
         if (const int vdm = b["vdm"].isString() ? findVdm(doc_, b["vdm"].asString()) : -1; vdm >= 0)
             doc_.brushVdm = doc_.vdms[size_t(vdm)];
     }
@@ -321,6 +484,16 @@ void App::applyProjectSettings() {
         readBool(sym, "x", symmetry_.x);
         readBool(sym, "y", symmetry_.y);
         readBool(sym, "z", symmetry_.z);
+        symmetry_.radialEnabled = false; // (older projects have none)
+        symmetry_.local = false;
+        readBool(sym, "radial", symmetry_.radialEnabled);
+        readBool(sym, "local", symmetry_.local);
+        float count = float(symmetry_.radial), axis = float(symmetry_.radialAxis);
+        readFloat(sym, "radial_count", count);
+        readFloat(sym, "radial_axis", axis);
+        symmetry_.radial = std::clamp(int(std::lround(count)), 2, Symmetry::kMaxRadial);
+        symmetry_.radialAxis = std::clamp(int(std::lround(axis)), 0, 2);
+        symmetryPivotKey_ = ~uint64_t(0);
     }
     if (const Json& g = s["gizmo"]; g.isObject()) {
         gizmo_.centreKey = ~uint64_t(0);
@@ -381,12 +554,13 @@ void App::openPathConfirmed(const std::string& path) {
         runCommand("splat_train", {{"source", path}});
         return;
     }
-    if (Image::isImagePath(path) || ext == ".sfbrush" || ext == ".exr" || ext == ".sfvdm") openPath(path);
+    if (Image::isImagePath(path) || ext == ".sfbrush" || ext == ".exr" || ext == ".sfvdm" || ext == kPackExtension)
+        openPath(path); // (a pack opens its review screen: the scene stays)
     else confirmDiscard([this, path] { openPath(path); });
 }
 
 void App::drawFileMenuProjectItems() {
-    if (ImGui::BeginMenu("Open Recent", !recentFiles_.empty())) {
+    if (ImGui::BeginMenu(tr("Open Recent"), !recentFiles_.empty())) {
         const size_t before = recentFiles_.size();
         recentFiles_ = pruneRecentFiles(std::move(recentFiles_), fileExists);
         if (recentFiles_.size() != before) saveProjectPrefs();
@@ -397,17 +571,17 @@ void App::drawFileMenuProjectItems() {
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", recentFiles_[i].c_str());
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Clear Recent")) {
+        if (ImGui::MenuItem(tr("Clear Recent"))) {
             recentFiles_.clear();
             saveProjectPrefs();
         }
         ImGui::EndMenu();
         if (!chosen.empty()) openPathConfirmed(chosen);
     }
-    if (ImGui::MenuItem("Save", "Ctrl+S")) saveProjectAs(false);
-    if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) saveProjectAs(true);
+    if (ImGui::MenuItem(tr("Save"), "Ctrl+S")) saveProjectAs(false);
+    if (ImGui::MenuItem(tr("Save As..."), "Ctrl+Shift+S")) saveProjectAs(true);
     ImGui::SetNextItemWidth(120.0f * uiScale_);
-    ImGui::SliderInt("Autosave (min)", &autosaveMinutes_, 0, 60, autosaveMinutes_ ? "%d" : "off");
+    ImGui::SliderInt(tr("Autosave (min)"), &autosaveMinutes_, 0, 60, autosaveMinutes_ ? "%d" : "off");
     if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectPrefs();
 }
 
@@ -420,11 +594,11 @@ void App::drawProjectPopups() {
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal(kUnsavedPopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         const std::string name = doc_.path.empty() ? std::string("Untitled") : utf8(fsPath(doc_.path).filename());
-        ImGui::Text("Save changes to %s before continuing?", name.c_str());
-        ImGui::TextDisabled("Your changes will be lost if you don't save them.");
+        ImGui::Text(tr("Save changes to %s before continuing?"), name.c_str());
+        ImGui::TextDisabled("%s", tr("Your changes will be lost if you don't save them."));
         ImGui::Spacing();
         const float w = 110.0f * uiScale_;
-        if (ImGui::Button("Save", ImVec2(w, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+        if (ImGui::Button(tr("Save"), ImVec2(w, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
             ImGui::CloseCurrentPopup();
             if (isProjectPath(doc_.path)) {
                 saveProjectTo(doc_.path);
@@ -437,14 +611,14 @@ void App::drawProjectPopups() {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Don't Save", ImVec2(w, 0))) {
+        if (ImGui::Button(tr("Don't Save"), ImVec2(w, 0))) {
             ImGui::CloseCurrentPopup();
             auto action = std::move(discardAction_);
             discardAction_ = nullptr;
             if (action) action();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(w, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (ImGui::Button(tr("Cancel"), ImVec2(w, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             ImGui::CloseCurrentPopup();
             discardAction_ = nullptr;
         }
@@ -462,12 +636,17 @@ void App::drawProjectPopups() {
     drawUpdateBanner();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal(kRestorePopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("SculptForge did not close normally last time.");
-        ImGui::TextUnformatted("Restore the autosaved work?");
+        ImGui::TextUnformatted(tr("SculptForge did not close normally last time."));
+        ImGui::TextUnformatted(tr("Restore the autosaved work?"));
+        if (crashlog::previousCrashed()) {
+            ImGui::Spacing();
+            ImGui::TextDisabled("%s", tr("What happened is in sculptforge-previous.log (Help > Open log folder);"));
+            ImGui::TextDisabled("%s", tr("please attach it if you report the problem."));
+        }
         ImGui::Spacing();
         const float w = 110.0f * uiScale_;
         const std::string autosave = autosavePath(prefDir_);
-        if (ImGui::Button("Restore", ImVec2(w, 0))) {
+        if (ImGui::Button(tr("Restore"), ImVec2(w, 0))) {
             ImGui::CloseCurrentPopup();
             runCommand("open_project", {{"path", autosave}});
             if (doc_.path == autosave) {
@@ -477,7 +656,7 @@ void App::drawProjectPopups() {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Discard", ImVec2(w, 0))) {
+        if (ImGui::Button(tr("Discard"), ImVec2(w, 0))) {
             ImGui::CloseCurrentPopup();
             std::error_code ec;
             std::filesystem::remove(fsPath(autosave), ec);
@@ -544,7 +723,8 @@ void App::drawUpdateBanner() {
     if (!updateAvailable_) return;
     const UpdateInfo& u = *updateAvailable_;
     const CanvasRect c = canvasRect(); // top centre of the 3D view, clear of the shelves
-    ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.5f, c.y + 12.0f * uiScale_), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.5f, c.y + timelineTopInset_ + 12.0f * uiScale_), ImGuiCond_Always,
+                            ImVec2(0.5f, 0.0f)); // (below the timeline strip when it is at the top)
     ImGui::SetNextWindowBgAlpha(0.96f);
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
@@ -552,25 +732,28 @@ void App::drawUpdateBanner() {
     if (ImGui::Begin("##update_banner", nullptr, flags)) {
         // Reading size (the guide's 17 px fonts), so the highlights are easy to read over the canvas.
         if (ImFont* title = guide_.bodyBoldFont()) ImGui::PushFont(title);
-        ImGui::Text("SculptForge %s is available", u.version.c_str());
+        ImGui::Text(tr("SculptForge %s is available"), u.version.c_str());
         if (guide_.bodyBoldFont()) ImGui::PopFont();
         if (ImFont* body = guide_.bodyFont()) ImGui::PushFont(body);
         ImGui::SameLine();
-        ImGui::TextDisabled("(you have %s)", SCULPTFORGE_VERSION);
+        ImGui::TextDisabled(tr("(you have %s)"), SCULPTFORGE_VERSION);
         for (const auto& h : u.highlights) ImGui::BulletText("%s", h.c_str());
+        ImGui::TextDisabled("%s", kFreeReleaseNote); // memberships (Support.h): releases stay free for everyone
         if (guide_.bodyFont()) ImGui::PopFont();
         ImGui::Spacing();
         bool close = false;
-        if (ImGui::Button("What's new")) SDL_OpenURL(u.notesUrl.c_str());
+        if (ImGui::Button(tr("What's new"))) SDL_OpenURL(u.notesUrl.c_str());
         ImGui::SameLine();
-        if (ImGui::Button("Download")) {
+        if (ImGui::Button(tr("Download"))) {
             SDL_OpenURL(u.downloadUrl.c_str());
             close = true;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Later")) close = true;
+        if (ImGui::Button(tr("Become an Insider"))) openSupportPage();
         ImGui::SameLine();
-        if (ImGui::Button("Skip this version")) {
+        if (ImGui::Button(tr("Later"))) close = true;
+        ImGui::SameLine();
+        if (ImGui::Button(tr("Skip this version"))) {
             updateSkipped_ = u.version;
             saveProjectPrefs();
             close = true;
@@ -582,16 +765,16 @@ void App::drawUpdateBanner() {
 
 void App::drawUpdatesSection() {
 #if SF_UPDATE_CHECK
-    if (ImGui::Checkbox("Check for updates", &checkUpdates_)) saveProjectPrefs();
+    if (ImGui::Checkbox(tr("Check for updates"), &checkUpdates_)) saveProjectPrefs();
     ui::HelpText("Check for updates", nullptr,
                  "Once a day at startup, download a small file from the SculptForge website that names the newest "
                  "version, and show a banner when there is a newer one. Nothing about you or your computer is sent.",
                  "Preferences > Updates");
 #else
-    ImGui::TextWrapped("This build gets its updates from your package manager.");
+    ImGui::TextWrapped("%s", tr("This build gets its updates from your package manager."));
 #endif
     ui::ActionButton(*this, "help.check_updates", ImVec2(-1, 0));
-    if (updateJob_) ImGui::TextDisabled("Checking...");
+    if (updateJob_) ImGui::TextDisabled("%s", tr("Checking..."));
     else if (!updateStatus_.empty()) ImGui::TextWrapped("%s", updateStatus_.c_str());
 }
 

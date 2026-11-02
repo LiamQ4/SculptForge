@@ -1,3 +1,5 @@
+run ui_look look=classic layout=zbrush
+input_style zbrush
 # CRKW: MaskRect (and MaskLasso) follow the symmetry axes, like a MaskPen stroke.
 run new_sphere subdivisions=5
 camera 0 0
@@ -10,7 +12,7 @@ expect_value mask_shape == 2
 
 # X symmetry is on: a rectangle over the left side masks the right side too.
 hold ctrl
-drag_path -0.2 -0.2 0.3 1.2
+drag_path 0 0.05 0.3 0.95
 hold none
 expect_value masked > 1000
 remember masked mirrored
@@ -21,7 +23,7 @@ expect_value masked == 0
 # X off: the same rectangle masks only the left side, about half as much.
 click "X##transform.symmetry_x"
 hold ctrl
-drag_path -0.2 -0.2 0.3 1.2
+drag_path 0 0.05 0.3 0.95
 hold none
 expect_value masked > 500
 expect_value masked < $mirrored

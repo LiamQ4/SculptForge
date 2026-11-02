@@ -23,7 +23,9 @@
   <a href="https://sculptforge.app/guide/"><b>User guide</b></a> ·
   <a href="#features">Features</a> ·
   <a href="#building">Build from source</a> ·
-  <a href="CONTRIBUTING.md">Contribute</a>
+  <a href="CONTRIBUTING.md">Contribute</a> ·
+  <a href="https://discord.gg/gWrYkEmQhH">Discord</a> ·
+  <a href="https://sculptforge.app/support.html">Membership</a>
 </p>
 
 <p align="center">
@@ -50,30 +52,30 @@ Plug in Claude, fal.ai or Meshy, or run models entirely on your own machine.
 | Image or text → sculptable 3D model | **Built in** (free models) | No |
 | Gaussian splats, OpenUSD / USDZ | **Built in** | No |
 | AI agents (MCP), headless scripting | **Built in** | ZScript |
-| Masking, polygroups, visibility (Ctrl / Ctrl+Shift, lasso or rectangle), polypaint, MatCaps | **Yes** | Yes |
-| Polypaint layers with blend modes (Multiply, Overlay, Screen...) | **Yes** (new in 0.4) | Opacity only |
+| Masking, face groups, visibility (Ctrl / Ctrl+Shift, lasso or rectangle), vertex paint, Lit Spheres | **Yes** | Yes |
+| Vertex Paint layers with blend modes (Multiply, Overlay, Screen...) | **Yes** (new in 0.4) | Opacity only |
 | Texture painting on UVs (1K-8K, same paint layers), automatic UV unwrap | **Yes** (new in 0.5) | Polypaint, converted to a texture |
-| Automatic quad retopology (ZRemesher-style) and ProjectAll detail transfer | **Yes** (new in 0.5) | Yes |
+| Automatic quad retopology (ZRemesher-style) and Project All detail transfer | **Yes** (new in 0.5) | Yes |
 | Quads kept from import, shown and exported as quads | **Yes** (new in 0.4) | Yes |
-| SubTools (separate meshes: append, split, merge, solo, Alt+click to select) | **Yes** (new in 0.3) | Yes |
-| Gizmo 3D: move, scale, rotate and pose (masked parts, soft joints, Transpose All) | **Yes** (new in 0.5) | Yes |
-| GoZ exchange with ZBrush | **Yes** (new in 0.2; not yet tested against a live ZBrush) | Yes |
-| Multiresolution (subdivision levels), dynamic topology, UV editing | Not yet ([roadmap](ROADMAP.md)) | Yes |
+| Parts (separate meshes: append, split, merge, solo, Alt+click to select) | **Yes** (new in 0.3) | Yes |
+| Gizmo: move, scale, rotate and pose (masked parts, soft joints, All Parts) | **Yes** (new in 0.5) | Yes |
+| Send to ZBrush (GoZ-compatible exchange) | **Yes** (new in 0.2; not yet tested against a live ZBrush) | Yes |
+| Multiresolution (subdivision levels), dynamic topology, UV editing | **Yes** (see the [user guide](docs/guide/index.md)) | Yes |
 
-SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files directly. Bring models over with GoZ (`.GoZ`
-files keep polygroups, mask and polypaint), as OBJ, FBX or GLB, or convert a ZTool library once with the
-[ZTool Export plug-in for ZBrush](integrations/zbrush/README.md), after which SculptForge opens the `.ZTL` files.
+SculptForge doesn't read ZBrush's proprietary `.ZTL`/`.ZPR` files directly. Bring models over with Send to ZBrush (`.GoZ`
+files keep face groups, mask and vertex paint), as OBJ, FBX or GLB, or convert a ZTool library once with the
+[SculptForge ZTL Export plug-in for ZBrush](integrations/zbrush/README.md), after which SculptForge opens the `.ZTL` files.
 
-> **Status: early release (v0.8).** The core sculpting, pipeline and AI features work and are tested on every
-> commit. Version 0.8 adds dynamic topology (Sculptris Pro style: brushes add triangles where they need them),
-> vector displacement brushes, QRemesh Guides and sculpt layers on every subdivision level; 0.7 follows ZBrush's
-> keys and gestures by default and adds a Blender bridge add-on; 0.6 halved the memory and made the view twice as
-> fast on huge meshes (see the [changelog](CHANGELOG.md)).
+> **Status: early release (v0.10.7).** This source includes multiresolution sculpting, dynamic topology,
+> a UV editor, PBR painting, performance profiles and the new Forge Terminal interface. Existing installations
+> keep their saved look and layout. See the [changelog](CHANGELOG.md) for release details.
 
 ## Features
 
-**A ZBrush-style interface**
-- Shelves around the canvas, alphabetical palettes holding every tool, a LightBox (`,`) of thumbnails, the
+**An interface ZBrush users can find their way around**
+- Task menus (File, Edit, Sculpt, Paint, Mesh, View, Render, Help) in the Forge Terminal look by default, or the
+  ZBrush-style layout with alphabetical palettes in one click (Preferences > Interface > Look)
+- Shelves around the canvas, palettes holding every tool, a Library (`,`) of thumbnails, the
   brush picker (`B`, type letters to pick), hold-Ctrl help on every button, a command palette (F3) and a script
   console (`` ` ``), and a fully customizable layout with Store Config. See [docs/ui-design.md](docs/ui-design.md).
 - A built-in **user guide** (Help > User Guide, Shift+F1) with search, also on the
@@ -81,27 +83,27 @@ files keep polygroups, mask and polypaint), as OBJ, FBX or GLB, or convert a ZTo
   chapter. Source: [docs/guide](docs/guide/index.md).
 
 **Sculpting**
-- Standard, Clay, Smooth, Move, Inflate, Crease, Flatten, Pinch, Dam Standard, Clay Buildup, Snake Hook, Trim,
+- Standard, Clay, Smooth, Move, Inflate, Crease, Flatten, Pinch, Sharp Crease, Clay Block, Tendril, Trim,
   Layer and Nudge brushes; X/Y/Z symmetry; tablet pressure; ZBrush-style modifiers and navigation.
 - Stroke types (dots, drag-rect, spray, lazy mouse) and brush alphas (built-in or any grayscale image).
-- **Masking** (Ctrl to paint, invert, blur, sharpen, grow/shrink, mask by cavity or polygroup) that every brush
+- **Masking** (Ctrl to paint, invert, blur, sharpen, grow/shrink, mask by cavity or face group) that every brush
   respects.
-- **Polygroups and visibility** the ZBrush way: auto groups, Ctrl+Shift isolate / hide, rectangle hide, delete
+- **Face Groups and visibility** with ZBrush-style gestures: auto groups, Ctrl+Shift isolate / hide, rectangle hide, delete
   hidden.
-- **SubTools**: keep the body, eyes, teeth and armour as separate meshes, each with its own undo history. You can
-  append a sphere, cube, plane or model file, show/hide, solo, reorder, duplicate, merge and split (by polygroup or
-  by piece), and Alt+click a SubTool to select it. Projects, OBJ, glTF, FBX, USD and GoZ keep them as separate
+- **Parts**: keep the body, eyes, teeth and armour as separate meshes, each with its own undo history. You can
+  append a sphere, cube, plane or model file, show/hide, solo, reorder, duplicate, merge and split (by face group or
+  by piece), and Alt+click a Part to select it. Projects, OBJ, glTF, FBX, USD and GoZ-compatible files keep them as separate
   objects.
-- **Gizmo 3D** (W Move, E Scale, R Rotate): move, scale and rotate a SubTool, or only its unmasked part with a
-  soft falloff for posing a limb at its joint; Shift snapping, numeric entry, All SubTools, one undo step per drag.
-- **Polypaint** (Paint brush, RGB while sculpting, fills, cavity paint) and six MatCap materials.
+- **Gizmo** (W Move, E Scale, R Rotate): move, scale and rotate a Part, or only its unmasked part with a
+  soft falloff for posing a limb at its joint; Shift snapping, numeric entry, All Parts, one undo step per drag.
+- **Vertex Paint** (Paint brush, RGB while sculpting, fills, cavity paint) and built-in and custom Lit Sphere materials (including the CRKW material collection).
 - **Texture painting** on UV maps: Auto UV (xatlas) unwraps any sculpt, then the Paint brush paints a 1K-8K
-  texture with the same paint layers and blend modes; polypaint and texture convert both ways, and OBJ, glTF,
-  USD, FBX and GoZ exports write the PNG next to the model.
+  texture with the same paint layers and blend modes; vertex paint and texture convert both ways, and OBJ, glTF,
+  USD, FBX and GoZ-compatible exports write the PNG next to the model.
 - **Project files** (`.sfproj`) that keep everything, with an unsaved-changes prompt, recent files and autosave.
 - Unlimited undo, Loop subdivision, **voxel remesh** (DynaMesh-style) and quadric decimation.
-- **QRemesh** quad retopology (ZRemesher-style: target count, Adaptive Size, Keep Groups, polypaint density,
-  symmetry) and **ProjectAll** to bring the sculpted detail back onto the new topology.
+- **Quad Remesh** quad retopology (ZRemesher-style: target count, Adaptive Size, Keep Groups, vertex paint density,
+  symmetry) and **Project All** to bring the sculpted detail back onto the new topology.
 - **Sculpt layers** that work as blend shapes, with live weights and playback.
 
 **Free built-in AI: Brush Lab (describe a brush, AI builds it)**
@@ -148,8 +150,8 @@ files keep polygroups, mask and polypaint), as OBJ, FBX or GLB, or convert a ZTo
   [docs/blender.md](docs/blender.md).
 
 **ZBrush interchange**
-- `.GoZ` import/export with polygroups, mask, polypaint and UVs, and a GoZ bridge (Send / Receive) on Windows and
-  macOS. Every visible SubTool goes over as its own ZBrush SubTool. See [docs/goz.md](docs/goz.md); the live bridge hasn't been tested against a running ZBrush yet.
+- `.GoZ` import/export with face groups, mask, vertex paint and UVs, and Send to ZBrush (Send / Receive) on Windows and
+  macOS. Every visible Part goes over as its own ZBrush SubTool. See [docs/goz.md](docs/goz.md); the live bridge hasn't been tested against a running ZBrush yet.
 
 **Gaussian splats**
 - Open phone captures (Polycam, Luma, Postshot, Scaniverse and others) as a sculpting reference, convert them
@@ -276,8 +278,8 @@ app: F1 for Controls, Shift+F1 for the guide).
 | Zoom | Mouse wheel, Ctrl + middle-drag, or Ctrl + left-drag background when nothing is masked |
 | Paint / erase mask | Hold **Ctrl** / **Ctrl+Alt** while stroking |
 | Invert / clear mask | Ctrl + click / Ctrl + drag on the background |
-| Isolate / hide polygroup | Ctrl+Shift + click / Ctrl+Shift+Alt + click |
-| Select a SubTool | Alt + click it |
+| Isolate / hide face group | Ctrl+Shift + click / Ctrl+Shift+Alt + click |
+| Select a Part | Alt + click it |
 | Show all | Ctrl+Shift + click on the background |
 | Hide outside / inside a rectangle | Ctrl+Shift + drag / Ctrl+Shift+Alt + drag |
 | Pen pressure | Strength (and optionally size); curve and test area in **Preferences > Tablet** |
@@ -287,7 +289,7 @@ app: F1 for Controls, Shift+F1 for the guide).
 | Select brush | `1`–`9`, `0` |
 | Paint brush / pick colour | `P` / `C` |
 | Toggle X symmetry / wireframe | `X` / `Shift+F` |
-| Gizmo 3D: Move / Scale / Rotate / back to Draw | `W` / `E` / `R` / `Q` (Alt+drag: the gizmo only; Shift snaps) |
+| Gizmo: Move / Scale / Rotate / back to Draw | `W` / `E` / `R` / `Q` (Alt+drag: the gizmo only; Shift snaps) |
 | Frame model | `F` |
 | Subdivide | Ctrl+D |
 | Undo / Redo | Ctrl+Z / Ctrl+Shift+Z |
@@ -297,6 +299,8 @@ app: F1 for Controls, Shift+F1 for the guide).
 
 Graphics tablets (Wacom, XP-Pen, Huion ...) work through the system's tablet driver on Windows (Windows Ink),
 macOS and Linux (Wayland / X11). Setup and mappings: [docs/tablet.md](docs/tablet.md).
+
+On Linux, SculptForge runs as a native Wayland window (no XWayland, sharp at fractional scales) or on X11.
 
 ## Project layout
 
@@ -321,10 +325,25 @@ SculptForge has no telemetry, no account and no servers of its own. AI features 
 directly to the service you choose. See [docs/ai-services.md](docs/ai-services.md) for exactly what is sent
 where, and for the licences of the AI models.
 
+## Membership
+
+SculptForge is free, and nothing in the app is ever paywalled: members pay for time and influence.
+**[Supporter](https://sculptforge.app/support.html)** ($5 / month): your name in the
+[credits](https://sculptforge.app/supporters.html), #members on Discord, a vote in the monthly feature vote and
+the monthly pack. **Insider** ($20 / month): also proposing vote options, a daily drop (a brush, alpha or VDM),
+preview builds of the next release about a week early and the monthly dev Q&A. Every release stays free for
+everyone; bug-fix and security releases go out to everyone the same day. **[Studio](https://sculptforge.app/studios.html#membership)**
+($300 / month; Founding Studio: the first 10 studios lock in $150 / month for good): Insider for every artist in
+the company, a custom studio build and custom content, guided development, priority triage, a private team
+channel and your logo here. Larger custom features are quoted separately.
+
+<!-- Studio members' logos go here. -->
+
 ## Contributing
 
 Contributions are welcome: bug reports, brushes, docs and code. Read [CONTRIBUTING.md](CONTRIBUTING.md)
-and the [Code of Conduct](CODE_OF_CONDUCT.md). Please report security issues privately (see
+and the [Code of Conduct](CODE_OF_CONDUCT.md). For questions, tips and showing your work, join the
+[SculptForge Discord](https://discord.gg/gWrYkEmQhH); bugs and feature requests go to [GitHub issues](https://github.com/islandmed/SculptForge/issues). Please report security issues privately (see
 [SECURITY.md](SECURITY.md)).
 
 ## License
@@ -337,6 +356,21 @@ licences are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 <sub>SculptForge is an independent project and is not affiliated with or endorsed by Maxon, Epic Games,
 Autodesk, Pixar, the Khronos Group, Hugging Face, Tencent, Microsoft, Stability AI, Anthropic, fal or Meshy.
-ZBrush is a trademark of Maxon. Unreal and Unreal Engine are trademarks of Epic Games, Inc. FBX is a trademark
+ZBrush, GoZ, MatCap and other ZBrush feature names are trademarks of Maxon Computer GmbH. Unreal and Unreal Engine are trademarks of Epic Games, Inc. FBX is a trademark
 of Autodesk, Inc. glTF is a trademark of the Khronos Group Inc. Other names are trademarks of their respective
 owners.</sub>
+
+
+## Local Blender add-on maintenance
+
+For the Blender integration in this workspace, start with [addons/blender/README.md](addons/blender/README.md). It identifies the source modules, exchange contract, packaging and validation entry points. The application and bridge versions can differ.
+
+## Local CRKW maintenance — 2026-11-02
+
+Source reviewed: 2026-11-02. The customized `ckw/crookedtools` branch integrates upstream `main` at `e55d3e0` (0.10.7), preserving CRKW sculpt tools, MetaHuman masks, camera/canvas controls, materials and texture manager. Camera controls and upstream navigation share the `Camera::ortho` state; shape masks use upstream mirror/radial symmetry; layout version 5 combines the camera/mask buttons with Undo/Redo migration. Renderer and project/undo state retain CRKW previews and saved mask data alongside upstream features. Source version is distinct from any installed/running application. In the new task-menu layout, use **Mesh > CrokedWillo** for the custom tools; the Classic layout keeps its CrokedWillo palette. Borderless mode retains the chosen CRKW display, while windowed mode supports upstream window placement.
+
+Windows verification uses a workspace-local CMake (`out/build-tools/cmake/data/bin/`) with Visual Studio 2026. The Release application, CLI and tests built successfully; all eight native core test shards passed. Blender extension and legacy ZIPs passed `build_addon.py --check`. Local README links and the CRKW diff whitespace check passed (upstream contains two existing trailing-whitespace lines in font licence text).
+
+The merge reconciles duplicate OpenGL declarations in `src/render/GL.h`. `src/app/SettingsPath.h` supplies an explicit per-process settings directory for UI tests because SDL's Windows shell lookup ignores `APPDATA`; normal launches continue using SDL's user settings folder. Scripted minus-key input is independent of the host keyboard layout. UI regression scripts explicitly choose their expected layout/input style, quote fixture paths with spaces, account for CRKW's built-in Gold when loading a custom Gold image, and keep selection coordinates inside the updated canvas.
+
+The first Windows UI run exposed the previous settings-isolation bug and touched project preferences (recent files/update/support flags), window state and ImGui state. The saved `ui.json` layout and `crkw-workspace.json` were unchanged; a post-discovery snapshot is retained in `out/update-main-preferences-snapshot`. Original recent-file history cannot be reconstructed from that snapshot. Subsequent isolated UI checks left the real project/layout/workspace/window preference hashes unchanged. No live Blender, ZBrush or Unreal round trip was run. Final UI/integration run: 121 passed, no failures; upstream-disabled `ui_stroke_resize` was not run. Together with the eight passing native core shards, all 129 enabled CTest targets passed. The desktop launcher uses `out/crkw-app/bin/sculptforge.exe`; installation is verified separately below.

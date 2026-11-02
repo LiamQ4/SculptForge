@@ -65,7 +65,9 @@ int runAppBenchmark(BenchCommandLine cl) {
         BenchGpu gpu;
         gpu.description = std::string(reinterpret_cast<const char*>(gl::GetString(GL_RENDERER))) + ", OpenGL " +
                           reinterpret_cast<const char*>(gl::GetString(GL_VERSION));
-        auto scene = [](Mesh& m) { return std::vector<SceneMesh>{SceneMesh{1, &m, true, true, nullptr}}; };
+        // SF_BENCH_FLAT=1: the mesh drawn with flat shading (the Material palette's Flat).
+        const bool flat = std::getenv("SF_BENCH_FLAT") && std::string(std::getenv("SF_BENCH_FLAT")) == "1";
+        auto scene = [flat](Mesh& m) { return std::vector<SceneMesh>{SceneMesh{1, &m, true, true, nullptr, false, flat}}; };
         gpu.upload = [&](Mesh& m) {
             SDL_PumpEvents();
             const auto t = Clock::now();
@@ -82,6 +84,8 @@ int runAppBenchmark(BenchCommandLine cl) {
             camera.frame(m.bounds());
             RenderSettings settings;
             settings.motionProxy = moving;
+            // SF_BENCH_CULL=1: Tool > Display > Backface culling on (#68).
+            settings.backfaceCulling = std::getenv("SF_BENCH_CULL") && std::string(std::getenv("SF_BENCH_CULL")) == "1";
             renderer.syncScene(scene(m));
             const int warmup = 5, frames = 120;
             Clock::time_point t;

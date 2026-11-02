@@ -105,6 +105,7 @@ const char* brushSourceName(BrushSource source) {
     case BrushSource::Studio: return "studio";
     case BrushSource::Gallery: return "gallery";
     case BrushSource::Project: return "project";
+    case BrushSource::Pack: return "pack";
     }
     return "session";
 }
@@ -138,6 +139,8 @@ Json BrushRecipe::toJson() const {
     Json j = Json::object();
     j.set("name", r.name);
     j.set("description", r.description);
+    if (connectedOnly) j.set("connectedOnly", true);
+    if (viewFalloff) j.set("viewFalloff", true);
     for (const auto& p : recipeParams()) {
         switch (p.kind) {
         case K::Float: j.set(p.key, std::round(double(*floatField(r, p.key)) * 1000.0) / 1000.0); break;
@@ -156,6 +159,8 @@ void BrushRecipe::applyJson(const Json& j) {
     if (!j.isObject()) return;
     if (j["name"].isString()) name = j["name"].asString();
     if (j["description"].isString()) description = j["description"].asString();
+    if (j["connectedOnly"].isBool()) connectedOnly = j["connectedOnly"].asBool();
+    if (j["viewFalloff"].isBool()) viewFalloff = j["viewFalloff"].asBool();
     for (const auto& p : recipeParams()) {
         const Json& v = j[p.key];
         if (v.isNull()) continue;
@@ -320,7 +325,7 @@ std::vector<BrushRecipe> builtinBrushRecipes() {
     }
     {
         BrushRecipe r;
-        r.name = "Clay Buildup";
+        r.name = "Clay Slab";
         r.description = "Builds up flat-topped strokes of clay for blocking in forms.";
         r.depth = 0.3f;
         r.plane = BrushRecipe::Plane::Clay;

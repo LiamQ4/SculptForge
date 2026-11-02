@@ -1,6 +1,7 @@
 # Preferences > Performance: antialiasing, Fast Navigation (a big scene draws without antialiasing while the view
 # moves; the threshold is lowered here so a small sphere counts as big), multithreading, what the last stroke cost
 # per dab, and memory. Strokes give the same result with multithreading off.
+run ui_look look=classic layout=zbrush        # written for the Classic look and the ZBrush-style palette bar and shelves
 run new_sphere subdivisions=6
 click "Preferences##palette.preferences"
 click "Performance##preferences.performance"
@@ -18,7 +19,17 @@ hover "Fast Navigation"
 expect_help "10 million triangles"
 hover "Multithreading##perf.mt"
 expect_help "every core"
+hover "Predictive Strokes"
+expect_help "exactly the same"
 hold none
+
+# Predictive Strokes: off by default (experimental), on and off again.
+expect_value predictive_strokes == 0
+click "Predictive Strokes"
+expect_value predictive_strokes == 1
+click "Predictive Strokes"
+expect_value predictive_strokes == 0
+expect_status "Predictive strokes off"
 
 # Antialiasing off and back; 8x.
 click "AA Off##perf.aa_1"

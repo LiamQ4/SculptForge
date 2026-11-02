@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/BVH.h"
 
+#include "core/AtomicRef.h"
 #include "core/ThreadPool.h"
 
 #include <algorithm>
@@ -13,6 +14,7 @@ namespace sf {
 namespace {
 
 constexpr uint32_t kLeafSize = 16;
+constexpr size_t kParallelRefitLeaves = 4096; // fewer: the serial walk up is cheaper than waking threads
 
 bool rayBox(const AABB& b, const glm::vec3& o, const glm::vec3& invDir, float tMax) {
     glm::vec3 t0 = (b.min - o) * invDir;
@@ -193,11 +195,14 @@ bool BVH::raycast(const Mesh& mesh, const glm::vec3& origin, const glm::vec3& di
     uint32_t bestTri = 0;
     bool found = false;
 
-    stack_.clear();
-    stack_.push_back(0);
-    while (!stack_.empty()) {
-        const Node& n = nodes_[stack_.back()];
-        stack_.pop_back();
+    // Per thread: the UI (the surface cursor, picks) casts rays while the predictive-stroke thread sculpts;
+    // a shared stack mixed their traversals (strokes then differed from the serial path).
+    thread_local std::vector<uint32_t> stack;
+    stack.clear();
+    stack.push_back(0);
+    while (!stack.empty()) {
+        const Node& n = nodes_[stack.back()];
+        stack.pop_back();
         if (!rayBox(n.box, origin, invDir, best)) continue;
         if (n.count > 0) {
             for (uint32_t i = n.first; i < n.first + n.count; ++i) {
@@ -212,8 +217,8 @@ bool BVH::raycast(const Mesh& mesh, const glm::vec3& origin, const glm::vec3& di
                 }
             }
         } else if (n.first != kNoLeaf) { // (kNoLeaf: a leaf dynamic edits emptied)
-            stack_.push_back(n.first);
-            stack_.push_back(n.first + 1);
+            stack.push_back(n.first);
+            stack.push_back(n.first + 1);
         }
     }
     if (!found) return false;
@@ -232,11 +237,14 @@ void BVH::queryTriangles(const Mesh& mesh, const glm::vec3& center, float radius
     out.clear();
     if (nodes_.empty()) return;
     const float r2 = radius * radius;
-    stack_.clear();
-    stack_.push_back(0);
-    while (!stack_.empty()) {
-        const Node& n = nodes_[stack_.back()];
-        stack_.pop_back();
+    // Per thread: the UI (the surface cursor, picks) casts rays while the predictive-stroke thread sculpts;
+    // a shared stack mixed their traversals (strokes then differed from the serial path).
+    thread_local std::vector<uint32_t> stack;
+    stack.clear();
+    stack.push_back(0);
+    while (!stack.empty()) {
+        const Node& n = nodes_[stack.back()];
+        stack.pop_back();
         if (!sphereBox(n.box, center, r2)) continue;
         if (n.count > 0) {
             for (uint32_t i = n.first; i < n.first + n.count; ++i) {
@@ -248,25 +256,44 @@ void BVH::queryTriangles(const Mesh& mesh, const glm::vec3& center, float radius
                 if (sphereBox(b, center, r2)) out.push_back(triIndices_[i]);
             }
         } else if (n.first != kNoLeaf) {
-            stack_.push_back(n.first);
-            stack_.push_back(n.first + 1);
+            stack.push_back(n.first);
+            stack.push_back(n.first + 1);
         }
     }
 }
 
-void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const {
+void BVH::forEachLeafInSphere(const glm::vec3& center, float radius,
+                              const std::function<void(std::span<const uint32_t>)>& fn) const {
+    if (nodes_.empty()) return;
+    const float r2 = radius * radius;
+    std::vector<uint32_t> stack;
+    stack.reserve(64);
+    stack.push_back(0);
+    while (!stack.empty()) {
+        const Node& n = nodes_[stack.back()];
+        stack.pop_back();
+        if (!sphereBox(n.box, center, r2)) continue;
+        if (n.count > 0) fn(std::span<const uint32_t>(triIndices_.data() + n.first, n.count));
+        else if (n.first != kNoLeaf) {
+            stack.push_back(n.first);
+            stack.push_back(n.first + 1);
+        }
+    }
+}
+
+template <class Shape>
+void BVH::queryVerticesIn(const Mesh& mesh, const Shape& shape, std::vector<uint32_t>& out) const {
     out.clear();
     queryLeaves_.clear();
     if (nodes_.empty()) return;
     if (vertBits_.capacity() < mesh.vertexCount()) vertBits_.resize(mesh.vertexCount());
-    const float r2 = radius * radius;
 
     // The units of parallel work: the subtrees the sphere touches, split breadth first until there are enough
     // of them (the same ones for any thread count).
     constexpr size_t kTasks = 128, kSerialTriangles = 16384;
     std::vector<uint32_t>& tasks = queryTasks_;
     tasks.clear();
-    if (sphereBox(nodes_[0].box, center, r2)) tasks.push_back(0);
+    if (shape.touches(nodes_[0].box)) tasks.push_back(0);
     int depth = 0; // of every inner node in `tasks` (median splits: each holds about nt >> depth triangles)
     for (bool split = true; split && tasks.size() < kTasks; ++depth) {
         split = false;
@@ -279,7 +306,7 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
             }
             split = true;
             for (uint32_t c : {n.first, n.first + 1})
-                if (sphereBox(nodes_[c].box, center, r2)) queryNext_.push_back(c);
+                if (shape.touches(nodes_[c].box)) queryNext_.push_back(c);
         }
         tasks.swap(queryNext_);
     }
@@ -291,13 +318,13 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
             const uint32_t ni = nodeStack.back();
             const Node& n = nodes_[ni];
             nodeStack.pop_back();
-            if (!sphereBox(n.box, center, r2) || (n.count == 0 && n.first == kNoLeaf)) continue;
+            if (!shape.touches(n.box) || (n.count == 0 && n.first == kNoLeaf)) continue;
             if (n.count == 0) {
                 nodeStack.push_back(n.first);
                 nodeStack.push_back(n.first + 1);
                 continue;
             }
-            if (boxInSphere(n.box, center, r2)) { // every corner is inside
+            if (shape.containsBox(n.box)) { // every corner is inside
                 for (uint32_t i = n.first; i < n.first + n.count; ++i) {
                     const auto& t = mesh.triangles[triIndices_[i]];
                     found.insertLocal(t.x);
@@ -316,8 +343,7 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
                         any = true;
                         continue;
                     }
-                    const glm::vec3 d = mesh.positions[v] - center;
-                    if (glm::dot(d, d) <= r2) {
+                    if (shape.contains(mesh.positions[v])) {
                         found.insertLocal(v);
                         any = true;
                     }
@@ -347,6 +373,56 @@ void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius,
     vertBits_.take(out);
 }
 
+namespace {
+
+struct SphereShape {
+    glm::vec3 c;
+    float r2;
+    bool touches(const AABB& b) const { return sphereBox(b, c, r2); }
+    bool containsBox(const AABB& b) const { return boxInSphere(b, c, r2); }
+    bool contains(const glm::vec3& p) const { return glm::dot(p - c, p - c) <= r2; }
+};
+
+// An infinite cylinder: the points within sqrt(r2) of the line through c along the unit vector a.
+struct CylinderShape {
+    glm::vec3 c, a;
+    float r, r2;
+    float dist2(const glm::vec3& p) const {
+        const glm::vec3 d = p - c;
+        const glm::vec3 off = d - a * glm::dot(d, a);
+        return glm::dot(off, off);
+    }
+    bool touches(const AABB& b) const { // conservative: the box's bounding sphere against the cylinder
+        const glm::vec3 mid = (b.min + b.max) * 0.5f;
+        const float reach = r + glm::length(b.max - mid);
+        return dist2(mid) <= reach * reach;
+    }
+    bool containsBox(const AABB& b) const {
+        for (int k = 0; k < 8; ++k) {
+            const glm::vec3 p((k & 1) ? b.max.x : b.min.x, (k & 2) ? b.max.y : b.min.y, (k & 4) ? b.max.z : b.min.z);
+            if (dist2(p) > r2) return false;
+        }
+        return true;
+    }
+    bool contains(const glm::vec3& p) const { return dist2(p) <= r2; }
+};
+
+} // namespace
+
+void BVH::queryVertices(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const {
+    queryVerticesIn(mesh, SphereShape{center, radius * radius}, out);
+}
+
+void BVH::queryVerticesCylinder(const Mesh& mesh, const glm::vec3& point, const glm::vec3& axis, float radius,
+                                std::vector<uint32_t>& out) const {
+    const float len = glm::length(axis);
+    if (!(len > 1e-12f)) {
+        queryVertices(mesh, point, radius, out);
+        return;
+    }
+    queryVerticesIn(mesh, CylinderShape{point, axis / len, radius, radius * radius}, out);
+}
+
 void BVH::refit(const Mesh& mesh, std::span<const uint32_t> movedVerts) {
     if (nodes_.empty()) return;
     if (leafBits_.capacity() < nodes_.size()) leafBits_.resize(nodes_.size());
@@ -365,6 +441,10 @@ void BVH::refitLeaves(const Mesh& mesh, std::span<const uint32_t> leaves) {
     poolFor(leaves.size(), [&](size_t b, size_t e) {
         for (size_t i = b; i < e; ++i) nodes_[leaves[i]].box = leafBox(mesh, nodes_[leaves[i]]);
     }, 512);
+    if (leaves.size() >= kParallelRefitLeaves) {
+        refitAncestors(leaves);
+        return;
+    }
     // Grow ancestors until one already contains the new bounds (a union, so the order doesn't matter).
     for (uint32_t li : leaves) {
         AABB box = nodes_[li].box;
@@ -378,6 +458,75 @@ void BVH::refitLeaves(const Mesh& mesh, std::span<const uint32_t> leaves) {
             box = pb;
         }
     }
+}
+
+// A big brush refits hundreds of thousands of leaves, and walking each one's ancestors on one thread cost more
+// than the leaves themselves (13 ms a dab at 21M triangles). Here the ancestors are flagged in parallel (each once:
+// the thread that flags a node first goes on up, the others stop there), then recomputed from their children:
+// bottom-up within subtrees taken in parallel, then the few nodes above those subtrees. Every box is the union
+// of its children's (tighter than growing the old one), so the result doesn't depend on the thread count.
+void BVH::refitAncestors(std::span<const uint32_t> leaves) {
+    if (nodeDirty_.size() < nodes_.size()) nodeDirty_.resize(nodes_.size(), 0); // (all 0 between calls)
+    poolFor(leaves.size(), [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i)
+            for (uint32_t ni = leaves[i]; ni != 0;) {
+                ni = nodes_[ni].parent;
+                if (AtomicRef<uint8_t>(nodeDirty_[ni]).exchange(1, std::memory_order_relaxed)) break;
+            }
+    }, 1024);
+    auto inner = [&](uint32_t ni) { return nodes_[ni].count == 0 && nodes_[ni].first != kNoLeaf; };
+    auto dirtyInner = [&](uint32_t ni) { return inner(ni) && nodeDirty_[ni]; };
+    auto recompute = [&](uint32_t ni) {
+        Node& n = nodes_[ni];
+        AABB box = nodes_[n.first].box;
+        box.expand(nodes_[n.first + 1].box);
+        n.box = box;
+        nodeDirty_[ni] = 0;
+    };
+    // The subtrees: dirty nodes split breadth first until there are enough; the split ones are done last.
+    constexpr size_t kTasks = 128;
+    std::vector<uint32_t>& tasks = queryTasks_;
+    std::vector<uint32_t>& next = queryNext_;
+    std::vector<uint32_t> aboveNodes;
+    tasks.clear();
+    if (dirtyInner(0)) tasks.push_back(0);
+    for (bool split = true; split && tasks.size() < kTasks;) {
+        split = false;
+        next.clear();
+        for (uint32_t ni : tasks) {
+            const uint32_t c = nodes_[ni].first;
+            if (!dirtyInner(c) && !dirtyInner(c + 1)) {
+                next.push_back(ni);
+                continue;
+            }
+            split = true;
+            aboveNodes.push_back(ni);
+            for (uint32_t k : {c, c + 1})
+                if (dirtyInner(k)) next.push_back(k);
+        }
+        tasks.swap(next);
+    }
+    // Each subtree post-order: a node once both its dirty children are done.
+    poolFor(tasks.size(), [&](size_t b, size_t e) {
+        std::vector<std::pair<uint32_t, bool>> stack;
+        for (size_t t = b; t < e; ++t) {
+            stack.assign(1, {tasks[t], false});
+            while (!stack.empty()) {
+                auto [ni, childrenDone] = stack.back();
+                stack.pop_back();
+                if (childrenDone) {
+                    recompute(ni);
+                    continue;
+                }
+                stack.push_back({ni, true});
+                const uint32_t c = nodes_[ni].first;
+                for (uint32_t k : {c, c + 1})
+                    if (dirtyInner(k)) stack.push_back({k, false});
+            }
+        }
+    }, 1, 2);
+    // Then the nodes above them, deepest first (they were split in breadth-first order).
+    for (auto it = aboveNodes.rbegin(); it != aboveNodes.rend(); ++it) recompute(*it);
 }
 
 void BVH::editLeaf(uint32_t leaf) {
@@ -528,7 +677,7 @@ bool BVH::degraded() const {
 size_t BVH::memoryBytes() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(v[0]); };
     return bytes(nodes_) + bytes(triIndices_) + bytes(triLeaf_) + bytes(leafCap_) + bytes(editedLeaves_) + bytes(leafEdited_) + vertBits_.memoryBytes() + leafBits_.memoryBytes() +
-           bytes(queryLeaves_) + bytes(scratchLeaves_) + bytes(stack_);
+           bytes(queryLeaves_) + bytes(scratchLeaves_) + bytes(stack_) + bytes(nodeDirty_);
 }
 
 void BVH::refitAll(const Mesh& mesh) {

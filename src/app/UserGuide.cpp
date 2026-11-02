@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <utility>
 
 namespace sf {
 
@@ -401,6 +402,13 @@ void UserGuide::navigate(const std::string& target, bool record) {
     }
     std::string file = t.file;
     if (const size_t slash = file.rfind('/'); slash != std::string::npos) file = file.substr(slash + 1);
+    // Chapters renamed to SculptForge's own names: old links still find them.
+    static const std::pair<const char*, const char*> kRenamed[] = {{"subtools.md", "parts.md"},
+                                                                   {"zspheres.md", "forge-spheres.md"},
+                                                                   {"polypaint.md", "vertex-paint.md"},
+                                                                   {"polygroups.md", "face-groups.md"}};
+    for (const auto& [from, to] : kRenamed)
+        if (file == from) file = to;
     if (file == "index.md") {
         go({-1, 0.0f}, t.anchor, record);
         return;
@@ -419,37 +427,44 @@ std::string UserGuide::websiteUrl() const {
 std::string UserGuide::chapterFor(const std::string& palette, const std::string& actionId) {
     auto starts = [&](const char* p) { return palette.rfind(p, 0) == 0; };
     auto idStarts = [&](const char* p) { return actionId.rfind(p, 0) == 0; };
-    if (starts("Tool > Geometry > QRemesh") || starts("Tool > SubTool > Project")) return "retopology.md";
-    if (starts("Tool > SubTool")) return "subtools.md";
+    // Palette paths by SculptForge's names, and the older ZBrush-style ones (stored layouts, scripts).
+    if (starts("Tool > Geometry > Quad Remesh") || starts("Tool > Geometry > QRemesh") || starts("Tool > Parts > Project") ||
+        starts("Tool > SubTool > Project"))
+        return "retopology.md";
+    if (starts("Tool > Parts") || starts("Tool > SubTool")) return "parts.md";
+    if (starts("Tool > Forge Spheres") || starts("Tool > ZSpheres")) return "forge-spheres.md";
     if (starts("Tool > Layers")) return "layers.md";
     if (starts("Tool > Facial Shapes")) return "facial-shapes.md";
     if (starts("Tool > Geometry") || starts("Tool > Remesh")) return "geometry.md";
     if (starts("Tool > Masking")) return "masking.md";
-    if (starts("Tool > Polygroups") || starts("Tool > Visibility")) return "polygroups.md";
+    if (starts("Tool > Face Groups") || starts("Tool > Polygroups") || starts("Tool > Visibility")) return "face-groups.md";
+    if (starts("Tool > Selection Sets")) return "selection-sets.md";
     if (starts("Tool > Export")) return "exporting.md";
     if (starts("Tool > Display")) return "interface.md";
-    if (starts("Tool")) return "subtools.md";
+    if (starts("Tool")) return "parts.md";
     if (starts("Brush"))
         return actionId == "ui.brush_lab" || actionId == "ui.brush_gallery" || actionId == "brush.paste" ? "brush-lab.md"
                                                                                                          : "sculpting.md";
     if (starts("Draw") || starts("Stroke") || starts("Alpha")) return "sculpting.md";
-    if (starts("Color") || starts("Material")) return "polypaint.md";
+    if (starts("Color") || starts("Material")) return "vertex-paint.md";
     if (starts("File > Blender")) return "blender.md";
+    if (starts("File > Maya")) return "maya.md";
     if (starts("File > Capture from phone") || actionId == "file.capture_phone") return "phone-capture.md";
     if (starts("File > Export") || idStarts("file.export") || actionId == "file.send_unreal" || actionId == "file.save_splats" ||
-        starts("File > GoZ"))
+        starts("File > Send to ZBrush") || starts("File > GoZ"))
         return "exporting.md";
     if (starts("File")) return "projects.md";
     if (starts("Generate")) return "generate-3d.md";
     if (starts("Splats > Make sculptable")) return "scan-to-sculptable.md";
     if (starts("Splats")) return "splats.md";
     if (starts("Script")) return "scripting.md";
+    if (starts("Library > Packs") || starts("Macros") || idStarts("pack.") || idStarts("macro.")) return "packs-and-macros.md";
     if (starts("Transform > Gizmo") || idStarts("gizmo.") || actionId == "tool.draw" || actionId == "tool.move" ||
         actionId == "tool.scale" || actionId == "tool.rotate")
         return "gizmo.md";
     if (starts("Transform")) return idStarts("transform.symmetry") ? "sculpting.md" : "navigation.md";
     if (starts("Render") || starts("Edit") || starts("Help") || starts("Palettes") || starts("Preferences") ||
-        starts("LightBox"))
+        starts("Library") || starts("LightBox"))
         return "interface.md";
     return {};
 }
@@ -990,6 +1005,23 @@ void UserGuide::drawPage(App& app) {
         else if (listItem && nextList) gap = 3.0f * s;
         else if (b.kind == BlockKind::Image || b.kind == BlockKind::Table || b.kind == BlockKind::Code) gap = 16.0f * s;
         y += h + gap;
+    }
+    if (place_.chapter == page && currentFile() == "whats-new.md") {
+        // The end of What's New: a quiet line about supporting SculptForge (it only opens the website's page).
+        const float y0 = origin.y + y + 8.0f * s;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddLine(ImVec2(origin.x, y0), ImVec2(origin.x + width, y0), theme::u32(theme::sectionRule));
+        ImGui::SetCursorScreenPos(ImVec2(origin.x, y0 + 14.0f * s));
+        if (bodyFont()) ImGui::PushFont(bodyFont());
+        ImGui::PushTextWrapPos(origin.x + width);
+        ImGui::TextUnformatted("SculptForge is free and open source, and stays that way. If it helps your work, "
+                               "you can support its development.");
+        ImGui::PopTextWrapPos();
+        if (bodyFont()) ImGui::PopFont();
+        ImGui::Spacing();
+        ImGui::SetCursorScreenPos(ImVec2(origin.x, ImGui::GetCursorScreenPos().y));
+        if (ImGui::Button("Support SculptForge##whats_new")) app.openSupportPage();
+        y = ImGui::GetCursorScreenPos().y - origin.y;
     }
     ImGui::SetCursorScreenPos(start);
     ImGui::Dummy(ImVec2(avail, y + pad * 2.0f));

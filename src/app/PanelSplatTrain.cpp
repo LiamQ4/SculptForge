@@ -53,6 +53,7 @@ enum class Pick { None, Video, Folder, Brush, Colmap };
 std::mutex g_pickMutex;
 std::vector<std::pair<Pick, std::string>> g_picked;
 void SDLCALL onPicked(void* userdata, const char* const* files, int) {
+    wakeMainLoop(); // a file dialog answered (maybe on another thread): redraw now
     if (!files || !files[0]) return;
     std::lock_guard lock(g_pickMutex);
     g_picked.emplace_back(Pick(reinterpret_cast<intptr_t>(userdata)), files[0]);
@@ -166,7 +167,7 @@ void App::registerSplatTrainUi() {
                    "Train a Gaussian splat from a capture - a phone video, a folder of photos, a phone-link capture "
                    "folder, or a COLMAP / nerfstudio dataset - in the background. The splat appears in the viewport "
                    "after the first few hundred steps and sharpens as it trains; the result is saved next to the "
-                   "capture and in the LightBox Splats tab. Uses Brush (downloaded on request), COLMAP for camera "
+                   "capture and in the Library Splats tab. Uses Brush (downloaded on request), COLMAP for camera "
                    "positions and ffmpeg for video.",
                    {{"source", T::String, "The capture: a video file or a folder.", true},
                     {"out", T::String, "Folder for the result and work files. Default: next to the capture.", false},

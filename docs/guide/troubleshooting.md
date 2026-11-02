@@ -22,7 +22,8 @@ found at start-up (for example `OpenGL 4.6 (Core Profile) Mesa 26.1.8 on ...`), 
 
 - Linux: run `sculptforge` in a terminal.
 - macOS: run `/Applications/SculptForge.app/Contents/MacOS/SculptForge` in Terminal.
-- Windows: the release build has no console window; if it closes straight away, update the driver first.
+- Windows: the release build has no console window; if it closes straight away, update the driver first, then
+  read the [log file](#the-log-file), which holds the same messages.
 
 ## First launch warnings on macOS and Windows
 
@@ -43,7 +44,7 @@ documentation** opens links to it).
   **Tool > Geometry > Decimate** or a lower **Voxel Remesh** resolution brings it down. See
   [Subdivide, Remesh, Decimate and LODs](geometry.md).
 - Turn off **Wireframe** (<kbd>Shift</kbd>+<kbd>F</kbd>) on dense meshes.
-- Hide SubTools you aren't working on, or **Solo** the active one.
+- Hide Parts you aren't working on, or **Solo** the active one.
 - A large Gaussian splat capture costs GPU time too: lower the count with **Clean floaters**, or untick
   **Show** in the **Splats** palette while you sculpt.
 - On laptops with two GPUs, make sure SculptForge runs on the dedicated one (in the GPU maker's control panel
@@ -51,8 +52,8 @@ documentation** opens links to it).
 - **Preferences > Performance**: lower **Antialiasing** (or turn it off), keep **Fast Navigation** on, and look
   at **Last stroke** to see whether brushes or the graphics card take the time. Step down a
   [subdivision level](subdivision-levels.md) for big changes. See [Performance and big meshes](performance.md).
-- A SubTool missing from the view with "Not enough GPU memory" in the status bar didn't fit on the graphics
-  card: hide other SubTools or step down a level.
+- A Part missing from the view with "Not enough GPU memory" in the status bar didn't fit on the graphics
+  card: hide other Parts or step down a level.
 
 ## Pen tablets
 
@@ -75,6 +76,8 @@ If no pen is detected or pressure doesn't change:
 - **Linux:** check that the system sees the pen as a tablet (for example in your desktop's tablet settings).
 - If the cursor moves but strokes have no pressure, test in another application to see whether the driver
   reports pressure at all.
+- **The cursor jumps back when you put the pen down elsewhere:** the tablet driver is set to mouse (relative)
+  mode. Turn on **Preferences > Tablet > Mouse mode (relative)**.
 
 ## AI services
 
@@ -179,36 +182,55 @@ SculptForge keeps its settings in one folder per user:
 | `project.json` | Recent files and the autosave interval |
 | `autosave.sfproj` | The autosaved copy of unsaved work (removed once you save) |
 | `clean_exit` | Marks a normal exit; without it, the autosave is offered for restore |
+| `sculptforge.log`, `sculptforge-previous.log` | What this session and the last one did, and what crashed (see [The log file](#the-log-file)) |
 | `console_history.txt` | The console's command history |
 | `recent_actions.txt` | Recently used entries of the command palette |
 | `brushes/` | Your brush library, one `.sfbrush` file per brush |
 | `brush-gallery-cache/`, `brush-gallery.json` | Community brush gallery cache and its address |
-| `thumbs/` | Cached LightBox and picker thumbnails (safe to delete) |
+| `thumbs/` | Cached Library and picker thumbnails (safe to delete) |
 
-Your **library folder** (projects, tools, alphas, images, splats and QuickSaves shown in the LightBox) is
-separate: `Documents/SculptForge` by default, changeable in **Preferences > LightBox > Library folder**.
+Your **library folder** (projects, tools, alphas, images, splats and QuickSaves shown in the Library) is
+separate: `Documents/SculptForge` by default, changeable in **Preferences > Library > Library folder**.
 
 > **Tip:** To move settings to another computer, copy `ui.json`, `ai.json` and the `brushes` folder. For a
 > shared layout, use **Preferences > Config > Save UI...** and **Load UI...** instead.
+
+## The log file
+
+SculptForge writes what it does to `sculptforge.log` in its [settings folder](#where-settings-live). Choose
+**Help > Open log folder** to open it:
+
+| System | Log file |
+|---|---|
+| Windows | `%APPDATA%\SculptForge\SculptForge\sculptforge.log` |
+| macOS | `~/Library/Application Support/SculptForge/SculptForge/sculptforge.log` |
+| Linux | `~/.local/share/SculptForge/SculptForge/sculptforge.log` |
+
+It holds the version, your system and GPU (the `OpenGL ... on ...` line), warnings and errors, and each command
+you ran. If SculptForge crashes, it ends with lines starting `CRASH:` that say what crashed and what was done
+last. Every start keeps the previous session's log as `sculptforge-previous.log` beside it, so after a crash
+**attach `sculptforge-previous.log` to your report** (the new `sculptforge.log` is the session after it). It holds
+no models and no keys, only command names and messages, which may include file names.
 
 ## Recovering work after a crash
 
 SculptForge autosaves unsaved work every 5 minutes by default (**Preferences > Autosave**, 0 turns it off).
 After a crash, the next start asks "SculptForge did not close normally last time. Restore the autosaved
 work?". **Restore** opens it as unsaved work (save it under a name); **Discard** deletes it. See
-[Projects, autosave and QuickSave](projects.md).
+[Projects, autosave and snapshots](projects.md). The dialog also points to the crashed session's
+[log file](#the-log-file).
 
 ## Frequently asked questions
 
 **Can SculptForge open ZBrush files (.ZTL, .ZPR)?**
 Not directly: they are proprietary and undocumented. Convert ZTools once in ZBrush with the free
-**SculptForge ZTool Export** plug-in, then open the `.ZTL` in SculptForge (see
-[Coming from ZBrush](coming-from-zbrush.md#bring-your-ztools-over)). Or use GoZ, or export OBJ or FBX from ZBrush
-(see [Exporting, Send to Unreal and GoZ](exporting.md#exchange-models-with-zbrush-goz)). `.ZPR` projects can't be
+**SculptForge ZTL Export** plug-in, then open the `.ZTL` in SculptForge (see
+[Coming from ZBrush](coming-from-zbrush.md#bring-your-ztools-over)). Or use Send to ZBrush, or export OBJ or FBX from ZBrush
+(see [Exporting, Send to Unreal and ZBrush](exporting.md#exchange-models-with-zbrush-send-to-zbrush)). `.ZPR` projects can't be
 converted; open their ZTools instead.
 
 **Does it have subdivision levels, DynaMesh, ZRemesher or UVs?**
-Voxel remesh works like DynaMesh, **QRemesh** like ZRemesher (with **ProjectAll** to bring the detail back; see
+Voxel remesh works like DynaMesh, **Quad Remesh** like ZRemesher (with **Project All** to bring the detail back; see
 [Quad retopology](retopology.md)), **Auto UV** unwraps any model, and Divide adds subdivision levels you can
 step up and down (see [Subdivision levels](subdivision-levels.md)). **Dynamic** on the top shelf is dynamic
 topology, like Sculptris Pro (see [Dynamic topology](dynamic-topology.md)).
@@ -238,7 +260,9 @@ good report includes:
 3. **Steps to reproduce**: what you did, what you expected and what happened instead.
 4. **The commands you ran**: open the console (the backtick key, left of <kbd>1</kbd>), click **Copy session
    as script** and paste it into the report. It often reproduces the problem exactly.
-5. **A file** if the problem is with a particular model (a small `.sfproj` or the original file), and a
+5. **After a crash, the log**: `sculptforge-previous.log` from **Help > Open log folder** (see
+   [The log file](#the-log-file)).
+6. **A file** if the problem is with a particular model (a small `.sfproj` or the original file), and a
    screenshot for display problems.
 
 For a security problem, don't open a public issue; follow `SECURITY.md` in the repository instead.

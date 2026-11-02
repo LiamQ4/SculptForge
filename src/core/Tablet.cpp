@@ -72,6 +72,7 @@ Json toJson(const TabletSettings& t) {
     Json buttons = Json::array();
     for (PenAction a : t.buttons) buttons.push(std::string(penActionId(a)));
     j.set("buttons", buttons);
+    j.set("mouseMode", t.mouseMode);
     return j;
 }
 
@@ -95,12 +96,56 @@ void fromJson(const Json& j, TabletSettings& t) {
                 const PenAction a = penActionFromId(b[i].asString(), t.buttons[i]);
                 if (a != PenAction::EraseMask) t.buttons[i] = a;
             }
+    t.mouseMode = j["mouseMode"].asBool(t.mouseMode);
 }
 
 void PenPressureTracker::sample(float pressure) {
     raw_ = clamp01(pressure);
     sinceDown_ = true;
     everSampled_ = true;
+}
+
+void PenCursor::cursorAt(float x, float y) {
+    cursorX_ = x;
+    cursorY_ = y;
+    haveCursor_ = true;
+    anchored_ = false;
+}
+
+void PenCursor::systemCursor(float x, float y) {
+    if (!std::isfinite(x) || !std::isfinite(y)) return;
+    systemX_ = x;
+    systemY_ = y;
+    haveSystem_ = true;
+}
+
+void PenCursor::map(float& x, float& y, uint64_t nowNs) {
+    if (!std::isfinite(x) || !std::isfinite(y)) return;
+    const bool system = haveSystem_;
+    haveSystem_ = false; // (one reading per position)
+    if (mouseMode && system) {
+        // The system cursor is the one cursor; the pen only adds pressure and tilt. Should the system stop
+        // saying where it is, the pen carries on from here.
+        offsetX_ = systemX_ - x;
+        offsetY_ = systemY_ - y;
+        anchored_ = true;
+        lastNs_ = nowNs;
+        x = systemX_;
+        y = systemY_;
+    } else if (mouseMode) {
+        // A pen that comes back (into range, or after a pause) moves the cursor on from where it is.
+        if (!anchored_ || nowNs - lastNs_ > kLiftedNs) {
+            offsetX_ = haveCursor_ ? cursorX_ - x : 0.0f;
+            offsetY_ = haveCursor_ ? cursorY_ - y : 0.0f;
+            anchored_ = true;
+        }
+        lastNs_ = nowNs;
+        x += offsetX_;
+        y += offsetY_;
+    }
+    cursorX_ = x;
+    cursorY_ = y;
+    haveCursor_ = true;
 }
 
 } // namespace sf

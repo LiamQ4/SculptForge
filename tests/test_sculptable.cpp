@@ -383,6 +383,7 @@ TEST(sculptable_texture_and_levels) {
         const glm::vec3 c = linearToSrgb(sampleTextureAt(d.mesh, t, p));
         orange += c.x > 0.75f && c.y > 0.35f && c.y < 0.75f && c.z < 0.3f;
     }
+    std::printf("  handle samples %zu, orange %zu\n", handle, orange);
     CHECK(handle > 10 && orange * 10 >= handle * 8);
     // The top level follows the scan: no vertex further than 2 voxels from it.
     const Mesh& scan = d.subtoolMesh(d.findSubtool("Test Mug Scan"));

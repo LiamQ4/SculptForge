@@ -6,6 +6,7 @@
 #include "TestHarness.h"
 
 #include "core/BrushAlpha.h"
+#include "core/BrushRecipe.h"
 #include "core/Commands.h"
 #include "core/Primitives.h"
 #include "core/Sculpt.h"
@@ -329,7 +330,9 @@ TEST(alpha_shapes_and_orients_dabs) {
     BrushAlpha square = BrushAlpha::square();
     DabParams p = dabAt(glm::vec3(0));
     p.alpha = &square;
+    p.focal = -1.0f; // (Focal Shift -100: the alpha shows hard to its edges; at 0 it rounds the corners, #60)
     stroke(sq, BrushType::Standard, p);
+    p.focal = 0.0f;
     const uint32_t c = nearest(sq.mesh, glm::vec3(0)), diag = nearest(sq.mesh, glm::vec3(0.25f, 0, 0.25f));
     CHECK(sq.mesh.positions[diag].y > 0.9f * sq.mesh.positions[c].y);
     CHECK(round.mesh.positions[diag].y == 0.0f);
@@ -366,6 +369,130 @@ TEST(alpha_shapes_and_orients_dabs) {
     r.undo.push(r.sculptor.endStroke());
     CHECK(r.mesh.positions[nearest(r.mesh, glm::vec3(-0.12f, 0, 0))].y > 0.001f);
     CHECK(r.mesh.positions[nearest(r.mesh, glm::vec3(0.12f, 0, 0))].y == 0.0f);
+}
+
+// #60: Focal Shift shapes alpha brushes as in ZBrush. The alpha is multiplied by a round falloff reaching the
+// stamp's corners: -100 shows the whole square, 0 rounds its corners into a soft mound, +100 leaves a small point.
+TEST(focal_shift_shapes_alpha_dabs) {
+    CHECK(alphaFalloff(0.0f, 1.0f, 0.0f) == 1.0f);
+    for (float d : {0.0f, 0.5f, 1.0f, 1.3f, 1.414f}) CHECK(alphaFalloff(d, 1.0f, -1.0f) == 1.0f);
+    CHECK(alphaFalloff(1.2f, 1.0f, 0.0f) < 0.1f && alphaFalloff(1.5f, 1.0f, 0.0f) == 0.0f);
+    CHECK(alphaFalloff(0.5f, 1.0f, 1.0f) < 0.5f * alphaFalloff(0.5f, 1.0f, 0.0f));
+
+    const BrushAlpha square = BrushAlpha::square();
+    CHECK(square.stamp(0.7f, 0.7f, -1.0f) == square.sample(0.7f, 0.7f));
+    CHECK(square.stamp(0.7f, 0.7f, 0.0f) < 0.5f * square.stamp(0.7f, 0.0f, 0.0f)); // rounded corners
+    CHECK(square.stamp(1.2f, 0.0f, -1.0f) == 0.0f);
+    const BrushAlpha round = BrushAlpha::round(); // (empty: the plain brush falloff, Focal Shift included)
+    CHECK(round.stamp(0.4f, 0.0f, 0.5f) == brushFalloff(0.4f, 1.0f, 0.5f) && round.stamp(1.1f, 0.0f, -1.0f) == 0.0f);
+
+    // A square-alpha dab: how much moves (footprint) and how much of the corner survives.
+    struct Footprint { int moved = 0; float corner = 0.0f, centre = 0.0f; };
+    auto dabWith = [&](BrushType type, float focal) {
+        Document d = planeDoc();
+        DabParams p = dabAt(glm::vec3(0));
+        p.alpha = &square;
+        p.alphaUp = glm::vec3(0, 0, -1);
+        p.focal = focal;
+        stroke(d, type, p);
+        Footprint f;
+        for (const glm::vec3& v : d.mesh.positions) f.moved += std::abs(v.y) > 1e-4f;
+        f.corner = d.mesh.positions[nearest(d.mesh, glm::vec3(0.22f, 0, 0.22f))].y;
+        f.centre = d.mesh.positions[nearest(d.mesh, glm::vec3(0))].y;
+        return f;
+    };
+    for (BrushType type : {BrushType::Standard, BrushType::ClayBuildup}) {
+        const Footprint hard = dabWith(type, -1.0f), soft = dabWith(type, 0.0f), point = dabWith(type, 1.0f);
+        CHECK(hard.centre > 0.0f && soft.centre > 0.0f && point.centre > 0.0f);
+        CHECK(hard.moved > soft.moved && soft.moved > point.moved);
+        CHECK(hard.corner > 0.8f * hard.centre);  // the full square
+        CHECK(soft.corner < 0.5f * soft.centre);  // corners rounded
+        CHECK(point.corner < 0.05f * point.centre); // almost gone
+        CHECK(point.moved < hard.moved / 2);
+    }
+}
+
+// #60: Focal Shift reaches the built-in square ClayBuildup tip and custom (recipe) brushes; 0 keeps their own tip.
+TEST(focal_shift_reaches_clay_buildup_and_recipes) {
+    auto height = [&](float focal, bool recipe, const glm::vec3& at) {
+        Document d = planeDoc();
+        DabParams p = dabAt(glm::vec3(0));
+        p.focal = focal;
+        if (recipe) {
+            BrushRecipe r;
+            r.name = "test";
+            d.sculptor.beginStroke(d.mesh, "test");
+            d.sculptor.dabRecipe(d.mesh, d.bvh, r, p, kNoSymmetry);
+            d.undo.push(d.sculptor.endStroke());
+        } else {
+            stroke(d, BrushType::ClayBuildup, p);
+        }
+        const uint32_t v = nearest(d.mesh, at);
+        return d.mesh.positions[v].y / std::max(d.mesh.positions[nearest(d.mesh, glm::vec3(0))].y, 1e-9f);
+    };
+    for (bool recipe : {false, true}) {
+        const glm::vec3 at = recipe ? glm::vec3(0.15f, 0, 0) : glm::vec3(0.27f, 0, 0); // (on the tip's soft edge)
+        const float hard = height(-0.8f, recipe, at), plain = height(0.0f, recipe, at), soft = height(0.8f, recipe, at);
+        CHECK(hard > plain + 0.02f && plain > soft + 0.02f);
+    }
+    // 0 is bit-identical to no Focal Shift at all (the brush's own tip).
+    Document a = planeDoc(), b = planeDoc();
+    DabParams p = dabAt(glm::vec3(0));
+    stroke(a, BrushType::ClayBuildup, p);
+    p.focal = 0.0f;
+    stroke(b, BrushType::ClayBuildup, p);
+    CHECK(a.mesh.positions == b.mesh.positions);
+}
+
+// #75: custom and Community (recipe) brushes show the whole alpha at Focal Shift -100, as the built-ins do (#60):
+// a DragRect-style single stamp of a corner-reaching alpha with Clay Slab displaces the square's corners, not
+// only the round tip inside the brush circle. At 0 the preset keeps its own round tip.
+TEST(custom_brush_full_alpha_at_focal_minus_100) {
+    BrushRecipe slab;
+    bool found = false;
+    for (const BrushRecipe& r : builtinBrushRecipes())
+        if (r.name == "Clay Slab") slab = r, found = true;
+    CHECK(found);
+    BrushAlpha full;
+    full.name = "Full";
+    full.width = full.height = 8;
+    full.values.assign(64, 1.0f); // (white to its corners)
+    BrushAlpha bark;
+    CHECK(BrushAlpha::builtin("bark", bark));
+
+    const float radius = 0.3f;
+    const glm::vec3 corner(0.26f, 0, 0.26f); // (0.37 out: past the brush circle, inside the stamp's square)
+    auto stampWith = [&](const BrushAlpha& alpha, float focal) {
+        Document d = planeDoc();
+        DabParams p = dabAt(glm::vec3(0), radius);
+        p.alpha = &alpha;
+        p.alphaUp = glm::vec3(0, 0, -1);
+        p.focal = focal;
+        d.sculptor.beginStroke(d.mesh, slab.name);
+        d.sculptor.dabRecipe(d.mesh, d.bvh, slab, p, kNoSymmetry);
+        d.undo.push(d.sculptor.endStroke());
+        return d;
+    };
+    // Movement summed over the stamp's four corner regions (outside the circle, inside the square).
+    auto cornerSum = [&](const Document& d) {
+        float sum = 0.0f;
+        for (const glm::vec3& v : d.mesh.positions) {
+            const float cheb = std::max(std::abs(v.x), std::abs(v.z));
+            if (glm::length(glm::vec2(v.x, v.z)) > radius * 1.05f && cheb < radius * 0.98f) sum += std::abs(v.y);
+        }
+        return sum;
+    };
+
+    const Document hard = stampWith(full, -1.0f), soft = stampWith(full, 0.0f);
+    const float centre = hard.mesh.positions[nearest(hard.mesh, glm::vec3(0))].y;
+    CHECK(centre > 0.0f);
+    for (glm::vec3 c : {corner, glm::vec3(-corner.x, 0, corner.z), glm::vec3(corner.x, 0, -corner.z), -corner})
+        CHECK(hard.mesh.positions[nearest(hard.mesh, c)].y > 0.5f * centre); // the corner texels are displaced
+    CHECK(soft.mesh.positions[nearest(soft.mesh, corner)].y == 0.0f); // (0: the preset's own round tip)
+    CHECK(cornerSum(soft) == 0.0f && cornerSum(hard) > 0.0f);
+
+    // Bark reaches its corners too; at -100 they move, at 0 they don't.
+    CHECK(cornerSum(stampWith(bark, -1.0f)) > 0.0f && cornerSum(stampWith(bark, 0.0f)) == 0.0f);
 }
 
 TEST(brush_set_alpha_command) {
@@ -468,5 +595,48 @@ TEST(spray_and_spacing_are_deterministic) {
     CHECK(pts.empty());
     spacer.moveTo(glm::vec2(115, 0), 10.0f, pts);
     CHECK(pts.size() == 1 && std::abs(pts[0].x - 110.0f) < 1e-3f);
-    CHECK(std::string(strokeTypeName(StrokeType::LazyMouse)) == "LazyMouse");
+    CHECK(std::string(strokeTypeName(StrokeType::LazyMouse)) == "Lazy Stroke");
+}
+
+TEST(alpha_generated_builtins) {
+    // #43: twelve patterns made in code (no image files), after Round, Square and Noise.
+    const auto& all = BrushAlpha::builtins();
+    CHECK(all.size() == 15);
+    CHECK(all[0].empty() && all[0].name == "Round" && all[1].name == "Square" && all[2].name == "Noise");
+    for (size_t i = 3; i < all.size(); ++i) {
+        const BrushAlpha& a = all[i];
+        CHECK(a.width == 128 && a.height == 128 && a.values.size() == 128u * 128u);
+        float lo = 1.0f, hi = 0.0f, border = 0.0f;
+        double sum = 0.0;
+        for (int y = 0; y < a.height; ++y)
+            for (int x = 0; x < a.width; ++x) {
+                const float v = a.values[size_t(y) * size_t(a.width) + size_t(x)];
+                lo = std::min(lo, v);
+                hi = std::max(hi, v);
+                sum += v;
+                if (x == 0 || y == 0 || x == a.width - 1 || y == a.height - 1) border = std::max(border, v);
+            }
+        const double mean = sum / double(a.values.size());
+        CHECK(lo >= 0.0f && hi <= 1.0f && hi > 0.5f); // a real stamp, in range
+        CHECK(mean > 0.02 && mean < 0.8);             // a pattern, not a blank or a flat plateau
+        CHECK(border < 0.05f);                        // fades out at the edge, so dabs leave no square
+        if (border >= 0.05f || mean <= 0.02 || mean >= 0.8)
+            std::printf("  %s: mean %.3f border %.3f\n", a.name.c_str(), mean, double(border));
+        CHECK(!BrushAlpha::builtinHelp(a.name).empty());
+        BrushAlpha byName;
+        CHECK(BrushAlpha::builtin(a.name, byName) && byName.values == a.values);
+        for (size_t j = 3; j < i; ++j) CHECK(all[j].values != a.values); // all different
+    }
+    // Names work in any case, with spaces, '_' or '-'.
+    BrushAlpha out;
+    CHECK(BrushAlpha::builtin("fabric_weave", out) && out.name == "Fabric Weave");
+    CHECK(BrushAlpha::builtin("ROCK-STRATA", out) && out.name == "Rock Strata");
+    CHECK(BrushAlpha::builtin("skinfolds", out) && out.name == "Skin Folds");
+    // And through the command.
+    Document d = planeDoc();
+    CommandRegistry reg;
+    CHECK(reg.execute(d, "brush_set_alpha", {{"name", std::string("hair strands")}}).ok);
+    CHECK(d.brushAlpha.name == "Hair Strands");
+    CommandResult bad = reg.execute(d, "brush_set_alpha", {{"name", std::string("star")}});
+    CHECK(!bad.ok && bad.message.find("cracks") != std::string::npos);
 }

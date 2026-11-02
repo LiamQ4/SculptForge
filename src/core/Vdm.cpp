@@ -1,8 +1,10 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Vdm.h"
+#include "core/Masking.h"
 
 #include "core/BrushLibrary.h"
+#include "core/Pack.h"
 #include "core/Commands.h"
 #include "core/Document.h"
 #include "core/PathStroke.h"
@@ -422,6 +424,116 @@ VectorDisplacement makeNostrilVdm(int size) {
     });
 }
 
+namespace {
+
+// 1 inside the stamp, 0 from 0.95 radii out: the generated maps below leave the square's rim where it was.
+float rimFade(float x, float y) { return 1.0f - smooth01((std::sqrt(x * x + y * y) - 0.55f) / 0.4f); }
+
+// Distance from p to the segment a-b, and the closest point on it.
+float toSegment(glm::vec2 p, glm::vec2 a, glm::vec2 b, glm::vec2& closest) {
+    const glm::vec2 v = b - a;
+    const float t = std::clamp(glm::dot(p - a, v) / std::max(glm::dot(v, v), 1e-12f), 0.0f, 1.0f);
+    closest = a + v * t;
+    return glm::length(p - closest);
+}
+
+// A smooth, repeatable wiggle (sums of sines) for crack and wrinkle lines.
+float wiggle(float t, float seed) {
+    return 0.6f * std::sin(t * 3.1f + seed) + 0.3f * std::sin(t * 7.3f + seed * 2.1f) + 0.1f * std::sin(t * 17.0f + seed);
+}
+
+} // namespace
+
+VectorDisplacement makeRivetVdm(int size) {
+    // A domed head on a short neck, its rim bulging out over the plate a little.
+    return generate("Rivet", size, [](float x, float y) {
+        const float rho = std::sqrt(x * x + y * y), r = 0.42f;
+        if (rho >= r + 0.2f) return glm::vec3(x, y, 0.0f);
+        const glm::vec2 radial = rho > 1e-6f ? glm::vec2(x, y) / rho : glm::vec2(0.0f);
+        if (rho < r) {
+            const float s = rho / r;
+            const float z = 0.06f + 0.24f * std::sqrt(std::max(0.0f, 1.0f - s * s)); // head on a 0.06 neck
+            const float out = 0.07f * smooth01((s - 0.55f) / 0.45f);                    // the rim overhangs
+            return glm::vec3(glm::vec2(x, y) + radial * out, z);
+        }
+        // The neck: from under the rim down to the plate.
+        const float t = (rho - r) / 0.2f;
+        const float z = 0.06f * (1.0f - smooth01(t));
+        const float in = -0.04f * (1.0f - t) * (1.0f - smooth01(t));
+        return glm::vec3(glm::vec2(x, y) + radial * in, z);
+    });
+}
+
+VectorDisplacement makeStitchesVdm(int size) {
+    // Three raised thread bars across a seam (drag along the seam: the stamp's Y); the threads draw the two sides
+    // of the seam together, so the skin bunches toward it.
+    return generate("Stitches", size, [](float x, float y) {
+        const float fade = rimFade(x, y);
+        float z = -0.06f * (1.0f - smooth01(std::abs(x) / 0.08f)); // the seam line itself
+        for (int k = -1; k <= 1; ++k) {
+            const float cy = float(k) * 0.33f;
+            glm::vec2 c;
+            const float d = toSegment(glm::vec2(x, y), glm::vec2(-0.32f, cy - 0.08f), glm::vec2(0.32f, cy + 0.08f), c);
+            z = std::max(z, 0.11f * std::sqrt(std::max(0.0f, 1.0f - smooth01(d / 0.07f))));
+        }
+        const float gather = -0.1f * std::tanh(x / 0.12f) * std::exp(-x * x / 0.12f);
+        return glm::vec3(x + gather * fade, y, z * fade);
+    });
+}
+
+VectorDisplacement makeSkinFoldVdm(int size) {
+    // A heavy roll of skin hanging over a crease (the stamp's bottom, -Y), as over an eyelid or a belly.
+    return generate("Skin Fold", size, [](float x, float y) {
+        const float crease = -0.15f + 0.25f * x * x;
+        const float d = y - crease; // above the crease > 0
+        const float fade = rimFade(x, y);
+        const float roll = d > 0.0f ? std::exp(-d * d / 0.08f) : std::exp(-d * d / 0.004f);
+        const float z = 0.22f * roll - 0.06f * std::exp(-d * d / 0.003f); // a deep line where it folds under
+        const float hang = d > 0.0f ? -0.16f * std::exp(-d * d / 0.03f) : 0.0f; // slides down over the crease
+        return glm::vec3(x, y + hang * fade, z * fade);
+    });
+}
+
+VectorDisplacement makeWrinkleVdm(int size) {
+    // A fine crease: skin pinched in from both sides and pressed down along a slightly wavy line (along X).
+    return generate("Wrinkle Line", size, [](float x, float y) {
+        const float line = 0.06f * wiggle(x * 1.2f, 0.7f);
+        const float d = y - line;
+        const float along = smooth01((0.8f - std::abs(x)) / 0.35f); // tapered ends
+        const float fade = rimFade(x, y) * along;
+        const float pinch = -0.12f * std::tanh(d / 0.06f) * std::exp(-d * d / 0.05f);
+        const float z = -0.18f * std::exp(-d * d / 0.002f) + 0.04f * std::exp(-d * d / 0.03f);
+        return glm::vec3(x, y + pinch * fade, z * fade);
+    });
+}
+
+VectorDisplacement makeCrackVdm(int size) {
+    // A jagged crack (along Y) whose sides split apart and break downward into it.
+    return generate("Crack", size, [](float x, float y) {
+        const float line = 0.12f * wiggle(y * 1.6f, 2.3f);
+        const float d = x - line;
+        const float along = smooth01((0.85f - std::abs(y)) / 0.3f);
+        const float fade = rimFade(x, y) * along;
+        const float width = 0.03f + 0.03f * (0.5f + 0.5f * std::sin(y * 9.0f));
+        const float split = 0.09f * std::tanh(d / width) * std::exp(-d * d / 0.04f); // the sides move apart
+        const float z = -0.28f * std::exp(-d * d / (width * width)) + 0.02f * std::exp(-d * d / 0.02f);
+        return glm::vec3(x + split * fade, y, z * fade);
+    });
+}
+
+VectorDisplacement makeRockLedgeVdm(int size) {
+    // A stepped shelf of rock strata whose upper layer juts out over the one below (toward -Y): an overhang.
+    return generate("Rock Ledge", size, [](float x, float y) {
+        const float fade = rimFade(x, y);
+        const float edge = -0.05f + 0.05f * wiggle(x * 2.0f, 4.1f);
+        const float t = smooth01((y - edge) / 0.18f); // 0 below the ledge, 1 on top
+        const float lip = std::exp(-(y - edge - 0.1f) * (y - edge - 0.1f) / 0.01f);
+        const float z = 0.2f * t + 0.03f * wiggle(x * 4.0f + y * 3.0f, 1.3f) * t;
+        const float jut = -0.14f * lip; // the lip pushed out over the lower layer
+        return glm::vec3(x, y + jut * fade, z * fade);
+    });
+}
+
 const std::vector<std::shared_ptr<const VectorDisplacement>>& builtinVdms() {
     static const std::vector<std::shared_ptr<const VectorDisplacement>> all = [] {
         std::vector<std::shared_ptr<const VectorDisplacement>> v;
@@ -429,6 +541,13 @@ const std::vector<std::shared_ptr<const VectorDisplacement>>& builtinVdms() {
         v.push_back(std::make_shared<const VectorDisplacement>(makeEarCurlVdm()));
         v.push_back(std::make_shared<const VectorDisplacement>(makeScalesVdm()));
         v.push_back(std::make_shared<const VectorDisplacement>(makeNostrilVdm()));
+        // #43: six more, made here in code like the four above (no files).
+        v.push_back(std::make_shared<const VectorDisplacement>(makeRivetVdm()));
+        v.push_back(std::make_shared<const VectorDisplacement>(makeStitchesVdm()));
+        v.push_back(std::make_shared<const VectorDisplacement>(makeSkinFoldVdm()));
+        v.push_back(std::make_shared<const VectorDisplacement>(makeWrinkleVdm()));
+        v.push_back(std::make_shared<const VectorDisplacement>(makeCrackVdm()));
+        v.push_back(std::make_shared<const VectorDisplacement>(makeRockLedgeVdm()));
         return v;
     }();
     return all;
@@ -530,7 +649,7 @@ void Sculptor::dabVdmSingle(Mesh& mesh, BVH& bvh, const DabParams& p, float hand
     auto clock = std::chrono::steady_clock::now();
     const VectorDisplacement* vdm = p.vdm && !p.vdm->empty() ? p.vdm : builtinVdms().front().get();
     // The stamp is the brush's square, so the corners reach out to radius x sqrt(2).
-    brushVertices(mesh, bvh, p.center, p.radius * 1.4143f, verts_);
+    brushRegion(mesh, bvh, p.center, p.viewDir, p.radius * 1.4143f, p.connectedOnly, p.viewFalloff, verts_, connected_);
     if (verts_.empty()) return;
     const auto& pos = mesh.positions;
     const auto& nrm = mesh.normals;
@@ -612,7 +731,7 @@ std::shared_ptr<const VectorDisplacement> addVdm(Document& doc, VectorDisplaceme
 void loadVdmLibrary(Document& doc, const BrushLibraryPaths& paths, std::vector<std::string>& messages) {
     const std::string current = doc.brushVdm ? doc.brushVdm->name : std::string();
     doc.vdms = builtinVdms();
-    auto scan = [&](const std::string& dir, bool user) {
+    auto scan = [&](const std::string& dir, bool user, const std::string& pack = {}) {
         std::vector<std::string> files;
         std::error_code ec;
         for (fs::directory_iterator it(utf8Path(dir), ec), end; !ec && it != end; it.increment(ec)) {
@@ -628,6 +747,11 @@ void loadVdmLibrary(Document& doc, const BrushLibraryPaths& paths, std::vector<s
                 messages.push_back("Skipped " + f + ": " + err);
                 continue;
             }
+            if (!pack.empty()) {
+                // A pack's VDM never replaces another: it gets the pack's name after its own.
+                if (findVdm(doc, v.name) >= 0) v.name += " (" + pack + ")";
+                if (findVdm(doc, v.name) >= 0) continue;
+            }
             const int i = findVdm(doc, v.name);
             auto shared = std::make_shared<const VectorDisplacement>(std::move(v));
             if (i < 0) doc.vdms.push_back(shared);
@@ -635,6 +759,8 @@ void loadVdmLibrary(Document& doc, const BrushLibraryPaths& paths, std::vector<s
         }
     };
     for (const std::string& dir : paths.studioDirs) scan(dir, false);
+    for (const auto& p : paths.packs)
+        if (p.vdm && !packsSafeMode()) scan(p.dir, false, p.pack);
     if (!paths.userDir.empty()) scan(paths.userDir, true);
     const int i = findVdm(doc, current);
     doc.brushVdm = i >= 0 ? doc.vdms[size_t(i)] : doc.vdms.front();
@@ -736,7 +862,7 @@ void registerVdmCommands(CommandRegistry& registry) {
                   }});
     registry.add({"vdm_new_plane",
                   "Add a VDM plane to sculpt a new vector displacement brush on (ZBrush's VDM plane template): a flat "
-                  "2 x 2 grid seen from the top, its border masked; the other SubTools are hidden. Then vdm_capture.",
+                  "2 x 2 grid seen from the top, its border masked; the other Parts are hidden. Then vdm_capture.",
                   {{"resolution", T::Number, "Quads per side (16-1024). Default 256; divide it for finer detail.", false}},
                   [](Document& doc, const Args& a) -> CommandResult {
                       const int res = std::clamp(int(argNumber(a, "resolution", 256)), 16, 1024);
@@ -772,13 +898,13 @@ void registerVdmCommands(CommandRegistry& registry) {
                       return {true, msg};
                   }});
     registry.add({"vdm_stamp",
-                  "Press the VDM brush once (like a DragRect click): at the surface point a ray along `view` through "
+                  "Press the VDM brush once (like a Drag Stamp click): at the surface point a ray along `view` through "
                   "`point` hits, `radius` in world units, its top turned by `angle` from the view's up. One undo step.",
                   {{"point", T::String, "x,y,z the ray goes through.", true},
                    {"view", T::String, "x,y,z view direction into the scene (default 0,0,-1).", false},
                    {"radius", T::Number, "Brush radius in world units (default 4% of the model's size).", false},
                    {"angle", T::Number, "Rotation in degrees, counter-clockwise on screen (default 0).", false},
-                   {"strength", T::Number, "Z Intensity 0-1 (default 0.5 = the map's own size; 1 doubles it).", false},
+                   {"strength", T::Number, "Intensity 0-1 (default 0.5 = the map's own size; 1 doubles it).", false},
                    {"invert", T::Bool, "Dig the shape in (Alt).", false},
                    {"symmetry", T::String, "Mirror axes, e.g. \"x\" or \"xz\" (default none).", false}},
                   [](Document& doc, const Args& a) -> CommandResult {
@@ -787,7 +913,7 @@ void registerVdmCommands(CommandRegistry& registry) {
                       if (a.count("view") && !parseVec3(argString(a, "view"), view)) return {false, "Bad view (expected x,y,z)"};
                       if (glm::length(view) < 1e-6f) return {false, "The view direction must not be zero"};
                       view = glm::normalize(view);
-                      if (doc.mesh.triangleCount() == 0) return {false, "The active SubTool is empty"};
+                      if (doc.mesh.triangleCount() == 0) return {false, "The active Part is empty"};
                       doc.syncBvh();
                       const AABB box = doc.mesh.bounds();
                       const float diag = std::max(glm::length(box.extent()), 1e-4f);
@@ -808,10 +934,8 @@ void registerVdmCommands(CommandRegistry& registry) {
                       p.alphaUp = up * std::cos(angle) - right * std::sin(angle);
                       p.vdm = doc.brushVdm.get();
                       Symmetry sym{false, false, false};
-                      const std::string axes = lower(argString(a, "symmetry"));
-                      sym.x = axes.find('x') != std::string::npos;
-                      sym.y = axes.find('y') != std::string::npos;
-                      sym.z = axes.find('z') != std::string::npos;
+                      std::string symError;
+                      if (!symmetryArg(a, doc.mesh, sym, symError)) return {false, symError};
                       if (!doc.sculptor.beginStroke(doc.mesh, "VDM", doc.activeLayer))
                           return {false, "Active layer weight is 0 - raise it to sculpt into the layer"};
                       doc.sculptor.dab(doc.mesh, doc.bvh, BrushType::Vdm, p, sym);

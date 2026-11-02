@@ -6,6 +6,785 @@ All notable changes to SculptForge are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-11-01
+
+### Changed
+- The membership card at launch is redesigned: the cube mark and the promise up top, the three memberships side by
+  side with their perks checked off and one bold button each (Insider highlighted), and the members' Discord in the
+  footer. It takes the current look's colours and opens in 150 ms. "Maybe later" now hides it for 30 days, updates
+  included; the welcome's Support button and the ten-hour note open it too.
+- New memberships; nothing in the app is ever paywalled. **Supporter** ($5 / month): your name in the credits (in
+  the app and on the new [supporters page](https://sculptforge.app/supporters.html)), #members, a vote in the monthly
+  feature vote and the monthly pack. **Insider** ($20 / month): also proposing vote options, a daily drop (a brush,
+  alpha or VDM), preview builds of the next release about a week early and the monthly dev Q&A. "Every release
+  stays free for everyone; bug-fix and security releases go out to everyone the same day." **Studio** ($300 /
+  month) covers the whole company with no seat count: Insider for every artist, a custom studio build, up to 5
+  custom items a month, guided development, priority triage, a private team channel and the logo on the website
+  and README; **Founding Studio**: the first 10 studios lock in $150 / month for good. The card, Help > About, the
+  welcome, the website and the guide (with a new Studio onboarding section) say so; the monthly pack and Insider
+  drops show as **Member pack** in Library > Packs (was Supporter Pack).
+- Insider preview builds: a workflow publishes the tested packages of a commit as a prerelease in the private
+  Insiders repository and posts to #insiders (`.github/workflows/insider-preview.yml`).
+
+### Fixed
+- Custom and Community brushes (Clay Slab and other presets) show the whole alpha at Focal Shift -100, as the
+  built-in brushes do since #60: the stamp reaches its square's corners instead of being cut by the preset's round
+  tip (#75, reported by rodrigomoretto). At the default Focal Shift presets look as before; saved presets are unchanged.
+### Added
+- A new default look: new installs start in **Forge Terminal** with the **Tokyo Night** colours and the
+  **SculptForge layout** (menus by task: File, Edit, Sculpt, Paint, Mesh, View, Render, Help, whose sections are the
+  palettes; a status bar; a one-row tool shelf). Existing installs keep their look and layout, and see a one-time card,
+  "SculptForge has a new look", with **Try it** and **Keep my layout**. The welcome offers **Coming from ZBrush? Use the
+  ZBrush-style layout** in one click, and Preferences > Interface > Look switches any time. The look is remembered
+  without Store Config. Also in Preferences > Interface > Look: the **Classic** look, **Forge Terminal** with Tokyo
+  Night, Catppuccin Mocha, Gruvbox Dark, Nord, Rosé Pine, Kanagawa or Everforest colours or **Match my desktop
+  theme** (on Linux, the Omarchy theme's colours when Omarchy is installed), **Phosphor** (green or amber, optional scanlines and glow on the interface only) and **Blueprint**.
+  Scripts: `ui_look`.
+
+### Fixed
+- Switching looks no longer grows the interface's minimum window size each time (the Sculpt Timeline strip covered
+  the axis gizmo at 2400x1350).
+- A stored SculptForge-layout UI configuration without shelves gets the SculptForge layout's shelves, not the
+  ZBrush-style ones.
+### Changed
+- Linux: the native Wayland support is now documented (installing guide, site, README): every Linux package opens
+  without XWayland, stays sharp at fractional scales and reads pen pressure through tablet-v2. A test checks the
+  Linux build's SDL has both the Wayland and X11 drivers, and the RHEL/Rocky builds now include libdecor (title
+  bars on GNOME Wayland).
+### Added
+- Standard benchmark scenes: `sculptforge --benchmark standard-15m` (and `standard-33m`, or `standard` for both;
+  also Help > Benchmark) sculpts a procedural 15 or 33 million triangle head with Clay at 25, 60 and 120 px, Move,
+  Smooth and a 240 px brush, and reports frame time p50/p95/p99, stroke lag in pixels, the worst stall, peak RAM and
+  graphics memory. The [benchmarks page](https://sculptforge.app/benchmarks/) lists results, explains how to run it
+  in three steps and how to submit yours (`tools/benchmark/submit.py` or the new **Benchmark result** issue form).
+
+## [0.10.6] - 2026-11-01
+
+### Added
+- Packs and macros (#20): `.sfpack` files bring brushes, alphas, Lit Spheres, Material Recipes, VDMs, keymaps, pie
+  menus and macros in one file (format: `docs/pack-format.md`). **File > Install Pack...**, a dropped file or
+  **Library > Packs** shows a review first (counts by type, every item, the license text, the author; a Supporter
+  Pack is marked by its `"channel": "insider"`, display only). Installed packs live in their own folders in the app
+  data folder, can be switched off or removed, never replace built-in or user items (a clash gets the pack's name),
+  and their items appear in the brush, alpha, Lit Sphere, Material Recipe, keymap, pie menu and macro lists tagged
+  with the pack. **New Pack** exports your own items; `pack_install`, `pack_list`, `pack_remove`, `pack_enable`,
+  `pack_disable` and `pack_create` work in `sculptforge-cli` and Python; `--no-packs` is a safe mode. Packs are data
+  only and every one is treated as hostile: a strict zip reader refuses absolute paths, `..`, symbolic links,
+  devices, encryption, ZIP64, overlapping entries and duplicate or Windows-reserved names, caps sizes, file counts
+  and the unpacking ratio, accepts only the listed file types and parses every file (JSON strictly).
+  Macros (`.sfmacro`): **Record Macro** keeps the commands you run, the **Macro Editor** checks the text as you type,
+  and every macro is an action for F3, keys and pie menus; edits on one Part undo as one step. A macro
+  shows its whole command list and asks before it first runs, only runs SculptForge's own commands (nothing that
+  reaches the network or another program), and uses files only inside the project folder or picked when it runs
+  (`macro_run`, `macro_list`, `macro_check`).
+- PBR viewport: **Material > Viewport Shading** switches between **Lit Sphere** (the default) and **PBR**, which
+  shows the texture's material channels as a game engine or renderer does: GGX reflections from a prefiltered
+  environment, diffuse light from its spherical harmonics, multiple-scattering energy for rough metals, exposure
+  and an ACES, AgX or Reinhard tone map. Painted Normal and Height channels bend the shading through MikkTSpace
+  tangents. Four environments: **Studio** (generated) and three CC0 HDRIs from Poly Haven (**Photo Studio**,
+  **Small Studio**, **Outdoor Sky**), plus `.hdr` / `.exr` files from `SCULPTFORGE_HDRI_PATH`; rotation, the
+  environment behind the model and a cavity term that keeps sculpted detail readable. Parts without a material
+  texture use a roughness and metallic set there. A new environment is prepared on a worker thread, and a
+  20.9-million-triangle mesh draws in about 8 ms in PBR next to about 6 ms with Lit Sphere (Apple M1 Pro).
+  Saved with the project (`viewport_shading mode=pbr environment=outdoor_sky exposure=0.5 tone_map=agx`).
+- Mesh Maps bake: **Tool > Bake** adds **Curvature** (convex edges bright, creases dark, from the surface's mean
+  curvature at a set radius), **Thickness** (how far rays travel inside), **Position** (16-bit) and **ID** (a colour
+  per face group or per Part) to the normal, world normal, displacement, AO, cavity and colour maps. The source can
+  be the Part's own **top subdivision level** (baked onto its lowest level) or its **micro level** (onto its base),
+  besides other Parts. UVs outside 0..1 bake as **UDIM tiles** (`name_normal.1001.png`, `1002`, ...). The bake runs
+  on a worker thread with progress and Cancel (`bake source=subdivision maps=normal,ao,curvature,thickness,position,id`).
+- Mesh Maps in the texture (`mesh_maps`): AO, curvature, thickness, position, world normal and ID baked on the
+  texture's own UVs and size, tile by tile on every core, for Fill layers to read. After sculpting, only the tiles
+  near the change are baked again, from a compact copy of the nearby triangles, and the result matches a full bake
+  texel for texel (2K maps of an 82k-triangle Part: about 10 s in full, about 0.5 s for a local change).
+- Fill layers: **Tool > Paint Layers > + Fill Layer** lays a material (colour, roughness, metallic, height) over the
+  whole Part through a mask built from effects: **Edge Wear**, **Dirt**, **Gradient**, **Thickness** and **Light
+  Direction** generators reading the Mesh Maps, **Noise** in 3D (no UV seams), a **Paint** mask painted with the
+  Paint brush, **Levels**, **Blur**, **Invert** and **Fill**, each with its own settings and blend. Fill layers sit
+  in the layer stack with paint layers, re-evaluate tile by tile when their settings, painted mask or the Mesh Maps
+  change, undo like any edit and are saved with the project (format 7). With **Live** on, sculpting re-bakes only
+  the Mesh Maps tiles near the stroke on a worker thread and the Fill layers follow the new form
+  (`fill_layer generator=edge_wear color=#e0e0e8 metallic=1`, `mesh_maps action=live live=true`).
+- Material Recipes: **Worn Metal**, **Painted Edges**, **Dirt and Dust** and **Rusted Iron**, stacks of Fill layers
+  kept as small `.sfmaterial` text files, laid on a Part in one undoable step from **Tool > Paint Layers >
+  Material Recipe**. Save your own from a Part's Fill layers (`material_recipe name=worn_metal`,
+  `material_recipe action=save path=mine.sfmaterial`).
+- Forge Spheres with the pointer only (#8): **Drag places child** (or <kbd>Ctrl</kbd>+drag) moves a new sphere away
+  from its parent in one Draw drag; the sphere last clicked or added is selected (outlined in orange) for **Delete
+  Selected**, **Insert Between** and **Set as Root**, and a right click on a sphere opens a menu with the same.
+  Set as Root keeps the armature's shape and links (`zsphere_set_root index=3`).
+- Maya input style (#32): <kbd>Alt</kbd>+right drag zooms with a sideways drag (right zooms in), as Maya's own
+  dolly; **Preferences > Input > Zoom drag** switches it back to up and down, and **Invert zoom** turns zoom drags
+  around in every style.
+- Along the normal (from the discussions): Move, Tendril, Elastic Tendril and KelvinGrab started with the invert
+  key held (<kbd>Alt</kbd>; <kbd>Ctrl</kbd> in the Blender and Maya styles) move the surface along the average
+  normal under the brush instead of the view plane. These brushes had no use for the key; **Preferences > Input >
+  Along the normal** makes it Always or Never.
+- Whole-Part deformations (from the discussions): **Tool > Deformation > Polish** (bilateral normal filtering:
+  noise goes, planes and edges stay), **Relax** (even spacing along the surface), **Smooth** (Laplacian, or Taubin
+  with Smooth keeps volume) and **Balloon** (fills the form out; negative lets the air out), each with an amount,
+  mask-aware, open borders and hidden faces kept, one undo step, and as commands (`deform_polish`, `deform_relax`,
+  `deform_smooth`, `deform_balloon`). 10.5M vertices at amount 50: Smooth 0.5 s, Balloon 0.7 s, Relax 0.9 s,
+  Polish 2 s (Apple M1 Pro).
+- Dynamic topology's **Smooth remesh** (from the discussions): how much Shift-smoothing remeshes while Dynamic is
+  on, from **Smooth only** (the topology stays) to **Simplify** (the default, as before); a preference, saved with
+  the project, `dyntopo smooth_remesh=0`.
+- Brush falloff options (from the discussions): **Connected only** keeps a dab to the surface joined to the point
+  under the cursor, **View falloff** measures the falloff on screen (a cylinder through the model along the view),
+  as Blender's proportional editing. For every sculpt brush, recipes, VDM stamps, masking and vertex paint; saved
+  with the preferences, the project and custom brushes. A dab moving 470k of 10.5M vertices: 9.6 ms, 16 ms with
+  Connected only.
+- The official community Discord (https://discord.gg/gWrYkEmQhH): **Help > Join the Discord...**, a button on the
+  support card at launch (it opens the invite and leaves the card open), a link in the first-run welcome, the top
+  bar and footer of every website page, the membership page (members get private channels), the README and
+  CONTRIBUTING.md (questions on Discord; bugs still go to GitHub issues).
+
+### Changed
+- The website's membership page is now `support.html` (titled Membership; the old address redirects there) and lists
+  what each membership includes. Help > Support SculptForge, the welcome, the reminder and the launch card open it
+  and describe the membership benefits; the one-time option is now the One-time Supporter (pay what you want).
+- Backface culling (#68): **Tool > Display > Backface culling** skips the back faces of every Part, closed or open,
+  from any view: you see through the openings of open meshes, and brushes and picking work only on the faces drawn.
+  Off by default; Store Config keeps it, projects keep their own. An 8M-triangle open mesh seen from behind: 3.1 ms
+  -> 0.7 ms a frame; a closed 20M sculpt is unchanged (its hidden back faces were already skipped).
+- Viewport cursor (#73): a crosshair over the 3D view where brushes act; the arrow (or the resize, text and link
+  cursors) over panels, menus, popups and gizmo handles. **Preferences > Interface > Viewport cursor**: Crosshair
+  (default) or Arrow.
+- A radial menu on the right mouse button (#74): **Preferences > Input > Radial Menus** offers **Right mouse
+  button**; a plain right-drag then opens the pie (as Maya's marking menus) and the view turns with
+  <kbd>Shift</kbd>+right-drag or the style's other ways (the panel says which). Off by default.
+
+### Fixed
+- Maya input style (#32): <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+drag erases the mask instead of starting
+  the <kbd>Ctrl</kbd>+<kbd>Shift</kbd> visibility selection.
+- Smooth on Quad Remesh results (#69): smoothing averaged every neighbour along a triangle edge, quad diagonals
+  included, so a vertex at one end of a diagonal was pulled along it and the quads sheared into zigzags. Smooth (the
+  brush, Shift, recipes' smoothing and Tool > Deformation > Smooth) now averages the polygon's own edges. 30 smooth
+  strokes on a remeshed sphere: corner angle error 3.9 -> 3.3 degrees (it was 8.8); on the lion head 8.7 -> 9.7
+  (was 19.5). Triangle meshes are unchanged.
+- Keep Masked remeshing (#67): Voxel Remesh with Keep Masked failed on real models ("Couldn't cut the remeshed
+  surface cleanly") at every resolution, because the voxel surface touches itself where parts of a model meet (a
+  lion's mane) and the join refused any such surface. Those spots are now fine; a mask edge that touches itself is
+  tidied at those corners, masked spots smaller than the new polygons are remeshed, narrow gaps between masked areas
+  are kept, and the strip is widened where the join folds (the status line says when the mask was tidied). When it
+  still can't be joined, the message says what to change (blur or grow the mask, by how much, or unmask where parts
+  overlap). Lion head and marble bust, four masks, two resolutions: 0 of 16 joined before, 16 of 16 now.
+- Tablet mouse mode (#72): after lifting the pen and putting it down elsewhere, the brush and the system arrow moved
+  together but apart, and clicks landed at the brush. In mouse mode the system cursor is now the one cursor for the
+  brush and the panels (read with every pen position; the pen adds pressure and tilt).
+- Radial menus on mouse buttons open only on a plain press (#74): <kbd>Alt</kbd>+middle pans, <kbd>Alt</kbd>+right
+  zooms (Maya style) and <kbd>Shift</kbd>+right turns the view, whatever menu is on the button.
+- glTF import rejects malformed accessor and buffer sizes instead of crashing or reading out of bounds (reported by
+  @Agapenordev in #70).
+- Paint Layers: picking a Material Recipe, or changing a Fill layer, from the panel could crash: the panel kept
+  reading the texture the command had just replaced. Its commands now run once the panel is drawn.
+
+## [0.10.5] - 2026-11-01
+### Added
+- **Radial symmetry** (#63): **R** in Transform > Symmetry and on the top shelf repeats strokes around the X, Y or Z
+  axis (Radial Count 2-64), combined with the X / Y / Z mirrors (mirror + radial = 2N copies), and **Local**
+  symmetry about the active Part's centre. Applies to every brush and stroke, mask and smooth strokes, vertex paint
+  and texture painting, Mask / Select Rectangle and Lasso, Dynamic Topology (new topology on every copy) and Insert;
+  the brush cursor shows on every copy. Saved in projects; `radial`, `radial_axis` and `local` arguments on
+  `stroke`, `vdm_stamp`, `mask_rect`, `mask_lasso`, `hide_rect`, `hide_lasso`, `insert_primitive` and `insert_mesh`.
+- **Preferences > Interface > Timeline position** (#63): the Sculpt Timeline strip at the top of the viewport (the
+  new default, away from the brush shelf) or at the bottom; Store Config keeps it.
+- **UV Editor** (Tool > Texture Map > UV Editor, Alt+U): a window with the active Part's UV layout over the UDIM
+  tile grid, drawn on the GPU (pan, zoom, a checker or the painted texture behind). Select vertices, edges, faces or
+  islands (1-4) by click or box, or on the model with **Select in 3D**; move, rotate and scale with the selection's
+  handles or G / R / S (X / Y lock an axis, Ctrl snaps). **Seam Tool**: drag on the model to mark seams along the
+  shortest edge paths (Alt clears); seams also from face groups, island borders or sharp edges, and show in red on
+  the model. **Unwrap**: Least Stretch (LSCM, then as-rigid-as-possible), Conformal (LSCM), By Face Groups, Planar,
+  Unfold Islands (keeps pins) and Auto Seams (xatlas), solved with a multigrid preconditioner (a 1.3M-triangle
+  sphere unwraps in seconds); closed, looped and tangled pieces get cut automatically; selected faces unwrap in
+  place. **Pack** into one tile or across UDIM tiles with a margin, rotation and equal texel density, by island
+  outline or box (whichever fits larger), or at a fixed texel density spilling into more tiles. **Texel density**:
+  set, match and pick, with a density heat map. **Trim sheets**: lay islands into horizontal strips (count, heights
+  or v ranges), fitted to the width or keeping proportions. **Pin**, **Weld**, **Split**, **Straighten**, **Flip**,
+  **Rotate 90**. The model shows islands, stretch or density colours and a UDIM-tinted checker live during edits, and
+  **Paint stays on the model** re-projects a painted texture (every layer) onto each new layout in the same undo
+  step. Seams and pins are saved in projects. Commands: `uv_unwrap`, `uv_pack`, `uv_seam`, `uv_select`,
+  `uv_transform`, `uv_edit`, `uv_density`, `uv_trim`, `uv_info` (scripts, CLI, Python, MCP); guide chapter UV
+  Editor.
+- **Preferences > Input > Start strokes off the model** (#62, off by default) and **Toggle strokes off the model**
+  (<kbd>Shift</kbd>+<kbd>L</kbd>): a left-drag that starts on the background begins a stroke, which touches the model
+  once the cursor reaches it (Lazy Stroke and the stroke path start there, so nothing jumps). Ctrl (mask) and Shift
+  (smooth) strokes work the same way; a Ctrl+click on the background still inverts the mask. The view still turns
+  with a right-drag (or a pen button set to Right click), pans with Alt+drag or a middle-drag, moves with Space held
+  when that option is on, and Blender and Maya keys keep Alt+left-drag. A label at the top of the canvas shows while
+  it is on. Mask Lasso, Mask Rectangle and the hide / show shapes are unchanged.
+
+### Changed
+- Features use SculptForge's own names (Parts, Forge Spheres, Vertex Paint, Face Groups, Library, Lit Spheres,
+  Quad Remesh, Voxel Remesh, Dynamic Topology, Snapshot, Gizmo, Lazy Stroke, Wireframe, Send to ZBrush, Sharp
+  Crease, Clay Block, Tendril...); searching for ZBrush terms still finds them. MatCaps are now Lit Spheres. The user guide's chapters follow
+  (Parts, Forge Spheres, Vertex Paint, Face Groups; the old web addresses redirect), and
+  Help > User Guide > Coming from ZBrush has the table of ZBrush terms and their SculptForge names. The ZBrush
+  plug-in is now called SculptForge ZTL Export (same file, `SculptForgeZToolExport.txt`).
+- New installs default to the SculptForge-style keys (Preferences > Input); a first-start "Coming from: ZBrush /
+  Blender / Maya / New to sculpting" choice sets the key style, and existing users keep their saved choice.
+  ZBrush's keys are the **ZBrush-style** option.
+- Contributions are signed off under the Developer Certificate of Origin (`git commit -s`; see CONTRIBUTING.md).
+- Faster CI and releases with the same tests (docs/releasing.md):
+  - **Compiler caching:** compiles go through ccache, cached only by pushes to main and maintainers' own runs.
+    Pull requests only read the cache, and tags never save one.
+  - **Parallel tests:** `sculptforge_tests` runs as eight parallel shards (`sculptforge_tests --shard K/N`; each test
+    now prints its time). ctest runs in parallel, with timed measurements and clipboard tests alone. The slowest
+    test sets are spread over several free runners.
+  - **Skipped work:** website-only pushes skip the build and test jobs.
+  - **Build once, promote:** the release packages are built and tested on every push to main (the new Packages
+    workflow). A tagged release promotes the packages of the commit it tags instead of building them again.
+  - **Smoke tests before publishing:** every package (Windows installer and .zip, .dmg, .deb and AppImage on x86_64
+    and arm64, .rpm) is installed on a fresh runner, opens a model, sculpts and saves.
+- `scripts/release.sh X.Y.Z` tags, waits and brings the site, update feed, guide, AUR, Homebrew and Omarchy to the
+  release, and drafts the issue replies. It is resumable, and stops with the fix when something is wrong.
+### Added
+- Selection Sets (**Tool > Selection Sets**, `selection_set_*`): any number of named snapshots per Part of the mask,
+  polygroups, visibility, vertex paint, UVs and shape, each holding the channels you tick. Store, restore, rename,
+  delete, combine (union / intersect / subtract, also as restore modes onto the current mask and visibility) and a
+  quick set from the visible faces, each one undo step. A set restores at any subdivision level of its Part (values
+  carried through the levels as the stack carries attributes; shapes as offsets, so in-between detail stays). Stored
+  compactly (runs of masked / painted / hidden elements, run-length polygroups) in projects under the optional
+  `selection_sets` key (no format version bump; older versions skip it), in `.sfsets` files
+  (`selection_sets_export` / `selection_sets_import`) and in USD exports as GeomSubsets and primvars, which USD import
+  reads back. A set with its shape is a morph target: the new **Morph** brush pulls toward it (Alt pushes away) and
+  `selection_set_morph` (Morph to Set) blends the whole Part toward it by an amount, within the mask. Python:
+  `Document.selection_sets`, `selection_set(name)` and `set_selection_set(name, mask=..., ...)` push and pull sets as
+  NumPy arrays.
+
+### Fixed
+- The viewport now appears on Windows setups whose window uses another colour format (seen on NVIDIA with high-resolution displays): the view was drawn but never reached the window, so the cursor left trails and the model never showed (#29).
+
+## [0.10.4] - 2026-11-01
+
+### Added
+- The interface in Spanish (#44): **Preferences > Interface > Language** switches between **English** (the default)
+  and **Español** at once, and Store Config keeps it. The palette bar, the palettes and their sub-palettes
+  (Preferences, SubTool, Geometry, Remesh, Masking, Polygroups and more), the top, left and right shelves, the
+  LightBox tabs, the command palette (which also finds commands by their Spanish names), Ctrl-help titles and many
+  messages are translated; tool and brush names stay as Spanish-speaking ZBrush artists use them (SubTool, QRemesh,
+  ZSpheres, LightBox, MatCap, Clay Buildup). The translations are written by hand and compiled into the program;
+  anything not yet translated shows in English.
+- Maya bridge (#42): **File > Maya** and a SculptForge shelf for Maya (`integrations/maya/sculptforge_maya.py`,
+  plain `maya.cmds`, released as `sculptforge_maya.zip`). Send the selected meshes from Maya, sculpt, then
+  **Send to Maya**: each object gets its new mesh by name, keeping its transform, parent and shading groups (one
+  undo step in Maya). Meshes travel as OBJ (quads, UVs) through one exchange folder you pick in both apps, with
+  a small, strictly checked manifest; no ports or connections, nothing in the folder is ever run, and the bridge
+  is off until you choose the folder. **Get automatically** (off by default) checks that folder once a second
+  (`maya_send` / `maya_receive folder=<folder>`; Help > User Guide > Working with Maya).
+- Mask from the mesh border (#61): **Tool > Masking > By border** masks the open edges of the active SubTool and
+  **Rings** (1-20) of edges inside them, so sculpting doesn't move the border (Blender: Mask from mesh
+  boundary). **Polygroup borders** also masks where polygroups meet (ZBrush: Mask by polygroup border), **Soft**
+  fades the mask inwards; one undo step. A closed mesh masks nothing and the status bar says it has no open edges
+  (`mask_border rings=2 polygroups=true soft=true`).
+- The support card at launch: a full-window card over a bronze sculpt rendered in SculptForge, with the Supporter
+  ($5 / month), Insider ($20 / month, "Insiders will get each release about two weeks early, starting with
+  SculptForge 1.0.") and Studio ($150 / month for up to 10 artists) memberships and a one-time gift, each opening its Stripe checkout in
+  the browser. It shows only while starting: the first time, after each update (with a link to What's New), and
+  otherwise at most once every 7 days; never mid-session, in tests, renders, demos or CI (`SF_NO_SUPPORT_CARD=1`
+  also turns it off). Maybe later, Esc or a click outside closes it; "I'm already a supporter" hides it for good
+  (stored in project.json; there are no accounts). Preferences > Support turns it off. Its picture is decoded on a
+  worker thread only when it shows. The donate page's first screen is redesigned to match (light and dark).
+- Radial (pie) menus (#45): up to 8 menus of up to 8 items, each item any action the command palette (F3) finds
+  (brushes, tools, commands, toggles). Hold a menu's key, flick toward an item and let go to run it; tap the key and
+  the pie stays open for a click. A menu can also open from a mouse button (middle, back, forward) or a pen side
+  button while it is held. Two built in: **Brushes** on <kbd>T</kbd> and **Masking** on <kbd>Y</kbd> (free in
+  every input style). Edit them in Preferences > Input > Radial Menus: add, remove and reorder items, pick each
+  action with the palette's search, give it your own label and icon, set the menu's key and button. Store Config
+  keeps them in ui.json; Export / Import shares one menu as a small JSON file holding only action names (unknown
+  actions are left out, counts and text lengths are capped).
+- Insert your own mesh (#34): **Append > Insert on the model > Active SubTool's copy...** (another SubTool) or
+  **From file...** (`.obj`, `.ply`, `.glb`), dragged onto the surface like the shapes: centred, sized by the drag,
+  its up axis along the normal, turned by the drag and mirrored by symmetry, one undo step
+  (`insert_mesh subtool=<name>|file=<path>`).
+- **Keep Masked** for Voxel Remesh, Decimate and QRemesh (#43, off by default): masked areas keep their
+  triangles exactly; the rest is rebuilt and, for the remeshers, joined to them along the mask's edge with a
+  strip of triangles so the model stays closed (`keep_masked=true` on `remesh`, `decimate`, `qremesh`).
+- Triple-click another SubTool in the viewport to make it the active one and frame it (#43).
+- **Preferences > Input > Hold Space and drag to move the camera** (#43, off by default since ZBrush's Space opens
+  the QuickMenu): with Space held, left-drag rotates, right- or middle-drag pans and Ctrl+drag zooms, anywhere on
+  the canvas; never while typing in a text field.
+- Twelve more built-in alphas (#43): Pores, Cracks, Scales, Rivets, Stitches, Fabric Weave, Bark, Rock Strata,
+  Wrinkles, Skin Folds, Hair Strands and Dot Grid; and six more VDM brushes: Rivet, Stitches, Skin Fold, Wrinkle
+  Line, Crack and Rock Ledge. All are generated in code the first time they're used (no downloaded or bundled
+  image files), with thumbnails in the pickers and the LightBox (whose Brush tab now lists the built-in VDMs too).
+
+### Fixed
+- Focal Shift now shapes brushes that use an alpha, as in ZBrush (#60): the alpha is multiplied by the round
+  falloff Focal Shift controls, so at -100 the whole alpha shows hard to its edges, at 0 a Square alpha's corners
+  round off into a soft mound, and at +100 only a soft point in the middle is left. Before, alpha brushes always
+  behaved as at -100. Focal Shift also reaches the built-in ClayBuildup's square tip and custom (Brush Lab)
+  brushes now, which ignored it; at 0 they keep their own tip exactly as before.
+- SelectRect and SelectLasso (hide / show) ignored symmetry (#51 follow-up): with X / Y / Z on, the mirror image of
+  the shape counts as inside too, as with MaskRect and MaskLasso (`hide_rect` / `hide_lasso symmetry=x`).
+
+## [0.10.3] - 2026-11-01
+
+### Added
+- Preferences > Tablet > Mouse mode (relative) (#54): for tablets whose driver is set to mouse mode, the pen moves
+  the cursor by how far it moves, like a mouse.
+- Alternate smooth (#40, as in ZBrush): start a stroke with Shift held, then let go of Shift while still pressing,
+  and the rest of the stroke smooths without shrinking the form (a Taubin smooth). Brush > Smooth keeps volume
+  makes that the Shift / Smooth brush smooth (letting go of Shift then switches to the plain one).
+- Ctrl+drag on the background with MaskPen draws a mask rectangle while dragging (#48) and masks what it covers;
+  one that covers none of the model clears the mask, as before (and as in ZBrush, without DynaMesh's remesh).
+- Axis gizmo (#43): click an end of the X / Y / Z gizmo in the canvas corner to snap to that side view
+  (orthographic), as in Blender; the negative ends are drawn too and the end under the pointer is ringed.
+- Undo and Redo on the right shelf (#43); stored layouts get them at the top once (layout version 3).
+- **Continuous** is also in the left shelf's stroke picker, under the stroke tiles (#43).
+- Insert on the model respects X / Y / Z symmetry (#43): a mirrored copy on the other side, one undo step
+  (`insert_primitive symmetry=x`).
+- SubTool thumbnails in the SubTool list (#43), drawn from each SubTool's existing GPU buffers (no upload, the
+  motion proxy on dense meshes), one per frame at most and only once a change has settled, never during a stroke.
+
+- Ways to support SculptForge (memberships on the website; the app stays free and behaves the same for
+  everyone). Each one only opens https://sculptforge.app/donate.html in the browser: **Help > Support
+  SculptForge...**, a line in the first-run welcome (new: a small note on the very first start, also Help > Welcome
+  in the command palette), a line at the end of **What's New**, and a **Supporters** section in **Help > About**
+  listing the names in `docs/supporters.txt`, compiled in and shown as plain text (control and invisible formatting
+  characters removed, 40 characters and 2000 names at most). After about ten hours of sculpting (counted locally
+  in project.json) one dismissible note shows along the bottom of the canvas, never at launch and never again.
+  No payment code, network calls, tracking or licence checks.
+
+### Changed
+- The Mask display toggle (right shelf, <kbd>Ctrl</kbd>+<kbd>H</kbd>) says in its help and the status bar that a
+  hidden mask still masks (#43).
+
+### Fixed
+- Pen tablets in mouse (relative) mode (#54): lifting the pen and putting it down elsewhere made the cursor jump
+  back to where the pen was on the tablet. Turn on Preferences > Tablet > Mouse mode.
+- MaskLasso and MaskRect ignored symmetry (#51): the mirror image of the shape is masked too now, as with mask
+  strokes. A Ctrl+click on the model with MaskLasso or MaskRect blurs the mask (Ctrl+Alt+click sharpens it), as
+  with MaskPen; it did nothing. A lasso or rectangle that covers none of the model clears the mask.
+- macOS (#41): reopening in full screen (restored from the last session, #35) left the menu bar and window buttons
+  unreachable until another display was clicked; full screen is now entered after the window is on screen.
+
+## [0.10.2] - 2026-11-01
+
+### Removed
+- The local API for other programs and its `mesh_read` / `mesh_set_positions` commands (added in 0.10.1, off by
+  default). SculptForge no longer listens on any port for other programs.
+
+### Changed
+- Predictive strokes stay an experiment, off by default (Preferences > Performance): a surface-cursor race that
+  could change a stroke is fixed, but a stroke is not yet identical to one placed without them in every run.
+- Draft strokes are no longer chosen by any hardware tier or on battery (they measured no faster and aren't yet
+  identical to a full stroke); the Draft Strokes setting still turns them on.
+
+### Added
+- Insert on the model (#34): the drag's direction also turns the inserted shape about the surface normal.
+
+### Fixed
+- Security: the timelapse, proof-mode and --record video exports passed the file name to ffmpeg's command line in
+  double quotes, so a crafted name (for example a project called `x$(...)`) could run a command. Names are now
+  quoted so nothing in them is interpreted (and refused on Windows when they contain shell characters).
+- The brush ring that follows the surface (#25) read the mesh while a predictive stroke's thread was changing it,
+  which could change where that stroke's dabs landed; it now shows the flat ring during such strokes.
+
+### Added
+- **QRemesh 2**, the new default quad retopology (**Tool > Remesh > QRemesh**, also under **Tool > Geometry**;
+  `qremesh method=v2`). The layout is solved over the whole model at once as an integer grid: a smooth cross field
+  that follows the principal curvature (smoothed over about one quad) and the feature lines, then a seamless
+  parametrization whose grid lines are the edge loops, with feature lines and guides on grid lines and the poles
+  on grid points, extracted at the target density. Poles appear only where the form needs them (a sphere gets
+  exactly eight, a box one per corner) and loops run unbroken; open QRemesh Guides are exact edge loops; hard
+  edges and polygroup borders (Keep Groups) are kept on their exact place; polypaint density adds the pole pairs a
+  change of density needs; symmetry mirrors the field and the result exactly; the result is deterministic.
+  Loop-aware relaxation lets vertices slide along loops on ridges but not off them. Against the legacy method on
+  the lion scan, the ICT head, a creature sculpted from a sphere and a hard-surface part at 2k / 5k / 10k quads:
+  a quarter to a fiftieth of the poles at the same distance to the sculpt (lion 5k: 1,028 → 199 poles, corners
+  18.2° → 7.9° off square; ICT head 5k: 511 → 114; creature 10k: 308 → 37; a 1.3M-triangle sculpt at 10k:
+  401 → 8; boxes: one pole per corner and 0.000% distance). The full table is in the guide (Quad retopology >
+  How it works). A 1.3M-triangle sculpt takes about 4 s to 5,000 quads.
+- **Quality report** after QRemesh, in the status line, the QRemesh panel and the `qremesh` command's message:
+  poles (by valence), how far quad corners are from square, and the distance to the sculpt (mean and Hausdorff).
+  `quality=false` skips the measuring.
+- Dense sculpts are decimated in parallel blocks to a working resolution first. A sculpted sphere at 2k / 5k /
+  10k quads (M1 Pro, 10 cores, shared with other jobs): 1.3M triangles 3.1-6.4 s (peak 0.36 GB), 5.2M 6.6-8.6 s
+  (1.3 GB), 21M about 20 s (4.7 GB); eight poles each time. The quality report adds a few seconds at 21M.
+- Tests: test_qremesh2.cpp (eight poles on a sphere, determinism, exact symmetry, hard edges and groups, the
+  command); `SF_QREMESH_BENCH=<dir>` runs the comparison with the legacy method and writes the results as OBJ,
+  `SF_BENCH_LIMITS=1` times 1.3M / 5.2M / 21M-triangle sculpts with their peak memory.
+
+- **Kelvinlet brushes**: physically based elastic brushes from the regularized Kelvinlets of de Goes & James
+  (SIGGRAPH 2017): the exact displacement of an elastic solid under a softened point load, so the surface moves
+  like clay pushed with a thumb, with no falloff edge. **KelvinGrab** (an elastic Move: tri-scale kernel, 1/r^5
+  falloff), **KelvinTwist** (press and drag right to turn clockwise around that point; every ring turns rigidly,
+  so volume is kept), **KelvinScale** (drag left to pinch, right to swell; integrated as a radial flow, so it never
+  folds through the centre) and **KelvinSnake** (a multi-scale SnakeHook whose pull narrows as it travels, so
+  horns taper by themselves). **Brush > Kelvinlet & Capture**: **Squash** is Poisson's ratio, from rubbery (0) to
+  incompressible clay that bulges around the thumb (100); **Sharpness** a tighter, cusped peak with the same
+  reach. Symmetry (the twist mirrors as a pseudovector), masks, hidden parts, sculpt layers, pressure and undo work
+  as with every brush. Each move touches only the points inside an adaptive cutoff (where the move is still more
+  than 4% of its largest, the last part faded smoothly to 0), evaluates the kernel from a radial table, works out a
+  fast drag in pieces in one pass, and passes on only what moved to undo, normals and the BVH. KelvinGrab and
+  DetailClone are on the bottom shelf; all five are in the brush picker, the LightBox and the `stroke` command.
+  On dense meshes a long move is applied at most about a brush radius per frame (the rest in the next frames),
+  the far field is evaluated on a coarse lattice and, over 400k vertices, deferred to a world lattice that a
+  sixth of the vertices take each frame (all of it when the stroke ends), and the cutoff tightens up to 10% of
+  the peak over a vertex budget. Twist and Scale at 33M / 50 px: 57 ms frames (was 110-280); KelvinGrab still
+  about 190 ms there (renderer sync), see docs/performance.md.
+- **Capture from view** (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>C</kbd>, askNK's request): drag a square (Shift: a
+  circle) over any sculpted detail and get, side by side, a **grayscale height alpha** (height toward the viewer
+  over a fitted plane, normalized, optionally detail-only) and a **vector displacement map**: each point's true 3D
+  offset from a smooth base (the broad form as a fitted quadric, the rest by implicit fairing with the rim held),
+  in the base's own tangent frame, so overhangs and sideways leans come along. Options: Base Smoothing, Edge Fade,
+  Resolution, Fit plane, Invert. **Use as Alpha**, **Use as VDM**, **Detail Clone** or **Save to Library** (the
+  alpha as a PNG in the LightBox Alphas folder, the VDM in the brush library; VDMs now show in the LightBox Brush
+  tab with their thumbnails). Commands `capture_alpha` and `capture_vdm`.
+- **DetailClone** brush: stamps the VDM brush's map along the stroke, one copy every stamp width (Clone Spacing),
+  each turned to follow the stroke (Clone follows stroke) and shaped to the surface under it; a click stamps one.
+- `new_bench_sphere millions=N` makes the benchmark's sphere of N million triangles (with subdivision levels),
+  and `SF_MEASURE_BRUSH=<brush>` makes `--measure-stroke` measure another built-in brush (`SF_KELVIN_LOG=1` logs
+  each Kelvinlet move: pieces, vertices, kernel / normals / BVH milliseconds).
+- Tests: tests/test_kelvinlet.cpp (kernel normalization and far-field cancellation, divergence against Squash,
+  bulge, exact twist, pinch without folding, symmetry, mask, undo, sculpt layers, threads, Detail Clone, the
+  captures with a VDM round trip within 9% RMS and a curved-surface capture; a dense-mesh timing check with
+  SF_BENCH_LIMITS=1) and the UI test kelvinlet_capture.
+
+### Changed
+- Make sculptable still remeshes with the legacy method for now (QRemesh 2 flattened part of a thin handle on x86).
+- The 0.9 QRemesh is kept as **Method > Legacy** (`qremesh method=legacy`). Closed QRemesh Guide loops (round an
+  eye, or across the symmetry plane) still use it for that piece for now, and a piece QRemesh 2 can't do cleanly
+  falls back to it; the status line says so.
+
+## [0.10.1] - 2026-11-01
+
+0.10.0 was tagged but never published (its Windows build failed); everything in it ships here.
+
+### Added
+- **Local API for other programs** (#36): Preferences > Input > Local API (or `SF_LOCAL_API=1`) serves commands to
+  programs on this computer on 127.0.0.1 with a token in `api.json`; new `mesh_read` and `mesh_set_positions`
+  read the active SubTool's coordinates and write them back as one undoable step (topology checked).
+- **Maya navigation style** (#32): Preferences > Input > Maya: Alt+left orbits, Alt+middle pans, Alt+right zooms;
+  Ctrl inverts, Ctrl+Alt masks.
+- **Focal length** (#26): Draw > Camera > Focal Length (15-300 mm, full-frame) with 35 / 50 / 85 / 135 presets,
+  saved with the project.
+- **More primitives** (#31): Append > Cylinder, Cone, Torus, Capsule, Icosphere, Quad Sphere (quads, one polygroup
+  per part); **Insert on the model** (#34): pick a primitive in Append > Insert and drag on the surface to add it
+  along the normal, sized by the drag (`insert_primitive`); **Continuous** stroke option (keeps dabbing while the
+  brush rests); an **X / Y / Z axis gizmo** in the canvas corner (Draw > Camera > Axes).
+- SculptForge remembers its window size, position, maximised and full-screen state (#35).
+
+### Fixed
+- The viewport could keep old frames on screen (cursor trails, popups burned in, the mesh not drawn) on some
+  drivers, NVIDIA on Windows among them (#29): the view now resets the scissor, colour and depth write state before
+  it clears.
+- Windows builds: proof mode's `small` / `near` names clashed with Windows headers.
+
+- **Micro levels: hundreds of millions of sculptable polygons** (**Tool > Geometry > Micro**, `micro_*`
+  commands). Above the highest subdivision level a SubTool can carry a micro level: per triangle a regular grid of
+  16-bit heights along the interpolated normal of the smooth (Phong-tessellated) base, instead of a mesh.
+  300 million micro triangles take 374 MB (1.25 bytes each; the whole app about 0.8 GB), where a mesh of that size
+  would need about 27 GB. Unlike ZBrush's HD Geometry the whole model is sculptable at once.
+  - Brushes: Standard, Clay, Clay Buildup, Smooth, Inflate, Flatten, Trim, Layer, Pinch / Crease / Dam Standard
+    (as height sharpening), Mask; symmetry, Focal Shift, pressure and the mask apply. Big brushes are evaluated on
+    a coarser grid and interpolated (scale-adaptive). Move reshapes the base below the micro level and the detail
+    rides along (dual scale); "Move along normals" moves the micro surface itself.
+  - Viewport: the micro surface is evaluated on the GPU per frame, with a level of detail per cluster and a
+    triangle budget (2M on a laptop profile, 8M on a workstation, `RenderSettings::renderTriangleBudget`), crack
+    free; the shading keeps every micro detail. 300M micro triangles orbit at 70+ fps with 4x antialiasing (M1 Pro).
+  - Bake Micro (to a mesh), Export Displacement (32-bit EXR or 16-bit PNG, scalar or vector, over the base UVs).
+  - Undo: a packed journal per stroke (tiles in Morton order, each tile's change predicted and packed).
+  - Very large levels stay out of core in a sparse memory-mapped file (only what you touch is in memory).
+  - Projects: format 7 when a SubTool has a micro level (others stay format 6 for older versions).
+  - `sculptforge --bench-micro --bench-sizes 33,100,300` measures it. Guide chapter "Micro levels".
+- Automatic hardware detection and calibration. On first launch, and again when the graphics card, its driver or
+  the version changes, SculptForge spends about a second or two (under a small overlay; Esc skips) measuring
+  triangle throughput, upload bandwidth, brush speed and memory bandwidth, and probes the GPU (OpenGL strings,
+  video memory through GL_NVX_gpu_memory_info, GL_ATI_meminfo, GLX_MESA_query_renderer, amdgpu sysfs, DXGI or
+  CGL), RAM, threads, SIMD and OS. The result picks a profile: **Laptop / Budget**, **Workstation** (64 GB+ RAM
+  with a 16 GB+ discrete GPU, or Apple Silicon Max / Ultra and big APUs, that measure fast) or a **Software** safe
+  mode for llvmpipe, with a render triangle budget, motion proxy
+  threshold, GPU memory and upload budgets, texture, subdivision and micro-triangle limits and the thread count.
+  Cached in the settings folder; no network use. A one-line status bar message says what was found.
+- Preferences > Performance shows what was detected and measured ("Detected <GPU>, <memory> -> Workstation"),
+  the settings in effect, **Re-calibrate** and manual overrides (kept across re-calibrations).
+- An adaptive frame governor holds the view at 60 fps (120 / 144 on a fast display) while it moves, by switching
+  big scenes to their motion proxy sooner or later, with hysteresis; it changes only what is drawn, never the
+  model. Fast Navigation's 10 million triangle threshold now comes from the profile.
+- On battery (laptops), brushes switch to draft mode, uploads per frame halve and the target is 60 Hz.
+- `sculptforge --calibrate` prints the profile as JSON (schema sculptforge.calibration/1); commands
+  `performance_profile`, `calibrate` and `set_performance_override` for the console, scripts and MCP.
+- For developers: `core/TierConfig.h` (resident cache cap, active-triangle budget, upload budget, draft brush
+  mode, zero-copy UMA, target Hz) and `renderTriangleBudget()` for the renderer and micro-displacement
+  (docs/performance.md, "Hardware profile").
+- Material painting (PBR): a painted texture can carry Roughness, Metallic, Normal, Height (16-bit), Ambient
+  Occlusion, Emissive and Opacity besides its colour, all painted in the same strokes. Turn channels on in
+  **Tool > Texture Map > Material Channels** (`texture_channels`); a channel costs no memory until it is painted
+  (64x64 copy-on-write tiles; untouched tiles aren't stored). **Color > Material** sets what the brush lays on
+  each channel (material swatches, per-channel value swatches and sliders; `paint_material`), and **C** picks the
+  whole material under the cursor. Paint layers hold every channel: channel chips on each layer row turn a
+  channel on or off for that layer, and give it its own blend mode and opacity, including **Normal Combine** for
+  normals (`texture_layer_channel`). Height also yields a normal combined onto the Normal channel. One undo step
+  per stroke, kept per layer and channel. Auto UV, Voxel Remesh, QRemesh and merging SubTools carry every channel.
+  See the guide's Material painting page.
+- Solo channel view: **Tool > Texture Map** shows one channel on the model (roughness and the other scalars in
+  grey, the normal as colours, emission in colour), live while painting (`channel_view`).
+- Export Maps with presets (`export_maps`): Unreal (`T_*_BC`, `T_*_N` in DirectX, `T_*_ORM`), Unity URP and HDRP
+  (mask map), glTF, Godot, Blender (one file per channel) and USD, plus your own JSON presets (the guide's Export
+  presets page). Height maps are 16-bit PNG.
+- Model exports wire the channels into their materials: glTF metal-rough slots (packed occlusion / roughness /
+  metallic, normal, emissive, alpha from opacity), UsdPreviewSurface inputs, the MTL PBR keys and FBX material
+  maps. Send to Unreal imports `T_<Name>_BC / _N / _ORM` and builds an `M_<Name>` material from them.
+- Preferences > Performance and `perf_info` show the memory of textures and their material channels.
+
+### Changed
+- Texture painting on dense meshes costs the texels a dab reaches instead of the triangles under it: the brush
+  finds the texture tiles under it from the BVH and paints each texel from a cached triangle-and-barycentrics
+  map, tiles in parallel. A 0.35-radius dab with X symmetry on a 21M-triangle sphere: 4K 150-360 ms -> 24-39 ms,
+  8K 240-350 ms -> 39-55 ms (M1 Pro, ranges over a busy and a quiet machine); results match the old dab within
+  1/255. Lighter meshes keep the per-triangle dab. No first-dab stutter: the UV bins are shared by every texture on
+  the same UVs (undo steps, copies) and built in parallel when painting starts (about 45 ms at 21M), the area under
+  the hovering brush is readied before it lands, and a stroke into a fresh area stays under 20 ms at 4K.
+  Preferences > Performance counts these caches.
+- Project format 7 stores material channels. It is written only when a texture has them: other projects are
+  still saved as format 6, and every older project opens as before.
+- **Sculpt Timeline**: every stroke and operation is a tick on a strip along the bottom of the canvas. Drag the
+  scrubber to see the model at any point of the session, click a step to go there. Sculpting from an earlier
+  point no longer throws the later steps away: they stay as a branch (a lane above the track) you can switch
+  back to, with undo / redo working on the active branch as before. Right-click a stroke to re-tune its strength
+  (0 removes it, 2 doubles it) without redoing the strokes after it; where later strokes overlap it they keep
+  their own displacement on top (they aren't sculpted again; see the guide's Sculpt Timeline chapter). Seeking
+  reuses undo's per-stroke deltas, swaps runs of strokes at once with one normal / BVH / GPU update, and jumps
+  from full checkpoints every 16 steps (within 1 GB; fewer on huge meshes) for long seeks. Each SubTool keeps
+  its own timeline. Commands `timeline_info`, `timeline_seek`, `timeline_select`, `timeline_retune`,
+  `timeline_save`, `timeline_load`; UI test timeline.
+- **Save with project** (in the timeline's header) also writes the history beside the project as
+  `<name>.sfhist` (strokes, masks, polypaint, visibility, polygroups, branches, re-tuned strengths; a topology
+  change cuts it). Opening the project brings it back when the mesh matches. The project format is unchanged.
+- **Export timelapse**: the history rendered as a turntable video, the model building up stroke by stroke while
+  the camera goes once around it (1080p or 4K MP4, no captions; needs ffmpeg). Also
+  `sculptforge project.sfproj --timelapse out.mp4 [--size 3840x2160] [--timelapse-seconds 20]`.
+- **Proof mode** (**Help > Benchmark**, `sculptforge --benchmark`): a scripted 240 Hz pen stroke through the
+  same input handlers a real pen uses, with a 60 px and a 240 px brush and a turn of the view, on 5, 20 and 33
+  million triangle meshes (100 million when free memory allows). A live HUD shows fps, frame time p50 / p95 /
+  p99, how far the stroke trails the pointer (ms and px) and memory; the run is recorded to an MP4 with the HUD in
+  it and written as a JSON result with the processor, graphics card, memory, OS, version and commit.
+  `docs/benchmark.md` describes the format, `tools/benchmark/submit.py` checks results and adds them to
+  `website/benchmarks/results.json`, which the new benchmarks page lists.
+- The brush cursor follows the surface (#25), as in SculptGL: over the model the Draw Size and Focal Shift rings
+  lie on the surface under the pointer, turned to its (smoothed) direction and pressed onto its shape, at the
+  brush's real size there, with a short normal line; with symmetry on, a fainter mirrored ring shows too. Every
+  brush (sculpt, paint, mask, dynamic topology). A few dozen BVH ray casts per drawn frame, no pass over the mesh
+  (0.09 ms on 5M triangles), and the idle view still draws nothing. **Preferences > Input > Cursor follows
+  surface** (on by default) brings back the flat screen rings.
+
+- **Predictive Strokes** (Preferences > Performance, on by default): a sculpt stroke's brush is worked out on its
+  own thread while the view keeps drawing at the display's rate. The dabs not finished yet are drawn as a GPU
+  preview on the surface (each brush's kernel in the vertex shader, with its shading and cavities), and the brush
+  cursor and the stroke's head are drawn where the pen will be a frame later. When a dab's result reaches the GPU
+  it replaces its preview in the same frame. Lifting the pen never waits. The finished sculpt is the same, bit for
+  bit, as with it off (`--measure-stroke` with `SF_MEASURE_VERIFY=1` replays the stroke and checks undo).
+  Painting, masking, dynamic topology, Move, Snake Hook and the drag strokes work as before.
+- **Draft Strokes** (Preferences > Performance, off by default; meant for laptops and battery): with Predictive
+  Strokes, the brush only moves the surface during the stroke; normals, cavities and culling bounds are worked out
+  once when the pen lifts.
+- `tools/bench_strokes.sh`: the big-brush stroke benchmark on 5M, 21M and 33M triangles, one build or two
+  interleaved (docs/performance.md). `new_sphere triangles=N` makes a sphere of about N triangles.
+  `--measure-stroke` reports frame p95 / p99, the preview's lag, and when the first and last dab reach the screen.
+
+### Changed (predictive strokes)
+- Big brushes on dense meshes no longer slow the view. `tools/bench_strokes.sh`, 200 px brush, M1 Pro shared
+  with other builds (load 9-45, so both columns are slower than on an idle machine; A/B interleaved):
+
+  | | 0.9.7 frame mean / p99 | Now | Brush on screen behind the pointer, 0.9.7 / now | Press | Release |
+  |---|---|---|---|---|---|
+  | 5.2M | 47 / 134 ms | 8.4 / 14 ms | 95 / 1 px | 98 -> 24 ms | 31 -> 0 ms |
+  | 21M | 71 / 651 ms | 8.8 / 18 ms | 37 / 1.5 px | 623 -> 14 ms | 1 -> 0 ms |
+  | 33.6M | 169 / 323 ms | 12.2 / 27 ms | 245 / 4 px | 315 -> 13 ms | 374 -> 0 ms |
+
+  With 60 and 240 px brushes at 21M and 33.6M the p99 frame is 11-31 ms (0.9.7: 26-636 ms). The solved surface
+  itself still trails as before; the preview covers it (docs/performance.md, "Predictive strokes").
+- Packing a stroke's vertices for the GPU no longer walks every vertex's neighbours again: the cavity term comes
+  from the normals pass. Clusters a stroke moved get quick culling bounds, made exact when it ends.
+- `Mesh::recomputeAllNormals` (new meshes, undo of big changes, timeline seeks) runs in parallel.
+
+### Fixed (predictive strokes)
+- A big brush that raised the surface past the GPU's position grid stalled the view for seconds on dense meshes
+  (the whole mesh was re-packed inside a frame); it is re-packed on the brush thread now.
+
+## [0.9.7] - 2026-10-31
+
+Speed first: big brushes on dense meshes take a third less time per frame, trail the pen by half as far and no
+longer pause when you lift it. Also from your reports: a right click opens the QuickMenu (#22), dynamic topology
+with symmetry remeshes both sides of an asymmetric mesh (#23) and the orthographic view shades correctly (#24).
+
+### Added
+- A right click on the canvas opens the QuickMenu under the cursor, as in ZBrush (#22). Pressed and let go
+  without moving more than 4 px, beside the model or on it; the view waits until the press moves past that, so
+  a click never nudges it, and a right drag turns, pans or zooms as before (by everything it moved, nothing
+  lost). A pen button set to Right click works the same; SDL's own mouse click for another pen button doesn't
+  open it. On by default in every input style (a right click without a drag did nothing before);
+  **Preferences > Input > Right click opens the QuickMenu** turns it off (`rightClickQuickMenu` in ui.json).
+  UI test right_click_menu (mouse, tremble, drag, pen button, Blender style, preference off).
+
+### Changed
+- Large brushes on dense meshes are faster and stay closer to the pointer. Measured on a 21M-triangle sphere
+  with a 200 px brush (`--measure-stroke 3,200`, M1 Pro):
+
+  | | 0.9.6 | Now |
+  |---|---|---|
+  | Frame | 98 ms | 65 ms |
+  | Brush behind the pointer, mean / worst | 293 / 544 px | 137 / 189 px |
+  | Press to first dab on screen | 361 ms | 157 ms |
+  | Release | 990 ms | 67-130 ms |
+
+  The 33M-triangle benchmark's large Standard dab goes from 44.6 to 41.8 ms; the other rows are unchanged.
+  - The stroke queue keeps about 50 ms of dabs, at least 4 (it kept at least 24: a second of work behind the
+    pointer at 21M, all placed on release).
+  - The BVH refit of a big dab recomputes the ancestors of its leaves in parallel (13 ms on one thread before).
+  - A dab's normals are recomputed for the corners of the BVH leaves its queries listed instead of every moved
+    vertex's neighbour ring (7 ms a dab on levels made by Divide).
+  - The GPU upload sends the changed blocks until three quarters of the mesh changed (it re-sent the whole
+    mesh above a quarter: 78 ms a frame against 14-30), and finds them in parallel (3.7 -> 0.4 ms).
+  - Starting a stroke no longer re-uploads the whole mesh when there are no LODs.
+
+### Fixed
+- The orthographic view (Numpad 5) shaded MatCaps and the lights as if inside out (#24): the shader worked out
+  each pixel's view ray as in a perspective view, which in an orthographic one tilted it far off the axis
+  towards the edges. An orthographic view now gives every pixel the axis; flat shading turns its facets
+  towards the viewer by that ray too (the direction from the eye, which an orthographic view can put inside
+  the model, turned them away). UI test ortho_shading (a new `luma@X,Y` value reads the last screenshot): the
+  same sphere in both views matches within 1 brightness level, where 0.9.6 was up to 38 off.
+- Dynamic topology with symmetry remeshes the mirrored side of a model whose sides aren't mirrored polygon for
+  polygon (#23; a QRemeshed head in the report). Splits, collapses and flips are found under the brush and done
+  on the mirror images of the same edges; without images (nothing to pair the vertices with) the other side only
+  moved and kept its coarse triangles: a stroke left 2,199 triangles along its path and 33 along its mirror image.
+  An edge under a mirror image of the brush whose image on the brush's side is missing is now remeshed where it
+  is (2,260 there). Symmetric meshes still get exactly mirrored topology (the 1M dynamic topology benchmark's times
+  are unchanged). Test `dyntopo_symmetry_remeshes_both_sides_of_an_asymmetric_mesh` (a turned sphere, then
+  random strokes with X and Z symmetry, valid after every dab, undone exactly).
+
+## [0.9.6] - 2026-10-31
+
+The same evening as 0.9.5, the next batch from your reports and from askNK's review: Extract and Mirror And Weld,
+a flat background, a Flatpak, strokes that keep their shape on dense meshes (built on a patch by @bribblej-web),
+and a fix for Divide crashing on models from Blender, with a log file so a crash is never silent again.
+
+### Added
+- Extract (Tool > SubTool > Extract), as in ZBrush: the masked, visible part of a SubTool becomes a shell with Thick (a share of the SubTool's size; negative grows inward, 0 makes a single-sided surface), E Smt (smooths the stepped edge) and Double (both ways). Extract shows a preview below the source that follows the settings; Accept keeps it as a new SubTool with outer, inner and rim polygroups and the source's polypaint, as one undo step (undo removes the SubTool, redo puts it back). TCorne and TBorder make the rim triangles instead of quads at sharp corners or all along it. An unaccepted preview goes when the source changes and is never saved. Commands: extract, extract_accept, extract_cancel.
+- Mirror And Weld (Tool > Geometry > Modify Topology, X / Y / Z): keeps the + side of the plane through the origin, cuts polygons crossing it, mirrors the half and welds the seam into one watertight mesh, keeping polygroups, polypaint, mask, UVs, quads and sculpt layers (`mirror_and_weld`, with `side=negative` for the other half). Undoable.
+- A flat viewport background (#21): Preferences > Display > Background (also in the Render palette) switches between the gradient (the default) and Flat Colour with a colour picker. Store Config keeps it, projects keep their own, and `set_background` (mode, color) scripts it.
+- Mirror (Tool > Deformation, X / Y / Z): flips the SubTool across the plane through the origin, or in place with `pivot=center` (`mirror`). Undoable.
+- A log file, `sculptforge.log` in the user data folder (`%APPDATA%\SculptForge\SculptForge` on Windows,
+  `~/Library/Application Support/SculptForge/SculptForge` on macOS, `~/.local/share/SculptForge/SculptForge` on
+  Linux), so a crash is never silent: it holds the version, system and GPU, everything SDL_Log reports (the
+  Windows build has no console), each command run (written before it runs), and on a crash a note with the
+  cause, the last command and, on Linux and macOS, a stack trace. Each start keeps the previous session's log as
+  `sculptforge-previous.log` and notes when that session didn't close normally; the restore dialog after a
+  crash points to it. **Help > Open log folder** opens the folder; `--log-dir` writes the log elsewhere, and
+  `--crash-test segv|abort|throw` crashes on purpose to test the note (ctest `crash_log`).
+- A Flatpak (#18): `SculptForge-<version>-x86_64.flatpak` and `-aarch64.flatpak` on every release (with
+  version-less copies, `SculptForge-linux-x86_64.flatpak` and `SculptForge-linux-arm64.flatpak`), built from
+  source on the freedesktop 26.08 runtime by `packaging/flatpak/org.sculptforge.SculptForge.yml`
+  (`packaging/flatpak/build.sh` builds it locally). Sandbox: Wayland or X11, OpenGL, devices (for the SpaceMouse),
+  network and the home folder. In a Flatpak the Blender bridge uses the host's folder and tells the add-on to start
+  the app through Flatpak's launcher; the add-on also looks for that launcher. A package for the FlatPark
+  repository, wrapping the release tarballs, is ready in `packaging/flatpak/flatpark/`.
+
+### Fixed
+- Strokes on dense meshes keep their shape (#19). When one dab cost more than a frame, the app placed every dab
+  of a long pointer movement before reading the pointer again, so the next movement was longer still and a fast
+  curve came out as a straight line. Dabs now wait in a queue that the app works through for 10 ms a frame,
+  between reading the pointer and drawing; a long gap between pointer samples is drawn as a curve through the
+  last samples, not a chord; and when the queue holds more than 24 dabs (or more than 0.05 s of work, whichever
+  is larger) every second waiting dab is dropped, so the brush stays near the pointer. Measured with the new
+  `--measure-stroke 3,200` (a fast two-turn circle, 200 px brush) on a 21M-triangle sphere: dabs were up to
+  69 px off the circle before and are within 4 px now, at 82 ms frames instead of 143 ms. Light meshes place
+  the same dabs as before. Based on a patch by @bribblej-web in #19. `SF_STROKE_IMMEDIATE=1` places every dab
+  at once as before; `SF_STROKE_BACKLOG=N` sets the queue limit in dabs (0: never drop).
+- The AppImage's root icon and `.DirIcon` are 512 px PNG files, not links to the SVG (#17), so AppImage managers
+  such as AppManager and Gear Lever show the icon when they integrate it, and the current appimagetool accepts
+  the AppDir. The AppImage is now built with appimagetool directly (packaging/linux/build-appimage.sh), which
+  checks the AppDir before packing it.
+- Divide crashed on models with a vertex shared by 22 or more triangles (#16), such as a cylinder sent from Blender
+  with Triangle Fan caps of 22 sides or more (21 worked) or Blender's UV sphere. The first subdivision level
+  works out each vertex's neighbours from the base mesh; around a high-valence base vertex the list was gathered
+  with every polygon twice before removing the repeats, which overran its 64 slots (3 x valence) and corrupted
+  the stack when the viewport shaded the new level. The repeats are now removed before the list is joined, so
+  it never holds more than 2 x valence (implicit adjacency is only used up to valence 32; above that the stored
+  adjacency has no limit). Unit tests divide fan cylinders of 3 to 300 sides and UV spheres up to 200 segments,
+  through OBJ and through the Blender Bridge, and compare every level's adjacency with a plain rebuild; a UI test
+  receives the issue's meshes from the bridge and divides them in the app.
+- Generating with a ComfyUI workflow and a seed read freed memory, which could crash at random or set the wrong
+  seed: while setting a node's seeds, the node was replaced after its first seed but its inputs were still read
+  for the second (a sampler with both `seed` and `noise_seed`). Found with AddressSanitizer; the keys are now
+  chosen before any is set. The unit test now has a node with both seeds.
+
+## [0.9.5] - 2026-10-31
+
+The day after launch, people filed ten issues. 0.9.5 answers all of them: ZSpheres for blocking out a base mesh,
+a Blender input style, flat shading, your own MatCaps, SpaceMouse navigation (experimental), an idle app that no
+longer keeps the graphics card busy, and fixes for pens on Windows and Linux, the S slider and the Blender Bridge.
+Thank you for the reports.
+
+### Added
+- ZSpheres (Tool > ZSpheres, #8): block out a base mesh from connected spheres. Draw grows a sphere from another (the drag sets its size) or adds a joint on a link, Move and Scale set the proportions, Alt+click deletes, Symmetry mirrors every edit, Preview (A) shows the skin, and Make Mesh builds it as a new watertight quad SubTool with a polygroup per link, keeping the ZSpheres hidden to edit again. Undoable, saved in projects, and scriptable (zsphere_new, zsphere_add, zsphere_set, zsphere_delete, zsphere_insert, zsphere_preview, zsphere_make_mesh, zsphere_list).
+- A Blender input style (#12): **Preferences > Input > Style > Blender**, also at the top of the Controls window.
+  Middle-drag orbits, Shift+middle pans, Ctrl+middle zooms, and Alt+left-drag does the same for pens and
+  trackpads (Emulate 3 Button Mouse); Ctrl inverts a stroke, Shift smooths; F / Shift+F set the radius and
+  strength; Blender 4.2+'s Sculpt Mode keys pick the nearest brushes (V Draw, S Smooth, P Pinch, I Inflate,
+  G Grab, C Clay Strips, Shift+C Crease, K Snake Hook, Shift+T Scrape as Flatten) and M the Mask brush
+  (Ctrl+drag unmasks); Alt+M / Ctrl+I clear / invert the mask; H / Shift+H / Alt+H hide, isolate and show
+  polygroups; Alt+1 / Alt+2 step the subdivision levels; Home frames everything. Choosing it sets Rotation to
+  Turntable. **Emulate Numpad** makes the number row work as the numpad.
+- **Import Blender keymap...**: reads a keymap exported from Blender (the .py file, as text: it is never run) and
+  takes the 3D View and Sculpt keys SculptForge has an equivalent for. Also the `blender_keymap_import` command.
+- Numpad views in every input style: Numpad 1 / 3 / 7 front, right, top (Ctrl: back, left, bottom), Numpad 5
+  orthographic, Numpad 4 / 6 / 8 / 2 orbit in 15 degree steps, Numpad 9 the other side, Numpad . frames the
+  active SubTool, Numpad Plus / Minus zoom.
+- An orthographic view. The axis views turn it on until the view is rotated again (Blender's Auto Perspective).
+
+- Custom MatCaps (#15): **Material > Load MatCap...** loads a lit-sphere image (PNG, JPG or EXR; non-square images
+  are cropped to the centre, large ones scaled to 1024) as a material and copies it into the new **MatCaps** folder
+  of the library (Documents/SculptForge/MatCaps); images in that folder load at start-up and, when added later,
+  the next time a material list opens (a cheap size and time check), and folders listed in `SCULPTFORGE_MATCAP_PATH`
+  load at start-up. They show in the material picker, palette and LightBox. Right-click > **Remove** takes one out
+  of the lists and moves its image to the trash (freedesktop trash on Linux, Recycle Bin on Windows; on macOS it
+  is hidden for the session and the message says where the file is). A project
+  using one embeds it as a PNG (an `attachments` entry; no format change), so it opens with the same look anywhere.
+  Scripts: `load_matcap path=...`, `remove_matcap name=...`, `set_material name=<your MatCap>`.
+- Smooth / Flat shading (#11): **Material** palette (and **Tool > Display**) > **Shading** switches the whole
+  scene to flat, faceted shading, where every polygon shows its own face; **This SubTool** keeps one SubTool smooth
+  or flat whatever the scene says. Both are saved in projects (no format change; older files open with your
+  preferred shading) and the scene's choice is a preference (Store Config). Smooth stays the default. Scripts:
+  `set_shading mode=flat`, `subtool_shading mode=smooth name=Eyes`.
+- 3Dconnexion SpaceMouse navigation (#6, experimental): the cap's six axes pan, zoom and turn the view about the
+  orbit pivot, continuously and at the same speed whatever the frame rate, in every input style and while a pen
+  stroke is held. Read through SDL's joystick API (no 3Dconnexion SDK), hot-plug aware, recognised by USB id
+  (vendor 256F, and the older Logitech-id SpaceNavigator / SpacePilot / SpaceExplorer / SpaceMouse Pro).
+  **Preferences > Input > SpaceMouse**: on/off, speed, dead zone, per-axis invert, Lock rotation to turntable,
+  Dominant axis, live axis bars, and an action per button (the two side buttons default to Frame and Front view);
+  Store Config keeps them (`spaceMouse` in ui.json). Untested on real hardware; the guide explains what to do when
+  3DxWare (Windows, macOS) or spacenavd (Linux) holds the device. UI tests drive a virtual joystick with a
+  SpaceMouse Compact's ids (`spacemouse`, `spacemouse_hold`, `spacemouse_button`, `spacemouse_unplug` steps).
+### Fixed
+- The Blender Bridge add-on zip was missing `zbrush_keys.py`, so Blender refused to install it ("cannot import name zbrush_keys", #10). The zip now carries every module, and the packaging check fails if one is left out.
+- Rotating, panning and zooming with the pen tip on the background only shook the view with some tablets (a Ugee
+  M708 on Linux, #7): their drivers send stray mouse events between the pen's, and the view followed both. The
+  pen now moves the view by its own motion only, and lifting the pen ends a view drag as it ends a stroke.
+- The S / U / I / O slider closed as soon as you grabbed it, and could open away from the cursor (#9, seen on
+  Windows). It now opens with its knob (the current value) right under the brush cursor, at any UI scale and
+  with a pen, and stays open while you drag until you let go, click elsewhere or press Esc.
+- B, M, S and the LightBox key followed the built-in key even after you gave the action another one.
+- Pens through Windows Ink (a Wacom Intuos Pro, #13): taps on menus and buttons often missed, Alt+pen drag and the
+  Move button threw the model off the canvas, and the S / U / O slider could not be dragged. Windows Ink and some
+  drivers send mouse events of their own beside the pen's, at an old position; the interface followed them as
+  well as the pen. While the pen is in range the interface now follows only the pen (as the canvas already
+  did), and the Move / Zoom / Rotate buttons move the view by the cursor's own steps.
+- SculptForge kept the graphics card and a little of the processor busy while it sat idle (#14): it drew a new
+  frame 60 or more times a second whatever happened. It now draws only when something changes: your input,
+  a stroke or view move, a background job (progress bars, splat training, the update check), a message from the
+  phone or the Blender Bridge, or an animation. Idle, it draws nothing (measured: 120 frames a second and 8% of
+  a processor core before, 0 frames and 0.1% after). UI tests and `--record` still draw every frame.
+  `sculptforge --measure-idle 5` prints the idle frame rate; `SF_CONTINUOUS_REDRAW=1` draws every frame as before.
+
+### Changed
+- The release builds use SDL 3.2.30 (was 3.2.10), which fixes Wacom tablets on Windows: clicks dropped with
+  Windows Ink off, and the barrel button pressed while hovering arriving as a left click. On Linux (X11) it also
+  stops the pen's own events from arriving a second time as mouse events.
+
 ## [0.9.4] - 2026-10-29
 
 ### Fixed

@@ -119,10 +119,13 @@ void App::setPhoneLinkOpen(bool open) {
         return;
     }
     if (phone_ && phone_->running()) return;
-    if (!phone_) phone_ = std::make_unique<link::PhoneLink>();
+    if (!phone_) {
+        phone_ = std::make_unique<link::PhoneLink>();
+        phone_->setWake(wakeMainLoop); // the app sleeps while idle (#14): a phone message wakes it
+    }
     phoneError_.clear();
     if (library_.user.empty()) {
-        phoneError_ = "The phone link saves into your library's Captures folder: set a library in Preferences > LightBox.";
+        phoneError_ = "The phone link saves into your library's Captures folder: set a library in Preferences > Library.";
         return;
     }
     link::PhoneLinkOptions o;
@@ -499,7 +502,7 @@ void App::drawPhoneWindow() {
     if (st.arBusy) ImGui::TextColored(kWarn, "Preparing the model for the phone...");
     else if (!st.arError.empty()) ImGui::TextColored(kBad, "%s", st.arError.c_str());
     else if (st.arVersion > 0) ImGui::Text("On the phone: %s", st.arSummary.c_str());
-    else hint("Tap View in AR on the phone: the active SubTool (or the scene) stands on your desk.");
+    else hint("Tap View in AR on the phone: the active Part (or the scene) stands on your desk.");
     ImGui::Checkbox("Update after each stroke##phone", &phoneLiveAr_);
     ui::HelpText("Update after each stroke", nullptr,
                  "While the phone shows the model, sculpting re-exports it (at most every few seconds); the phone offers "

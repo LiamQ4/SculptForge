@@ -1,5 +1,6 @@
 // CRKW CrokedWillo workspace and sculpt helper.
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "app/SettingsPath.h"
 #include "app/App.h"
 #include "app/Ui.h"
 #include <IconsLucide.h>
@@ -14,7 +15,7 @@ namespace sf {
 namespace {
 std::filesystem::path windowSettingsPath() {
     std::filesystem::path path;
-    if (char* pref = SDL_GetPrefPath("SculptForge", "SculptForge")) {
+    if (char* pref = appPrefPath()) {
         const std::string utf8(pref);
         path = std::filesystem::path(std::u8string(utf8.begin(), utf8.end())) / "crkw-workspace.json";
         SDL_free(pref);

@@ -1,6 +1,14 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "app/SettingsPath.h"
 #include "app/App.h"
+#include "core/LayerStack.h"
+#include "app/ShellQuote.h"
+#include "app/SpaceCamera.h"
+#include "app/AirStroke.h"
+#include "app/AsyncStroke.h"
+#include "app/Calibration.h"
+#include "app/CrashLog.h"
 
 #include "ai/AiCommands.h"
 #include "app/Demo.h"
@@ -12,6 +20,7 @@
 
 #include <imgui_internal.h>
 #include "ai/Generator3D.h"
+#include "core/Micro.h"
 #include "core/EnginePresets.h"
 #include "link/UnrealLink.h"
 #include "core/BrushLibrary.h"
@@ -27,6 +36,10 @@
 #include <imgui_impl_opengl3.h>
 #include <imgui_impl_sdl3.h>
 
+#include <cstdio>
+#include <ctime>
+#include <cstdlib>
+#include <functional>
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -52,6 +65,10 @@ extern const unsigned char fontLucide[];
 extern const unsigned long long fontLucide_size;
 extern const unsigned char fontSemiBold[];
 extern const unsigned long long fontSemiBold_size;
+extern const unsigned char fontMono[];
+extern const unsigned long long fontMono_size;
+extern const unsigned char fontMonoBold[];
+extern const unsigned long long fontMonoBold_size;
 extern const unsigned char appIcon[];
 extern const unsigned long long appIcon_size;
 } // namespace assets
@@ -136,10 +153,19 @@ App::~App() = default;
 bool App::init(const AppOptions& options) {
     options_ = options;
     const bool recording = !options.recordPath.empty() || !options.uiTest.empty();
-    const bool headless = !options.renderPath.empty() || recording;
+    const bool headless = !options.renderPath.empty() || recording || !options.timelapsePath.empty();
+    // UI tests run in a hidden window that never has focus; SDL drops joystick input without focus otherwise, and
+    // the scripted SpaceMouse is a virtual joystick (UiTest.cpp).
+    if (!options.uiTest.empty()) SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    if (!headless && options.demo.empty()) applyCachedThreadCount(); // the hardware profile's threads, before any brush work
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return false;
+    }
+    // Joysticks for a 3Dconnexion SpaceMouse (SpaceMouse.cpp). Not fatal: the app works without them.
+    if (!headless || !options.uiTest.empty()) {
+        if (SDL_InitSubSystem(SDL_INIT_JOYSTICK)) spaceMouseScan();
+        else SDL_Log("SDL joystick init failed (no SpaceMouse): %s", SDL_GetError());
     }
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -156,13 +182,28 @@ bool App::init(const AppOptions& options) {
     const SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
                                   (headless ? SDL_WINDOW_HIDDEN : 0) |
                                   (options.fullscreen && !headless ? SDL_WINDOW_FULLSCREEN : 0);
-    const int winW = recording ? options.width : 1600, winH = recording ? options.height : 960;
+    const bool sized = recording || options.benchmark; // proof mode: --size (1920x1080 by default)
+    rememberWindow_ = !sized && !headless && options.demo.empty() && !options.fullscreen;
+    const WindowState saved = rememberWindow_ ? loadWindowState() : WindowState{};
+    const int winW = sized ? options.width : saved.w, winH = sized ? options.height : saved.h;
     window_ = SDL_CreateWindow("SculptForge CRKW", winW, winH, flags);
     if (!window_) {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
         return false;
     }
-    if (!headless && options.demo.empty()) initCkwWindow();
+    if (!headless && options.demo.empty() && !sized) initCkwWindow();
+    if (rememberWindow_ && !ckwBorderless_) { // #35: where and how big it was last time
+        if (saved.placed) SDL_SetWindowPosition(window_, saved.x, saved.y);
+#if defined(__APPLE__)
+        // #41: full screen on macOS is its own Space, entered from a window already on screen and key; entered
+        // here, before the first frame, the menu bar and traffic lights couldn't be revealed. The loop enters it
+        // after the first swap instead.
+        if (saved.fullscreen) fullscreenAfterFirstFrame_ = true;
+#else
+        if (saved.fullscreen) SDL_SetWindowFullscreen(window_, true);
+#endif
+        else if (saved.maximized) SDL_MaximizeWindow(window_);
+    }
     {
         Image icon;
         std::string iconErr;
@@ -194,11 +235,14 @@ bool App::init(const AppOptions& options) {
         SDL_Log("%s", err.c_str());
         return false;
     }
+    renderer_.setEnvironmentWake([] { wakeMainLoop(); }); // (PBR view: a new environment's lighting is ready)
+    // Fill layers ask for Mesh Maps: the app bakes them on a worker thread (PanelFill.cpp, updateMeshMaps).
+    setMeshMapRequester([this](Document&) { meshMapsWanted_ = true; });
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    if (char* pref = SDL_GetPrefPath("SculptForge", "SculptForge")) {
+    if (char* pref = appPrefPath()) {
         iniPath_ = std::string(pref) + "imgui.ini";
         io.IniFilename = iniPath_.c_str();
         aiSettingsPath_ = std::string(pref) + "ai.json";
@@ -229,8 +273,8 @@ bool App::init(const AppOptions& options) {
     ImFontConfig fontConfig;
     fontConfig.FontDataOwnedByAtlas = false;
     fontConfig.OversampleH = 2;
-    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontRegular), int(assets::fontRegular_size),
-                                   15.0f * scale, &fontConfig);
+    fontRegular_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontRegular), int(assets::fontRegular_size),
+                                                  15.0f * scale, &fontConfig);
     // Lucide icons (ISC/MIT) merged into the UI font, so ICON_LC_* strings work in any label.
     {
         static const ImWchar kIconRanges[] = {ICON_MIN_LC, ICON_MAX_LC, 0};
@@ -271,6 +315,39 @@ bool App::init(const AppOptions& options) {
         fontIcons_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontLucide), int(assets::fontLucide_size),
                                                     20.0f * scale, &big, kIconRanges);
     }
+    { // JetBrains Mono (SIL OFL) for the looks (Preferences > Interface > Look), with the icons and box drawing.
+        static const ImWchar kMonoRanges[] = {0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x21FF, 0x2500, 0x259F, 0x25A0, 0x25FF, 0};
+        static const ImWchar kIconRanges[] = {ICON_MIN_LC, ICON_MAX_LC, 0};
+        auto addMono = [&](const unsigned char* data, unsigned long long size, float px) {
+            ImFont* f = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(data), int(size), px * scale, &fontConfig, kMonoRanges);
+            ImFontConfig icons;
+            icons.MergeMode = true;
+            icons.PixelSnapH = true;
+            icons.FontDataOwnedByAtlas = false;
+            icons.GlyphMinAdvanceX = px * scale;
+            icons.GlyphOffset = ImVec2(0, px * 0.13f * scale);
+            io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontLucide), int(assets::fontLucide_size), px * scale,
+                                           &icons, kIconRanges);
+            return f;
+        };
+        fontMono_ = addMono(assets::fontMono, assets::fontMono_size, 15.0f);
+        fontMonoSmall_ = addMono(assets::fontMono, assets::fontMono_size, 12.0f);
+        fontMonoTiny_ = addMono(assets::fontMono, assets::fontMono_size, 10.5f);
+        fontMonoBold_ = addMono(assets::fontMonoBold, assets::fontMonoBold_size, 15.0f);
+        fontInterSmall_ = fontSmall_;
+        fontInterTiny_ = fontTiny_;
+        fontInterBold_ = fontBold_;
+        theme::fonts = {fontMono_, fontMonoSmall_, fontMonoBold_};
+    }
+    { // The support card's display sizes (PanelSupportCard.cpp): Latin only, so the atlas grows by a few glyphs.
+        static const ImWchar kCardRanges[] = {0x0020, 0x00FF, 0x2014, 0x2014, 0x2019, 0x2019, 0x2026, 0x2026, 0};
+        fontCardTitle_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontSemiBold),
+                                                        int(assets::fontSemiBold_size), 40.0f * scale, &fontConfig, kCardRanges);
+        fontCardHead_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontSemiBold),
+                                                       int(assets::fontSemiBold_size), 21.0f * scale, &fontConfig, kCardRanges);
+        fontCardBody_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontRegular),
+                                                       int(assets::fontRegular_size), 16.5f * scale, &fontConfig, kCardRanges);
+    }
     addHelpFonts(scale); // Ctrl-help titles (Inter SemiBold) and the console (ProggyClean)
     guide_.addFonts(scale); // User Guide headings
     if (recording) {
@@ -283,6 +360,7 @@ bool App::init(const AppOptions& options) {
         ImGui::GetCurrentContext()->TestEngineHookItems = true; // lets the demo find buttons by label
         io.IniFilename = nullptr;                               // fixed, reproducible layout
     }
+    applyLook(); // Preferences > Interface > Look (after the fonts it may switch to)
     ImGui_ImplSDL3_InitForOpenGL(window_, glContext_);
     ImGui_ImplOpenGL3_Init("#version 330 core");
 
@@ -320,20 +398,31 @@ bool App::init(const AppOptions& options) {
         std::snprintf(generatorCommand_, sizeof generatorCommand_, "%s",
                       ai::defaultGeneratorCommand(std::string(base) + cliName).c_str());
     }
+    initHardwareProfile(); // the cached hardware profile, or calibration over the first frames (PanelPerformanceProfile.cpp)
     return true;
 }
 
 void App::shutdown() {
+    saveWindowState();
+    if (doc_.sculptor.strokeActive()) endStroke();
+    solver_.reset(); // (its thread uses the renderer)
     flushBrushEdits();
     if (blenderInitialised_) writeBridgeHeartbeat(blenderExchangeRoot(), true); // the add-on starts a new one
 
+    spaceMouseClose();
+    shutdownHardwareProfile(); // its timer queries need the GL context
     if (refTexture_) gl::DeleteTextures(1, &refTexture_);
     clearTextureManagerPreviews();
     gallery_.reset(); // its preview textures need the GL context
     thumbs_.clear();
+    clearSubtoolThumbnails();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
+    for (SDL_Cursor*& c : cursors_) {
+        if (c) SDL_DestroyCursor(c);
+        c = nullptr;
+    }
     renderer_.shutdown();
     if (glContext_) SDL_GL_DestroyContext(glContext_);
     if (window_) SDL_DestroyWindow(window_);
@@ -389,8 +478,8 @@ int App::runUiTest(int w, int h, int fps) {
     bool finalFrame = false;
     while (frames < fps * 60 * 30) {
         SDL_Event e;
-        while (SDL_PollEvent(&e)) {
-        } // the script provides all input
+        while (SDL_PollEvent(&e)) // the script provides all input (its SpaceMouse is a virtual joystick)
+            if (e.type >= SDL_EVENT_JOYSTICK_AXIS_MOTION && e.type < SDL_EVENT_GAMEPAD_AXIS_MOTION) spaceMouseEvent(e);
         if (demo_->finished()) {
             if (finalFrame) break;
             finalFrame = true; // one more frame, for a failure screenshot
@@ -402,17 +491,22 @@ int App::runUiTest(int w, int h, int fps) {
         pollUnreal();
         pollGenerator();
         pollBlender(); // (demo recordings leave the user's Blender bridge alone)
+        pollMaya(); // (tests and recordings never read the user's Maya folder: maya.json isn't loaded)
         pollPhone();
         pollAutoUv();
+        pollUvEditor();
         pollBake();
         pollQRemesh();
         pollSplatTrain();
         pollSculptable();
         updateCameraAspect();
+        updateSpaceMouse(dt);
 
+        hardwareProfileFrameBegin(); // (only with SF_HW_PROFILE_IN_TESTS=1: tests use fixed settings)
         Demo::beginFrame();
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
+        keepImGuiOnPen();
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize = ImVec2(float(w), float(h));
         io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
@@ -420,14 +514,18 @@ int App::runUiTest(int w, int h, int fps) {
         ImGui::NewFrame();
         ImGui::LogToBuffer(0); // capture every drawn string (0: don't auto-open tree nodes)
         drawUi();
+        drawHardwareProfileOverlay();
         if (ImGuiContext* g = ImGui::GetCurrentContext()) demo_->setFrameText(g->LogBuffer.c_str());
         ImGui::LogFinish();
         ImGui::Render();
+        updateMouseCursor();
 
+        prewarmTexturePaint(); // dense textured meshes: ready the area under the hovering Paint brush (PanelPbr.cpp)
         const auto syncStart = std::chrono::steady_clock::now();
         syncScene();
         notePerformanceFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - syncStart).count());
         viewSamples(); // keeps Fast Navigation's view of the camera current (UI tests read view_samples)
+        hardwareProfileFrameEnd();
         ++frames;
         const std::string shot = demo_->takeShotRequest();
         if (shot.empty()) continue;
@@ -443,6 +541,7 @@ int App::runUiTest(int w, int h, int fps) {
         img.height = h;
         img.rgba = rgba;
         for (size_t i = 3; i < img.rgba.size(); i += 4) img.rgba[i] = 255;
+        demo_->setLastShot(img.rgba, w, h);
         if (!img.savePng(shot, err)) SDL_Log("%s", err.c_str());
         else SDL_Log("Screenshot %s", shot.c_str());
     }
@@ -537,10 +636,14 @@ int App::runRecording() {
     // virtual camera and downsampled.
     const int ss = std::max(options_.supersample, 1), ow = w / ss, oh = h / ss;
     // Frames go straight to ffmpeg as raw RGBA.
+    if (shellQuote(options_.recordPath).empty()) {
+        SDL_Log("--record: choose a file name without \" %% ! ^ & | < > in it");
+        return 1;
+    }
     std::string cmd = "ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s " + std::to_string(ow) + "x" + std::to_string(oh) +
                       " -r " + std::to_string(fps) +
-                      " -i - -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -movflags +faststart \"" +
-                      options_.recordPath + "\"";
+                      " -i - -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -movflags +faststart " +
+                      shellQuote(options_.recordPath);
 #if defined(_WIN32)
     FILE* ff = _popen(cmd.c_str(), "wb");
 #else
@@ -563,6 +666,7 @@ int App::runRecording() {
         pollBrushRequest();
         pollUnreal();
         pollAutoUv();
+        pollUvEditor();
         pollBake();
         pollQRemesh();
         pollSplatTrain();
@@ -572,6 +676,7 @@ int App::runRecording() {
         Demo::beginFrame();
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
+        keepImGuiOnPen();
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize = ImVec2(float(w), float(h));
         io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
@@ -580,6 +685,7 @@ int App::runRecording() {
         drawUi();
         demo_->drawOverlay();
         ImGui::Render();
+        updateMouseCursor();
 
         syncScene();
         ++frames;
@@ -614,55 +720,469 @@ int App::runRecording() {
     return status == 0 ? 0 : 1;
 }
 
+namespace {
+
+Uint32 g_wakeEvent = 0; // registered in App::run(); 0 before
+
+constexpr int kIdleTickMs = 250;       // asleep: wake this often to run the pollers (the Blender bridge, autosave)
+constexpr int kCaretTickMs = 530;      // a text field has the keyboard: redraw for the caret's blink
+constexpr double kAfterChangeSeconds = 0.25; // a poller changed something: draw for this long
+constexpr double kStrokeBudgetSeconds = 0.010; // a frame's share of placing a stroke's dabs; the rest waits for the next
+constexpr float kRightClickSlop = 4.0f;        // pixels a right press may move and still be a click (#22)
+constexpr double kStrokeBacklogSeconds = 0.05; // queued dabs beyond this much work are thinned (strokeTo)
+constexpr size_t kStrokeBacklogMinDabs = 4;    // ... but never fewer dabs than this waiting
+
+} // namespace
+
+void wakeMainLoop() {
+    if (g_wakeEvent == 0) return;
+    SDL_Event e{};
+    e.type = g_wakeEvent;
+    SDL_PushEvent(&e);
+}
+
+bool App::backgroundBusy() const {
+    auto running = [](const auto& f) { return f.valid() && f.wait_for(std::chrono::seconds(0)) != std::future_status::ready; };
+    return running(pendingBrush_) || running(pendingGenerator_) || running(pendingModels_) || running(pendingUnreal_) ||
+           running(pendingComfyCheck_) || galleryBusy() || thumbs_.busy() || libraryScanner_.busy() || autoUv_ ||
+           bakeBusy() || qremesh_ || voxelRemesh_ || updateJob_ || splatTrainBusy() || sculptableBusy() || phoneBusy() || uvEditorBusy() ||
+           supportCardLoading() || renderer_.environmentPending() || meshMapsBusy();
+}
+
+void App::redrawIn(double seconds) {
+    const double at = double(SDL_GetTicksNS()) * 1e-9 + seconds;
+    redrawAt_ = redrawAt_ > 0.0 ? std::min(redrawAt_, at) : at;
+}
+
+bool App::wantsFrames(double now) const {
+    return now < activeUntil_ || drag_ != Drag::None || doc_.sculptor.strokeActive() ||
+           !dabQueue_.empty() || // a stroke's dabs still waiting (drainStrokeDabs) are placed a few each frame
+           strokeFinishing_ || solverBusy() || // the solver thread is placing a stroke's dabs (AsyncStroke.cpp)
+           backgroundBusy() || playingLayer_ >= 0 || faceTakePlaying_ ||
+           spaceMouseMoving() || // a held SpaceMouse cap sends no events, but the view keeps moving (SpaceMouse.cpp)
+           perf_.framesStill < 10; // the view just moved: Fast Navigation's full-quality frame comes after it stops
+}
+
+uint64_t App::frameKey() const {
+    uint64_t h = std::hash<std::string>{}(status_) ^ (std::hash<std::string>{}(updateStatus_) << 1);
+    for (const uint64_t v : {uint64_t(doc_.undo.revision()), uint64_t(doc_.splatsVersion), uint64_t(doc_.modified),
+                             uint64_t(doc_.subtoolCount()), uint64_t(int64_t(doc_.activeSubtool))})
+        h = h * 1099511628211ull ^ v;
+    return h;
+}
+
 int App::run() {
     if (!options_.renderPath.empty()) return renderHeadless();
     if (!options_.recordPath.empty() || !options_.uiTest.empty()) return runRecording();
+    if (!options_.timelapsePath.empty()) return runTimelapseCli(); // (PanelTimeline.cpp)
+    if (options_.benchmark) startProofMode();                     // runs in this loop (ProofMode.cpp)
+    if (g_wakeEvent == 0) g_wakeEvent = SDL_RegisterEvents(1);
+    // Dabs are queued and placed within a time budget each frame (strokeTo). SF_STROKE_IMMEDIATE=1 places them all
+    // as each pointer sample arrives, as before 0.9.6 (for comparison).
+    const char* immediateEnv = std::getenv("SF_STROKE_IMMEDIATE");
+    interactiveStrokes_ = !(immediateEnv && *immediateEnv && *immediateEnv != '0');
+    // SF_CONTINUOUS_REDRAW=1 draws every frame as before 0.9.5 (for comparison, or a driver that misbehaves).
+    const char* continuousEnv = std::getenv("SF_CONTINUOUS_REDRAW");
+    const bool continuous = continuousEnv && *continuousEnv && *continuousEnv != '0';
+    const bool logRedraw = std::getenv("SF_REDRAW_LOG") != nullptr; // why each frame is drawn (bug reports)
+    // SF_FRAME_LOG=ms: every frame slower than that, with where its time went.
+    const double frameLogMs = std::getenv("SF_FRAME_LOG") ? std::atof(std::getenv("SF_FRAME_LOG")) : -1.0;
+    double phase[10] = {};
+    int phases = 0;
+    const auto mark = [&] {
+        if (frameLogMs >= 0.0 && phases < 10) phase[phases++] = double(SDL_GetTicksNS()) * 1e-6;
+    };
+    auto seconds = [] { return double(SDL_GetTicksNS()) * 1e-9; };
+    // --measure-idle: let start-up settle (first frames, the LightBox's thumbnails), then count.
+    constexpr double kMeasureSettle = 3.0;
+    const double started = seconds();
+    uint64_t framesDrawn = 0, wakeUps = 0, framesAtMeasure = 0, wakesAtMeasure = 0;
+    std::clock_t cpuAtMeasure = 0; // processor time of every thread (the driver's included)
+    bool measuring = false;
+    // Input while measuring (a pointer crossing the window on a shared desktop) restarts the count once it has
+    // passed: idle means no input. After kMeasureGiveUp seconds it counts whatever comes (the test's timeout).
+    constexpr double kMeasureGiveUp = 40.0;
+    double measureFrom = started + kMeasureSettle;
+    int measureRestarts = 0;
+    float lastMotionX = -1e9f, lastMotionY = -1e9f; // the mouse's last position, from its motion events
     Uint64 lastTicks = SDL_GetTicksNS();
+    uint64_t lastKey = frameKey();
+    bool draw = true;
+    activeUntil_ = started + 1.0;
+    // --measure-stroke: two turns of a circle over the model in S seconds. The pointer is read once per pass of the loop, as a busy program gets it (the window system hands
+    // over only the latest position), so a pass that places many dabs makes the next gap longer.
+    // The brush behind the pointer is measured twice: the surface (the last dab whose result is on the GPU) and
+    // the preview (the predictive stroke's head, render/Ghost.h; the surface when there is none). Release is how
+    // long letting go holds up the UI, then how long until the last dab is on screen.
+    struct MeasureView {
+        float distance, aspect, w, h;
+        bool operator==(const MeasureView&) const = default;
+    };
+    struct StrokeMeasure {
+        bool started = false, moving = false; // moving: the press's first frame is on screen, the pointer moves
+        bool releasing = false;               // let go: waiting for the last dab to reach the screen
+        double pressMs = 0.0, start = 0.0, lastFrame = 0.0, maxFrame = 0.0, sumFrames = 0.0, maxLag = 0.0, sumLag = 0.0;
+        double pressAt = 0.0, firstSurfaceMs = 0.0, maxPreviewLag = 0.0, sumPreviewLag = 0.0;
+        double releaseMs = 0.0, releaseAt = 0.0;
+        uint64_t frames = 0, samples = 0, lagSamples = 0;
+        float cx = 0.0f, cy = 0.0f, r = 0.0f;
+        double angle = 0.0; // the pointer's angle round the circle (0 at the press, 4 pi at the end)
+        std::vector<glm::vec2> dabs;
+        MeasureView view{};     // the view before the stroke (it starts once this has held still for a second)
+        double viewSince = 0.0;
+        std::vector<double> frameTimes; // seconds, for the percentiles
+        std::vector<float> radii;       // each dab's brush radius (px)
+        // SF_MEASURE_VERIFY=1: the mesh before the stroke, to check undo and replay the dabs (verifyStroke).
+        uint64_t before = 0;
+        // SF_MEASURE_SNAPSHOT=prefix: the canvas at a few points of the stroke, as prefix-N.png.
+        int snapshots = 0;
+    } sm;
+    // SF_MEASURE_POP=1: how much the picture jumps when the solver's result replaces the preview (commitSolverBatch).
+    const char* popEnv = std::getenv("SF_MEASURE_POP");
+    popProbe_ = popEnv && *popEnv && *popEnv != '0';
+    const char* verifyEnv = std::getenv("SF_MEASURE_VERIFY");
+    const bool verify = verifyEnv && *verifyEnv && *verifyEnv != '0';
+    const char* snapshotEnv = std::getenv("SF_MEASURE_SNAPSHOT");
     while (running_) {
+        const double t0 = seconds();
+        if (options_.measureIdle > 0.0f) {
+            if (!measuring && t0 >= measureFrom) {
+                measuring = true;
+                framesAtMeasure = framesDrawn;
+                wakesAtMeasure = wakeUps;
+                cpuAtMeasure = std::clock();
+            } else if (measuring && t0 >= measureFrom + options_.measureIdle) {
+                const double fps = double(framesDrawn - framesAtMeasure) / double(options_.measureIdle);
+                const double cpu = 100.0 * double(std::clock() - cpuAtMeasure) / CLOCKS_PER_SEC / double(options_.measureIdle);
+                std::printf("Idle: %llu frames, %llu wake-ups in %.1f s: %.2f fps, CPU %.1f%% of one core (%s redraw)\n",
+                            (unsigned long long)(framesDrawn - framesAtMeasure), (unsigned long long)(wakeUps - wakesAtMeasure),
+                            double(options_.measureIdle), fps, cpu, continuous ? "continuous" : "on-demand");
+                if (measureRestarts > 0) std::printf("  (restarted %d times after input)\n", measureRestarts);
+                std::fflush(stdout);
+                // Idle is 0 fps; a pointer crossing the window draws about a second's worth. Every frame is 60+.
+                return continuous || fps < 5.0 ? 0 : 1;
+            }
+        }
+        // Nothing to draw: sleep until an event, or the next poller tick.
+        const ImGuiIO& io = ImGui::GetIO();
+        // Input keeps the frames coming a little while (hover highlights, tooltips after their delay); other
+        // events (the window shown, moved, focused) need a frame or two.
+        const auto onEvent = [&](const SDL_Event& ev) {
+            if (strokeProbe_ && ((ev.type >= SDL_EVENT_MOUSE_MOTION && ev.type <= SDL_EVENT_MOUSE_WHEEL) ||
+                                 (ev.type >= SDL_EVENT_PEN_PROXIMITY_IN && ev.type <= SDL_EVENT_PEN_AXIS)))
+                return; // --measure-stroke: the real pointer stays out of the scripted stroke
+            handleEvent(ev);
+            if (ev.type == SDL_EVENT_KEYMAP_CHANGED || ev.type == SDL_EVENT_KEYBOARD_ADDED ||
+                ev.type == SDL_EVENT_KEYBOARD_REMOVED || ev.type == SDL_EVENT_MOUSE_ADDED ||
+                ev.type == SDL_EVENT_MOUSE_REMOVED || ev.type == SDL_EVENT_CLIPBOARD_UPDATE ||
+                (ev.type == SDL_EVENT_JOYSTICK_AXIS_MOTION && !spaceMouseDeflected()))
+                return; // nothing on screen changes (a hand resting on a SpaceMouse: inside its dead zone)
+            // A mouse motion event that doesn't move the mouse: what a window system sends when the cursor's shape
+            // changes or the window is refocused under a still pointer (the crosshair over the view, #73). Not input,
+            // and nothing to draw: counting it would make setting the cursor wake the idle loop.
+            if (ev.type == SDL_EVENT_MOUSE_MOTION && ev.motion.which != SDL_PEN_MOUSEID) {
+                const bool still = ev.motion.x == lastMotionX && ev.motion.y == lastMotionY;
+                lastMotionX = ev.motion.x;
+                lastMotionY = ev.motion.y;
+                if (still) return;
+            }
+            draw = true;
+            if (logRedraw) SDL_Log("redraw: event 0x%x", unsigned(ev.type));
+            const bool input = (ev.type >= SDL_EVENT_KEY_DOWN && ev.type < SDL_EVENT_JOYSTICK_AXIS_MOTION) ||
+                               (ev.type >= SDL_EVENT_FINGER_DOWN && ev.type <= SDL_EVENT_FINGER_CANCELED) ||
+                               (ev.type >= SDL_EVENT_PEN_PROXIMITY_IN && ev.type <= SDL_EVENT_PEN_AXIS) ||
+                               ev.type == SDL_EVENT_DROP_FILE;
+            const double t = seconds();
+            activeUntil_ = std::max(activeUntil_, t + (input ? std::max(0.75, double(uiPrefs_.tooltipDelay) + 0.5) : 0.1));
+            if (input && options_.measureIdle > 0.0f && t - started < kMeasureGiveUp) {
+                if (measuring) ++measureRestarts;
+                measuring = false;
+                measureFrom = std::max(measureFrom, activeUntil_ + 0.5);
+            }
+        };
+        SDL_Event e;
+        if (!continuous && !draw) {
+            int timeout = io.WantTextInput ? kCaretTickMs : kIdleTickMs;
+            if (redrawAt_ > 0.0) timeout = std::clamp(int((redrawAt_ - t0) * 1000.0) + 1, 0, timeout);
+            if (SDL_WaitEventTimeout(&e, timeout)) {
+                onEvent(e);
+            } else if (io.WantTextInput) {
+                draw = true; // the caret blinks
+            }
+            ++wakeUps;
+        }
+        phases = 0;
+        mark();
+        while (SDL_PollEvent(&e)) onEvent(e);
+        mark();
+        // (The window must have settled too: a window manager that maximises it late, on a busy machine, changes
+        // the canvas and with it the brush's size in the world mid-stroke.)
+        if (options_.measureStroke > 0.0f && !sm.started) {
+            const CanvasRect c = canvasRect();
+            const MeasureView v{camera_.distance, camera_.aspect, c.w, c.h};
+            if (!(v == sm.view)) {
+                sm.view = v;
+                sm.viewSince = t0;
+            }
+        }
+        if (options_.measureStroke > 0.0f && !sm.started && t0 - started >= kMeasureSettle && t0 - sm.viewSince >= 1.0 &&
+            !backgroundBusy()) {
+            const CanvasRect c = canvasRect();
+            sm.cx = c.x + c.w * 0.5f;
+            sm.cy = c.y + c.h * 0.5f;
+            sm.r = 0.25f * std::min(c.w, c.h);
+            sm.started = true;
+            sm.start = sm.lastFrame = sm.pressAt = seconds();
+            strokeProbe_ = &sm.dabs;
+            strokeRadiusProbe_ = &sm.radii;
+            if (options_.measureStrokeRadius > 0.0f) radiusPx_ = std::clamp(options_.measureStrokeRadius, 2.0f, 800.0f);
+            if (const char* b = std::getenv("SF_MEASURE_BRUSH")) // e.g. KelvinGrab: measure another built-in brush
+                if (BrushType t; brushFromName(b, t)) brush_ = t, doc_.activeBrush = -1;
+            if (verify) sm.before = meshStateHash(doc_.mesh);
+            onMouseDown(sm.cx + sm.r, sm.cy, SDL_BUTTON_LEFT);
+            if (drag_ != Drag::Stroke) {
+                std::printf("Stroke: no stroke began (nothing to sculpt under the circle's start)\n");
+                return 1;
+            }
+        } else if (sm.moving) {
+            // The pointer follows the clock, but moves at most kMaxPointerStep per pass: the stroke follows the chords
+            // between samples, and on a slow frame rate (software GL on a busy machine: 100 ms frames and more) the
+            // chords would cut well inside the circle, or one long frame would skip the whole stroke. Above 30 fps
+            // the clock alone sets it; below, the stroke takes longer and is checked just as strictly.
+            constexpr double kMaxPointerStep = 0.25; // radians (a chord's middle 0.8% of the radius inside the circle)
+            const double clock = std::min(1.0, (seconds() - sm.start) / double(options_.measureStroke)) * 4.0 * 3.14159265358979;
+            const double a = std::min(clock, sm.angle + kMaxPointerStep);
+            const double u = a / (4.0 * 3.14159265358979);
+            sm.angle = a;
+            // SF_MEASURE_RESIZE=1: the brush size changes every frame mid-stroke, as [ and ] would (the solver thread
+            // must see each batch's own size: ui_stroke_resize, with verify).
+            static const bool resize = std::getenv("SF_MEASURE_RESIZE") != nullptr;
+            if (resize) radiusPx_ = std::clamp(options_.measureStrokeRadius > 0.0f ? options_.measureStrokeRadius : 60.0f, 2.0f, 800.0f) *
+                                    (1.0f + 0.4f * float(std::sin(u * 40.0)));
+            onMouseMove(sm.cx + sm.r * float(std::cos(a)), sm.cy + sm.r * float(std::sin(a)), 0.0f, 0.0f, false);
+            ++sm.samples;
+            if (u >= 1.0) {
+                sm.releaseAt = seconds();
+                onMouseUp(); // places the dabs still waiting (or, with predictive strokes, leaves them to the solver)
+                sm.releaseMs = (seconds() - sm.releaseAt) * 1000.0;
+                sm.moving = false;
+                sm.releasing = true;
+            }
+        } else if (sm.releasing && !doc_.sculptor.strokeActive()) {
+            {
+                const double releaseDoneMs = (seconds() - sm.releaseAt) * 1000.0;
+                const double releaseMs = sm.releaseMs;
+                strokeProbe_ = nullptr;
+                strokeRadiusProbe_ = nullptr;
+                std::vector<float> off;
+                for (const glm::vec2& d : sm.dabs) off.push_back(std::abs(std::hypot(d.x - sm.cx, d.y - sm.cy) - sm.r));
+                std::sort(off.begin(), off.end());
+                const auto pct = [&](double q) { return off.empty() ? 0.0f : off[std::min(off.size() - 1, size_t(q * off.size()))]; };
+                const double frameMean = sm.frames ? sm.sumFrames / double(sm.frames) * 1000.0 : 0.0;
+                std::sort(sm.frameTimes.begin(), sm.frameTimes.end());
+                const auto framePct = [&](double q) {
+                    return sm.frameTimes.empty() ? 0.0
+                                                 : sm.frameTimes[std::min(sm.frameTimes.size() - 1, size_t(q * double(sm.frameTimes.size())))] * 1000.0;
+                };
+                std::printf("  frame percentiles: p50 %.1f ms, p95 %.1f ms, p99 %.1f ms\n", framePct(0.5), framePct(0.95), framePct(0.99));
+                const double lagMean = sm.lagSamples ? sm.sumLag / double(sm.lagSamples) : 0.0;
+                const double previewMean = sm.lagSamples ? sm.sumPreviewLag / double(sm.lagSamples) : 0.0;
+                std::printf("Stroke (%s%s): %zu dabs from %llu pointer samples in %.1f s, circle radius %.0f px, brush radius %.0f px\n"
+                            "  off the circle: median %.1f px, 95%% %.1f px, worst %.1f px\n"
+                            "  press %.0f ms (first dab's surface on screen %.0f ms); then frames: %llu, mean %.1f ms, worst %.1f ms\n"
+                            "  brush behind the pointer: surface mean %.0f px, worst %.0f px; preview mean %.0f px, worst %.0f px\n"
+                            "  release %.0f ms (last dab on screen after %.0f ms)\n",
+                            interactiveStrokes_ ? "queued" : "immediate", predictiveStrokes() ? ", predictive" : "", sm.dabs.size(),
+                            (unsigned long long)sm.samples, sm.releaseAt - sm.start, double(sm.r), double(radiusPx_),
+                            double(pct(0.5)), double(pct(0.95)), double(off.empty() ? 0.0f : off.back()), sm.pressMs,
+                            sm.firstSurfaceMs, (unsigned long long)sm.frames, frameMean, sm.maxFrame * 1000.0, lagMean, sm.maxLag,
+                            previewMean, sm.maxPreviewLag, releaseMs, releaseDoneMs);
+                // tools/bench_strokes.sh reads this line.
+                std::printf("bench: %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f\n", frameMean, sm.maxFrame * 1000.0, lagMean,
+                            previewMean, sm.pressMs, sm.firstSurfaceMs, releaseMs, releaseDoneMs, framePct(0.95), framePct(0.99));
+                if (popProbe_ && popCommits_ > 0)
+                    std::printf("pop: when the solver's dabs replace their preview the view changes by %.3f on average "
+                                "(worst %.3f); without the preview those dabs would change it by %.3f (%llu commits)\n",
+                                popWith_ / double(popCommits_), popWorst_, popWithout_ / double(popCommits_),
+                                (unsigned long long)popCommits_);
+                std::fflush(stdout);
+                const MeasureView now{camera_.distance, camera_.aspect, canvasRect().w, canvasRect().h};
+                if (verify && !(now == sm.view))
+                    std::printf("verify: skipped (the view changed during the stroke: distance %.3f -> %.3f, canvas %.0fx%.0f -> %.0fx%.0f)\n",
+                                double(sm.view.distance), double(now.distance), double(sm.view.w), double(sm.view.h), double(now.w), double(now.h));
+                else if (verify && !verifyStroke(sm.before, sm.dabs, sm.radii)) return 1;
+                // The test (ui_stroke_path, a light sphere): every dab placed, all of them on the circle.
+                const float spacing = std::max(1.0f, radiusPx_ * 0.15f);
+                const double expected = 4.0 * 3.14159265358979 * double(sm.r) / double(spacing);
+                if (std::getenv("SF_MEASURE_RESIZE")) return 0; // (the spacing changed with the size: verify checked it)
+                const bool enough = double(sm.dabs.size()) >= 0.9 * expected, onCircle = !off.empty() && off.back() < spacing;
+                if (!enough || !onCircle)
+                    std::printf("Stroke check failed: %zu dabs (want %.0f or more), worst %.1f px off the circle (want under %.1f)\n",
+                                sm.dabs.size(), 0.9 * expected, double(off.empty() ? 0.0f : off.back()), double(spacing));
+                return enough && onCircle ? 0 : 1;
+            }
+        }
+        // The stroke's queued dabs: handed to the solver thread (predictive strokes, AsyncStroke.cpp), or placed here
+        // for a limited time, then look at the pointer again.
+        // Continuous (#31): a pointer held still keeps dabbing where it is, 30 times a second.
+        if (strokeContinuous_ && drag_ == Drag::Stroke && !firstDabPending_ && dabQueue_.empty() &&
+            strokeBrush_ != BrushType::Move && strokeBrush_ != BrushType::SnakeHook && strokeType_ != StrokeType::DragRect &&
+            strokeType_ != StrokeType::DragDot) {
+            const double nowS = double(SDL_GetTicksNS()) * 1e-9;
+            if (nowS - strokeMovedAt_ > 0.05 && nowS - continuousDabAt_ > 1.0 / 30.0) {
+                dabQueue_.push({lastX_, lastY_, lastStrokePressure_});
+                continuousDabAt_ = nowS;
+            }
+        }
+        if (asyncStroke_) pumpStroke();
+        else drainStrokeDabs(kStrokeBudgetSeconds);
+        mark();
+        kelvinCatchUp(); // a long Kelvinlet move, a bounded part per frame (PanelKelvinlet.cpp)
         Uint64 now = SDL_GetTicksNS();
         float dt = float(double(now - lastTicks) * 1e-9);
         lastTicks = now;
-        SDL_Event e;
-        while (SDL_PollEvent(&e)) handleEvent(e);
-        processPendingFiles();
-        animateLayers(dt);
-        pollBrushRequest();
-        pollGenerator();
-        pollUnreal();
-        pollGoz();
-        pollBlender();
-        pollPhone();
-        pollAutoUv();
-        pollBake();
-        pollQRemesh();
-        pollSplatTrain();
-        pollSculptable();
+        if (!solverBusy()) { // (the solver thread owns the document's mesh until the stroke's end)
+            processPendingFiles();
+            animateLayers(dt);
+            pollBrushRequest();
+            pollGenerator();
+            pollUnreal();
+            pollGoz();
+            pollBlender();
+            pollMaya();
+            pollPhone();
+            pollAutoUv();
+            pollUvEditor();
+        pollUvEditor();
+            pollBake();
+            pollQRemesh();
+            pollSplatTrain();
+            pollSculptable();
+        }
+        tickProject(dt); // the title and autosave, asleep or not
+        const double t = seconds();
+        if (const uint64_t key = frameKey(); key != lastKey) { // a job finished, the Blender bridge sent a model...
+            lastKey = key;
+            draw = true;
+            if (logRedraw) SDL_Log("redraw: changed (status \"%s\")", status_.c_str());
+            activeUntil_ = std::max(activeUntil_, t + kAfterChangeSeconds);
+        }
+        if (redrawAt_ > 0.0 && t >= redrawAt_) {
+            redrawAt_ = 0.0;
+            draw = true;
+        }
+        if (!draw && !continuous && !wantsFrames(t)) continue;
 
         int fbW = 0, fbH = 0, winW = 0, winH = 0;
         SDL_GetWindowSizeInPixels(window_, &fbW, &fbH);
         SDL_GetWindowSize(window_, &winW, &winH);
         if (fbW <= 0 || fbH <= 0) {
-            SDL_Delay(16);
+            draw = false; // minimised: the next event (restore) draws again
             continue;
         }
         updateCameraAspect();
+        // The SpaceMouse moves the view by its held axes every frame (frame-rate independent); while it does,
+        // spaceMouseMoving() is true and a loop that waits for events when idle must keep drawing.
+        updateSpaceMouse(dt);
 
+        hardwareProfileFrameBegin(); // the frame governor's CPU and GPU timing
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
+        keepImGuiOnPen();
         ImGui::NewFrame();
         drawUi();
+        drawHardwareProfileOverlay();
         ImGui::Render();
+        updateMouseCursor();
+        mark();
 
+        buildGhost(); // the dabs not on the GPU yet, drawn as a preview (predictive strokes)
+        // dense textured meshes: ready the area under the hovering Paint brush (PanelPbr.cpp); not while the solver
+        // thread owns the mesh
+        if (!solverBusy()) prewarmTexturePaint();
         const auto syncStart = std::chrono::steady_clock::now();
         syncScene();
+        mark();
         notePerformanceFrame(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - syncStart).count());
         const int samples = viewSamples();
         renderSettings_.motionProxy = perf_.proxyNow; // big meshes draw their lighter proxy while the view moves
         perf_.samplesUsed = renderer_.drawView(camera_, fbW, fbH, renderSettings_, canvasViewport(fbW, fbH), samples);
+        if (snapshotEnv && *snapshotEnv && (sm.moving || sm.releasing)) {
+            // Three points of the stroke, and the end (the frame the last dab reached the screen).
+            const double u = sm.moving ? (seconds() - sm.start) / double(options_.measureStroke) : 2.0;
+            const bool last = sm.releasing && !doc_.sculptor.strokeActive();
+            if ((sm.snapshots < 3 && u >= 0.3 * (sm.snapshots + 1)) || (last && sm.snapshots < 4)) {
+                sm.snapshots = last ? 4 : sm.snapshots + 1;
+                const Renderer::Viewport v = canvasViewport(fbW, fbH);
+                Image img;
+                img.width = v.w > 0 ? v.w : fbW;
+                img.height = v.h > 0 ? v.h : fbH;
+                img.rgba.resize(size_t(img.width) * size_t(img.height) * 4);
+                gl::ReadPixels(v.w > 0 ? v.x : 0, v.w > 0 ? v.y : 0, img.width, img.height, GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
+                for (int y = 0; y < img.height / 2; ++y) // (GL rows are bottom-up)
+                    std::swap_ranges(img.rgba.begin() + std::ptrdiff_t(size_t(y) * img.width * 4),
+                                     img.rgba.begin() + std::ptrdiff_t(size_t(y + 1) * img.width * 4),
+                                     img.rgba.begin() + std::ptrdiff_t(size_t(img.height - 1 - y) * img.width * 4));
+                std::string error;
+                img.savePng(std::string(snapshotEnv) + "-" + std::to_string(sm.snapshots) + ".png", error);
+            }
+        }
         renderSettings_.motionProxy = false; // (other renders, e.g. project thumbnails, draw in full)
+        mark();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        hardwareProfileFrameEnd();
+        if (proof_) proofBeforeSwap(fbW, fbH); // Help > Benchmark: timing, video capture, the scripted pointer
         SDL_GL_SwapWindow(window_);
-        tickProject(dt);
+        if (fullscreenAfterFirstFrame_) { // (#41, macOS: the window is shown now; raise it, then full screen)
+            fullscreenAfterFirstFrame_ = false;
+            SDL_RaiseWindow(window_);
+            SDL_SetWindowFullscreen(window_, true);
+        }
+        mark();
+        if (phases == 7 && phase[6] - phase[0] > frameLogMs)
+            SDL_Log("frame %.1f ms: events %.1f, dabs %.1f, UI %.1f, ghost + sync %.1f, draw %.1f, UI draw + swap %.1f",
+                    phase[6] - phase[0], phase[1] - phase[0], phase[2] - phase[1], phase[3] - phase[2], phase[4] - phase[3],
+                    phase[5] - phase[4], phase[6] - phase[5]);
+        ++framesDrawn;
+        {
+            const double frameNow = seconds();
+            static double lastSwap = 0.0;
+            if (lastSwap > 0.0) frameSeconds_ = frameSeconds_ * 0.9 + std::min(0.1, frameNow - lastSwap) * 0.1;
+            lastSwap = frameNow;
+        }
+        if (sm.started && sm.firstSurfaceMs == 0.0 && !sm.dabs.empty()) sm.firstSurfaceMs = (seconds() - sm.pressAt) * 1000.0;
+        if (sm.started && !sm.moving && !sm.releasing && sm.pressMs == 0.0) { // the press is on screen: start moving round the circle
+            sm.moving = true;
+            sm.pressMs = (seconds() - sm.start) * 1000.0;
+            sm.start = sm.lastFrame = seconds();
+        } else if (sm.moving) {
+            const double now = seconds();
+            sm.maxFrame = std::max(sm.maxFrame, now - sm.lastFrame);
+            sm.sumFrames += now - sm.lastFrame;
+            sm.frameTimes.push_back(now - sm.lastFrame);
+            sm.lastFrame = now;
+            ++sm.frames;
+            if (!sm.dabs.empty()) { // how far round the circle the brush is behind the pointer, on screen now
+                const double pointer = std::fmod(sm.angle, 2.0 * 3.14159265358979); // where the pointer was sent
+                const glm::vec2 d = sm.dabs.back();
+                double behind = pointer - std::atan2(double(d.y - sm.cy), double(d.x - sm.cx));
+                behind = std::remainder(behind, 2.0 * 3.14159265358979);
+                const double px = std::abs(behind) * double(sm.r);
+                sm.maxLag = std::max(sm.maxLag, px);
+                sm.sumLag += px;
+                ++sm.lagSamples;
+                const glm::vec2 h = ghostHeadValid_ ? ghostHead_ : d; // the preview's head (or the surface's)
+                double ahead = pointer - std::atan2(double(h.y - sm.cy), double(h.x - sm.cx));
+                const double hpx = std::abs(std::remainder(ahead, 2.0 * 3.14159265358979)) * double(sm.r);
+                sm.maxPreviewLag = std::max(sm.maxPreviewLag, hpx);
+                sm.sumPreviewLag += hpx;
+            }
+        }
+        lastKey = frameKey(); // what this frame changed is on screen already
+        draw = continuous || wantsFrames(seconds());
+        if (logRedraw && draw && !continuous)
+            SDL_Log("redraw: keep drawing (input %d, drag %d, busy %d, view moved %d)", int(seconds() < activeUntil_),
+                    int(drag_ != Drag::None), int(backgroundBusy()), int(perf_.framesStill < 10));
     }
     finishProject();
     return 0;
@@ -672,14 +1192,29 @@ int App::run() {
 // Input
 // ---------------------------------------------------------------------------
 
-void App::handleEvent(const SDL_Event& e) {
-    if (dropPenMouseEvent(e)) return; // pen side buttons are mapped in Tablet.cpp, not left to SDL
+void App::handleEvent(const SDL_Event& event) {
+    if (dropPenMouseEvent(event)) return; // pen side buttons are mapped in Tablet.cpp, not left to SDL
+    if (strayMouseMotion(event)) return;  // neither the canvas nor the UI follows a driver's stray mouse events
+    SDL_Event e = event;
+    mapPenPosition(e); // a tablet in mouse mode moves the cursor relatively (#54), for the canvas and the UI
+    if (supportCardEvent(e)) return;  // the support card at launch takes clicks and keys while open
+    if (radialMouseEvent(e)) return;  // clicks on an open radial menu, and the buttons that open one (RadialMenu.cpp)
     ImGui_ImplSDL3_ProcessEvent(&e);
     const ImGuiIO& io = ImGui::GetIO();
 
     switch (e.type) {
     case SDL_EVENT_QUIT:
         requestQuit();
+        break;
+    case SDL_EVENT_JOYSTICK_ADDED:
+    case SDL_EVENT_JOYSTICK_REMOVED:
+    case SDL_EVENT_JOYSTICK_AXIS_MOTION:
+    case SDL_EVENT_JOYSTICK_BUTTON_DOWN:
+        spaceMouseEvent(e); // a SpaceMouse (SpaceMouse.cpp)
+        break;
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        if (radial_.hold != RadialHold::None) closeRadialMenu(); // its key or button's release won't come here
+        spaceHeld_ = false; // Space let go in another window never reaches us
         break;
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
         if (e.window.windowID == SDL_GetWindowID(window_)) requestQuit();
@@ -697,10 +1232,16 @@ void App::handleEvent(const SDL_Event& e) {
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         lastInputPen_ = e.button.which == SDL_PEN_MOUSEID;
         // Strokes and navigation start only on the canvas, never on the shell around it.
-        if (!pickerOpen() && !io.WantCaptureMouse && canvasRect().contains(e.button.x, e.button.y))
+        if (!pickerOpen() && !io.WantCaptureMouse && canvasRect().contains(e.button.x, e.button.y)) {
+            mouseClicks_ = e.button.clicks;
             onMouseDown(e.button.x, e.button.y, e.button.button);
+            mouseClicks_ = 1;
+        }
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
+        // A right click that didn't drag: the QuickMenu (#22). (SDL's click for a pen button doesn't count: a pen
+        // button opens it only when set to Right click, in penButton.)
+        if (e.button.button == SDL_BUTTON_RIGHT && e.button.which != SDL_PEN_MOUSEID) rightClickRelease();
         onMouseUp();
         break;
     case SDL_EVENT_MOUSE_MOTION:
@@ -710,12 +1251,19 @@ void App::handleEvent(const SDL_Event& e) {
         if (!io.WantCaptureMouse && canvasRect().contains(e.wheel.mouse_x, e.wheel.mouse_y)) camera_.zoom(e.wheel.y);
         break;
     case SDL_EVENT_KEY_DOWN:
+        if (e.key.key == SDLK_SPACE && !e.key.repeat && // hold Space and drag: the camera (#43; not while typing)
+            spaceCameraKeyDown(uiPrefs_.spaceCamera, io.WantTextInput || io.WantCaptureKeyboard)) {
+            spaceHeld_ = true;
+            break;
+        }
         if (!io.WantCaptureKeyboard && !e.key.repeat) onKey(e.key.key, e.key.mod);
         else if (!io.WantCaptureKeyboard && (e.key.key == SDLK_LEFTBRACKET || e.key.key == SDLK_RIGHTBRACKET))
             onKey(e.key.key, e.key.mod);
         break;
     case SDL_EVENT_KEY_UP:
+        if (e.key.key == SDLK_SPACE) spaceHeld_ = false;
         if (e.key.key == SDLK_SPACE) quickMenuKeyUp(); // a held Space closes the QuickMenu when let go
+        radialKeyUp(e.key.key);                        // a radial menu's held key: run the slot pointed at
         break;
     case SDL_EVENT_DROP_FILE:
         if (e.drop.data) openPathConfirmed(e.drop.data);
@@ -729,7 +1277,76 @@ bool App::pick(float x, float y, RayHit& hit) const {
     if (!doc_.activeSubtoolInfo().visible) return false; // you can't sculpt what you can't see
     glm::vec3 origin, dir;
     canvasRay(x, y, origin, dir);
-    return doc_.bvh.raycast(doc_.mesh, origin, dir, hit);
+    return frontRaycast(origin, dir, hit);
+}
+
+// The surface under a ray as drawn: with Backface culling on (#68) a back face isn't drawn, so the ray goes on
+// through it to the next face it meets (a brush through the opening of an open mesh works on the far side).
+bool App::frontRaycast(const glm::vec3& origin, const glm::vec3& dir, RayHit& hit) const {
+    if (!surfaceRaycast(doc_.mesh, doc_.bvh, origin, dir, hit)) return false; // (the micro surface on a micro level)
+    if (!renderSettings_.backfaceCulling) return true;
+    glm::vec3 o = origin;
+    for (int i = 0; i < 16 && glm::dot(hit.normal, dir) > 0.0f; ++i) {
+        const glm::vec3 d = glm::normalize(dir);
+        o = hit.position + d * std::max(1e-6f, 1e-5f * glm::distance(origin, hit.position)); // just past it
+        if (!surfaceRaycast(doc_.mesh, doc_.bvh, o, dir, hit)) return false;
+    }
+    return glm::dot(hit.normal, dir) <= 0.0f;
+}
+
+// The crosshair (#73): over the 3D view, where a click sculpts, paints or masks, or while a stroke runs (it may
+// drag over a panel). Not over the panels or windows floating above the view (ImGui has the pointer), a gizmo
+// handle, while the view turns or pans, or where ImGui asks for a cursor of its own (a resize handle on the edge).
+bool App::viewportCursorWanted() const {
+    if (uiPrefs_.viewportCursor != 0) return false;
+    if (drag_ == Drag::Stroke || drag_ == Drag::MaskCanvas || drag_ == Drag::AirStroke) return true;
+    if (drag_ != Drag::None) return false;
+    if (ImGui::GetIO().WantCaptureMouse || !canvasRect().contains(mouseX_, mouseY_)) return false;
+    if (ImGui::GetMouseCursor() != ImGuiMouseCursor_Arrow) return false;
+    if (gizmoActive() && gizmo_.hover != GizmoHandle::None) return false;
+    return true;
+}
+
+// The system cursor, set here rather than by ImGui's backend (which knows no crosshair, and would not put its own
+// back after another was set): ImGui's choice, or the crosshair over the view. Decided after the frame's UI, from
+// that frame's hover state, so a window floating over the view never makes it flicker. SDL_SetCursor runs only
+// when the kind changes.
+void App::updateMouseCursor() {
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+    const ImGuiMouseCursor ui = ImGui::GetMouseCursor();
+    cursorKind_ = viewportCursorWanted() ? kCursorCrosshair : ui == ImGuiMouseCursor_None || io.MouseDrawCursor ? kCursorHidden : int(ui);
+    if (cursorKind_ == cursorShown_) return; // (the shape on screen already: nothing for the window system to do)
+    const bool wasHidden = cursorShown_ == kCursorHidden || cursorShown_ == -2;
+    cursorShown_ = cursorKind_;
+    if (cursorKind_ == kCursorHidden) {
+        SDL_HideCursor();
+        return;
+    }
+    SDL_SystemCursor id = SDL_SYSTEM_CURSOR_DEFAULT;
+    switch (cursorKind_) {
+    case kCursorCrosshair: id = SDL_SYSTEM_CURSOR_CROSSHAIR; break;
+    case ImGuiMouseCursor_TextInput: id = SDL_SYSTEM_CURSOR_TEXT; break;
+    case ImGuiMouseCursor_ResizeAll: id = SDL_SYSTEM_CURSOR_MOVE; break;
+    case ImGuiMouseCursor_ResizeNS: id = SDL_SYSTEM_CURSOR_NS_RESIZE; break;
+    case ImGuiMouseCursor_ResizeEW: id = SDL_SYSTEM_CURSOR_EW_RESIZE; break;
+    case ImGuiMouseCursor_ResizeNESW: id = SDL_SYSTEM_CURSOR_NESW_RESIZE; break;
+    case ImGuiMouseCursor_ResizeNWSE: id = SDL_SYSTEM_CURSOR_NWSE_RESIZE; break;
+    case ImGuiMouseCursor_Hand: id = SDL_SYSTEM_CURSOR_POINTER; break;
+    case ImGuiMouseCursor_Wait: id = SDL_SYSTEM_CURSOR_WAIT; break;
+    case ImGuiMouseCursor_Progress: id = SDL_SYSTEM_CURSOR_PROGRESS; break;
+    case ImGuiMouseCursor_NotAllowed: id = SDL_SYSTEM_CURSOR_NOT_ALLOWED; break;
+    default: break;
+    }
+    const size_t slot = size_t(id) < std::size(cursors_) ? size_t(id) : 0;
+    if (!cursors_[slot]) cursors_[slot] = SDL_CreateSystemCursor(id);
+    if (!cursors_[slot] && id != SDL_SYSTEM_CURSOR_DEFAULT) { // (a system without this one: the arrow)
+        if (!cursors_[0]) cursors_[0] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
+        if (cursors_[0]) SDL_SetCursor(cursors_[0]);
+    } else if (cursors_[slot]) {
+        SDL_SetCursor(cursors_[slot]);
+    }
+    if (wasHidden) SDL_ShowCursor();
 }
 
 BrushType App::activeBrush() const {
@@ -740,6 +1357,7 @@ BrushType App::activeBrush() const {
 }
 
 void App::onMouseDown(float x, float y, Uint8 button) {
+    if (strokeFinishing_) endStroke(); // the last stroke's dabs still being placed: finish them first
     mouseX_ = x;
     mouseY_ = y;
     const SDL_Keymod mod = inputMods();
@@ -753,17 +1371,58 @@ void App::onMouseDown(float x, float y, Uint8 button) {
         if (eraserAction() == PenAction::EraseMask && previewLod_ < 0 && pick(x, y, hit)) beginMaskStroke(x, y);
         return;
     }
+    // A right press with no keys held may be a click that opens the QuickMenu (rightClickRelease); it navigates
+    // only once it moves past the slop.
+    rightClick_.pending = button == SDL_BUTTON_RIGHT && uiPrefs_.rightClickQuickMenu &&
+                          !(SDL_GetModState() & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI));
+    rightClick_.x = x;
+    rightClick_.y = y;
+    rightClick_.dx = rightClick_.dy = 0.0f;
+    zsMenu_.armed = false;
+    // A right click on a Forge Sphere opens its menu (#8): Delete, Insert Between, Set as Root.
+    if (button == SDL_BUTTON_RIGHT && zsphereActive() && !doc_.mesh.zspherePreview &&
+        !(SDL_GetModState() & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)))
+        zsphereRightDown(x, y);
+    if (spaceHeld_) { // Preferences > Input > Hold Space and drag to move the camera (#43)
+        switch (spaceCameraMove(button, ctrlDown(SDL_GetModState()))) {
+        case SpaceCameraMove::Orbit: drag_ = Drag::Orbit; break;
+        case SpaceCameraMove::Pan: drag_ = Drag::Pan; break;
+        case SpaceCameraMove::Zoom: drag_ = Drag::Zoom; break;
+        case SpaceCameraMove::None: break;
+        }
+        if (drag_ != Drag::None) {
+            rightClick_.pending = false;
+            return;
+        }
+    }
+    if (blenderStyle() && blenderNavigationDown(button)) return; // middle / Alt+left / right drags navigate
+    if (mayaStyle() && mayaNavigationDown(button)) return;       // Alt+left / middle / right: orbit / pan / zoom
     if (button == SDL_BUTTON_LEFT) {
+        if (axisGizmoMouseDown(x, y)) return;   // the axis gizmo's ends snap to a side view (#43)
+        if (zsphereMouseDown(x, y, mod)) return; // a ZSphere SubTool takes clicks on it (PanelZSpheres.cpp)
         if (polygroupMouseDown(x, y, mod)) return;
         if (maskSelectMouseDown(x, y, mod)) return;
         if (gizmoMouseDown(x, y, mod)) return; // Gizmo 3D handles, pivot clicks (Gizmo.cpp)
+        if (uvToolMouseDown(x, y, mod)) return; // the UV Editor's Seam / Select in 3D tool (PanelUvEditor.cpp)
         if (guideMouseDown(x, y, mod)) return; // the QRemesh Guides brush (PanelRetopo.cpp)
         if (faceMouseDown(x, y, mod)) return;  // placing facial landmarks (PanelFace.cpp)
         if (sculptableMouseDown(x, y)) return; // Make sculptable: landmarks, crop box (PanelSculptable.cpp)
+        if (captureMouseDown(x, y)) return;    // Capture from view: the drag draws the square (PanelKelvinlet.cpp)
+        // A triple-click on another SubTool makes it the active one and frames it (#43). (Its first two clicks
+        // don't sculpt it: brushes work on the active SubTool only.)
+        if (mouseClicks_ >= 3 && !(mod & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) &&
+            insertType_.empty() && doc_.subtoolCount() > 1) {
+            const int target = pickSubtool(x, y);
+            if (target >= 0 && target != doc_.activeSubtool) {
+                runCommand("subtool_select", {{"index", double(target)}});
+                frameActiveSubtool();
+                return;
+            }
+        }
         // Alt+click on another SubTool selects it (ZBrush); Alt+drag stays an inverted stroke or a pan.
         // Shift+Alt+click selects and frames it (ZBrush), the active one too.
         const bool frameClick = (mod & SDL_KMOD_ALT) && (mod & SDL_KMOD_SHIFT) && !ctrlDown(mod);
-        if ((mod & SDL_KMOD_ALT) && !ctrlDown(mod) && (frameClick || !(mod & SDL_KMOD_SHIFT)) &&
+        if (!blenderStyle() && (mod & SDL_KMOD_ALT) && !ctrlDown(mod) && (frameClick || !(mod & SDL_KMOD_SHIFT)) &&
             (doc_.subtoolCount() > 1 || frameClick)) {
             const int target = pickSubtool(x, y);
             subtoolClickFrame_ = frameClick;
@@ -777,11 +1436,25 @@ void App::onMouseDown(float x, float y, Uint8 button) {
         }
         RayHit hit;
         const bool maskMod = ctrlDown(mod) && !(mod & SDL_KMOD_SHIFT);
+        if (!insertType_.empty() && !maskMod && previewLod_ < 0 && pick(x, y, hit)) { // Append > Insert (#34)
+            drag_ = Drag::Insert;
+            insertAt_ = hit.position;
+            insertNormal_ = hit.normal;
+            insertX_ = x;
+            insertY_ = y;
+            insertPx_ = 0.0f;
+            return;
+        }
         if (previewLod_ < 0 && pick(x, y, hit)) {
             if (maskMod) beginMaskStroke(x, y);
             else beginStroke(x, y, hit);
+        } else if (airStrokeMouseDown(x, y, mod)) { // Start strokes off the model (#62, Input.cpp)
+        } else if (blenderStyle()) {
+            // Blender: a drag beside the model navigates as the middle button would (Shift pans, Ctrl zooms).
+            const SDL_Keymod keys = SDL_GetModState();
+            drag_ = (keys & SDL_KMOD_SHIFT) ? Drag::Pan : ctrlDown(keys) ? Drag::Zoom : Drag::Orbit;
         } else if (maskMod && !(mod & SDL_KMOD_ALT) && previewLod_ < 0) {
-            drag_ = Drag::MaskCanvas; // click inverts, drag clears (or zooms without a mask)
+            drag_ = Drag::MaskCanvas; // click inverts, drag draws a mask rectangle (PanelMasking.cpp)
             maskCanvasX_ = x;
             maskCanvasY_ = y;
             maskCanvasMoved_ = false;
@@ -803,21 +1476,51 @@ void App::onMouseDown(float x, float y, Uint8 button) {
     }
 }
 
+// Blender: middle-drag orbits, Shift+middle pans, Ctrl+middle zooms; Alt+left-drag is the emulated middle button
+// (pens, trackpads); the right button drags the same way. True when the press started navigating.
+bool App::mayaNavigationDown(Uint8 button) {
+    const SDL_Keymod keys = SDL_GetModState(); // the keyboard itself, before inputMods' Maya mapping
+    if (!(keys & SDL_KMOD_ALT) || ctrlDown(keys) || (keys & SDL_KMOD_SHIFT)) return false; // Alt alone navigates
+    if (button == SDL_BUTTON_LEFT) drag_ = Drag::Orbit;
+    else if (button == SDL_BUTTON_MIDDLE) drag_ = Drag::Pan;
+    else if (button == SDL_BUTTON_RIGHT) drag_ = Drag::Zoom;
+    else return false;
+    rightClick_.pending = false;
+    return true;
+}
+
+bool App::blenderNavigationDown(Uint8 button) {
+    const SDL_Keymod keys = SDL_GetModState(); // the keyboard itself: blenderMods turns Ctrl into the invert
+    const bool emulated = button == SDL_BUTTON_LEFT && (keys & SDL_KMOD_ALT);
+    if (button != SDL_BUTTON_MIDDLE && button != SDL_BUTTON_RIGHT && !emulated) return false;
+    drag_ = (keys & SDL_KMOD_SHIFT) ? Drag::Pan : ctrlDown(keys) ? Drag::Zoom : Drag::Orbit;
+    return true;
+}
+
 void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
-    if (!fromPen) {
-        // Windows Ink and some tablet drivers send mouse events of their own beside the pen's, often at an old
-        // position (where the pen last touched). Taking those made the brush ring flick between two places, so
-        // while the pen is in range only the pen moves the cursor. A pen that went quiet without saying it left
-        // (some drivers never do) hands the cursor back to the mouse.
-        if (dragFromPen_ && drag_ != Drag::None) return;
-        if (penInProximity_) {
-            if (SDL_GetTicksNS() - lastPenNs_ < 1000000000ull) return;
-            penLeft();
-        }
+    // (A driver's stray mouse events beside the pen's never get here: strayMouseMotion.) A pen that went quiet
+    // without saying it left (some drivers never do) hands the cursor back to the mouse.
+    if (!fromPen && penInProximity_) penLeft();
+    if (fromPen) {
+        // The pen moves by the distance from its last position taken here, not by SDL's xrel: SDL keeps one cursor
+        // position for the pen and every mouse, so with a driver's stray mouse events in between (a Ugee pen on
+        // X11, #7) each pen event's xrel jumped back from the stray position and the view shook instead of turning.
+        dx = x - mouseX_;
+        dy = y - mouseY_;
     }
     mouseX_ = x;
     mouseY_ = y;
     lastInputPen_ = fromPen;
+    if (rightClick_.pending) { // a right click so far: the view waits until it is a drag
+        // (By the motion's own steps, not the position: some input moves only relatively.) Past the slop, the
+        // drag goes on by everything since the press, so it loses nothing.
+        rightClick_.dx += dx;
+        rightClick_.dy += dy;
+        if (std::hypot(rightClick_.dx, rightClick_.dy) <= kRightClickSlop) return;
+        rightClick_.pending = false;
+        dx = rightClick_.dx;
+        dy = rightClick_.dy;
+    }
     // ZBrush: start a pan with Alt, then let go of Alt while still dragging to zoom.
     if (drag_ == Drag::Pan && panFromAlt_ && !(inputMods() & SDL_KMOD_ALT)) drag_ = Drag::Zoom;
     // Shift+press on the background: letting go of Shift before the drag gets going rolls the view instead.
@@ -836,19 +1539,35 @@ void App::onMouseMove(float x, float y, float dx, float dy, bool fromPen) {
     case Drag::Orbit: orbitBy(dx, dy); break;
     case Drag::Roll: rollBy(x, y, dx, dy); break;
     case Drag::Pan: camera_.pan(dx, dy, canvasHeight()); break;
-    // ZBrush: dragging up (forward) zooms out, every zoom drag; the SculptForge style zooms in.
-    case Drag::Zoom: camera_.zoom((zbrushStyle() ? dy : -dy) * 0.05f); break;
+    case Drag::Zoom: camera_.zoom(zoomDragAmount(dx, dy)); break;
     case Drag::MaskCanvas: maskCanvasMove(x, y); break;
     case Drag::SubToolClick: subtoolClickMove(x, y); break;
     case Drag::Select: selectionMove(x, y); break;
     case Drag::Gizmo: gizmoDragTo(x, y); break;
     case Drag::Guide: guideDragTo(x, y); break;
+    case Drag::UvTool: uvToolDragTo(x, y); break;
     case Drag::Sculptable: sculptableMouseMove(x, y); break;
+    case Drag::Capture: captureMouseMove(x, y); break;
+    case Drag::ZSphere: zsphereDragTo(x, y); break;
+    case Drag::AirStroke: airStrokeTo(x, y); break;
     case Drag::None: break;
     }
 }
 
+// How far a zoom drag zooms in (negative: out). ZBrush: dragging up (forward) zooms out; the SculptForge and
+// Blender styles zoom in. Maya (#32): a drag to the right zooms in, as Maya's own dolly (Preferences > Input >
+// Zoom drag can make it vertical). Invert zoom turns either around.
+float App::zoomDragAmount(float dx, float dy) const {
+    float a = mayaStyle() && uiPrefs_.mayaZoomHorizontal ? dx : zbrushStyle() ? dy : -dy;
+    if (uiPrefs_.invertZoom) a = -a;
+    return a * 0.05f;
+}
+
 void App::orbitBy(float dx, float dy) {
+    if (autoOrtho_) { // an axis view turned: back to perspective (Blender's Auto Perspective)
+        camera_.ortho = false;
+        autoOrtho_ = false;
+    }
     if (!orbitStarted_) {
         orbitRaw_ = camera_;
         orbitStarted_ = true;
@@ -878,15 +1597,46 @@ void App::rollBy(float x, float y, float dx, float dy) {
 
 void App::onMouseUp() {
     rollPending_ = false;
+    rightClick_.pending = false;
+    zsMenu_.armed = false;
     orbitStarted_ = false;
     panFromAlt_ = false;
     if (drag_ == Drag::Select) selectionMouseUp();
+    if (drag_ == Drag::Insert) {
+        // The drag's length on screen, as a size at the surface point's depth (at least a small default).
+        const float px = std::max(insertPx_, 12.0f * uiScale_);
+        const float dist = glm::length(camera_.position() - insertAt_);
+        const float worldPerPx = 2.0f * dist * std::tan(camera_.fovY * 0.5f) / std::max(canvasRect().h, 1.0f);
+        Args args{{"x", double(insertAt_.x)}, {"y", double(insertAt_.y)},
+                  {"z", double(insertAt_.z)}, {"nx", double(insertNormal_.x)},
+                  {"ny", double(insertNormal_.y)}, {"nz", double(insertNormal_.z)},
+                  {"size", double(2.0f * px * worldPerPx)},
+                  // the drag's direction on screen turns it about the normal
+                  {"twist", insertPx_ > 4.0f ? double(glm::degrees(std::atan2(mouseY_ - insertY_, mouseX_ - insertX_))) : 0.0}};
+        args = withSymmetryArgs(std::move(args));
+        if (insertType_ == "mesh") { // your own mesh: a SubTool's copy or a file (insert_mesh)
+            args[insertMeshKey_] = insertMeshValue_;
+            runCommand("insert_mesh", args);
+        } else {
+            args["type"] = insertType_;
+            runCommand("insert_primitive", args);
+        }
+    }
     if (drag_ == Drag::Stroke && maskClickPending_) maskClickRelease(); // Ctrl+click: blur / sharpen the mask
-    else if (drag_ == Drag::Stroke) endStroke();
+    else if (drag_ == Drag::Stroke && asyncStroke_) {
+        // Predictive strokes: letting go doesn't wait for the dabs still to place; the solver carries on and
+        // pumpStroke ends the stroke once they are on screen (anything that needs the document first ends it).
+        strokeFinishing_ = true;
+        // (even with nothing left to place: the stroke's end work runs on the solver thread, pumpStroke)
+    } else if (drag_ == Drag::Stroke) endStroke();
     if (drag_ == Drag::MaskCanvas) maskCanvasRelease();
     if (drag_ == Drag::SubToolClick) subtoolClickRelease();
     if (drag_ == Drag::Guide) guideRelease();
+    if (drag_ == Drag::UvTool) uvToolRelease();
     if (drag_ == Drag::Sculptable) sculptableMouseUp();
+    if (drag_ == Drag::Capture) captureMouseUp();
+    if (drag_ == Drag::ZSphere) zsphereRelease();
+    if (drag_ == Drag::AirStroke) airStrokeRelease();
     gizmoRelease();
     drag_ = Drag::None;
     dragFromPen_ = false;
@@ -894,29 +1644,89 @@ void App::onMouseUp() {
 }
 
 void App::onKey(SDL_Keycode key, SDL_Keymod mod) {
+    if (key == SDLK_ESCAPE && radial_.menu >= 0) {
+        closeRadialMenu();
+        return;
+    }
+    if (key == SDLK_ESCAPE && !insertType_.empty()) { // Append > Insert (#34) off
+        insertType_.clear();
+        status_ = "Insert off";
+        return;
+    }
     if (captureShortcutKey(key, mod)) return; // Ctrl+Alt+click a button, then press its new key
+    if (uvEditorKey(key, mod)) return;        // keys over the UV Editor's view (PanelUvEditor.cpp)
+    if (key == SDLK_ESCAPE && capture_.armed) { // Capture from view waiting for its square (PanelKelvinlet.cpp)
+        capture_.armed = false;
+        status_ = "Capture cancelled";
+        return;
+    }
     if (lightBoxKey(key, mod)) return;        // , LightBox, B / M pickers, S / I pop-ups (LightBox.cpp)
     // CRKW: Ctrl+V over Generate 3D's image box pastes an image there (drawImageTo3D does it), not a brush.
     if (key == SDLK_V && (mod & SDL_KMOD_CTRL) && imagePasteHoverFrame_ >= ImGui::GetFrameCount() - 1) return;
+    // Blender's Emulate Numpad: the number row works as the numpad, unless the key itself has an action.
+    if (blenderStyle() && uiPrefs_.emulateNumpad && key >= SDLK_0 && key <= SDLK_9 &&
+        !actions_.actionForChord(chordFromEvent(key, mod)))
+        key = key == SDLK_0 ? SDLK_KP_0 : SDL_Keycode(SDLK_KP_1 + (key - SDLK_1));
+    keyDown_ = key; // a radial menu's key holds it open until this key is let go (RadialMenu.cpp)
     actions_.handleKey(key, mod);             // the shortcut map: Config.cpp initActions()
+    keyDown_ = SDLK_UNKNOWN;
 }
 
 // ---------------------------------------------------------------------------
 // Strokes
 // ---------------------------------------------------------------------------
 
+bool App::alongNormalBrush(BrushType t) const {
+    return t == BrushType::Move || t == BrushType::SnakeHook || t == BrushType::KelvinSnake || t == BrushType::KelvinGrab;
+}
+
+// Along the normal (from the discussions): with the invert key held as the stroke begins (Preferences > Input >
+// Along the normal), the grab slides along the average normal under the brush rather than across the view. These
+// brushes don't use the invert key otherwise (Alt flips only Elastic Tendril's click-without-moving bump).
+void App::beginAlongNormal(const RayHit& hit, float radius) {
+    strokeAlongNormal_ = false;
+    if (!alongNormalBrush(strokeBrush_) || uiPrefs_.alongNormal == 2) return;
+    const bool key = (inputMods() & SDL_KMOD_ALT) != 0 || (erasing() && eraserAction() == PenAction::Invert);
+    if (uiPrefs_.alongNormal == 0 && !key) return;
+    glm::vec3 n = brushAreaNormal(doc_.mesh, doc_.bvh, hit.position, std::max(radius, 1e-6f), focalShift_);
+    if (glm::length(n) < 0.5f) n = hit.normal;
+    if (glm::length(n) < 0.5f) return;
+    if (glm::dot(n, camera_.forward()) > 0.0f && glm::dot(hit.normal, camera_.forward()) < 0.0f) n = -n; // (outward, to the viewer)
+    strokeAlongNormal_ = true;
+    alongNormalDir_ = glm::normalize(n);
+    alongNormalAnchor_ = hit.position;
+    alongNormalStartY_ = lastY_;
+    strokeInvert_ = invertToggle_; // (the key chose the direction, it doesn't invert the stroke)
+    status_ = std::string(brushLabel(strokeBrush_)) + ": along the normal";
+}
+
+// The point on the normal line the cursor asks for: nearest the cursor's ray, or, when the normal points at the
+// viewer (the cursor can't say how far along it), by how far the cursor went up since the press.
+glm::vec3 App::alongNormalTarget(float x, float y) const {
+    glm::vec3 origin, dir;
+    canvasRay(x, y, origin, dir);
+    float s = 0.0f;
+    if (!lineRayClosest(alongNormalAnchor_, alongNormalDir_, origin, dir, s))
+        s = (alongNormalStartY_ - y) * camera_.worldPerPixel(alongNormalAnchor_, canvasHeight());
+    return alongNormalAnchor_ + alongNormalDir_ * s;
+}
+
 void App::beginStroke(float x, float y, const RayHit& hit) {
+    refreshSymmetryPivot(); // (local symmetry: the active Part's centre as the stroke starts)
     strokeBrush_ = activeBrush();
+    strokeAlongNormal_ = false;
     straight_ = {};
     straight_.shiftAtStart = (inputMods() & SDL_KMOD_SHIFT) != 0;
+    strokeAltSmooth_ = false;
     strokeInvert_ = invertToggle_ != (((inputMods() & SDL_KMOD_ALT) != 0) || (erasing() && eraserAction() == PenAction::Invert));
     // Shift still smooths geometry while the Paint brush is active (ZBrush behaviour).
     strokePaint_ = strokeBrush_ != BrushType::Smooth && (paintMode_ || paintRgb_);
     strokeSculpt_ = !(strokePaint_ && paintMode_);
     const BrushRecipe* recipe = strokeRecipe();
     haveLastDab_ = false;
+    doc_.sculptor.draftStrokes = draftStrokes() && asyncStrokeAllowed(); // (AsyncStroke.cpp)
     if (!doc_.sculptor.beginStroke(doc_.mesh,
-                                   !strokeSculpt_ ? std::string("Paint") : recipe ? recipe->name : brushName(strokeBrush_),
+                                   !strokeSculpt_ ? std::string("Paint") : recipe ? recipe->name : brushLabel(strokeBrush_),
                                    strokeSculpt_ ? doc_.activeLayer : -1)) {
         status_ = "Active layer weight is 0 - raise it to sculpt into the layer";
         drag_ = Drag::Orbit;
@@ -925,13 +1735,33 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
     drag_ = Drag::Stroke;
     playingLayer_ = -1;
     if (strokeType_ == StrokeType::DragRect || strokeType_ == StrokeType::DragDot) doc_.sculptor.holdTopology(); // (they re-stamp)
-    clearLods();
+    // (Only when there are LODs: clearing forgets which mesh was shown, so the next frame sent the whole mesh
+    // again, 0.3 s at 21M triangles before the first dab showed.)
+    if (!lods_.empty() || previewLod_ >= 0) clearLods();
     beginPaintStroke();
     if (doc_.sculptor.dyntopo.enabled && strokeSculpt_ && !dyntopoBlocker(doc_.mesh).empty())
-        status_ = "Dynamic is on, but this SubTool has subdivision levels: sculpting without remeshing";
+        status_ = "Dynamic is on, but this Part has subdivision levels: sculpting without remeshing";
     lastX_ = x;
     lastY_ = y;
-    residual_ = 0.0f;
+    strokePath_.reset(x, y);
+    dabQueue_.clear();
+    dabSeconds_ = prepSeconds_ = 0.0; // measured again: the mesh and the brush may have changed
+    // Predictive strokes (AsyncStroke.cpp): the solver thread, the ghost's first estimate (the picked triangle);
+    // the stroke's own copies of the recipe and the alpha, which the solver thread reads (DabSettings).
+    asyncStroke_ = asyncStrokeAllowed();
+    strokeRecipe_ = asyncStroke_ && recipe ? std::make_shared<const BrushRecipe>(*recipe) : nullptr;
+    strokeAlpha_ = asyncStroke_ && !doc_.brushAlpha.empty() ? std::make_shared<const BrushAlpha>(doc_.brushAlpha) : nullptr;
+    pointerLatest_ = glm::vec2(x, y);
+    pointerLatestAt_ = double(SDL_GetTicksNS()) * 1e-9;
+    penPredictor_.reset(pointerLatest_, pointerLatestAt_);
+    {
+        const glm::vec3 n = glm::dot(hit.normal, camera_.forward()) > 0.0f ? -hit.normal : hit.normal;
+        ghostFrame_ = {hit.position, glm::length(n) > 0.0f ? glm::normalize(n) : -camera_.forward(), hit.position, true};
+        const glm::uvec3 t = hit.triangle < doc_.mesh.triangles.size() ? doc_.mesh.triangles[hit.triangle] : glm::uvec3(0);
+        const auto& P = doc_.mesh.positions;
+        ghostCurvature_ = 0.0f;
+        ghostEdge_ = (glm::distance(P[t.x], P[t.y]) + glm::distance(P[t.y], P[t.z]) + glm::distance(P[t.z], P[t.x])) / 3.0f;
+    }
 
     if (strokeBrush_ == BrushType::Move && !recipe && strokeSculpt_) {
         const float pressure = pressureSize_ ? std::max(strokePressure(), 0.05f) : 1.0f;
@@ -941,13 +1771,22 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
         p.radius = radiusPx_ * pressure * camera_.worldPerPixel(hit.position, canvasHeight());
         p.strength = strength_;
         p.focal = focalShift_;
+        p.connectedOnly = uiPrefs_.connectedOnly;
+        p.viewFalloff = uiPrefs_.viewFalloff;
         doc_.sculptor.beginGrab(doc_.mesh, doc_.bvh, p, symmetry_);
         grabPlanePoint_ = grabLast_ = hit.position;
+        beginAlongNormal(hit, p.radius);
+        return;
+    }
+    if (kelvinStrokeBrush()) { // KelvinGrab / Twist / Scale (PanelKelvinlet.cpp)
+        kelvinBegin(hit);
+        if (strokeBrush_ == BrushType::KelvinGrab) beginAlongNormal(hit, kelvinRadius_);
         return;
     }
     lazyMouse_.reset(glm::vec2(x, y));
-    if (strokeBrush_ == BrushType::SnakeHook && !recipe && strokeSculpt_) {
+    if ((strokeBrush_ == BrushType::SnakeHook || strokeBrush_ == BrushType::KelvinSnake) && !recipe && strokeSculpt_) {
         grabPlanePoint_ = grabLast_ = hit.position; // the pulled tip (see snakeHookTo)
+        beginAlongNormal(hit, radiusPx_ * camera_.worldPerPixel(hit.position, canvasHeight()));
         return;
     }
     if (strokeType_ == StrokeType::DragRect) {
@@ -963,12 +1802,30 @@ void App::beginStroke(float x, float y, const RayHit& hit) {
 }
 
 void App::strokeTo(float x, float y) {
+    strokeMovedAt_ = double(SDL_GetTicksNS()) * 1e-9; // (Continuous dabs wait for the pointer to rest)
+    if (asyncStroke_) {
+        pointerLatest_ = glm::vec2(x, y);
+        pointerLatestAt_ = double(SDL_GetTicksNS()) * 1e-9;
+        penPredictor_.add(pointerLatest_, pointerLatestAt_);
+    }
+    // ZBrush's alternate smooth (#40): Shift let go while the stroke it began goes on.
+    if (strokeBrush_ == BrushType::Smooth && straight_.shiftAtStart && !strokeAltSmooth_ && !strokeMask_ &&
+        !(inputMods() & SDL_KMOD_SHIFT)) {
+        strokeAltSmooth_ = true;
+        status_ = smoothKeepVolume_ ? "Smooth: plain (Shift let go)" : "Smooth: keeping volume (Shift let go)";
+    }
     if (maskClickPending_) { // Ctrl+press on the model: a drag past the click slop paints the mask after all
         if (std::hypot(x - maskClickX_, y - maskClickY_) < 4.0f) return;
         maskClickPending_ = false;
         firstDab(maskClickX_, maskClickY_);
     }
     const BrushRecipe* recipe = strokeRecipe();
+    if (strokeBrush_ == BrushType::Move && !recipe && strokeSculpt_ && strokeAlongNormal_) {
+        const glm::vec3 p = alongNormalTarget(x, y);
+        doc_.sculptor.grab(doc_.mesh, doc_.bvh, p - grabLast_);
+        grabLast_ = p;
+        return;
+    }
     if (strokeBrush_ == BrushType::Move && !recipe && strokeSculpt_) {
         glm::vec3 origin, dir;
         canvasRay(x, y, origin, dir);
@@ -981,7 +1838,11 @@ void App::strokeTo(float x, float y) {
         grabLast_ = p;
         return;
     }
-    if (strokeBrush_ == BrushType::SnakeHook && !recipe && strokeSculpt_) {
+    if (kelvinStrokeBrush()) {
+        kelvinTo(x, y);
+        return;
+    }
+    if ((strokeBrush_ == BrushType::SnakeHook || strokeBrush_ == BrushType::KelvinSnake) && !recipe && strokeSculpt_) {
         snakeHookTo(x, y);
         return;
     }
@@ -1010,34 +1871,86 @@ void App::strokeTo(float x, float y) {
         if (!penTracker_.readyForFirstDab() && penTracker_.everSampled()) {
             lastX_ = x;
             lastY_ = y;
+            strokePath_.reset(x, y);
             return;
         }
         firstDabPending_ = false;
         lastStrokePressure_ = strokePressure();
-        dabAt(lastX_, lastY_, lastStrokePressure_);
+        if (asyncStroke_) dabQueue_.push({lastX_, lastY_, lastStrokePressure_}); // (the solver thread places it)
+        else dabAt(lastX_, lastY_, lastStrokePressure_);
     }
 
     // Place dabs at even screen-space spacing along the cursor path. Every input sample counts (pens
     // send 100-200+ a second, several per frame); the pressure is interpolated between samples.
+    // The dabs are queued, not placed here: on a huge mesh one dab can cost more than a frame, and placing every
+    // dab of a long gap before the next look at the pointer made the gaps longer still, until the stroke was one
+    // straight line. The interactive loop works through the queue for a limited time per frame (drainStrokeDabs),
+    // and a gap between samples that is long is drawn as a curve (core/StrokePath.h).
     const float spacing = std::max(1.0f, radiusPx_ * (recipe ? recipe->spacing : 0.15f));
-    glm::vec2 from(lastX_, lastY_), to(x, y);
-    float len = glm::length(to - from);
     const float p0 = lastStrokePressure_, p1 = strokePressure();
-    float travelled = spacing - residual_;
-    while (travelled <= len) {
-        const float u = travelled / len;
-        glm::vec2 p = from + (to - from) * u;
-        dabAt(p.x, p.y, p0 + (p1 - p0) * u);
-        travelled += spacing;
-    }
-    residual_ = len - (travelled - spacing);
+    strokeScratch_.clear();
+    // (a Shift line stays straight: no curve through its corner)
+    strokePath_.addSample(x, y, p0, p1, spacing, interactiveStrokes_ && !straight_.active, strokeScratch_);
+    for (const PathDab& d : strokeScratch_) dabQueue_.push(d);
     lastX_ = x;
     lastY_ = y;
     lastStrokePressure_ = p1;
+    if (interactiveStrokes_) {
+        // Too far behind the pointer: place every second waiting dab only (a wider spacing under load). The limit
+        // is in time, not dabs: what the last dabs cost says how many are kStrokeBacklogSeconds of work, and never
+        // fewer than kStrokeBacklogMinDabs. A light mesh places hundreds of dabs a frame, so a small brush moved
+        // fast keeps its spacing (several input samples arrive before each frame); on a heavy mesh the brush stays
+        // near the pointer (a floor of 24 dabs was a second of work behind it at 21M triangles, and releasing
+        // placed all of them). SF_STROKE_BACKLOG=0 never drops dabs; a number is a fixed limit in dabs.
+        static const long fixedLimit = [] {
+            const char* env = std::getenv("SF_STROKE_BACKLOG");
+            return env && *env ? std::max(0L, std::strtol(env, nullptr, 10)) : -1L;
+        }();
+        dabQueue_.thin(strokeBacklogLimit(dabSeconds_, fixedLimit, kStrokeBacklogSeconds, kStrokeBacklogMinDabs));
+    } else {
+        drainStrokeDabs(0.0); // scripts, UI tests and recordings place every dab at once, as before
+    }
+}
+
+void App::drainStrokeDabs(double budgetSeconds) {
+    if (dabQueue_.empty()) return;
+    static const bool log = std::getenv("SF_STROKE_LOG") != nullptr; // per frame: dabs waiting, placed, ms
+    const auto start = std::chrono::steady_clock::now();
+    const size_t waiting = dabQueue_.size();
+    size_t placed = 0;
+    while (!dabQueue_.empty()) {
+        const PathDab d = dabQueue_.pop();
+        const auto dabStart = std::chrono::steady_clock::now();
+        dabAt(d.x, d.y, d.pressure);
+        ++placed;
+        // what a dab costs on this mesh with this brush (the backlog limit in strokeTo)
+        const double cost = std::chrono::duration<double>(std::chrono::steady_clock::now() - dabStart).count();
+        dabSeconds_ = dabSeconds_ > 0.0 ? dabSeconds_ * 0.8 + cost * 0.2 : cost;
+        if (budgetSeconds > 0.0 &&
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() >= budgetSeconds)
+            break; // at least one dab per call, so a stroke always moves on
+    }
+    if (log)
+        SDL_Log("stroke: %llu waiting, %llu placed in %.1f ms, %llu left", (unsigned long long)waiting,
+                (unsigned long long)placed,
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
+                (unsigned long long)dabQueue_.size());
 }
 
 void App::dabAt(float x, float y, float pressure) {
-    const BrushRecipe* recipe = strokeRecipe();
+    // On the solver thread (predictive strokes) the dab sees the view and the brush settings as they were when its
+    // batch began (DabSettings), and nothing the main thread changes meanwhile.
+    const DabSettings live = dabView_ ? DabSettings() : dabSettings();
+    const DabSettings& st = dabView_ ? dabView_->settings : live;
+    if (dabView_) {
+        if (dabView_->probe) dabView_->probe->emplace_back(x, y);
+        if (dabView_->radiusProbe) dabView_->radiusProbe->push_back(st.radiusPx);
+    } else if (strokeProbe_) {
+        strokeProbe_->emplace_back(x, y);
+        if (strokeRadiusProbe_) strokeRadiusProbe_->push_back(st.radiusPx);
+    }
+    const Camera& cam = dabView_ ? dabView_->camera : camera_;
+    const BrushRecipe* recipe = st.recipe;
     if (recipe && recipe->jitter > 0.0f) {
         // Deterministic per-stroke scatter (xorshift).
         auto rnd = [this] {
@@ -1046,13 +1959,13 @@ void App::dabAt(float x, float y, float pressure) {
             jitterSeed_ ^= jitterSeed_ << 5;
             return float(jitterSeed_ & 0xffff) / 65535.0f * 2.0f - 1.0f;
         };
-        x += rnd() * recipe->jitter * radiusPx_;
-        y += rnd() * recipe->jitter * radiusPx_;
+        x += rnd() * recipe->jitter * st.radiusPx;
+        y += rnd() * recipe->jitter * st.radiusPx;
     }
     dabRadiusScale_ = dabStrengthScale_ = 1.0f;
     dabAngle_ = 0.0f;
-    if (strokeType_ == StrokeType::Spray) {
-        const SprayDab s = spray_.next(radiusPx_, sprayScatter_);
+    if (st.strokeType == StrokeType::Spray) {
+        const SprayDab s = spray_.next(st.radiusPx, st.sprayScatter);
         x += s.offset.x;
         y += s.offset.y;
         dabRadiusScale_ = s.scale;
@@ -1060,63 +1973,51 @@ void App::dabAt(float x, float y, float pressure) {
         dabAngle_ = s.angle;
     }
     RayHit hit;
-    if (!pick(x, y, hit)) return;
+    if (!(dabView_ ? pickWith(*dabView_, x, y, hit) : pick(x, y, hit))) return;
     if (pressure < 0.0f) pressure = strokePressure();
 
     DabParams p;
     p.center = hit.position;
-    p.viewDir = camera_.forward();
-    p.radius = radiusPx_ * (pressureSize_ ? std::max(pressure, 0.05f) : 1.0f) *
-               camera_.worldPerPixel(hit.position, canvasHeight()) * dabRadiusScale_;
+    p.viewDir = cam.forward();
+    p.radius = st.radiusPx * (st.pressureSize ? std::max(pressure, 0.05f) : 1.0f) *
+               cam.worldPerPixel(hit.position, dabView_ ? dabView_->canvas.h : canvasHeight()) * dabRadiusScale_;
     // Smooth keeps its own Z Intensity (ZBrush), whether picked or held with Shift.
-    p.strength = (strokeBrush_ == BrushType::Smooth ? smoothStrength_ : strength_) * dabStrengthScale_;
-    p.pressure = pressureStrength_ ? pressure : 1.0f;
-    p.invert = strokeInvert_;
-    p.frontFacesOnly = frontFacesOnly_;
-    p.focal = focalShift_;
-    lastDabScreen_ = glm::vec2(x, y);
-    if (strokeMask_) {
-        p.strength = maskStrength_;
-        doc_.sculptor.dabMask(doc_.mesh, doc_.bvh, p, symmetry_);
+    p.strength = (st.brush == BrushType::Smooth ? st.smoothStrength : st.strength) * dabStrengthScale_;
+    p.keepVolume = st.brush == BrushType::Smooth && st.smoothKeepVolume;
+    p.pressure = st.pressureStrength ? pressure : 1.0f;
+    p.invert = st.invert;
+    p.frontFacesOnly = st.frontFacesOnly;
+    p.connectedOnly = st.connectedOnly;
+    p.viewFalloff = st.viewFalloff;
+    p.focal = st.focal;
+    if (!dabView_) lastDabScreen_ = glm::vec2(x, y); // (the solver's: when its batch is committed)
+    if (st.mask) {
+        p.strength = st.maskStrength;
+        doc_.sculptor.dabMask(doc_.mesh, doc_.bvh, p, st.symmetry);
         return;
     }
-    p.alpha = &doc_.brushAlpha;
-    p.alphaUp = screenUpVector(dabAngle_);
-    p.vdm = doc_.brushVdm.get();
+    p.alpha = st.alpha;
+    p.alphaUp = cam.orientation() * glm::vec3(-std::sin(dabAngle_), std::cos(dabAngle_), 0.0f); // screenUpVector
+    p.vdm = st.vdm;
     p.strokeDelta = haveLastDab_ ? hit.position - lastDabHit_ : glm::vec3(0.0f);
     lastDabHit_ = hit.position;
     haveLastDab_ = true;
-    if (strokePaint_) paintAt(p);
-    if (!strokeSculpt_) return;
+    if (st.paint) paintAt(p); // (never on the solver thread: painting strokes stay in the frame loop)
+    if (!st.sculpt) return;
     if (recipe) {
-        doc_.sculptor.dabRecipe(doc_.mesh, doc_.bvh, *recipe, p, symmetry_);
+        doc_.sculptor.dabRecipe(doc_.mesh, doc_.bvh, *recipe, p, st.symmetry);
         return;
     }
-    doc_.sculptor.dab(doc_.mesh, doc_.bvh, strokeBrush_, p, symmetry_);
+    doc_.sculptor.dab(doc_.mesh, doc_.bvh, st.brush, p, st.symmetry);
 }
 
 void App::endStroke() {
-    strokeMask_ = false;
-    maskClickPending_ = false; // (a command can end a Ctrl+click before its release)
-    firstDabPending_ = false;
-    // Preferences > Performance shows what the stroke cost.
-    if (doc_.sculptor.timings.dabs > 0) {
-        perf_.lastStroke = doc_.sculptor.timings;
-        perf_.lastStrokeSyncMs = perf_.strokeSyncMs;
-        perf_.lastStrokeFrames = perf_.strokeFrames;
-    }
-    doc_.sculptor.timings = {};
-    perf_.strokeSyncMs = 0.0;
-    perf_.strokeFrames = 0;
-    UndoRecord r = doc_.sculptor.endStroke();
-    finishPaintStroke(r);
-    if (r.topology && !r.topology->uvs.empty())
-        status_ = "Dynamic topology removed the UVs of the remeshed SubTool (Undo brings them back)";
-    if (!r.empty()) {
-        doc_.undo.push(std::move(r));
-        doc_.modified = true;
-        updateTitle();
-    }
+    if (asyncStroke_) solverWait(); // (the dabs in flight; then the solver thread is idle)
+    drainStrokeDabs(0.0); // the dabs still waiting belong to this stroke
+    doc_.sculptor.flushDetailClone(doc_.mesh, doc_.bvh, symmetry_); // a Detail Clone click
+    kelvinFinish(); // the rest of a Kelvinlet move (PanelKelvinlet.cpp)
+    // (a command can end a Ctrl+click before its release: finishStrokeNow clears the mask click too)
+    finishStrokeNow(); // AsyncStroke.cpp
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,16 +2025,41 @@ void App::endStroke() {
 // ---------------------------------------------------------------------------
 
 void App::runCommand(const std::string& name, const Args& args) {
+    // In the app a macro asks before it first runs and a pack is reviewed before it's installed (PanelPacks.cpp),
+    // whether they come from a button, a key, the console or a script.
+    if (name == "macro_run" && macros_.runDepth == 0) {
+        Macro m;
+        std::string err;
+        const std::string path = argString(args, "path");
+        if (!(path.empty() ? findMacro(argString(args, "name"), &commands_, m, err)
+                           : readMacroFile(path, &commands_, m, err))) {
+            status_ = err;
+            lastCommandOk_ = false;
+            return;
+        }
+        lastCommandOk_ = true;
+        requestMacroRun(m);
+        return;
+    }
+    if (name == "pack_install") {
+        reviewPackFile(argString(args, "path"));
+        lastCommandOk_ = packs_.review != nullptr;
+        return;
+    }
     if (doc_.sculptor.strokeActive()) endStroke();
     if (name == "save_project") storeProjectSettings();
     flushBrushEdits(); // commands may replace brushes: save edits first, then watch what's there afterwards
+    crashlog::action(name); // (failures reach the log through SDL_Log below)
     CommandResult r = commands_.execute(doc_, name, args);
     status_ = r.message;
+    if (name.rfind("uv_", 0) == 0 || name == "texture_create" || name == "texture_delete") uvEditorChanged();
     lastCommandOk_ = r.ok;
     if (r.ok && name != "export_glb" && name != "export_lods" && name != "export_usd" && name != "export_fbx" &&
         name != "export_unreal" && name.rfind("unreal_", 0) != 0 && name != "save_obj" && name != "save_project" &&
         name != "mesh_info" && name.rfind("brush_", 0) != 0 && name.rfind("splat_", 0) != 0 && name != "mesh_to_splats" &&
-        name != "set_color" && name != "set_material" && name != "export_ply" && name != "face_weights" &&
+        name != "set_color" && name != "set_material" && name != "load_matcap" && name != "set_shading" && name != "subtool_shading" &&
+        name != "viewport_shading" &&
+        name != "export_ply" && name != "face_weights" &&
         name != "face_preset" && name.rfind("face_take", 0) != 0 && name != "face_landmarks_detect") {
         clearLods();
         playingLayer_ = -1;
@@ -1156,11 +2082,16 @@ void App::runCommand(const std::string& name, const Args& args) {
     updateTitle();
     // The console shows every command as a script line (but not a live face feed, 30 times a second).
     if (name != "face_weights" || !r.ok) consoleEcho(name, args, r);
+    if (r.ok && (name == "pack_remove" || name == "pack_enable" || name == "pack_disable")) refreshPacks();
+    // Macro > Record keeps what the user runs (not what a running macro runs).
+    if (r.ok && macros_.recorder.active() && macros_.runDepth == 0 && name != "face_weights")
+        macros_.recorder.record(name, args, macroProjectDir());
 }
 
 namespace {
 
 void SDLCALL onFileChosen(void* userdata, const char* const* files, int) {
+    wakeMainLoop(); // a file dialog answered (maybe on another thread): redraw now
     if (!files || !files[0]) return;
     auto* req = static_cast<App::DialogRequest*>(userdata);
     req->app->queueFile(req->action, files[0]);
@@ -1170,7 +2101,8 @@ void SDLCALL onFileChosen(void* userdata, const char* const* files, int) {
 
 void App::queueFile(FileAction action, std::string path) {
     if (action != FileAction::OpenObj && action != FileAction::LoadBrush && action != FileAction::OpenImage &&
-        action != FileAction::AppendSubtool && action != FileAction::ComfyWorkflow && !path.empty() &&
+        action != FileAction::AppendSubtool && action != FileAction::ComfyWorkflow && action != FileAction::InsertMesh &&
+        !path.empty() &&
         std::filesystem::path(std::u8string(path.begin(), path.end())).extension().empty())
         path += action == FileAction::SaveObj      ? ".obj"
                 : action == FileAction::SaveBrush  ? ".sfbrush"
@@ -1183,6 +2115,13 @@ void App::queueFile(FileAction action, std::string path) {
         path += kProjectExtension; // as save_project does, so the recent list gets the real name
     std::lock_guard lock(pendingMutex_);
     pendingFiles_.push_back({action, std::move(path)});
+}
+
+void App::loadMatcapDialog() {
+    static const SDL_DialogFileFilter kMatcapFilters[] = {{"Lit Sphere images", "png;jpg;jpeg;exr"}, {"All files", "*"}};
+    const std::string folder = matcapFolder();
+    SDL_ShowOpenFileDialog(onFileChosen, &dialogRequests_[int(FileAction::LoadMatcap)], window_, kMatcapFilters, 2,
+                           folder.empty() ? nullptr : folder.c_str(), false);
 }
 
 void App::openFileDialog() {
@@ -1198,6 +2137,8 @@ void App::openPath(const std::string& path) {
         if (loadReferenceImage(path)) showImageTo3D_ = true;
     } else if (ext == ".sfbrush") {
         installBrushFile(path);
+    } else if (ext == kPackExtension) { // a pack: the review screen first, nothing is installed yet
+        reviewPackFile(path);
     } else if (ext == ".exr" || ext == ".sfvdm") { // a vector displacement map for the VDM brush
         runCommand("vdm_set", {{"path", path}, {"swap_yz", vdmImport_.swapYZ}, {"flip_x", vdmImport_.flipX},
                                {"flip_y", vdmImport_.flipY}, {"flip_z", vdmImport_.flipZ}, {"scale", double(vdmImport_.scale)}});
@@ -1246,6 +2187,7 @@ AABB App::sceneBounds() const {
 }
 
 void App::processPendingFiles() {
+    pollPackDialogs(); // Install Pack, New Pack's save and a macro's "?" files (PanelPacks.cpp)
     std::vector<PendingFile> files;
     {
         std::lock_guard lock(pendingMutex_);
@@ -1286,6 +2228,14 @@ void App::processPendingFiles() {
             if (lastCommandOk_) camera_.frame(sceneBounds()); // a model can be any size, anywhere
             break;
         case FileAction::ComfyWorkflow: setComfyWorkflow(f.path, comfyPickingText_); break;
+        case FileAction::LoadMatcap: runCommand("load_matcap", {{"path", f.path}}); break;
+        case FileAction::InsertMesh: // Append > Insert on the model > From file (#34): the next drag inserts it
+            insertType_ = "mesh";
+            insertMeshKey_ = "file";
+            insertMeshValue_ = f.path;
+            status_ = "Insert " + std::filesystem::path(std::u8string(f.path.begin(), f.path.end())).filename().string() +
+                      ": drag on the model (the drag sets its size). Esc stops.";
+            break;
         case FileAction::Count: break;
         }
     }
@@ -1300,6 +2250,11 @@ Mesh& App::displayedMesh() {
 }
 
 void App::syncScene() {
+    if (solverBusy()) return; // the solver thread is changing the mesh: the GPU keeps what it has (AsyncStroke.cpp)
+    // Fill layers: Mesh Maps bakes started and landed (live after sculpting), and a painted mask's tiles evaluated.
+    updateMeshMaps();
+    if (paintsTexture(doc_.mesh) && doc_.mesh.texture->fillRevision != doc_.mesh.texture->revision)
+        updateFillLayers(doc_.mesh, mutableTexture(doc_.mesh));
     // The active SubTool's slot shows the LOD being previewed instead of the sculpt.
     Mesh& shown = displayedMesh();
     if (&shown != lastDisplayed_) shown.topologyDirty = true;
@@ -1310,13 +2265,21 @@ void App::syncScene() {
         SubTool& s = doc_.subtools[size_t(i)];
         const bool active = i == doc_.activeSubtool;
         Mesh* mesh = active ? &shown : &s.mesh;
-        scene.push_back({s.id, mesh, active, s.visible, bakeNormalMap(s.id, *mesh), renderSettings_.wireframe});
+        // Solo channel view (channel_view): the texture's shown texels follow before the renderer uploads them.
+        if (mesh->texture) syncChannelView(*mesh->texture, doc_.channelView);
+        const bool flat = s.shading == Shading::Flat || (s.shading == Shading::Default && renderSettings_.flatShading);
+        scene.push_back({s.id, mesh, active, s.visible, bakeNormalMap(s.id, *mesh), renderSettings_.wireframe, flat});
+        scene.back().pbr = renderSettings_.pbr();
+        if (active && &shown == &doc_.mesh) scene.back().overlay = uvEditorOverlay(s.id); // the UV Editor's colours
     }
     renderer_.syncScene(scene);
     renderer_.syncSplats(doc_.splats, doc_.splatsVersion);
+    if (subtoolPanelShown_) updateSubtoolThumbnails(); // from the buffers just synced (PanelSubTools.cpp)
+    subtoolPanelShown_ = false;
 }
 
 void App::setLayerWeight(int index, float weight) {
+    if (solverBusy()) solverWait(); // (the solver thread is moving this mesh: after its batch)
     doc_.mesh.setLayerWeight(index, weight);
     doc_.bvhDirty = true;
     doc_.modified = true;
@@ -1363,6 +2326,8 @@ void App::updateTitle() {
 // ---------------------------------------------------------------------------
 
 void App::drawUi() {
+    // An Extract preview goes once its source changes or another SubTool is picked (strokes aren't commands).
+    if (doc_.extractPreview.id && !doc_.sculptor.strokeActive()) doc_.dropExtractPreview(true);
     drawProjectPopups();
     if (hideUi_) return; // demos: clean beauty shots
     // Draw order (ui-spec §12): shells, LightBox, floating windows, then pop-ups and help.
@@ -1374,11 +2339,14 @@ void App::drawUi() {
     drawMhMaskManager();
     drawTextureManager();
     drawCameraController();
+    drawRadialMenu(); // radial menus (RadialMenu.cpp)
     drawSubToolPopups();
     if (showBrushLab_) drawBrushLab();
     drawBrushGallery();
     if (showImageTo3D_) drawImageTo3D();
     drawPhoneWindow(); // File > Capture from phone (PanelPhone.cpp)
+    drawUvEditor();    // Tool > Texture Map > UV Editor (PanelUvEditor.cpp)
+    drawTimelineUi();  // the Sculpt Timeline strip, timelapse, proof mode HUD (PanelTimeline.cpp, ProofMode.cpp)
     pollAlphaFile();
     pollVdm();
     if (previewLod_ >= 0) {
@@ -1392,13 +2360,25 @@ void App::drawUi() {
     const ImVec2 mouse(mouseX_, mouseY_);
     drawGizmo(); // Gizmo 3D handles and panel (Gizmo.cpp)
     drawQRemeshGuides(); // QRemesh Guides curves (PanelRetopo.cpp)
+    drawUvEditorOverlay(); // UV seams on the model, the Seam tool's cursor (PanelUvEditor.cpp)
+    drawZSphereOverlay(); // the sphere under the cursor (PanelZSpheres.cpp)
+    drawZSphereMenu();    // a right click on a sphere
     drawFaceOverlay();   // facial landmarks (PanelFace.cpp)
     drawSplatTrainOverlay(); // splat training progress (PanelSplatTrain.cpp)
     drawSculptableOverlay(); // Make sculptable: crop box, face landmarks (PanelSculptable.cpp)
+    drawCaptureOverlay();    // Capture from view: the square, the result window (PanelKelvinlet.cpp)
+    if (uiPrefs_.showAxes) drawAxisGizmo(); // X / Y / Z in the canvas corner (#31)
+    drawAirStrokeIndicator(); // Start strokes off the model is on (#62, Input.cpp)
+    if (drag_ == Drag::Insert) { // the size the insert will get
+        insertPx_ = std::hypot(mouse.x - insertX_, mouse.y - insertY_);
+        ImGui::GetForegroundDrawList()->AddCircle(ImVec2(insertX_, insertY_), std::max(insertPx_, 12.0f * uiScale_),
+                                                  theme::u32(theme::accent), 48, 2.0f * uiScale_);
+    }
     // In Gizmo mode (and with the QRemesh Guides brush) the brush ring shows only while Ctrl masks or Shift smooths.
-    const bool ringOff = gizmoActive() || (guidesMode_ && !(inputMods() & SDL_KMOD_SHIFT)) || sculptableHot();
+    const bool ringOff = gizmoActive() || (guidesMode_ && !(inputMods() & SDL_KMOD_SHIFT)) || sculptableHot() || zsphereActive() ||
+                         uvToolActive();
     if (((!ImGui::GetIO().WantCaptureMouse && canvasRect().contains(mouse.x, mouse.y)) || drag_ == Drag::Stroke) &&
-        !hideBrushCursor_ && drag_ != Drag::Select && drag_ != Drag::Guide &&
+        !hideBrushCursor_ && radial_.menu < 0 && drag_ != Drag::Select && drag_ != Drag::Guide && // (no ring under a pie)
         (!ringOff || drag_ == Drag::Stroke || ctrlDown(inputMods())))
         drawBrushCursor();
     drawSelectionOverlay();
@@ -1417,7 +2397,9 @@ void App::drawUi() {
                                "version 3 or later. It comes with ABSOLUTELY NO WARRANTY.");
             ImGui::Spacing();
             ImGui::TextWrapped("Built with SDL 3 (zlib), Dear ImGui (MIT), GLM (MIT), stb (MIT/public domain), ufbx "
-                               "(MIT/public domain), xatlas (MIT), MikkTSpace (zlib) and the Inter typeface (SIL OFL 1.1). QRemesh follows Instant Meshes "
+                               "(MIT/public domain), xatlas (MIT), MikkTSpace (zlib), the Inter and JetBrains Mono typefaces "
+                               "(SIL OFL 1.1) and the MIT-licensed colours of the Forge Terminal look's schemes. Quad Remesh "
+                               "follows Instant Meshes "
                                "(BSD-3-Clause). The phone link uses QR Code generator (MIT), libdatachannel and libjuice (MPL-2.0), usrsctp "
                                "(BSD-3-Clause) and Mbed TLS (Apache-2.0). Uses libcurl (curl license) "
                                "where available.");
@@ -1429,11 +2411,16 @@ void App::drawUi() {
             ImGui::SameLine();
             if (ImGui::Button("AI services & privacy"))
                 SDL_OpenURL("https://github.com/islandmed/SculptForge/blob/main/docs/ai-services.md");
+            ImGui::Spacing();
+            drawSupportersSection(); // PanelSupport.cpp
         }
         ImGui::End();
     }
+    drawSupportUi(); // the first-run welcome, the one support reminder (PanelSupport.cpp)
     guide_.draw(*this);  // Help > User Guide
+    drawPacksUi();       // pack review, New Pack, macro confirmation and editor (PanelPacks.cpp)
     drawHelpConsoleUi(); // console, command palette, Controls (F1), Ctrl-hover help: last, on top
+    drawSupportCard();   // the support card at launch, over everything (PanelSupportCard.cpp)
 }
 
 void App::drawLayersContents() {
@@ -1514,6 +2501,11 @@ void App::sendToUnreal() {
     import.skeletal = r.skeletal;
     import.lods = r.lodCount > 1;
     import.normalMapPath = bakedNormalMapFile(import.normalMapDirectX); // Tool > Bake's last normal map, if it fits
+    // A texture with material channels goes along as T_<name>_BC / _N / _ORM and a built M_<name> material.
+    if (hasTexture(doc_.mesh) && !link::addUnrealMaterialMaps(*doc_.mesh.texture, o.folder, import, err)) {
+        status_ = "Export failed: " + err;
+        return;
+    }
     status_ = "Sending " + r.assetName + " to Unreal...";
     auto promise = std::make_shared<std::promise<std::string>>();
     pendingUnreal_ = promise->get_future();
@@ -1657,7 +2649,11 @@ void App::drawRecipeEditor(BrushRecipe& recipe) {
         case RecipeParam::Kind::Float:
             ImGui::SliderFloat(p.label, recipe.field(p.key), p.min, p.max, "%.2f");
             break;
-        case RecipeParam::Kind::Bool: ImGui::Checkbox(p.label, &recipe.frontFacesOnly); break;
+        case RecipeParam::Kind::Bool:
+            ImGui::Checkbox(p.label, &recipe.frontFacesOnly);
+            ImGui::Checkbox("Connected only##recipe", &recipe.connectedOnly); // (falloff options, not recipeParams)
+            ImGui::Checkbox("View falloff##recipe", &recipe.viewFalloff);
+            break;
         case RecipeParam::Kind::Enum: {
             int idx = recipe.enumIndex(p.key);
             if (ImGui::Combo(p.label, &idx, p.options.data(), int(p.options.size()))) recipe.setEnumIndex(p.key, idx);
@@ -2251,6 +3247,7 @@ void App::drawImageTo3D() {
                 if (ImGui::Selectable(p.label, aiSettings_.hfModel == p.id)) aiSettings_.hfModel = p.id;
             ImGui::EndCombo();
         }
+        if (ai::hunyuanModel(aiSettings_.hfModel)) hint(ai::kHunyuanLicenceNote);
         ImGui::InputText("HF token", hfToken_, sizeof hfToken_, ImGuiInputTextFlags_Password);
         hint(hfToken_[0] || std::getenv("HF_TOKEN")
                  ? "Runs on Hugging Face's shared GPUs with your account's free daily allowance."
@@ -2268,6 +3265,7 @@ void App::drawImageTo3D() {
             ImGui::EndCombo();
         }
         ImGui::InputText("Model id", falModel_, sizeof falModel_);
+        if (ai::hunyuanModel(falModel_)) hint(ai::kHunyuanLicenceNote);
         ImGui::InputText("API key", falKey_, sizeof falKey_, ImGuiInputTextFlags_Password);
         if (!falKey_[0]) hint(std::getenv("FAL_KEY") ? "Using FAL_KEY from the environment." : "Get a key at fal.ai/dashboard/keys");
     } else if (serviceId == "meshy") {
@@ -2393,6 +3391,117 @@ void App::drawPalette_Splats() {
     drawSculptableSection(); // Make sculptable (PanelSculptable.cpp)
 }
 
+bool App::drawSurfaceCursor(ImDrawList* dl, float radiusPx, ImU32 col) {
+    // Only what brushes work on: the active, visible SubTool with an up-to-date BVH (a stale one, after a
+    // whole-mesh change, is rebuilt at the next press; until then the flat ring shows), not an LOD preview.
+    if (previewLod_ >= 0 || doc_.bvhDirty) return false;
+    // Not while the solver thread is moving this mesh (predictive strokes): reading it then races the dabs.
+    if (solverBusy() || (asyncStroke_ && drag_ == Drag::Stroke)) return false;
+    RayHit hit;
+    if (!pick(mouseX_, mouseY_, hit)) return false; // one ray, as a press would cast
+    // The world radius a dab here gets (App::firstDab / the brushes: Draw Size times world size of a pixel).
+    const float radius = radiusPx * camera_.worldPerPixel(hit.position, canvasHeight());
+    if (!(radius > 0.0f) || !std::isfinite(radius)) return false;
+    // A steady normal (8 rays), the ring pressed onto the surface (48) and the Focal Shift ring (32): a few dozen
+    // BVH ray casts, only on frames that are drawn anyway, never a pass over the mesh.
+    const glm::vec3 n = surfaceCursorNormal(doc_.mesh, doc_.bvh, hit, radius);
+    surfaceCursorRing(doc_.mesh, doc_.bvh, hit.position, n, radius, 48, cursorRing_);
+    const float focal = focalRingFraction(focalShift_);
+    surfaceCursorRing(doc_.mesh, doc_.bvh, hit.position, n, radius * focal, 32, cursorInner_);
+
+    const glm::vec3 eye = camera_.position(), forward = camera_.forward();
+    const bool ortho = camera_.ortho;
+    auto facing = [&](const glm::vec3& p, const glm::vec3& pn) {
+        return glm::dot(pn, ortho ? -forward : eye - p) > 0.0f;
+    };
+    const ImU32 inner = IM_COL32(255, 255, 255, 90);
+    // Closed polyline through the points facing the camera; a point on the far side of a curve breaks the line.
+    auto drawRing = [&](const std::vector<SurfaceRingPoint>& ring, const SymCopy& m, ImU32 colour, float width) {
+        const size_t count = std::min<size_t>(ring.size(), 64);
+        ImVec2 sp[64];
+        bool ok[64];
+        for (size_t i = 0; i < count; ++i) {
+            const glm::vec3 q = m.point(ring[i].position);
+            ok[i] = facing(q, m.dir(ring[i].normal)) && gizmoProject(q, sp[i]);
+        }
+        for (size_t i = 0; i < count; ++i) {
+            const size_t j = (i + 1) % count;
+            if (ok[i] && ok[j]) dl->AddLine(sp[i], sp[j], colour, width);
+        }
+    };
+    auto fade = [](ImU32 colour, float k) {
+        const ImU32 a = ImU32(float((colour >> IM_COL32_A_SHIFT) & 0xFF) * k);
+        return (colour & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
+    };
+    // The mirrored and radial rings first (fainter), as the brush copies its dabs (Sculptor::copies; the first is
+    // this one): every copy's cursor shows.
+    refreshSymmetryPivot();
+    const std::vector<SymCopy> mirrors = Sculptor::copies(symmetry_);
+    symmetryCopiesDrawn_ = 0;
+    for (size_t k = mirrors.size(); k-- > 0;) {
+        const SymCopy& m = mirrors[k];
+        const bool self = k == 0;
+        // A copy that lands on the cursor's own ring (hovering on the plane or the axis) adds nothing.
+        if (!self && glm::length(m.point(hit.position) - hit.position) < radius * 0.05f) continue;
+        if (!self && !facing(m.point(hit.position), m.dir(n))) continue;
+        ++symmetryCopiesDrawn_;
+        drawRing(cursorRing_, m, self ? col : fade(col, 0.45f), self ? 2.0f : 1.25f);
+        drawRing(cursorInner_, m, self ? inner : fade(inner, 0.6f), 1.0f);
+    }
+    // The surface's direction: a short line out of the centre (with a dot where the brush touches).
+    ImVec2 c0, c1;
+    if (gizmoProject(hit.position, c0) && gizmoProject(hit.position + n * (radius * 0.4f), c1)) {
+        dl->AddLine(c0, c1, fade(col, 0.85f), 1.5f);
+        dl->AddCircleFilled(c0, 2.0f * uiScale_, col);
+    }
+    return true;
+}
+
+std::array<AxisGizmoEnd, 6> App::axisGizmoLayout() const {
+    // Top left of the canvas, below the timeline strip when that is at the top (timelineTopInset_).
+    const CanvasRect canvas = canvasRect();
+    const float s = 34.0f * uiScale_;
+    return axisGizmoEnds(glm::mat3(camera_.view()),
+                         glm::vec2(canvas.x + s + 18.0f * uiScale_, canvas.y + timelineTopInset_ + s + 18.0f * uiScale_), s);
+}
+
+bool App::axisGizmoMouseDown(float x, float y) {
+    // A click on an end snaps to that side view, orthographic (#43, as in Blender's navigation gizmo).
+    if (!uiPrefs_.showAxes) return false;
+    const auto ends = axisGizmoLayout();
+    const int hit = axisGizmoHit(ends, x, y, 9.0f * uiScale_);
+    if (hit < 0) return false;
+    if (const Action* a = actions_.find(axisGizmoView(ends[size_t(hit)].axis, ends[size_t(hit)].negative).action); a && a->run) a->run();
+    return true;
+}
+
+void App::drawAxisGizmo() {
+    // The world axes as the camera sees them, under the UI: red X, green Y, blue Z, a labelled ball at the
+    // positive end and a plain one at the negative end; the ends pointing away are drawn first and dimmer. A click
+    // on an end snaps to that side (axisGizmoMouseDown); the end under the mouse gets a ring.
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    auto ends = axisGizmoLayout();
+    const glm::vec2 c = (ends[0].at + ends[3].at) * 0.5f;
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const int hover = ImGui::GetIO().WantCaptureMouse ? -1 : axisGizmoHit(ends, mouse.x, mouse.y, 9.0f * uiScale_);
+    const AxisGizmoEnd hovered = hover >= 0 ? ends[size_t(hover)] : AxisGizmoEnd{};
+    std::sort(ends.begin(), ends.end(), [](const AxisGizmoEnd& a, const AxisGizmoEnd& b) { return a.depth < b.depth; });
+    static constexpr ImU32 colours[3] = {IM_COL32(230, 80, 80, 255), IM_COL32(110, 200, 90, 255), IM_COL32(80, 140, 240, 255)};
+    static constexpr const char* names[3] = {"X", "Y", "Z"};
+    for (const AxisGizmoEnd& e : ends) {
+        const ImVec2 tip(e.at.x, e.at.y);
+        ImU32 col = e.depth < -0.2f ? (colours[e.axis] & 0x00ffffffu) | 0x90000000u : colours[e.axis];
+        if (e.negative) col = (col & 0xff000000u) | ((col & 0x00fefefeu) >> 1); // the negative end: darker
+        else dl->AddLine(ImVec2(c.x, c.y), tip, col, 2.0f * uiScale_);
+        dl->AddCircleFilled(tip, (e.negative ? 5.5f : 7.0f) * uiScale_, col);
+        if (hover >= 0 && e.axis == hovered.axis && e.negative == hovered.negative)
+            dl->AddCircle(tip, 9.0f * uiScale_, IM_COL32(255, 255, 255, 220), 0, 1.5f * uiScale_);
+        if (e.negative) continue;
+        const ImVec2 ts = ImGui::CalcTextSize(names[e.axis]);
+        dl->AddText(ImVec2(tip.x - ts.x * 0.5f, tip.y - ts.y * 0.5f), IM_COL32(20, 20, 22, 255), names[e.axis]);
+    }
+}
+
 void App::drawBrushCursor() {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const CanvasRect canvas = canvasRect();
@@ -2402,7 +3511,8 @@ void App::drawBrushCursor() {
         ~PopClip() { dl->PopClipRect(); }
     } popClip{dl};
     const float r = radiusPx_ * (pressureSize_ && lastInputPen_ ? std::max(strokePressure(), 0.05f) : 1.0f);
-    const ImVec2 c(mouseX_, mouseY_);
+    const glm::vec2 at = predictedPointer(); // during a predictive stroke, where the pen will be as this frame shows
+    const ImVec2 c(at.x, at.y);
     const SDL_Keymod mod = inputMods();
     const bool inverted = drag_ == Drag::Stroke ? strokeInvert_
                                                 : invertToggle_ != (((mod & SDL_KMOD_ALT) != 0) ||
@@ -2423,9 +3533,12 @@ void App::drawBrushCursor() {
         const glm::vec3 pc = linearToSrgb(inverted ? glm::vec3(1.0f) : doc_.paintColor);
         col = ImGui::GetColorU32(ImVec4(pc.x, pc.y, pc.z, 0.9f));
     }
-    dl->AddCircle(c, r, col, 64, 1.5f);
-    // The inner ring is Focal Shift, as in ZBrush: where the falloff drops to half.
-    dl->AddCircle(c, r * focalRingFraction(focalShift_), IM_COL32(255, 255, 255, 90), 48, 1.0f);
+    surfaceCursorShown_ = uiPrefs_.cursorFollowsSurface && drawSurfaceCursor(dl, r, col);
+    if (!surfaceCursorShown_) {
+        dl->AddCircle(c, r, col, 64, 1.5f);
+        // The inner ring is Focal Shift, as in ZBrush: where the falloff drops to half.
+        dl->AddCircle(c, r * focalRingFraction(focalShift_), IM_COL32(255, 255, 255, 90), 48, 1.0f);
+    }
     if (strokeType_ == StrokeType::LazyMouse && drag_ == Drag::Stroke) {
         // The string from the cursor to the lagging brush point.
         const ImVec2 lp(lazyMouse_.point.x, lazyMouse_.point.y);

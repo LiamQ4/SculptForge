@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(SculptForge VERSION 0.9.4 LANGUAGES C CXX)
+project(SculptForge VERSION 0.10.7 LANGUAGES C CXX)
 include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -28,14 +28,19 @@ include(cmake/Dependencies.cmake)
 add_library(sculptforge_core STATIC
   src/core/Mesh.cpp
   src/core/BVH.cpp
+  src/core/SurfaceCursor.cpp
   src/core/IndexBits.cpp
   src/core/ThreadPool.cpp
   src/core/UploadOrder.cpp
   src/core/Benchmark.cpp
+  src/core/HardwareProfile.cpp
+  src/core/FrameGovernor.cpp
+  src/core/TierConfig.cpp
   src/core/Sculpt.cpp
   src/core/Dyntopo.cpp
   src/core/DyntopoCommands.cpp
   src/core/Undo.cpp
+  src/core/Timeline.cpp
   src/core/Primitives.cpp
   src/core/Document.cpp
   src/core/Commands.cpp
@@ -44,12 +49,17 @@ add_library(sculptforge_core STATIC
   src/core/CrkwMetaHuman.cpp
   src/core/CrkwMaskManager.cpp
   src/core/Polygroups.cpp
+  src/core/SelectionSets.cpp
   src/core/ScreenSelect.cpp
   src/core/SubTools.cpp
+  src/core/ExtractMirror.cpp
   src/core/MeshTransform.cpp
+  src/core/Deform.cpp
   src/core/TransformCommands.cpp
   src/core/Decimate.cpp
   src/core/Script.cpp
+  src/core/Macro.cpp
+  src/core/Pack.cpp
   src/core/Json.cpp
   src/core/BrushRecipe.cpp
   src/core/BrushLibrary.cpp
@@ -70,13 +80,36 @@ add_library(sculptforge_core STATIC
   src/core/PaintLayer.cpp
   src/core/Texture.cpp
   src/core/TextureCommands.cpp
+  src/core/Uv.cpp
+  src/core/UvCommands.cpp
+  src/core/UvPack.cpp
+  src/core/UvUnwrap.cpp
+  src/core/TileImage.cpp
+  src/core/EnvironmentMath.cpp
+  src/core/MeshMaps.cpp
+  src/core/LayerStack.cpp
+  src/core/MaterialRecipe.cpp
+  src/core/TextureChannels.cpp
+  src/core/TextureChannelCommands.cpp
+  src/core/LayerStackIO.cpp
+  src/core/MapExport.cpp
   src/core/Multires.cpp
+  src/core/Micro.cpp
+  src/core/MicroSculpt.cpp
+  src/core/MicroCommands.cpp
+  src/core/MicroStore.cpp
   src/core/MultiresCommands.cpp
   src/core/AutoUv.cpp
   src/core/TextureTransfer.cpp
   src/core/SurfaceQuery.cpp
   src/core/QRemesh.cpp
   src/core/QRemeshGuides.cpp
+  src/core/QRemesh2.cpp
+  src/core/QRemesh2Proxy.cpp
+  src/core/QRemesh2Field.cpp
+  src/core/QRemesh2Param.cpp
+  src/core/QuadQuality.cpp
+  src/core/ZSpheres.cpp
   src/core/Projection.cpp
   src/core/RetopoCommands.cpp
   third_party/xatlas/xatlas.cpp
@@ -85,12 +118,18 @@ add_library(sculptforge_core STATIC
   src/core/Tangents.cpp
   third_party/mikktspace/mikktspace.c
   src/core/Vdm.cpp
+  src/core/Kelvinlet.cpp
+  src/core/KeepMasked.cpp
+  src/core/ViewCapture.cpp
   third_party/tinyexr/tinyexr_impl.cpp
   src/core/Matcap.cpp
+  src/core/Trash.cpp
   src/core/Project.cpp
   src/core/Guide.cpp
   src/core/UpdateCheck.cpp
   src/core/Tablet.cpp
+  src/core/RadialMenu.cpp
+  src/core/SpaceMouse.cpp
   src/io/ObjIO.cpp
   src/io/FbxIO.cpp
   third_party/ufbx/ufbx.c
@@ -102,6 +141,8 @@ add_library(sculptforge_core STATIC
   src/io/GozCommands.cpp
   src/io/BlenderBridge.cpp
   src/io/BlenderCommands.cpp
+  src/io/MayaBridge.cpp
+  src/io/MayaCommands.cpp
   src/io/StlIO.cpp
   src/io/ArExport.cpp
 )
@@ -112,7 +153,24 @@ embed_files(${CMAKE_CURRENT_BINARY_DIR}/EmbeddedFace.cpp sf::assets
   faceTemplateData ${CMAKE_CURRENT_SOURCE_DIR}/assets/face/ict-arkit.sfface)
 target_sources(sculptforge_core PRIVATE src/core/Face.cpp src/core/FaceCommands.cpp
   ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedFace.cpp)
+# The PBR viewport's bundled environments (core/EnvironmentMath.h): CC0 HDRIs from Poly Haven, 512 x 256
+# (THIRD_PARTY_NOTICES.md).
+embed_files(${CMAKE_CURRENT_BINARY_DIR}/EmbeddedHdri.cpp sf::assets
+  hdriPhotoStudio ${CMAKE_CURRENT_SOURCE_DIR}/assets/hdri/brown_photostudio_02.hdr
+  hdriSmallStudio ${CMAKE_CURRENT_SOURCE_DIR}/assets/hdri/studio_small_09.hdr
+  hdriOutdoorSky ${CMAKE_CURRENT_SOURCE_DIR}/assets/hdri/kloofendal_48d_partly_cloudy_puresky.hdr)
+target_sources(sculptforge_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedHdri.cpp)
+# The built-in Material Recipes (core/MaterialRecipe.h): Fill layer stacks as data files.
+embed_files(${CMAKE_CURRENT_BINARY_DIR}/EmbeddedRecipes.cpp sf::assets
+  recipeWornMetal ${CMAKE_CURRENT_SOURCE_DIR}/assets/materials/worn_metal.sfmaterial
+  recipePaintedEdges ${CMAKE_CURRENT_SOURCE_DIR}/assets/materials/painted_edges.sfmaterial
+  recipeDirtAndDust ${CMAKE_CURRENT_SOURCE_DIR}/assets/materials/dirt_and_dust.sfmaterial
+  recipeRustedIron ${CMAKE_CURRENT_SOURCE_DIR}/assets/materials/rusted_iron.sfmaterial)
+target_sources(sculptforge_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedRecipes.cpp)
 target_include_directories(sculptforge_core PUBLIC src PRIVATE third_party/stb third_party/ufbx third_party/xatlas third_party/mikktspace third_party/tinyexr)
+if(WIN32)
+  target_link_libraries(sculptforge_core PRIVATE shell32) # core/Trash.cpp: the Recycle Bin
+endif()
 # Third-party C code: compile quietly.
 if(MSVC)
   set_source_files_properties(third_party/ufbx/ufbx.c third_party/xatlas/xatlas.cpp third_party/mikktspace/mikktspace.c third_party/tinyexr/tinyexr_impl.cpp PROPERTIES COMPILE_OPTIONS "/w")
@@ -194,7 +252,11 @@ if(SCULPTFORGE_BUILD_APP)
     fontRegular ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf
     fontSemiBold ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Inter-SemiBold.ttf
     fontLucide ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/lucide.ttf
-    appIcon ${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/sculptforge-256.png)
+    fontMono ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/JetBrainsMono-Regular.ttf # the looks (Preferences > Interface > Look)
+    fontMonoBold ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/JetBrainsMono-SemiBold.ttf
+    appIcon ${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/sculptforge-256.png
+    supporters ${CMAKE_CURRENT_SOURCE_DIR}/docs/supporters.txt # Help > About (never empty: it starts with comments)
+    supportCard ${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/support-card.jpg) # the support card's picture (decoded only when it shows)
   include(cmake/EmbedGuide.cmake)
   embed_guide(${CMAKE_CURRENT_BINARY_DIR}/EmbeddedGuide.cpp ${CMAKE_CURRENT_SOURCE_DIR}/docs/guide)
   add_executable(sculptforge
@@ -202,21 +264,29 @@ if(SCULPTFORGE_BUILD_APP)
     ${CMAKE_CURRENT_BINARY_DIR}/EmbeddedGuide.cpp
     src/app/main.cpp
     src/app/Bench.cpp
+    src/app/Calibration.cpp
+    src/app/PanelPerformanceProfile.cpp
+    src/app/CrashLog.cpp
     src/app/App.cpp
     src/app/PanelCkw.cpp
     src/app/PanelCamera.cpp
     src/app/PanelMetaHuman.cpp
     src/app/PanelMhMask.cpp
     src/app/CkwHuion.cpp
+    src/app/AsyncStroke.cpp
     src/app/Demo.cpp
     src/app/UiTest.cpp
     src/app/Actions.cpp
+    src/app/BlenderKeymap.cpp
     src/app/Ui.cpp
     src/app/UiLayout.cpp
     src/app/Shell.cpp
     src/app/ShellGeometry.cpp
     src/app/Palettes.cpp
     src/app/Theme.cpp
+    src/app/LookSchemes.cpp
+    src/app/I18n.cpp
+    src/app/I18nSpanish.cpp
     src/app/CommandPalette.cpp
     src/app/Console.cpp
     src/app/Config.cpp
@@ -227,39 +297,66 @@ if(SCULPTFORGE_BUILD_APP)
     src/app/AssetLibrary.cpp
     src/app/PanelMasking.cpp
     src/app/PanelPolygroups.cpp
+    src/app/PanelSelectionSets.cpp
     src/app/Selection.cpp
     src/app/PanelBrushes.cpp
     src/app/PanelVdm.cpp
+    src/app/PanelKelvinlet.cpp
     src/app/PanelFace.cpp
     src/app/PanelBrushLibrary.cpp
     src/app/PanelBrushGallery.cpp
     src/app/PanelPolypaint.cpp
+    src/app/PanelPacks.cpp
     src/app/PanelPaintLayers.cpp
     src/app/PanelTexture.cpp
+    src/app/PanelUvEditor.cpp
+    src/app/PanelPbr.cpp
+    src/app/PanelFill.cpp
     src/app/PanelGeometry.cpp
     src/app/Gizmo.cpp
     src/app/PanelBake.cpp
     src/app/PanelRetopo.cpp
+    src/app/PanelZSpheres.cpp
     src/app/PanelSplatTrain.cpp
     src/app/PanelSculptable.cpp
     src/app/PanelPerformance.cpp
     src/app/PanelGoz.cpp
     src/app/PanelBlender.cpp
+    src/app/PanelMaya.cpp
     src/app/PanelPhone.cpp
     src/app/PanelProject.cpp
     src/app/PanelSubTools.cpp
+    src/app/PanelSupport.cpp
+    src/app/PanelSupportCard.cpp
+    src/app/PanelExtract.cpp
+    src/app/PanelTimeline.cpp
+    src/app/ProofMode.cpp
     src/app/Tablet.cpp
+    src/app/SpaceMouse.cpp
     src/app/Input.cpp
+    src/app/RadialMenu.cpp
     src/render/GL.cpp
     src/render/Camera.cpp
     src/render/Clusters.cpp
+    src/render/Ghost.cpp
     src/render/Renderer.cpp
+    src/render/UvView.cpp
+    src/render/MicroRenderer.cpp
   )
   target_link_libraries(sculptforge PRIVATE sculptforge_core sculptforge_ai sculptforge_phone imgui SDL3::SDL3)
   target_include_directories(sculptforge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lucide)
   target_compile_definitions(sculptforge PRIVATE SCULPTFORGE_VERSION="${PROJECT_VERSION}"
                                                  CRKW_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
                                                  SF_UPDATE_CHECK=$<BOOL:${SCULPTFORGE_UPDATE_CHECK}>)
+  # The commit a build came from, for proof mode's results (src/app/ProofMode.cpp); taken when CMake configures.
+  find_package(Git QUIET)
+  if(GIT_FOUND AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/.git)
+    execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                    OUTPUT_VARIABLE SF_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  endif()
+  if(SF_GIT_COMMIT)
+    set_source_files_properties(src/app/ProofMode.cpp PROPERTIES COMPILE_DEFINITIONS "SF_GIT_COMMIT=\"${SF_GIT_COMMIT}\"")
+  endif()
   if(MSVC)
     target_compile_options(sculptforge PRIVATE /W4 /utf-8 /permissive-)
   else()
@@ -433,20 +530,32 @@ if(SCULPTFORGE_BUILD_TESTS)
   # tests/test_main.cpp plus every tests/test_*.cpp (add a file to add tests; see tests/TestHarness.h).
   file(GLOB SCULPTFORGE_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.cpp)
   add_executable(sculptforge_tests ${SCULPTFORGE_TEST_SOURCES} src/cli/McpServer.cpp src/app/AssetLibrary.cpp
-                                   src/app/UiLayout.cpp src/app/ShellGeometry.cpp src/render/Camera.cpp
-                                   src/render/Clusters.cpp)
+                                   src/app/UiLayout.cpp src/app/ShellGeometry.cpp src/app/LookSchemes.cpp src/app/I18n.cpp src/app/I18nSpanish.cpp src/render/Camera.cpp
+                                   src/render/Clusters.cpp src/render/Ghost.cpp)
   target_include_directories(sculptforge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_compile_definitions(sculptforge_tests PRIVATE SF_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   target_link_libraries(sculptforge_tests PRIVATE sculptforge_core sculptforge_ai sculptforge_phone)
   if(SCULPTFORGE_BUILD_APP) # the action registry (key chords, shortcut overrides) needs SDL's key names
-    target_sources(sculptforge_tests PRIVATE src/app/Actions.cpp)
+    target_sources(sculptforge_tests PRIVATE src/app/Actions.cpp src/app/BlenderKeymap.cpp)
     target_link_libraries(sculptforge_tests PRIVATE SDL3::SDL3)
     target_compile_definitions(sculptforge_tests PRIVATE SF_TEST_ACTIONS)
   endif()
   if(MSVC)
     target_compile_options(sculptforge_tests PRIVATE /utf-8)
   endif()
-  add_test(NAME sculptforge_tests COMMAND sculptforge_tests)
+  # The suite as SCULPTFORGE_TEST_SHARDS processes (sculptforge_tests_0of8 ...; `ctest -j` runs them at once, CI does;
+  # more shards than cores balance better), each with its own temporary folder so tests in different shards never
+  # share a scratch file.
+  set(SCULPTFORGE_TEST_SHARDS 8 CACHE STRING "Number of ctest entries the sculptforge_tests suite is split into")
+  math(EXPR last_shard "${SCULPTFORGE_TEST_SHARDS} - 1")
+  foreach(k RANGE ${last_shard})
+    set(shard_tmp ${CMAKE_CURRENT_BINARY_DIR}/test-tmp/shard${k})
+    file(MAKE_DIRECTORY ${shard_tmp})
+    add_test(NAME sculptforge_tests_${k}of${SCULPTFORGE_TEST_SHARDS}
+             COMMAND sculptforge_tests --shard ${k}/${SCULPTFORGE_TEST_SHARDS})
+    set_tests_properties(sculptforge_tests_${k}of${SCULPTFORGE_TEST_SHARDS} PROPERTIES COST 1000 # the longest: start first
+                         ENVIRONMENT "TMPDIR=${shard_tmp};TMP=${shard_tmp};TEMP=${shard_tmp}")
+  endforeach()
   # A stand-in for Brush, COLMAP and ffmpeg (tests/tools/fake_splat_tools.cpp): splat training is tested without a GPU.
   add_executable(sf_fake_splat_tools tests/tools/fake_splat_tools.cpp)
   target_include_directories(sf_fake_splat_tools PRIVATE third_party/stb)
@@ -488,6 +597,9 @@ if(SCULPTFORGE_BUILD_TESTS)
     # The add-on's zips build and its manifest passes the checks Blender's validator makes.
     add_test(NAME blender_addon_package COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/addons/blender/build_addon.py
                                               --check --version ${PROJECT_VERSION} --out ${CMAKE_CURRENT_BINARY_DIR}/blender-addon)
+    # The Maya shelf script (integrations/maya, #42) with a mocked maya.cmds, round-tripped through sculptforge-cli.
+    add_test(NAME maya_shelf_script COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/maya/test_sculptforge_maya.py
+                                            --cli ${SCULPTFORGE_CLI_RUNNER})
     # The add-on inside a real Blender, when one is installed (tests/blender/test_in_blender.py).
     find_program(SCULPTFORGE_BLENDER blender)
     if(SCULPTFORGE_BLENDER)
@@ -496,6 +608,11 @@ if(SCULPTFORGE_BUILD_TESTS)
                                         -- --cli ${SCULPTFORGE_CLI_RUNNER})
       set_tests_properties(blender_addon PROPERTIES TIMEOUT 300)
     endif()
+    # The release smoke test (tests/release_smoke.py, run by release.yml on every package): open, sculpt, save, reopen.
+    add_test(NAME release_smoke COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/release_smoke.py
+                                      --cli ${SCULPTFORGE_CLI_RUNNER} --out ${CMAKE_CURRENT_BINARY_DIR}/release-smoke)
+    # Proof mode results: the validator and website list tool (tools/benchmark/submit.py, docs/benchmark.md).
+    add_test(NAME benchmark_submit COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/benchmark/submit.py selftest)
     add_test(NAME guide_site COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/guide/build_site.py --check
                                      --out ${CMAKE_CURRENT_BINARY_DIR}/guide-site)
   endif()
@@ -523,6 +640,10 @@ if(SCULPTFORGE_BUILD_TESTS)
           "SCULPTFORGE_BRUSH=$<TARGET_FILE:sf_fake_splat_tools>;SCULPTFORGE_COLMAP=$<TARGET_FILE:sf_fake_splat_tools>;SCULPTFORGE_FFMPEG=$<TARGET_FILE:sf_fake_splat_tools>")
       endif()
     endforeach()
+    # The hardware profile panel with a real calibration (tests/ui/hardware_profile.sfui).
+    if(TEST ui_hardware_profile)
+      set_tests_properties(ui_hardware_profile PROPERTIES ENVIRONMENT "SF_HW_PROFILE_IN_TESTS=1")
+    endif()
     # The shell layout again on a 1920x1080 window (docs/ui-design.md §2.3).
     add_test(NAME ui_shell_layout_1080 COMMAND sculptforge --ui-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/shell_layout.sfui
              --size 1920x1080 --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/shell_layout_1080)
@@ -530,9 +651,60 @@ if(SCULPTFORGE_BUILD_TESTS)
     add_test(NAME ui_help_console_1080 COMMAND sculptforge --ui-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/help_console.sfui
              --size 1920x1080 --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/help_console_1080)
     set_tests_properties(ui_help_console_1080 PROPERTIES LABELS ui TIMEOUT 300)
+    # The S / U / I / O slider on a UI scaled 1.5x (Windows at 150%, #9): it must still open under the cursor.
+    add_test(NAME ui_size_popup_scaled COMMAND sculptforge --ui-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/size_popup.sfui
+             --size 2400x1350 --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/size_popup_scaled)
+    set_tests_properties(ui_size_popup_scaled PROPERTIES LABELS ui TIMEOUT 300)
     add_test(NAME ui_user_guide_1080 COMMAND sculptforge --ui-test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/user_guide.sfui
              --size 1920x1080 --ui-out ${CMAKE_CURRENT_BINARY_DIR}/ui-shots/user_guide_1080)
     set_tests_properties(ui_user_guide_1080 PROPERTIES LABELS ui TIMEOUT 300)
+    # A crash leaves a note in the log file (#16). Needs no window.
+    add_test(NAME crash_log COMMAND ${CMAKE_COMMAND} -DAPP=$<TARGET_FILE:sculptforge>
+             -DDIR=${CMAKE_CURRENT_BINARY_DIR}/crash-log-test -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/crash_log.cmake)
+    # Idle, the app draws nothing (#14): --measure-idle fails when it keeps drawing frames.
+    add_test(NAME ui_idle_redraw COMMAND sculptforge --measure-idle 4)
+    set_tests_properties(ui_idle_redraw PROPERTIES LABELS ui TIMEOUT 60 ENVIRONMENT "SF_NO_UPDATE_CHECK=1")
+    # sculptforge --calibrate on this machine's GPU: the JSON it prints passes the schema check (it exits 1 if not).
+    add_test(NAME ui_calibrate_json COMMAND sculptforge --calibrate-quick --calibrate-no-save)
+    set_tests_properties(ui_calibrate_json PROPERTIES LABELS ui TIMEOUT 60)
+    # A fast stroke in the interactive loop (dabs queued, placed a few milliseconds a frame): every dab lands on the
+    # pointer's circle (#19).
+    add_test(NAME ui_stroke_path COMMAND sculptforge --run "new_sphere" --measure-stroke 1.5)
+    set_tests_properties(ui_stroke_path PROPERTIES LABELS ui TIMEOUT 60 ENVIRONMENT "SF_NO_UPDATE_CHECK=1")
+    # Predictive strokes with the brush size changing every frame mid-stroke: each batch of dabs keeps the size it
+    # was handed (no data race with the solver thread), replaying the stroke without the thread gives the same
+    # mesh, bit for bit, and its undo the mesh it started from.
+    add_test(NAME ui_stroke_resize COMMAND sculptforge --run "new_sphere" --measure-stroke 1.5)
+    set_tests_properties(ui_stroke_resize PROPERTIES LABELS ui TIMEOUT 60 DISABLED TRUE # predictive strokes: not yet identical in every run
+                         ENVIRONMENT "SF_NO_UPDATE_CHECK=1;SF_MEASURE_RESIZE=1;SF_MEASURE_VERIFY=1;SF_PREDICTIVE_STROKE=1")
+    # The system clipboard is one per desktop (one X server under CI's xvfb-run), and on X11 every SDL program asks a
+    # new clipboard owner what it holds: a program that quits meanwhile makes the owner's answer fail (BadWindow).
+    # Scripts that set, read or paste it (or click a Copy / Paste button) run alone under ctest -j.
+    foreach(t ${SCULPTFORGE_UI_TESTS} shell_layout_1080 help_console_1080 size_popup_scaled user_guide_1080)
+      string(REGEX REPLACE "_1080$|_scaled$" "" base ${t})
+      get_filename_component(base ${base} NAME_WE)
+      set(script ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/${base}.sfui)
+      get_filename_component(name ${t} NAME_WE)
+      if(EXISTS ${script} AND TEST ui_${name})
+        file(READ ${script} body)
+        if(body MATCHES "(^|\n)(clipboard|expect_clipboard) |\"[^\"\n]*(Copy|Paste)[^\"\n]*\"|ctrl\\+[cvx]")
+          set_tests_properties(ui_${name} PROPERTIES RUN_SERIAL TRUE)
+        endif()
+      endif()
+    endforeach()
+    # The longest UI tests start first under ctest -j (COST orders a parallel run; without it they may start last).
+    foreach(t ui_make_sculptable ui_texture_transfer ui_bake)
+      if(TEST ${t})
+        set_tests_properties(${t} PROPERTIES COST 500)
+      endif()
+    endforeach()
+    # Timed measurements run alone when ctest runs tests in parallel (CI: ctest -j): other tests' load must not
+    # change what they measure.
+    foreach(t ui_idle_redraw ui_calibrate_json ui_stroke_path ui_hardware_profile)
+      if(TEST ${t})
+        set_tests_properties(${t} PROPERTIES RUN_SERIAL TRUE)
+      endif()
+    endforeach()
     # The guide's keyboard table must match the app's default shortcuts (tools/guide/update_shortcuts.py).
     if(Python3_Interpreter_FOUND)
       sculptforge_runner(SCULPTFORGE_APP_RUNNER sculptforge)

@@ -20,7 +20,7 @@ public:
     float roll = 0.0f;  // radians around the view direction; only free orbiting makes it non-zero
     float fovY = glm::radians(35.0f);
     float aspect = 1.0f;
-    bool orthographic = false;
+    bool ortho = false; // orthographic: shows what a perspective view would at the target's depth (Numpad 5)
     float focalLengthMm() const; // full-frame equivalent using a 24 mm sensor height
     void setFocalLengthMm(float mm);
 

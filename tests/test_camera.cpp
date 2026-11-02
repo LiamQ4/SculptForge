@@ -81,14 +81,14 @@ TEST(camera_turntable_after_free_rotation_stands_upright) {
 
 TEST(camera_orthographic_rays_and_brush_scale) {
     Camera c;
-    c.orthographic = true;
+    c.ortho = true;
     glm::vec3 a, b, da, db;
     c.screenRay(100, 200, 800, 600, a, da);
     c.screenRay(700, 400, 800, 600, b, db);
     CHECK(near(da, db));
     CHECK(glm::length(a - b) > 0.1f);
     CHECK(std::abs(c.worldPerPixel(glm::vec3(0), 600) - c.worldPerPixel(glm::vec3(0, 0, -10), 600)) < 1e-6f);
-    c.orthographic = false;
+    c.ortho = false;
     c.screenRay(100, 200, 800, 600, a, da);
     c.screenRay(700, 400, 800, 600, b, db);
     CHECK(glm::length(da - db) > .1f);
@@ -103,7 +103,7 @@ TEST(camera_projection_toggle_preserves_target_plane_scale_and_lens) {
     const glm::vec4 point(.4f, .5f, 0, 1);
     glm::vec4 perspective = c.projection() * c.view() * point;
     perspective /= perspective.w;
-    c.orthographic = true;
+    c.ortho = true;
     glm::vec4 ortho = c.projection() * c.view() * point;
     ortho /= ortho.w;
     CHECK(glm::length(glm::vec2(ortho) - glm::vec2(perspective)) < 1e-5f);
@@ -115,4 +115,32 @@ TEST(camera_projection_toggle_preserves_target_plane_scale_and_lens) {
         CHECK(std::abs(projected.x / projected.w) < 1);
         CHECK(std::abs(projected.y / projected.w) < 1);
     }
+}
+
+TEST(camera_orthographic_matches_perspective_at_the_target) {
+    // Numpad 5: the orthographic view is as tall as the perspective one at the target, rays are parallel, and a
+    // pixel covers the same width at any depth.
+    Camera c;
+    c.distance = 5.0f;
+    c.aspect = 1.5f;
+    const float w = 900.0f, h = 600.0f;
+    const float persp = c.worldPerPixel(c.target, h);
+    c.ortho = true;
+    CHECK(std::abs(c.worldPerPixel(c.target, h) - persp) < 1e-5f);
+    CHECK(std::abs(c.worldPerPixel(c.target + glm::vec3(0, 0, -3), h) - persp) < 1e-5f);
+    glm::vec3 o1, d1, o2, d2;
+    c.screenRay(10.0f, 20.0f, w, h, o1, d1);
+    c.screenRay(800.0f, 500.0f, w, h, o2, d2);
+    CHECK(near(d1, d2) && near(d1, c.forward()));
+    // The centre ray goes through the target; one pixel to the right lands one pixel's width to the right.
+    glm::vec3 oc, dc, or_, dr;
+    c.screenRay(w * 0.5f, h * 0.5f, w, h, oc, dc);
+    c.screenRay(w * 0.5f + 1.0f, h * 0.5f, w, h, or_, dr);
+    const glm::vec3 toTarget = c.target - oc;
+    CHECK(glm::length(toTarget - dc * glm::dot(toTarget, dc)) < 1e-4f);
+    CHECK(std::abs(glm::length(or_ - oc) - persp) < 1e-4f);
+    // Zooming in never clips the model: the depth range reaches behind the eye.
+    c.distance = 0.01f;
+    const glm::vec4 p = c.projection() * c.view() * glm::vec4(0.0f, 0.0f, 1.0f, 1.0f); // in front of the target...
+    CHECK(std::abs(p.z / p.w) <= 1.0f); // ...and behind the eye, still drawn
 }

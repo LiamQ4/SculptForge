@@ -9,6 +9,7 @@
 #include "core/Benchmark.h"
 #include "core/BrushLibrary.h"
 #include "core/Commands.h"
+#include "core/Pack.h"
 #include "core/Script.h"
 
 #include <cstdio>
@@ -32,6 +33,7 @@ void usage() {
         "      --schema               Print commands as LLM tool definitions (JSON)\n"
         "      --mcp                  Run as an MCP server on stdio (Claude Code, Claude Desktop, any MCP client)\n"
         "  -q, --quiet                Only print errors\n"
+        "      --no-packs             Safe mode: leave every installed pack out (pack_install still works)\n"
         "      --bench                Run the performance benchmark (CPU side; the app's --bench adds the GPU)\n"
         "      --bench-sizes 4,16,32  Benchmark sizes in millions of triangles\n"
         "      --bench-dabs N         Dabs per benchmark stroke (default 40)\n"
@@ -39,6 +41,8 @@ void usage() {
         "      --bench-no-project     Skip the project save / open (it needs twice the memory)\n"
         "      --bench-view           Benchmark only what the viewport costs (uploads, orbit)\n"
         "      --bench-dyntopo        Benchmark dynamic topology strokes (e.g. --bench-sizes 0.25,1,4)\n"
+        "      --bench-micro          Benchmark micro-displacement levels (sizes = micro triangles, e.g. 33,100,300)\n"
+        "      --bench-micro-level N  Micro level for --bench-micro (default 4: 256 per base triangle)\n"
         "      --bench-out FILE       Write the benchmark report (Markdown) to FILE\n"
         "  -h, --help                 Show this help\n"
         "\n"
@@ -107,6 +111,8 @@ int main(int argc, char** argv) {
             return 0;
         } else if (sf::parseBenchArg(argc, argv, i, bench)) {
             // handled after the loop
+        } else if (a == "--no-packs") {
+            sf::setPacksSafeMode(true);
         } else if (a == "-q" || a == "--quiet") {
             quiet = true;
         } else if (a == "-h" || a == "--help") {

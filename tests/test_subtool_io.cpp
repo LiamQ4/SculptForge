@@ -179,7 +179,7 @@ TEST(subtool_project_v2_round_trip) {
     CHECK(readStoredZip(path, entries, err));
     Json manifest;
     CHECK(!entries.empty() && Json::parse(std::string(entries[0].data.begin(), entries[0].data.end()), manifest, err));
-    CHECK(manifest["version"].asNumber() == kProjectVersion && manifest["subtools"].size() == 3);
+    CHECK(manifest["version"].asNumber() == kProjectBaseWriteVersion && manifest["subtools"].size() == 3);
     CHECK(manifest["active_subtool"].asNumber() == 1 && !manifest.has("mesh"));
     CHECK(manifest["subtools"][1]["goz_name"].asString() == "Eye_ZB");
 
@@ -187,7 +187,7 @@ TEST(subtool_project_v2_round_trip) {
     CommandRegistry reg;
     Document third;
     CommandResult r = reg.execute(third, "open_project", {{"path", path}});
-    CHECK(r.ok && r.message.find("3 SubTools") != std::string::npos);
+    CHECK(r.ok && r.message.find("3 Parts") != std::string::npos);
     std::filesystem::remove(path);
 }
 
@@ -251,7 +251,7 @@ TEST(subtool_obj_export_import) {
     CommandRegistry reg;
     const std::string path = tempPath("sf_subtool_scene.obj");
     CommandResult r = reg.execute(doc, "save_obj", {{"path", path}});
-    CHECK(r.ok && r.message.find("2 SubTools") != std::string::npos);
+    CHECK(r.ok && r.message.find("2 Parts") != std::string::npos);
     const std::string text = readText(path);
     CHECK(countOf(text, "\no ") == 2);
     CHECK(text.find("\no Body\n") != std::string::npos && text.find("\no Sword\n") != std::string::npos);
@@ -484,7 +484,7 @@ TEST(subtool_goz_send_receive_and_export) {
     Document doc = makeExportScene();
     CommandRegistry reg;
     CommandResult r = reg.execute(doc, "goz_send", {{"folder", root.string()}, {"launch", false}});
-    CHECK(r.ok && r.message.find("1 more SubTools") != std::string::npos);
+    CHECK(r.ok && r.message.find("1 more Parts") != std::string::npos);
     CHECK(doc.gozName == "Body" && doc.subtools[2].gozName == "Sword" && doc.subtools[1].gozName == "Eye_ZB");
     const fs::path project = root / "GoZProjects" / "Default";
     CHECK(fs::exists(project / "Body.GoZ") && fs::exists(project / "Sword.GoZ") && !fs::exists(project / "Eye_ZB.GoZ"));

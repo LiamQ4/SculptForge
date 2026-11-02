@@ -34,16 +34,37 @@ UiLayout standardLayout() {
                   "draw.zadd",         "draw.zsub",     "draw.rgb",             "draw.paint_vertex",   "draw.paint_texture",   "draw.new_texture",     "sep",                 "widget.draw_size",
                   "widget.strength",   "row",           "ui.brush_lab",         "draw.front_faces",    "sep",
                   "draw.dynamic",      "widget.dyntopo_detail", "sep",
-                  "transform.symmetry_x",   "transform.symmetry_y", "transform.symmetry_z",    "sep",                 "draw.pressure_strength",
+                  "transform.symmetry_x",   "transform.symmetry_y", "transform.symmetry_z",    "transform.symmetry_radial", "sep",                 "draw.pressure_strength",
                   "draw.pressure_size", "widget.points"};
     l.leftShelf = {"widget.tile.brush", "widget.tile.stroke", "widget.tile.alpha", "widget.tile.material", "widget.color"};
-    l.rightShelf = {"view.frame", "crkw.camera", "crkw.mask_manager", "widget.nav.move", "widget.nav.zoom", "widget.nav.rotate", "sep",
+    l.rightShelf = {"edit.undo",  "edit.redo",       "sep",
+                    "view.frame", "crkw.camera", "crkw.mask_manager", "widget.nav.move", "widget.nav.zoom", "widget.nav.rotate", "sep",
                     "view.polyf", "view.polygroups", "view.mask",       "view.polypaint",    "sep",
                     "subtool.solo", "view.splats"};
     l.bottomShelf = {"brush.standard", "brush.clay",    "brush.claybuildup", "brush.damstandard", "brush.move",
                      "brush.smooth",   "brush.inflate", "brush.pinch",       "brush.flatten",     "brush.crease",
-                     "brush.trim",     "brush.snakehook", "brush.layer",     "brush.nudge",       "brush.paint",
+                     "brush.trim",     "brush.snakehook", "brush.layer",     "brush.nudge",       "brush.kelvingrab",
+                     "brush.detailclone", "brush.paint",
                      "widget.add_brush"};
+    return l;
+}
+
+UiLayout standardLayout(int shellLayout) {
+    UiLayout l = standardLayout();
+    if (shellLayout != 1) return l;
+    // The SculptForge layout: one tool row (the mode, the transform tools, add / subtract, the two sliders,
+    // dynamic topology, symmetry). Library, Brush Lab, Front, the pressure options and the triangle counts moved to
+    // the menus (Sculpt > Draw) and the status bar.
+    l.topShelf = {"draw.sculpt",          "draw.paint",           "sep",
+                  "tool.draw",            "tool.move",            "tool.scale",           "tool.rotate",       "sep",
+                  "draw.zadd",            "draw.zsub",            "draw.rgb",             "draw.paint_vertex", "draw.paint_texture",
+                  "draw.new_texture",     "sep",                  "widget.draw_size",     "widget.strength",   "sep",
+                  "draw.dynamic",         "widget.dyntopo_detail", "sep",
+                  "transform.symmetry_x", "transform.symmetry_y", "transform.symmetry_z", "transform.symmetry_radial"};
+    l.rightShelf = {"edit.undo",  "edit.redo",       "sep",
+                    "view.frame", "crkw.camera", "crkw.mask_manager", "widget.nav.move", "widget.nav.zoom", "widget.nav.rotate", "sep",
+                    "view.polyf", "view.polygroups", "view.mask",       "view.polypaint",    "sep",
+                    "subtool.solo", "view.splats"};
     return l;
 }
 
@@ -74,12 +95,12 @@ Json toJson(const UiLayout& l) {
     return j;
 }
 
-bool fromJson(const Json& j, UiLayout& l, std::string& error) {
+bool fromJson(const Json& j, UiLayout& l, std::string& error, int shellLayout) {
     if (!j.isObject()) {
         error = "The UI configuration is not a JSON object";
         return false;
     }
-    UiLayout out = standardLayout();
+    UiLayout out = standardLayout(shellLayout);
     auto flag = [&](const char* key, bool& v) { v = j[key].asBool(v); };
     auto number = [&](const char* key, float& v) { v = float(j[key].asNumber(v)); };
     flag("shelvesVisible", out.shelvesVisible);
@@ -106,6 +127,11 @@ bool fromJson(const Json& j, UiLayout& l, std::string& error) {
         auto at = std::find(out.rightShelf.begin(), out.rightShelf.end(), "view.frame");
         out.rightShelf.insert(at == out.rightShelf.end() ? at : std::next(at), "crkw.camera");
     }
+    // Version 3 added Undo and Redo at the top of the right shelf (#43): put them into stored ones.
+    if (int(j["version"].asNumber(1)) < 5 && j["rightShelf"].isArray() &&
+        std::find(out.rightShelf.begin(), out.rightShelf.end(), "edit.undo") == out.rightShelf.end() &&
+        std::find(out.rightShelf.begin(), out.rightShelf.end(), "edit.redo") == out.rightShelf.end())
+        out.rightShelf.insert(out.rightShelf.begin(), {"edit.undo", "edit.redo", "sep"});
     readStrings(j["bottomShelf"], out.bottomShelf);
     if (int(j["version"].asNumber(1)) < 4) {
         auto contains = [](const auto& shelf) { return std::find(shelf.begin(),shelf.end(),"crkw.mask_manager")!=shelf.end(); };

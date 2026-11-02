@@ -2,11 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Project.h"
 #include "core/CrkwMetaHuman.h"
+#include "core/Micro.h"
+#include "core/Timeline.h"
 
 #include "core/Multires.h"
 
+#include "core/LayerStack.h"
+#include "core/LayerStackIO.h"
+#include "core/SelectionSets.h"
 #include "core/Texture.h"
 #include "core/ThreadPool.h"
+#include "core/ZSpheres.h"
 #include "io/Zip.h"
 
 #include <algorithm>
@@ -49,9 +55,20 @@ ProjectThumbnailProvider& thumbnailProvider() {
 // version 1); every other key belongs to
 // Document::projectSettings (camera, render, brush, symmetry, ...).
 const char* const kCoreKeys[] = {"format", "version", "app_version", "mesh", "layers", "active_layer",
-                                 "subtools", "active_subtool", "brushes", "active_brush", "splats"};
+                                 "subtools", "active_subtool", "brushes", "active_brush", "splats", "attachments"};
 
 std::filesystem::path fsPath(const std::string& p) { return std::filesystem::path(std::u8string(p.begin(), p.end())); }
+
+constexpr size_t kMaxAttachmentSize = size_t(64) << 20;
+
+// Document::projectFiles names: "matcaps/Gold.png" - letters, digits, space . _ - and '/' between parts.
+bool validAttachmentName(const std::string& name) {
+    if (name.empty() || name.size() > 200 || name.front() == '/' || name.back() == '/' || name.find("..") != std::string::npos)
+        return false;
+    return std::all_of(name.begin(), name.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == ' ' || c == '.' || c == '_' || c == '-' || c == '/' || c >= 0x80;
+    });
+}
 
 bool isCoreKey(const std::string& key) {
     return std::any_of(std::begin(kCoreKeys), std::end(kCoreKeys), [&](const char* k) { return key == k; });
@@ -130,6 +147,29 @@ public:
         return add(file, Scalar::U32, 1, v.size(), littleEndian(v.data(), v.size()));
     }
     Json bytes(const std::string& file, const std::vector<uint8_t>& v) { return add(file, Scalar::U8, 1, v.size(), v); }
+    // `count` 16-bit integers at `v` (which must outlive the save), as u8 x 2, written straight from memory on
+    // little-endian machines.
+    Json int16s(const std::string& file, const int16_t* v, size_t count) {
+        if constexpr (std::endian::native == std::endian::little) {
+            ZipEntry e{file, {}};
+            e.external = count ? reinterpret_cast<const uint8_t*>(v) : nullptr;
+            e.externalSize = count * 2;
+            entries.push_back(std::move(e));
+            return descriptor(file, Scalar::U8, 2, count);
+        } else {
+            std::vector<uint8_t> data(count * 2);
+            for (size_t i = 0; i < count; ++i) data[2 * i] = uint8_t(uint16_t(v[i])), data[2 * i + 1] = uint8_t(uint16_t(v[i]) >> 8);
+            return add(file, Scalar::U8, 2, count, std::move(data));
+        }
+    }
+    // Copied external-free: a byte array that must outlive the save.
+    Json externalBytes(const std::string& file, const std::vector<uint8_t>& v) {
+        ZipEntry e{file, {}};
+        e.external = v.empty() ? nullptr : v.data();
+        e.externalSize = v.size();
+        entries.push_back(std::move(e));
+        return descriptor(file, Scalar::U8, 1, v.size());
+    }
 
     std::vector<ZipEntry> entries;
 
@@ -208,6 +248,16 @@ public:
     bool bytes(const Json& desc, const char* what, size_t count, std::vector<uint8_t>& out) {
         out.resize(count);
         return read(desc, what, Scalar::U8, 1, count, out.data());
+    }
+    bool int16s(const Json& desc, const char* what, size_t count, std::vector<int16_t>& out) {
+        out.resize(count);
+        if (!read(desc, what, Scalar::U8, 2, count, out.data())) return false;
+        if constexpr (std::endian::native != std::endian::little)
+            for (int16_t& v : out) {
+                const uint8_t* p = reinterpret_cast<const uint8_t*>(&v);
+                v = int16_t(uint16_t(p[0]) | uint16_t(p[1]) << 8);
+            }
+        return true;
     }
 
 private:
@@ -302,6 +352,7 @@ void writeMesh(Writer& w, const std::string& prefix, const Mesh& m, Json& out, s
         mesh.set("polygroups", w.uints(prefix + "mesh/polygroups.bin", m.polygroups.data(), m.polygroups.size(), 1));
     if (m.hasHidden()) mesh.set("hidden", w.bytes(prefix + "mesh/hidden.bin", m.hidden));
     if (m.hasUvs()) mesh.set("uvs", w.floats(prefix + "mesh/uvs.bin", &m.uvs[0].x, m.uvs.size(), 2));
+    if (m.hasUvFlags()) mesh.set("uv_flags", w.bytes(prefix + "mesh/uv_flags.bin", m.uvFlags)); // seams, pins (core/Uv.h)
     // Optional and ignored by older readers, so no format version bump.
     if (m.hasQuads())
         mesh.set("quad_partners", w.uints(prefix + "mesh/quad_partners.bin", m.quadPartners.data(), m.quadPartners.size(), 1));
@@ -356,6 +407,9 @@ bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& e
     if (mj.has("uvs")) {
         m.uvs.resize(nt * 3);
         r.floats(mj["uvs"], "uvs", nt * 3, 2, nt ? &m.uvs[0].x : nullptr);
+    }
+    if (mj.has("uv_flags")) {
+        if (!r.bytes(mj["uv_flags"], "UV seams", nt * 3, m.uvFlags)) m.uvFlags.clear();
     }
     if (mj.has("quad_partners")) { // rebuildTopology() unpairs anything that isn't a valid pair
         m.quadPartners.resize(nt);
@@ -495,9 +549,22 @@ Json writeTexture(Writer& w, const std::string& prefix, const Mesh& m) {
         l.set("visible", tl.visible);
         l.set("locked", tl.locked);
         l.set("rgba", pngBlob(w, prefix + "texture/" + std::to_string(i) + ".png", t.width, t.height, tl.rgba));
+        // A Fill layer (format 7, core/LayerStack.h): its settings and painted mask; `rgba` is its last evaluation,
+        // so readers that don't know Fill layers show it as a paint layer.
+        if (tl.fill) {
+            l.set("fill", fillLayerJson(*tl.fill));
+            if (tl.mask.size() == t.texelCount() * 4)
+                l.set("mask", pngBlob(w, prefix + "texture/" + std::to_string(i) + "_mask.png", t.width, t.height, tl.mask));
+        }
         layers.push(std::move(l));
     }
     out.set("layers", std::move(layers));
+    // Material channels (format 7, core/LayerStackIO.h); absent for a base-colour-only texture.
+    if (Json pbr = writeTextureChannels(t, prefix, [&](const std::string& file, const std::vector<uint8_t>& bytes) {
+            return w.bytes(file, bytes);
+        });
+        pbr.isObject())
+        out.set("pbr", std::move(pbr));
     return out;
 }
 
@@ -521,6 +588,13 @@ bool readTexture(Reader& r, const Json& tj, Mesh& m, std::string& error) {
         l.visible = lj["visible"].asBool(true);
         l.locked = lj["locked"].asBool(false);
         if (!readPngBlob(r, lj["rgba"], "texture layer", tex->width, tex->height, l.rgba, error)) return false;
+        if (lj["fill"].isObject()) {
+            auto fill = std::make_shared<FillLayer>();
+            if (!fillLayerFromJson(lj["fill"], *fill, error)) return false;
+            l.fill = std::move(fill);
+            if (lj["mask"].isObject() && !readPngBlob(r, lj["mask"], "fill layer mask", tex->width, tex->height, l.mask, error))
+                return false;
+        }
         tex->layers.push_back(std::move(l));
     }
     if (tex->layers.empty()) {
@@ -533,6 +607,15 @@ bool readTexture(Reader& r, const Json& tj, Mesh& m, std::string& error) {
     }
     for (size_t i = 3; i < (tex->layers.empty() ? tex->pixels : tex->base).size(); i += 4)
         (tex->layers.empty() ? tex->pixels : tex->base)[i] = 255; // Base is opaque
+    if (!readTextureChannels(tj["pbr"], *tex,
+                             [&](const Json& desc, const char* what, size_t maxBytes, std::vector<uint8_t>& out) {
+                                 const size_t n = countOf(desc["count"]);
+                                 return n != size_t(-1) && n <= maxBytes && r.bytes(desc, what, n, out);
+                             },
+                             error)) {
+        if (!r.error.empty()) error = r.error;
+        return false;
+    }
     tex->markAllDirty();
     m.texture = std::move(tex);
     m.paintToTexture = tj["paint_to_texture"].asBool(true);
@@ -712,12 +795,61 @@ bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error, bool wor
     return true;
 }
 
+// Selection Sets (core/SelectionSets.h): `selection_sets` = {"version", "morph_target", "sets": [summary + "data"]},
+// each set one packed u8 blob under subtools/i/sets/. Optional, so no format version bump: older readers ignore it.
+constexpr int kSelectionSetsVersion = 1;
+
+Json writeSelectionSets(Writer& w, const std::string& prefix, const SelectionSetList& list) {
+    Json j = Json::object();
+    j.set("version", kSelectionSetsVersion);
+    if (!list.morphTarget.empty()) j.set("morph_target", list.morphTarget);
+    Json sets = Json::array();
+    for (size_t k = 0; k < list.sets.size(); ++k) {
+        Json one = selectionSetSummary(*list.sets[k]);
+        std::vector<uint8_t> packed = packSelectionSet(*list.sets[k]);
+        const size_t n = packed.size();
+        one.set("data", w.add(prefix + "sets/" + std::to_string(k) + ".bin", Scalar::U8, 1, n, std::move(packed)));
+        sets.push(std::move(one));
+    }
+    j.set("sets", std::move(sets));
+    return j;
+}
+
+// Sets that can't be read (damaged, or from a newer set format) are left out and named in `skipped`; the rest of
+// the project still loads.
+void readSelectionSets(Reader& r, const Json& j, Mesh& m, std::string& skipped) {
+    if (!j.isObject() || !j["sets"].isArray()) return;
+    auto list = std::make_shared<SelectionSetList>();
+    for (const Json& one : j["sets"].items()) {
+        const Json& desc = one["data"];
+        auto it = r.files.find(desc["file"].asString());
+        const double count = desc["count"].asNumber(-1);
+        std::vector<uint8_t> bytes;
+        SelectionSet set;
+        std::string why;
+        const std::string saved = r.error;
+        const bool ok = it != r.files.end() && count >= 0 && double(it->second.size) == count &&
+                        r.bytes(desc, "selection set", size_t(count), bytes) &&
+                        unpackSelectionSet(bytes.data(), bytes.size(), set, why) && list->find(set.name) < 0;
+        r.error = saved;
+        if (!ok) {
+            skipped += (skipped.empty() ? "" : ", ") + ("'" + one["name"].asString() + "'");
+            continue;
+        }
+        list->sets.push_back(std::make_shared<const SelectionSet>(std::move(set)));
+    }
+    list->morphTarget = j["morph_target"].asString();
+    if (list->find(list->morphTarget) < 0) list->morphTarget.clear();
+    if (!list->sets.empty()) m.selectionSets = std::move(list);
+}
+
 // A SubTool read from a project, before it joins the document.
 struct LoadedSubtool {
     Json crkwMetaHuman;
     std::string name, gozName;
     std::vector<QRemeshGuide> qremeshGuides;
     bool visible = true;
+    Shading shading = Shading::Default;
     int activeLayer = -1;
     Mesh mesh;
     // A big mesh's BVH is built on its own thread once the positions and triangles are read (they don't change
@@ -754,7 +886,8 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
     Writer w;
     Json manifest = Json::object();
     manifest.set("format", kFormatName);
-    manifest.set("version", kProjectVersion);
+    ProjectVersionNeed version; // the lowest format the content needs (set again once the SubTools are written)
+    manifest.set("version", version.version);
     manifest.set("app_version", SCULPTFORGE_VERSION);
 
     // Every SubTool with its mesh, layers and state; blobs live under subtools/<i>/.
@@ -767,18 +900,42 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
         st.set("visible", s.visible);
         if (s.crkwMetaHuman.isObject()) st.set("crkw_metahuman", s.crkwMetaHuman);
         if (doc.subtoolMesh(i).crkwMaskState) st.set("crkw_mask_manager", *doc.subtoolMesh(i).crkwMaskState);
+        if (s.shading != Shading::Default) st.set("shading", shadingName(s.shading)); // (no format change: optional)
         writeMesh(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i), st);
         st.set("active_layer", active ? doc.activeLayer : s.activeLayer);
         if (hasPaintLayers(doc.subtoolMesh(i)))
             st.set("paint_layers", writePaintLayers(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
-        if (doc.subtoolMesh(i).texture && doc.subtoolMesh(i).texture->width > 0)
+        if (doc.subtoolMesh(i).texture && doc.subtoolMesh(i).texture->width > 0) {
             st.set("texture", writeTexture(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
+            version.need(textureFormatVersion(*doc.subtoolMesh(i).texture));
+        }
         if (subdivLevelCount(doc.subtoolMesh(i)))
             st.set("subdiv", writeSubdiv(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
+        if (const Mesh& m = doc.subtoolMesh(i); m.micro && microMatches(m)) { // format 7: the micro level (core/Micro.h)
+            const MicroMesh& mm = *m.micro;
+            const std::string p = "subtools/" + std::to_string(i) + "/micro/";
+            Json mj = Json::object();
+            mj.set("level", mm.level);
+            mj.set("step", double(mm.step));
+            // Tiles packed (delta + per-tile range, core/MicroStore.h): untouched tiles are 3 bytes.
+            std::vector<uint8_t> packed;
+            microPackTiles(mm.disp.data(), mm.baseTriangles, mm.samples, packed);
+            const size_t packedBytes = packed.size();
+            mj.set("displacement_packed", w.add(p + "displacement.pack", Scalar::U8, 1, packedBytes, std::move(packed)));
+            if (mm.hasMask()) mj.set("mask", w.externalBytes(p + "mask.bin", mm.mask));
+            st.set("micro", std::move(mj));
+            version.need(7);
+        }
         const std::string& gozName = active ? doc.gozName : s.gozName;
         if (!gozName.empty()) st.set("goz_name", gozName);
         const std::vector<QRemeshGuide>& guides = active ? doc.qremeshGuides : s.qremeshGuides;
         if (!guides.empty()) st.set("qremesh_guides", qremeshGuidesToJson(guides)); // (no format change: optional)
+        if (const Mesh& m = doc.subtoolMesh(i); m.selectionSets && !m.selectionSets->sets.empty())
+            st.set("selection_sets", writeSelectionSets(w, "subtools/" + std::to_string(i) + "/", *m.selectionSets));
+        if (const Mesh& m = doc.subtoolMesh(i); !m.zspheres.empty()) { // a ZSphere SubTool (core/ZSpheres.h); optional
+            st.set("zspheres", zspheresToJson(m.zspheres));
+            if (m.zspherePreview) st.set("zsphere_preview", true);
+        }
         subtools.push(std::move(st));
     }
     manifest.set("subtools", std::move(subtools));
@@ -812,10 +969,23 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
         manifest.set("splats", std::move(splats));
     }
 
+    if (!doc.projectFiles.empty()) { // (no format change: optional, older readers ignore it)
+        Json files = Json::array();
+        for (const auto& [name, bytes] : doc.projectFiles) {
+            if (!validAttachmentName(name)) continue;
+            Json f = Json::object();
+            f.set("name", name);
+            f.set("data", w.bytes("attachments/" + name, bytes));
+            files.push(std::move(f));
+        }
+        manifest.set("attachments", std::move(files));
+    }
+
     if (doc.projectSettings.isObject())
         for (const auto& [key, value] : doc.projectSettings.members())
             if (!isCoreKey(key)) manifest.set(key, value);
 
+    manifest.set("version", version.version);
     const std::string text = manifest.dump(true);
     w.entries.insert(w.entries.begin(), ZipEntry{kManifestName, std::vector<uint8_t>(text.begin(), text.end())});
     // The preview goes second, so loadProjectThumbnail finds it after reading two local headers.
@@ -867,6 +1037,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
 
     // SubTools: version 1 has one mesh at the top level, version 2 a "subtools" list.
     std::deque<LoadedSubtool> subtools; // (stable addresses: BVH threads use them)
+    std::string skippedSets;            // selection sets that couldn't be read
     int activeSubtool = 0;
     if (version < 2) {
         LoadedSubtool& s = subtools.emplace_back();
@@ -876,18 +1047,22 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     } else {
         const Json& list = manifest["subtools"];
         if (!list.isArray() || list.size() == 0 || list.size() > kMaxProjectSubtools) {
-            error = "Project has no valid SubTool list";
+            error = "Project has no valid Part list";
             return false;
         }
         for (const Json& sj : list.items()) {
             LoadedSubtool& s = subtools.emplace_back();
             s.name = sj["name"].asString();
-            if (s.name.empty()) s.name = "SubTool";
+            if (s.name.empty()) s.name = "Part";
             s.visible = sj["visible"].asBool(true);
+            if (sj["shading"].isString()) parseShading(sj["shading"].asString(), s.shading); // unknown: Default
             s.gozName = sj["goz_name"].asString();
             s.crkwMetaHuman = sj["crkw_metahuman"];
             s.qremeshGuides = qremeshGuidesFromJson(sj["qremesh_guides"]);
             if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error, false, false)) return false;
+            s.mesh.zspheres = zspheresFromJson(sj["zspheres"]);
+            s.mesh.zspherePreview = !s.mesh.zspheres.empty() && sj["zsphere_preview"].asBool(false);
+            readSelectionSets(r, sj["selection_sets"], s.mesh, skippedSets);
             // The BVH builds (on the pool) while the levels and topology load (off it), then the normals.
             s.startBvh();
             r.parallelReads = !s.bvhBuilder.joinable();
@@ -899,6 +1074,45 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
             s.finishBvh();
             r.parallelReads = true;
             s.mesh.recomputeAllNormals();
+            if (const Json& mj = sj["micro"]; mj.isObject() && version >= 7) {
+                const int level = int(mj["level"].asNumber(0));
+                if (level < 1 || level > MicroMesh::kMaxLevel) {
+                    error = "Project micro level is invalid";
+                    return false;
+                }
+                const uint32_t n = 1u << level;
+                const size_t count = s.mesh.triangleCount() * size_t((n + 1) * (n + 2) / 2);
+                const uint32_t samples = (n + 1) * (n + 2) / 2;
+                MicroStore disp;
+                std::vector<uint8_t> mask;
+                if (const Json& pj = mj["displacement_packed"]; pj.isObject()) { // tiles packed (MicroStore.h)
+                    std::vector<uint8_t> packed;
+                    const size_t bytes = countOf(pj["count"]);
+                    if (bytes == size_t(-1) || !r.bytes(pj, "micro displacement", bytes, packed)) {
+                        error = r.error.empty() ? "Project micro displacement is invalid" : r.error;
+                        return false;
+                    }
+                    std::string why;
+                    if (microWantsOutOfCore(count)) disp.assignMapped(count, why);
+                    else disp.assign(count, 0);
+                    if (!microUnpackTiles(packed.data(), packed.size(), s.mesh.triangleCount(), samples, disp.data())) {
+                        error = "Project micro displacement is damaged";
+                        return false;
+                    }
+                } else {
+                    std::vector<int16_t> plain;
+                    if (!r.int16s(mj["displacement"], "micro displacement", count, plain)) {
+                        error = r.error;
+                        return false;
+                    }
+                    disp = std::move(plain);
+                }
+                if (mj["mask"].isObject() && !r.bytes(mj["mask"], "micro mask", count, mask)) {
+                    error = r.error;
+                    return false;
+                }
+                if (!microAttach(s.mesh, level, float(mj["step"].asNumber(0)), std::move(disp), std::move(mask), error)) return false;
+            }
             s.activeLayer = int(sj["active_layer"].asNumber(-1));
         }
         const double active = manifest["active_subtool"].asNumber(0);
@@ -940,12 +1154,14 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     doc.qremeshGuides = std::move(subtools[0].qremeshGuides);
     doc.subtools[0].visible = subtools[0].visible;
     doc.subtools[0].crkwMetaHuman = std::move(subtools[0].crkwMetaHuman);
+    doc.subtools[0].shading = subtools[0].shading;
     for (size_t i = 1; i < subtools.size(); ++i) {
         BVH* builtI = subtools[i].finishBvh();
         const int at = doc.addSubtool(std::move(subtools[i].mesh), subtools[i].name, false, -1, builtI);
         SubTool& s = doc.subtools[size_t(at)];
         s.visible = subtools[i].visible;
         s.crkwMetaHuman = std::move(subtools[i].crkwMetaHuman);
+        s.shading = subtools[i].shading;
         s.activeLayer = validLayer(subtools[i].activeLayer, s.mesh);
         s.gozName = subtools[i].gozName;
         s.qremeshGuides = std::move(subtools[i].qremeshGuides);
@@ -953,6 +1169,8 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     doc.selectSubtool(activeSubtool);
     doc.splats = std::move(splats);
     doc.splatsChanged();
+    if (!skippedSets.empty())
+        doc.notice += (doc.notice.empty() ? "" : "; ") + std::string("Selection sets left out (unreadable): ") + skippedSets;
     for (const auto& b : manifest["brushes"].items()) {
         if (!b.isObject()) continue;
         // Brushes the library already has, unchanged, stay library brushes; the rest are the project's own.
@@ -972,6 +1190,17 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     doc.projectSettings = Json::object();
     for (const auto& [key, value] : manifest.members())
         if (!isCoreKey(key)) doc.projectSettings.set(key, value);
+    // Attachments are extras (an embedded MatCap): one that can't be read is left out rather than failing the file.
+    doc.projectFiles.clear();
+    for (const Json& f : manifest["attachments"].items()) {
+        const std::string name = f["name"].asString();
+        const size_t n = countOf(f["data"]["count"]);
+        if (!validAttachmentName(name) || n == size_t(-1) || n > kMaxAttachmentSize || doc.projectFiles.size() >= 64) continue;
+        std::vector<uint8_t> bytes;
+        r.error.clear();
+        if (r.bytes(f["data"], "attachment", n, bytes)) doc.projectFiles[name] = std::move(bytes);
+    }
+    r.error.clear();
     doc.path = path;
     restoreCrkwMetaHumanPreviews(doc);
     doc.markClean();
@@ -1011,8 +1240,10 @@ bool loadProjectThumbnail(const std::string& path, Image& out, std::string& erro
 CommandResult openProjectCommand(Document& doc, const std::string& path) {
     std::string err;
     if (!loadProject(path, doc, err)) return {false, err};
-    std::string msg = "Opened project " + path + " (";
-    if (doc.subtoolCount() > 1) msg += std::to_string(doc.subtoolCount()) + " SubTools, ";
+    std::string msg = "Opened project " + std::filesystem::path(path).filename().string() + " (";
+    // The Sculpt Timeline saved beside it, if it matches (only into the app's own scene: not thumbnails, scratch opens).
+    const int histories = &doc == Timeline::historyDocument ? loadHistorySidecar(doc, path) : 0;
+    if (doc.subtoolCount() > 1) msg += std::to_string(doc.subtoolCount()) + " Parts, ";
     size_t tris = 0, layers = 0;
     for (int i = 0; i < doc.subtoolCount(); ++i) {
         tris += doc.subtoolMesh(i).triangleCount();
@@ -1021,6 +1252,7 @@ CommandResult openProjectCommand(Document& doc, const std::string& path) {
     msg += std::to_string(tris) + " triangles";
     if (layers) msg += ", " + std::to_string(layers) + " layers";
     if (!doc.splats.empty()) msg += ", " + std::to_string(doc.splats.size()) + " splats";
+    if (histories > 0) msg += ", with its history";
     return {true, msg + ")"};
 }
 
@@ -1028,7 +1260,7 @@ CommandResult openProjectCommand(Document& doc, const std::string& path) {
 void registerProjectCommands(CommandRegistry& registry) {
     using T = ParamSpec::Type;
     registry.add({"save_project",
-                  "Save everything (mesh, mask, polypaint, polygroups, visibility, UVs, sculpt layers, splats, brushes "
+                  "Save everything (mesh, mask, vertex paint, face groups, visibility, UVs, sculpt layers, splats, brushes "
                   "and view settings) as a SculptForge project (.sfproj).",
                   {{"path", T::String, "Output .sfproj path (UTF-8). Defaults to the current project path.", false}},
                   [](Document& doc, const Args& a) -> CommandResult {
@@ -1042,6 +1274,9 @@ void registerProjectCommands(CommandRegistry& registry) {
                       if (!saveProject(path, doc, err)) return {false, err};
                       doc.path = path;
                       doc.markClean();
+                      // The Sculpt Timeline's history beside it (<name>.sfhist), when the app asks for it.
+                      if (Timeline::saveWithProject && &doc == Timeline::historyDocument && !saveHistorySidecar(doc, path, &err))
+                          return {true, "Saved project " + path + " (the history wasn't saved: " + err + ")"};
                       return {true, "Saved project " + path};
                   }});
     registry.add({"open_project", "Open a SculptForge project (.sfproj), replacing the current scene.",

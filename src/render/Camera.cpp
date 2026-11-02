@@ -26,9 +26,11 @@ glm::mat4 Camera::view() const {
 }
 
 glm::mat4 Camera::projection() const {
-    if (!orthographic) return glm::perspective(fovY, aspect, nearPlane(), farPlane());
-    const float half = distance * std::tan(fovY * .5f);
-    return glm::ortho(-half * aspect, half * aspect, -half, half, nearPlane(), farPlane());
+    if (!ortho) return glm::perspective(fovY, aspect, nearPlane(), farPlane());
+    // As tall as the perspective view at the target; the depth range reaches behind the eye, as in Blender, so
+    // zooming in never clips the model.
+    const float h = distance * std::tan(fovY * 0.5f);
+    return glm::ortho(-h * aspect, h * aspect, -h, h, -farPlane(), farPlane());
 }
 
 float Camera::focalLengthMm() const { return 12.0f / std::tan(fovY * .5f); }
@@ -86,7 +88,7 @@ void Camera::frame(const AABB& box) {
     if (!box.valid()) return;
     target = box.center();
     float radius = std::max(glm::length(box.extent()) * 0.5f, 1e-4f);
-    distance = orthographic ? radius * 1.1f / (std::tan(fovY * .5f) * std::min(aspect, 1.0f))
+    distance = ortho ? radius * 1.1f / (std::tan(fovY * .5f) * std::min(aspect, 1.0f))
                             : radius / std::sin(fovY * 0.5f) * 1.1f;
 }
 
@@ -101,7 +103,8 @@ void Camera::screenRay(float x, float y, float width, float height, glm::vec3& o
 }
 
 float Camera::worldPerPixel(const glm::vec3& point, float viewportHeight) const {
-    float depth = orthographic ? distance : std::max(glm::dot(point - position(), forward()), nearPlane());
+    if (ortho) return 2.0f * distance * std::tan(fovY * 0.5f) / std::max(viewportHeight, 1.0f);
+    float depth = std::max(glm::dot(point - position(), forward()), nearPlane());
     return 2.0f * depth * std::tan(fovY * 0.5f) / std::max(viewportHeight, 1.0f);
 }
 

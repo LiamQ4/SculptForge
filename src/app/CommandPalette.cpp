@@ -1,9 +1,12 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "app/Theme.h"
 #include "app/CommandPalette.h"
 
 #include "app/App.h"
+#include "app/I18n.h"
 #include "app/Ui.h"
+#include "app/ZBrushNames.h"
 
 #include <IconsLucide.h>
 #include <imgui_internal.h>
@@ -71,19 +74,79 @@ int fuzzy(const std::string& hay, const std::string& word, bool allowScattered =
 
 } // namespace
 
+std::string CommandPalette::zbrushHint(const Action& a, const std::string& query) {
+    const std::string names = zbrushNamesIn(a.label, a.palette);
+    if (names.empty()) return {};
+    const std::string zbrush = lower(names), label = lower(a.label);
+    for (const auto& w : words(query))
+        if (w.size() >= 2 && fuzzy(zbrush, w, false) > 0 && fuzzy(label, w, false) == 0)
+            return "(ZBrush users: " + names + ")";
+    return {};
+}
+
 int CommandPalette::score(const Action& a, const std::string& query) {
     const auto ws = words(query);
     if (ws.empty()) return 1;
     const std::string label = lower(a.label), palette = lower(a.palette), id = lower(a.id), command = lower(a.command),
                       description = lower(a.description);
+    const std::string shown = lower(trAction(a.id, a.label)); // the label in the interface language finds it too (#44)
+    const std::string zbrush = lower(zbrushNamesIn(a.label, a.palette, true)); // and the ZBrush (or earlier) name
     int total = 0;
     for (const auto& w : ws) {
-        const int s = 3 * fuzzy(label, w) + 2 * fuzzy(palette, w, false) + 2 * std::max(fuzzy(id, w), fuzzy(command, w)) +
+        const int s = 3 * std::max({fuzzy(label, w), shown == label ? 0 : fuzzy(shown, w), fuzzy(zbrush, w, false)}) +
+                      2 * fuzzy(palette, w, false) + 2 * std::max(fuzzy(id, w), fuzzy(command, w)) +
                       fuzzy(description, w, false);
         if (s == 0) return 0; // every word must match somewhere
         total += s;
     }
     return total;
+}
+
+namespace {
+
+// A command another action already runs is listed once, under that action.
+std::set<std::string> coveredCommands(const ActionRegistry& reg) {
+    std::set<std::string> covered;
+    for (const auto& a : reg.all())
+        if (!a.command.empty() && a.id != "cmd." + a.command) covered.insert(a.command);
+    return covered;
+}
+
+bool listed(const Action& a, const std::set<std::string>& covered) {
+    if (!a.run || a.label.empty()) return false;
+    return a.id.rfind("cmd.", 0) != 0 || !covered.count(a.command);
+}
+
+} // namespace
+
+std::vector<size_t> CommandPalette::find(const App& app, const std::string& query, size_t limit,
+                                         const std::function<bool(const Action&)>& accept) {
+    const ActionRegistry& reg = app.actions_;
+    const auto& all = reg.all();
+    const std::set<std::string> covered = coveredCommands(reg);
+    auto withDescription = [&](const Action& a) {
+        if (!a.description.empty() || a.command.empty()) return a;
+        Action copy = a;
+        if (const Command* c = app.commands_.find(a.command)) copy.description = c->description;
+        return copy;
+    };
+    std::vector<std::pair<int, size_t>> scored;
+    const bool empty = words(query).empty();
+    for (size_t i = 0; i < all.size(); ++i) {
+        if (!listed(all[i], covered) || (accept && !accept(all[i]))) continue;
+        if (empty) scored.emplace_back(1, i);
+        else if (const int s = score(withDescription(all[i]), query); s > 0) scored.emplace_back(s, i);
+    }
+    std::stable_sort(scored.begin(), scored.end(), [&](const auto& a, const auto& b) {
+        if (a.first != b.first) return a.first > b.first;
+        return lower(all[a.second].label) < lower(all[b.second].label);
+    });
+    std::vector<size_t> out;
+    for (const auto& [s, i] : scored) {
+        if (out.size() >= limit) break;
+        out.push_back(i);
+    }
+    return out;
 }
 
 void CommandPalette::search(App& app) {
@@ -95,45 +158,17 @@ void CommandPalette::search(App& app) {
     selected_ = 0;
     scrollToSelected_ = true;
     const auto& all = reg.all();
-    // A command another action already runs is listed once, under that action.
-    std::set<std::string> covered;
-    for (const auto& a : all)
-        if (!a.command.empty() && a.id != "cmd." + a.command) covered.insert(a.command);
-    auto listed = [&](const Action& a) {
-        if (!a.run || a.label.empty()) return false;
-        return a.id.rfind("cmd.", 0) != 0 || !covered.count(a.command);
-    };
-    auto withDescription = [&](const Action& a) {
-        if (!a.description.empty() || a.command.empty()) return a;
-        Action copy = a;
-        if (const Command* c = app.commands_.find(a.command)) copy.description = c->description;
-        return copy;
-    };
     if (words(query_).empty()) {
+        const std::set<std::string> covered = coveredCommands(reg);
         for (const auto& id : reg.recent()) {
             for (size_t i = 0; i < all.size(); ++i)
-                if (all[i].id == id && listed(all[i])) results_.push_back(i);
+                if (all[i].id == id && listed(all[i], covered)) results_.push_back(i);
             if (int(results_.size()) >= kRecentShown) break;
         }
-        if (results_.empty()) {
-            for (size_t i = 0; i < all.size(); ++i)
-                if (listed(all[i])) results_.push_back(i);
-            std::stable_sort(results_.begin(), results_.end(), [&](size_t a, size_t b) {
-                return lower(all[a].label) < lower(all[b].label);
-            });
-        }
+        if (results_.empty()) results_ = find(app, "", all.size()); // A-Z
         return;
     }
-    std::vector<std::pair<int, size_t>> scored;
-    for (size_t i = 0; i < all.size(); ++i) {
-        if (!listed(all[i])) continue;
-        if (const int s = score(withDescription(all[i]), query_); s > 0) scored.emplace_back(s, i);
-    }
-    std::stable_sort(scored.begin(), scored.end(), [&](const auto& a, const auto& b) {
-        if (a.first != b.first) return a.first > b.first;
-        return lower(all[a.second].label) < lower(all[b.second].label);
-    });
-    for (const auto& [s, i] : scored) results_.push_back(i);
+    results_ = find(app, query_, all.size());
 }
 
 void CommandPalette::draw(App& app, const CanvasRect& area) {
@@ -167,7 +202,7 @@ void CommandPalette::draw(App& app, const CanvasRect& area) {
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::ColorConvertU32ToFloat4(IM_COL32(0x1b, 0x1b, 0x1e, 0xff)));
         ImGui::SetNextItemWidth(-FLT_MIN);
         if (focus) ImGui::SetKeyboardFocusHere();
-        ImGui::InputTextWithHint("##Command palette", "Search commands, brushes and settings", query_, sizeof query_);
+        ImGui::InputTextWithHint("##Command palette", tr("Search commands, brushes and settings"), query_, sizeof query_);
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
         dl->AddText(ImVec2(fieldPos.x + 5.0f * s, fieldPos.y + 6.0f * s), ui::color::textDim, ICON_LC_SEARCH);
@@ -191,11 +226,11 @@ void CommandPalette::draw(App& app, const CanvasRect& area) {
 
         ImGui::Dummy(ImVec2(0, 2.0f * s));
         if (words(query_).empty() && n > 0 && !app.actions_.recent().empty())
-            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::textDim), "Recently used");
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::textDim), "%s", tr("Recently used"));
         const float rowH = ImGui::GetTextLineHeight() + 10.0f * s;
         if (n == 0) {
             ImGui::Dummy(ImVec2(0, 4.0f * s));
-            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::textDim), "  No matching commands");
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::color::textDim), "%s", tr("  No matching commands"));
             ImGui::Dummy(ImVec2(0, 4.0f * s));
         } else {
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
@@ -217,7 +252,7 @@ void CommandPalette::draw(App& app, const CanvasRect& area) {
                     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0, 0, 0, 0));
                     ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0, 0, 0, 0));
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 0));
-                    if (ImGui::Selectable((a.label + "##pal." + a.id).c_str(), false, ImGuiSelectableFlags_None, ImVec2(w, rowH)))
+                    if (ImGui::Selectable((std::string(trAction(a.id, a.label)) + "##pal." + a.id).c_str(), false, ImGuiSelectableFlags_None, ImVec2(w, rowH)))
                         run = r;
                     ImGui::PopStyleColor(4);
                     const bool hovered = ImGui::IsItemHovered();
@@ -231,22 +266,29 @@ void CommandPalette::draw(App& app, const CanvasRect& area) {
                     rows->AddText(ImVec2(x, ty), r == selected_ ? ui::color::accent : ui::color::textDim,
                                   a.icon ? a.icon : ICON_LC_CHEVRON_RIGHT);
                     x += ImGui::GetFontSize() + 10.0f * s;
-                    rows->AddText(ImVec2(x, ty), fg, a.label.c_str());
-                    x += ImGui::CalcTextSize(a.label.c_str()).x + 10.0f * s;
+                    const char* shownLabel = trAction(a.id, a.label);
+                    rows->AddText(ImVec2(x, ty), fg, shownLabel);
+                    x += ImGui::CalcTextSize(shownLabel).x + 10.0f * s;
+                    // Found by its ZBrush name: "Forge Spheres (ZBrush users: ZSpheres)".
+                    if (const std::string hint = zbrushHint(a, query_); !hint.empty()) {
+                        rows->AddText(ImVec2(x - 4.0f * s, ty), ui::color::accent, hint.c_str());
+                        if (ImGui::GetCurrentContext()->LogEnabled) ImGui::LogText("\n%s %s", shownLabel, hint.c_str());
+                        x += ImGui::CalcTextSize(hint.c_str()).x + 6.0f * s;
+                    }
                     const std::string chord = app.actions_.shortcutText(a.id);
                     const float keysW = chord.empty() ? 0.0f : ui::KeycapsWidth(chord);
                     const float right = p.x + w - 8.0f * s - keysW;
                     if (!a.palette.empty()) {
                         const ImVec4 clip(x, p.y, right - 8.0f * s, p.y + rowH);
-                        rows->AddText(nullptr, 0.0f, ImVec2(x, ty), ui::color::textDim, a.palette.c_str(), nullptr, 0.0f, &clip);
+                        rows->AddText(nullptr, 0.0f, ImVec2(x, ty), ui::color::textDim, trPath(a.palette).c_str(), nullptr, 0.0f, &clip);
                     }
                     if (!chord.empty()) ui::KeycapsAt(rows, ImVec2(right, ty - 1.0f * s), chord);
-                    if (ImGui::GetCurrentContext()->LogEnabled) ImGui::LogText("\n%s  %s  %s", a.label.c_str(), a.palette.c_str(), chord.c_str());
+                    if (ImGui::GetCurrentContext()->LogEnabled) ImGui::LogText("\n%s  %s  %s", trAction(a.id, a.label), trPath(a.palette).c_str(), chord.c_str());
                     rows->ChannelsSetCurrent(0);
                     if (r == selected_)
-                        rows->AddRectFilled(p, ImVec2(p.x + w, p.y + rowH), IM_COL32(0xf0, 0x88, 0x2e, 0x30), 4.0f * s);
+                        rows->AddRectFilled(p, ImVec2(p.x + w, p.y + rowH), IM_COL32(0xf0, 0x88, 0x2e, 0x30), theme::rounding(4.0f * s));
                     else if (hovered)
-                        rows->AddRectFilled(p, ImVec2(p.x + w, p.y + rowH), IM_COL32(0xff, 0xff, 0xff, 0x0a), 4.0f * s);
+                        rows->AddRectFilled(p, ImVec2(p.x + w, p.y + rowH), IM_COL32(0xff, 0xff, 0xff, 0x0a), theme::rounding(4.0f * s));
                 }
             }
             rows->ChannelsMerge();
@@ -261,7 +303,7 @@ void CommandPalette::draw(App& app, const CanvasRect& area) {
             auto hint = [&](const char* keys, const char* what) {
                 ui::Keycaps(keys);
                 ImGui::SameLine(0, 4.0f * s);
-                ImGui::TextColored(dim, "%s", what);
+                ImGui::TextColored(dim, "%s", tr(what));
                 ImGui::SameLine(0, 14.0f * s);
             };
             ImGui::SetWindowFontScale(0.86f);
@@ -269,8 +311,9 @@ void CommandPalette::draw(App& app, const CanvasRect& area) {
             hint("Enter", "run");
             hint("Shift+Enter", "edit in console");
             hint("Esc", "close");
-            const std::string count = std::to_string(n) + (n == 1 ? " result" : " results");
-            ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(count.c_str()).x);
+            const std::string count = std::to_string(n) + tr(n == 1 ? " result" : " results");
+            // Right-aligned, but never over the hints (they are longer in some languages).
+            ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(count.c_str()).x));
             ImGui::TextColored(dim, "%s", count.c_str());
             ImGui::SetWindowFontScale(1.0f);
         }

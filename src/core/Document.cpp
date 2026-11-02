@@ -4,6 +4,8 @@
 
 #include "core/Multires.h"
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <memory>
 
@@ -30,6 +32,7 @@ void Document::setMesh(Mesh m, std::string name, BVH* built) {
     subtools.back().id = nextSubtoolId_++;
     subtools.back().name = name.empty() ? "Sculpt" : std::move(name);
     activeSubtool = 0;
+    extractPreview = {};
     markClean();
 }
 
@@ -50,6 +53,7 @@ void Document::markClean() {
 
 void Document::selectSubtool(int i) {
     if (i < 0 || i >= subtoolCount() || i == activeSubtool) return;
+    uvSelection.clear();
     // Check the active SubTool back in, then check `i` out. Swapping keeps each
     // mesh's GPU dirty state, so the renderer doesn't re-upload anything.
     auto swapIn = [this](SubTool& s) {
@@ -73,7 +77,7 @@ void Document::selectSubtool(int i) {
 int Document::addSubtool(Mesh m, std::string name, bool select, int at, BVH* built) {
     SubTool s;
     s.id = nextSubtoolId_++;
-    s.name = uniqueSubtoolName(name.empty() ? "SubTool" : name);
+    s.name = uniqueSubtoolName(name.empty() ? "Part" : name);
     s.mesh = std::move(m);
     s.mesh.topologyDirty = true;
     if (built) s.bvh = std::move(*built);
@@ -115,6 +119,46 @@ void Document::moveSubtool(int i, int direction) {
     modified = true;
 }
 
+int Document::subtoolIndex(uint32_t id) const {
+    for (int i = 0; i < subtoolCount(); ++i)
+        if (subtools[size_t(i)].id == id) return i;
+    return -1;
+}
+
+bool Document::applySubtoolStep(SubtoolStep& step) {
+    if (step.stashed) { // redo: put it back where it was
+        const int at = std::clamp(step.at, 0, subtoolCount());
+        subtools.insert(subtools.begin() + at, std::move(*step.stashed));
+        step.stashed.reset();
+        if (at <= activeSubtool) ++activeSubtool;
+        subtools[size_t(at)].mesh.topologyDirty = true;
+        modified = true;
+        return true;
+    }
+    const int i = subtoolIndex(step.id);
+    if (i < 0 || i == activeSubtool || subtoolCount() <= 1) return false;
+    step.at = i;
+    step.stashed = std::make_unique<SubTool>(std::move(subtools[size_t(i)]));
+    subtools.erase(subtools.begin() + i);
+    if (activeSubtool > i) --activeSubtool;
+    modified = true;
+    return true;
+}
+
+bool Document::extractPreviewCurrent() const {
+    if (!extractPreview.id) return false;
+    const int i = subtoolIndex(extractPreview.id);
+    return i >= 0 && i != activeSubtool && activeSubtoolInfo().id == extractPreview.source &&
+           undo.revision() == extractPreview.revision;
+}
+
+void Document::dropExtractPreview(bool staleOnly) {
+    if (!extractPreview.id || (staleOnly && extractPreviewCurrent())) return;
+    const int i = subtoolIndex(extractPreview.id);
+    extractPreview = {};
+    if (i >= 0) removeSubtool(i);
+}
+
 int Document::findSubtool(const std::string& name) const {
     for (int i = 0; i < subtoolCount(); ++i)
         if (subtools[size_t(i)].name == name) return i;
@@ -150,6 +194,26 @@ int Document::addBrush(BrushRecipe recipe) {
     return int(brushes.size()) - 1;
 }
 
+const char* shadingName(Shading s) {
+    switch (s) {
+    case Shading::Smooth: return "smooth";
+    case Shading::Flat: return "flat";
+    default: return "default";
+    }
+}
+
+bool parseShading(const std::string& name, Shading& out) {
+    for (Shading s : {Shading::Default, Shading::Smooth, Shading::Flat}) {
+        std::string lower = name;
+        for (char& c : lower) c = char(std::tolower(static_cast<unsigned char>(c)));
+        if (lower == shadingName(s)) {
+            out = s;
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string Document::assetName() const {
     if (path.empty()) return "Sculpt";
     auto stem = std::filesystem::path(std::u8string(path.begin(), path.end())).stem().u8string();
@@ -157,6 +221,7 @@ std::string Document::assetName() const {
 }
 
 void Document::replaceMeshUndoable(Mesh m, std::string label) {
+    if (!m.selectionSets) m.selectionSets = mesh.selectionSets; // the Part keeps its sets (restoring checks they fit)
     if (m.multires && !subdivMatches(m)) m.multires.reset();
     if (mesh.multires && !m.multires) {
         // A tool rebuilt the mesh from the current level: the levels go, the undo step keeps them.

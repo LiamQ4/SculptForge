@@ -3,6 +3,7 @@
 #include "core/Polygroups.h"
 
 #include "core/Commands.h"
+#include "core/Masking.h"
 #include "core/ScreenSelect.h"
 
 #include <algorithm>
@@ -135,7 +136,7 @@ std::string visibleSummary(const Mesh& m) {
 }
 
 std::string groupSummary(const Mesh& m) {
-    return std::to_string(visiblePolygroupCount(m)) + " visible polygroups";
+    return std::to_string(visiblePolygroupCount(m)) + " visible face groups";
 }
 
 bool groupExists(const Mesh& m, uint32_t group) {
@@ -146,14 +147,18 @@ bool groupExists(const Mesh& m, uint32_t group) {
 
 // Hides or keeps the visible triangles by whether their centre projects inside a screen shape.
 template <class Inside>
-std::vector<uint8_t> hiddenByShape(const Mesh& mesh, const glm::mat4& viewProj, Inside inside, bool hideInside) {
+std::vector<uint8_t> hiddenByShape(const Mesh& mesh, const glm::mat4& viewProj, Inside inside, bool hideInside,
+                                   const std::vector<SymCopy>& mirrors) {
     std::vector<uint8_t> hidden = currentHidden(mesh);
     for (uint32_t t = 0; t < mesh.triangleCount(); ++t) {
         if (hidden[t]) continue;
         const glm::uvec3& tri = mesh.triangles[t];
         const glm::vec3 c = (mesh.positions[tri.x] + mesh.positions[tri.y] + mesh.positions[tri.z]) / 3.0f;
         glm::vec2 ndc;
-        if ((projectToNdc(viewProj, c, ndc) && inside(ndc)) == hideInside) hidden[t] = 1;
+        bool in = projectToNdc(viewProj, c, ndc) && inside(ndc);
+        for (size_t k = 0; k < mirrors.size() && !in; ++k) // or its mirror image, with symmetry (#51)
+            in = !mirrors[k].identity() && projectToNdc(viewProj, mirrors[k].point(c), ndc) && inside(ndc);
+        if (in == hideInside) hidden[t] = 1;
     }
     return unlessAllHidden(std::move(hidden));
 }
@@ -257,17 +262,17 @@ std::vector<uint8_t> hiddenInverted(const Mesh& mesh) {
 }
 
 std::vector<uint8_t> hiddenByRect(const Mesh& mesh, const glm::mat4& viewProj, glm::vec2 rectMin, glm::vec2 rectMax,
-                                  bool hideInside) {
+                                  bool hideInside, const std::vector<SymCopy>& mirrors) {
     const glm::vec2 lo = glm::min(rectMin, rectMax), hi = glm::max(rectMin, rectMax);
     return hiddenByShape(
         mesh, viewProj, [&](glm::vec2 p) { return p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y; },
-        hideInside);
+        hideInside, mirrors);
 }
 
 std::vector<uint8_t> hiddenByLasso(const Mesh& mesh, const glm::mat4& viewProj, const std::vector<glm::vec2>& lasso,
-                                   bool hideInside) {
+                                   bool hideInside, const std::vector<SymCopy>& mirrors) {
     const ScreenPolygon polygon(lasso);
-    return hiddenByShape(mesh, viewProj, [&](glm::vec2 p) { return polygon.contains(p); }, hideInside);
+    return hiddenByShape(mesh, viewProj, [&](glm::vec2 p) { return polygon.contains(p); }, hideInside, mirrors);
 }
 
 bool polygroupIsolated(const Mesh& mesh, uint32_t group) {
@@ -346,7 +351,7 @@ void registerPolygroupCommands(CommandRegistry& reg) {
     // --- Polygroups ---
     reg.add(
         {"polygroup_auto_by_normals",
-         "Split the visible surface into polygroups wherever it turns more than an angle (each flat side of a "
+         "Split the visible surface into face groups wherever it turns more than an angle (each flat side of a "
          "box becomes a group), like ZBrush Auto Groups / Groups By Normals.",
          {{"angle", T::Number, "Largest normal deviation inside one group, in degrees (1-180). Default 30.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
@@ -356,7 +361,7 @@ void registerPolygroupCommands(CommandRegistry& reg) {
          }});
 
     reg.add({"polygroup_by_connectivity",
-             "Give every disconnected piece of the visible mesh its own polygroup (like ZBrush Auto Groups).",
+             "Give every disconnected piece of the visible mesh its own face group (like ZBrush Auto Groups).",
              {},
              [](Document& doc, const Args&) -> CommandResult {
                  commitPolygroups(doc, groupsByConnectivity(doc.mesh), "Groups by Connectivity");
@@ -364,7 +369,7 @@ void registerPolygroupCommands(CommandRegistry& reg) {
              }});
 
     reg.add({"polygroup_uv",
-             "Give every UV island of the visible mesh its own polygroup (ZBrush Polygroups > UV Groups).", {},
+             "Give every UV island of the visible mesh its own face group (ZBrush Polygroups > UV Groups).", {},
              [](Document& doc, const Args&) -> CommandResult {
                  if (!doc.mesh.hasUvs()) return {false, "This mesh has no UVs: unwrap it first (Tool > UV Map)"};
                  commitPolygroups(doc, groupsByUvs(doc.mesh), "Group by UVs");
@@ -372,47 +377,47 @@ void registerPolygroupCommands(CommandRegistry& reg) {
              }});
 
     reg.add({"polygroup_from_mask",
-             "Move the masked (visible) part of the mesh into a new polygroup, like ZBrush Group Masked.", {},
+             "Move the masked (visible) part of the mesh into a new face group, like ZBrush Group Masked.", {},
              [](Document& doc, const Args&) -> CommandResult {
                  size_t n = 0;
                  std::vector<uint32_t> groups = groupsFromMask(doc.mesh, &n);
                  if (n == 0) return {false, "Nothing is masked"};
                  const uint32_t id = nextPolygroupId(doc.mesh);
                  commitPolygroups(doc, groups, "Group Masked");
-                 return {true, "Polygroup " + std::to_string(id) + " with " + std::to_string(n) + " masked triangles"};
+                 return {true, "Face Group " + std::to_string(id) + " with " + std::to_string(n) + " masked triangles"};
              }});
 
-    reg.add({"polygroup_clear", "Remove all polygroups (everything returns to one group).", {},
+    reg.add({"polygroup_clear", "Remove all face groups (everything returns to one group).", {},
              [](Document& doc, const Args&) -> CommandResult {
-                 commitPolygroups(doc, std::vector<uint32_t>(doc.mesh.triangleCount(), 0u), "Clear Polygroups");
-                 return {true, "Polygroups cleared"};
+                 commitPolygroups(doc, std::vector<uint32_t>(doc.mesh.triangleCount(), 0u), "Clear Face Groups");
+                 return {true, "Face Groups cleared"};
              }});
 
-    reg.add({"polygroup_merge_visible", "Merge everything visible into a single polygroup (ZBrush Group Visible).", {},
+    reg.add({"polygroup_merge_visible", "Merge everything visible into a single face group (ZBrush Group Visible).", {},
              [](Document& doc, const Args&) -> CommandResult {
                  commitPolygroups(doc, groupsMergeVisible(doc.mesh), "Group Visible");
                  return {true, groupSummary(doc.mesh)};
              }});
 
     // --- Visibility ---
-    reg.add({"hide_polygroup", "Hide one polygroup (ZBrush Ctrl+Shift+Alt+click).",
-             {{"group", T::Number, "Polygroup id.", true}},
+    reg.add({"hide_polygroup", "Hide one face group (ZBrush Ctrl+Shift+Alt+click).",
+             {{"group", T::Number, "Face Group id.", true}},
              [](Document& doc, const Args& a) -> CommandResult {
                  const uint32_t group = uint32_t(std::max(0.0, argNumber(a, "group", 0)));
-                 if (!groupExists(doc.mesh, group)) return {false, "No polygroup " + std::to_string(group)};
+                 if (!groupExists(doc.mesh, group)) return {false, "No face group " + std::to_string(group)};
                  std::vector<uint8_t> hidden = hiddenHideGroup(doc.mesh, group);
-                 if (hidden.empty()) return {false, "Hiding polygroup " + std::to_string(group) + " would hide everything"};
-                 commitHidden(doc, hidden, "Hide Polygroup");
+                 if (hidden.empty()) return {false, "Hiding face group " + std::to_string(group) + " would hide everything"};
+                 commitHidden(doc, hidden, "Hide Face Group");
                  return {true, visibleSummary(doc.mesh)};
              }});
 
-    reg.add({"isolate_polygroup", "Show only one polygroup and hide the rest (ZBrush Ctrl+Shift+click).",
-             {{"group", T::Number, "Polygroup id.", true}},
+    reg.add({"isolate_polygroup", "Show only one face group and hide the rest (ZBrush Ctrl+Shift+click).",
+             {{"group", T::Number, "Face Group id.", true}},
              [](Document& doc, const Args& a) -> CommandResult {
                  const uint32_t group = uint32_t(std::max(0.0, argNumber(a, "group", 0)));
                  std::vector<uint8_t> hidden = hiddenIsolateGroup(doc.mesh, group);
-                 if (hidden.empty()) return {false, "No polygroup " + std::to_string(group)};
-                 commitHidden(doc, hidden, "Isolate Polygroup");
+                 if (hidden.empty()) return {false, "No face group " + std::to_string(group)};
+                 commitHidden(doc, hidden, "Isolate Face Group");
                  return {true, visibleSummary(doc.mesh)};
              }});
 
@@ -430,6 +435,10 @@ void registerPolygroupCommands(CommandRegistry& reg) {
                  return {true, visibleSummary(doc.mesh)};
              }});
 
+    const ParamSpec symmetryParam{"symmetry", T::String,
+                                  "Mirror axes, e.g. \"x\" or \"xz\": the mirror image of the shape counts as inside "
+                                  "too, as the brushes mirror (#51; default none).",
+                                  false};
     reg.add({"hide_rect",
              "Rectangle selection (ZBrush Ctrl+Shift+drag): keep the visible triangles inside a screen rectangle and "
              "hide the rest, or hide the inside instead. Coordinates are normalised (-1..1, y up) in the given view; "
@@ -439,16 +448,18 @@ void registerPolygroupCommands(CommandRegistry& reg) {
               {"x1", T::Number, "Rectangle right (-1..1). Default 1.", false},
               {"y1", T::Number, "Rectangle top (-1..1). Default 1.", false},
               {"inside", T::Bool, "Hide the inside instead of the outside (ZBrush: Alt held).", false},
-              {"view_proj", T::String, "Optional 16 numbers: column-major view-projection matrix.", false}},
+              {"view_proj", T::String, "Optional 16 numbers: column-major view-projection matrix.", false},
+              symmetryParam},
              [](Document& doc, const Args& a) -> CommandResult {
                  if (doc.mesh.triangleCount() == 0) return {false, "The mesh is empty"};
                  glm::mat4 vp;
                  std::string error;
-                 if (!viewProjArg(doc.mesh, a, vp, error)) return {false, error};
+                 std::vector<SymCopy> mirrors;
+                 if (!viewProjArg(doc.mesh, a, vp, error) || !symmetryCopiesArg(a, doc.mesh, mirrors, error)) return {false, error};
                  const glm::vec2 lo(float(argNumber(a, "x0", -1)), float(argNumber(a, "y0", -1)));
                  const glm::vec2 hi(float(argNumber(a, "x1", 1)), float(argNumber(a, "y1", 1)));
                  const bool inside = argBool(a, "inside", false);
-                 std::vector<uint8_t> hidden = hiddenByRect(doc.mesh, vp, lo, hi, inside);
+                 std::vector<uint8_t> hidden = hiddenByRect(doc.mesh, vp, lo, hi, inside, mirrors);
                  if (hidden.empty())
                      return {false, inside ? "That would hide everything" : "Nothing visible inside the rectangle"};
                  commitHidden(doc, hidden, inside ? "Hide Inside" : "Hide Outside");
@@ -461,15 +472,19 @@ void registerPolygroupCommands(CommandRegistry& reg) {
              "view; without a view they span the mesh seen from the front (+Z).",
              {{"points", T::String, "The lasso: at least 3 points as \"x0 y0 x1 y1 ...\" (-1..1, y up).", true},
               {"inside", T::Bool, "Hide the inside instead of the outside (ZBrush: Alt held).", false},
-              {"view_proj", T::String, "Optional 16 numbers: column-major view-projection matrix.", false}},
+              {"view_proj", T::String, "Optional 16 numbers: column-major view-projection matrix.", false},
+              symmetryParam},
              [](Document& doc, const Args& a) -> CommandResult {
                  if (doc.mesh.triangleCount() == 0) return {false, "The mesh is empty"};
                  glm::mat4 vp;
                  std::vector<glm::vec2> lasso;
                  std::string error;
-                 if (!viewProjArg(doc.mesh, a, vp, error) || !lassoArg(a, lasso, error)) return {false, error};
+                 std::vector<SymCopy> mirrors;
+                 if (!viewProjArg(doc.mesh, a, vp, error) || !lassoArg(a, lasso, error) ||
+                     !symmetryCopiesArg(a, doc.mesh, mirrors, error))
+                     return {false, error};
                  const bool inside = argBool(a, "inside", false);
-                 std::vector<uint8_t> hidden = hiddenByLasso(doc.mesh, vp, lasso, inside);
+                 std::vector<uint8_t> hidden = hiddenByLasso(doc.mesh, vp, lasso, inside, mirrors);
                  if (hidden.empty())
                      return {false, inside ? "That would hide everything" : "Nothing visible inside the lasso"};
                  commitHidden(doc, hidden, inside ? "Hide Inside" : "Hide Outside");

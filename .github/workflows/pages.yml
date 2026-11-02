@@ -3,7 +3,7 @@ name: Website
 on:
   push:
     branches: [main]
-    paths: ['website/**', '.github/workflows/pages.yml']
+    paths: ['website/**', 'docs/supporters.txt', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -23,12 +23,32 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the release tags
+      # The online guide is the latest release's guide, the one inside the app people can download, not main's:
+      # main already documents features that aren't released yet. Its sitemap goes with it. The rest of website/
+      # (home page, update feed) comes from main, where it only changes when a release goes out.
+      - name: Guide from the latest release
+        run: |
+          tag=$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -v -- - | head -1)
+          # A tag can sit on the tested code commit while the guide's pages were rebuilt just after it: when the
+          # guide's sources haven't changed since the tag, main's built guide is that release's guide.
+          if git diff --quiet "$tag" HEAD -- docs/guide tools/guide; then
+            echo "Guide from main (its sources match $tag)"
+          else
+            echo "Guide from $tag"
+            rm -rf website/guide
+            git archive "$tag" website/guide website/sitemap.xml | tar -x
+          fi
+      # The credits page always matches docs/supporters.txt on main.
+      - name: Supporters page
+        run: python3 tools/guide/build_site.py --supporters
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
           path: website
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
       # Tell Bing and the other IndexNow search engines about the pages straight away (key file in website/).
       - name: IndexNow
         continue-on-error: true
@@ -47,6 +67,25 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the release tags
+      # The online guide is the latest release's guide, the one inside the app people can download, not main's:
+      # main already documents features that aren't released yet. Its sitemap goes with it. The rest of website/
+      # (home page, update feed) comes from main, where it only changes when a release goes out.
+      - name: Guide from the latest release
+        run: |
+          tag=$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -v -- - | head -1)
+          # A tag can sit on the tested code commit while the guide's pages were rebuilt just after it: when the
+          # guide's sources haven't changed since the tag, main's built guide is that release's guide.
+          if git diff --quiet "$tag" HEAD -- docs/guide tools/guide; then
+            echo "Guide from main (its sources match $tag)"
+          else
+            echo "Guide from $tag"
+            rm -rf website/guide
+            git archive "$tag" website/guide website/sitemap.xml | tar -x
+          fi
+      - name: Supporters page
+        run: python3 tools/guide/build_site.py --supporters
       - name: Push website/ to islandmed/islandmed.github.io
         env:
           KEY: ${{ secrets.MIRROR_DEPLOY_KEY }}

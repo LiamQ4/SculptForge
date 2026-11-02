@@ -3,6 +3,7 @@
 //
 // Pop-up pickers (ZBrush's brush, stroke, alpha and material pop-ups), the
 // Draw Size / Strength sliders at the cursor, and the thumbnail tile.
+#include "app/Theme.h"
 #include "app/Pickers.h"
 
 #include "app/App.h"
@@ -16,6 +17,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <array>
 #include <cctype>
 #include <cmath>
@@ -26,15 +28,18 @@ namespace sf {
 
 namespace {
 
-// Theme tokens (docs/ui-design.md section 10).
-constexpr ImU32 kAccent = IM_COL32(240, 136, 46, 255);
-constexpr ImU32 kTileBg = IM_COL32(42, 42, 46, 255);
-constexpr ImU32 kTileHover = IM_COL32(54, 54, 59, 255);
-constexpr ImU32 kTileBorder = IM_COL32(18, 18, 20, 255);
-constexpr ImU32 kGlyph = IM_COL32(140, 140, 144, 255);
-constexpr ImU32 kText = IM_COL32(216, 216, 216, 255);
-constexpr ImU32 kTextDim = IM_COL32(140, 140, 144, 255);
-constexpr ImU32 kPanelBg = IM_COL32(37, 37, 40, 252); // #252528, pop-ups
+// Theme tokens (docs/ui-design.md section 10): the Classic look's values, or the current look's tokens.
+ImU32 lookColor(ImU32 classic, const ImVec4& token, float alpha = 1.0f) {
+    return theme::look.id == 0 ? classic : theme::u32(token, alpha);
+}
+ImU32 kAccent() { return lookColor(IM_COL32(240, 136, 46, 255), theme::accent); }
+ImU32 kTileBg() { return lookColor(IM_COL32(42, 42, 46, 255), theme::tile); }
+ImU32 kTileHover() { return lookColor(IM_COL32(54, 54, 59, 255), theme::headerHover); }
+ImU32 kTileBorder() { return lookColor(IM_COL32(18, 18, 20, 255), theme::tileBorder); }
+ImU32 kGlyph() { return lookColor(IM_COL32(140, 140, 144, 255), theme::textDim); }
+ImU32 kText() { return lookColor(IM_COL32(216, 216, 216, 255), theme::text); }
+ImU32 kTextDim() { return lookColor(IM_COL32(140, 140, 144, 255), theme::textDim); }
+ImU32 kPanelBg() { return lookColor(IM_COL32(37, 37, 40, 252), theme::panelBg, 0.99f); } // #252528, pop-ups
 // The left tray's colour field. These should become theme tokens (Theme.h) once the theme settles.
 constexpr ImU32 kFieldEdge = IM_COL32(14, 14, 16, 255);       // 1 px around the SV square, hue strip and swatches
 constexpr ImU32 kFieldHairline = IM_COL32(255, 255, 255, 28); // inner highlight that lifts a swatch off the tray
@@ -94,7 +99,10 @@ struct State {
     // Draw Size / Z Intensity / RGB Intensity / Focal Shift at the cursor.
     int slider = -1; // PickerUi::Slider, -1 = closed
     bool sliderSmooth = false; // Z Intensity of the Smooth brush (Shift was held)
-    ImVec2 sliderAt{0, 0};
+    ImVec2 sliderAt{0, 0};  // the cursor when it opened
+    ImVec2 sliderPos{0, 0}; // the window's place, fixed once the knob is under sliderAt
+    bool sliderPlaced = false;
+    ImVec2 sliderKnob{0, 0};
     int sliderFrame = -1;
     std::string sliderTyped;
     bool sliderWasActive = false;
@@ -162,11 +170,11 @@ void quickInfo(ImTextureID tex, const char* glyph, const std::string& title, con
     else if (glyph) {
         ImGui::Dummy(ImVec2(big, big));
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), kTileBg, 4.0f);
+        dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), kTileBg(), theme::rounding(4.0f));
         const float fs = ImGui::GetFontSize() * 3.0f;
         const ImVec2 sz = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, glyph);
         const ImVec2 c = ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax()).GetCenter();
-        dl->AddText(ImGui::GetFont(), fs, ImVec2(c.x - sz.x * 0.5f, c.y - sz.y * 0.5f), kGlyph, glyph);
+        dl->AddText(ImGui::GetFont(), fs, ImVec2(c.x - sz.x * 0.5f, c.y - sz.y * 0.5f), kGlyph(), glyph);
     }
     ImGui::TextUnformatted(title.c_str());
     if (!text.empty()) {
@@ -189,10 +197,10 @@ bool beginPickerWindow(const char* title, float width) {
     ImGui::SetNextWindowPos(pos, ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0), ImVec2(width, vp->Size.y - 60.0f));
     if (s.openedFrame == ImGui::GetFrameCount()) ImGui::SetNextWindowFocus();
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, theme::rounding(6.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 8));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, kPanelBg);
-    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(64, 64, 70, 255));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, kPanelBg());
+    ImGui::PushStyleColor(ImGuiCol_Border, lookColor(IM_COL32(64, 64, 70, 255), theme::tileBorder));
     const bool visible = ImGui::Begin(title, nullptr,
                                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                           ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
@@ -227,8 +235,8 @@ void pickerTitle(const char* icon, const char* title, const char* hint) {
 }
 
 const BrushAlpha& builtinAlpha(int i) {
-    static const std::array<BrushAlpha, 3> alphas = {BrushAlpha::round(), BrushAlpha::square(), BrushAlpha::noise()};
-    return alphas[size_t(std::clamp(i, 0, 2))];
+    const auto& all = BrushAlpha::builtins(); // Round, Square, Noise and the generated patterns (#43)
+    return all[size_t(std::clamp(i, 0, int(all.size()) - 1))];
 }
 
 } // namespace
@@ -246,38 +254,38 @@ bool AssetTile(const char* id, ImTextureID texture, const char* glyph, const std
     const bool hovered = ImGui::IsItemHovered();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 t0 = p, t1(p.x + thumbSize, p.y + thumbSize);
-    dl->AddRectFilled(t0, t1, hovered ? kTileHover : kTileBg, 4.0f);
+    dl->AddRectFilled(t0, t1, hovered ? kTileHover() : kTileBg(), theme::rounding(4.0f));
     if (texture) {
         const float pad = 2.0f;
         dl->AddImageRounded(texture, ImVec2(t0.x + pad, t0.y + pad), ImVec2(t1.x - pad, t1.y - pad), ImVec2(0, 0),
-                            ImVec2(1, 1), dim ? IM_COL32(255, 255, 255, 110) : IM_COL32_WHITE, 3.0f);
+                            ImVec2(1, 1), dim ? IM_COL32(255, 255, 255, 110) : IM_COL32_WHITE, theme::rounding(3.0f));
     } else if (glyph) {
         const float fs = std::round(thumbSize * 0.36f);
         const ImVec2 gs = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, glyph);
         dl->AddText(ImGui::GetFont(), fs,
-                    ImVec2(std::round((t0.x + t1.x - gs.x) * 0.5f), std::round((t0.y + t1.y - gs.y) * 0.5f)), kGlyph,
+                    ImVec2(std::round((t0.x + t1.x - gs.x) * 0.5f), std::round((t0.y + t1.y - gs.y) * 0.5f)), kGlyph(),
                     glyph);
     }
     dl->AddRect(t0, t1,
-                selected  ? kAccent
-                : hovered ? IM_COL32(90, 90, 96, 255)
-                          : kTileBorder,
-                4.0f, 0, selected ? 2.0f : 1.0f);
+                selected  ? kAccent()
+                : hovered ? lookColor(IM_COL32(90, 90, 96, 255), theme::textDim)
+                          : kTileBorder(),
+                theme::rounding(4.0f), 0, selected ? 2.0f : 1.0f);
     if (badge && *badge) {
         // The orange key of the brush pop-up: press it to pick this tile.
         const float fs = ImGui::GetFontSize();
         const ImVec2 bs = ImGui::CalcTextSize(badge);
         const ImVec2 b1(t1.x - 3.0f, t0.y + 3.0f + fs + 2.0f), b0(b1.x - std::max(bs.x + 8.0f, fs + 2.0f), t0.y + 3.0f);
-        dl->AddRectFilled(b0, b1, kAccent, 3.0f);
-        dl->AddText(ImVec2(std::round((b0.x + b1.x - bs.x) * 0.5f), b0.y + 1.0f), IM_COL32(20, 20, 22, 255), badge);
+        dl->AddRectFilled(b0, b1, kAccent(), theme::rounding(3.0f));
+        dl->AddText(ImVec2(std::round((b0.x + b1.x - bs.x) * 0.5f), b0.y + 1.0f), lookColor(IM_COL32(20, 20, 22, 255), theme::textOnAccent), badge);
         ImGui::LogText(" [%s]", badge);
     }
     const std::string shown = elide(label, thumbSize);
     const ImVec2 ls = ImGui::CalcTextSize(shown.c_str());
     dl->AddText(ImVec2(std::round(p.x + (thumbSize - ls.x) * 0.5f), t1.y + 2.0f),
                 selected ? IM_COL32(255, 255, 255, 255)
-                : dim    ? kTextDim
-                         : kText,
+                : dim    ? kTextDim()
+                         : kText(),
                 shown.c_str());
     ImGui::LogText(" %s", label.c_str()); // drawn directly: tell the log (UI tests read it) too
     if (hovered) {
@@ -309,11 +317,11 @@ void AssetTileHoverGlow() {
         ImDrawList* dl;
         ~PopClip() { dl->PopClipRect(); }
     } pop{dl};
-    dl->AddRectFilled(ImVec2(a.x + 3, a.y + 5), ImVec2(b.x + 3, b.y + 5), IM_COL32(0, 0, 0, 90), 8.0f);
-    dl->AddRectFilled(a, b, IM_COL32(48, 48, 53, 255), 6.0f);
+    dl->AddRectFilled(ImVec2(a.x + 3, a.y + 5), ImVec2(b.x + 3, b.y + 5), IM_COL32(0, 0, 0, 90), theme::rounding(8.0f));
+    dl->AddRectFilled(a, b, lookColor(IM_COL32(48, 48, 53, 255), theme::header), theme::rounding(6.0f));
     dl->AddImageRounded(g.tex, ImVec2(a.x + 3, a.y + 3), ImVec2(b.x - 3, b.y - 3), ImVec2(0, 0), ImVec2(1, 1),
-                        IM_COL32_WHITE, 5.0f);
-    dl->AddRect(a, b, IM_COL32(240, 136, 46, 160), 6.0f, 0, 1.5f);
+                        IM_COL32_WHITE, theme::rounding(5.0f));
+    dl->AddRect(a, b, lookColor(IM_COL32(240, 136, 46, 160), theme::accent, 0.63f), theme::rounding(6.0f), 0, 1.5f);
 }
 
 // ---------------------------------------------------------------------------
@@ -353,7 +361,7 @@ std::string brushActionId(const BrushItem& item) {
 }
 
 const char* brushTypeDescription(int type) {
-    if (type == kPaintBrush) return "Polypaint: paints the current colour onto the surface without sculpting (P).";
+    if (type == kPaintBrush) return "Vertex Paint: paints the current colour onto the surface without sculpting (P).";
     switch (BrushType(type)) {
     case BrushType::Standard:
         return "Pushes the surface out along its normal, building soft, rounded form. Alt carves.";
@@ -378,7 +386,7 @@ const char* brushTypeDescription(int type) {
     case BrushType::SnakeHook:
         return "Pulls the surface out along the stroke into horns, tentacles and spikes.";
     case BrushType::Trim:
-        return "Trim Dynamic: cuts away everything above a plane, for hard planar surfaces.";
+        return "Trim: cuts away everything above a plane, for hard planar surfaces.";
     case BrushType::Layer:
         return "Raises the surface to one fixed height per stroke; overlapping passes never stack.";
     case BrushType::Nudge:
@@ -386,6 +394,22 @@ const char* brushTypeDescription(int type) {
     case BrushType::Vdm:
         return "Vector displacement: drag out one stamp of a whole 3D shape, overhangs and all (a horn, an ear, "
                "scales). Choose the map in Brush > Vector Displacement or the Alpha picker. Works best on dense meshes.";
+    case BrushType::KelvinGrab:
+        return "Elastic move from the physics of elasticity (Kelvinlets): the surface follows the cursor like real clay, "
+               "fading out with no edge. Squash (Brush > Kelvinlet) makes it bulge like incompressible clay.";
+    case BrushType::KelvinTwist:
+        return "Elastic twist: press and drag right to turn the surface clockwise around that point (left turns it "
+               "back); the turn fades smoothly, keeping the volume.";
+    case BrushType::KelvinScale:
+        return "Elastic pinch and swell: press and drag left to pinch the surface toward that point, right to swell it.";
+    case BrushType::KelvinSnake:
+        return "Elastic Tendril: pulls horns, tentacles and spikes that taper naturally as they stretch.";
+    case BrushType::DetailClone:
+        return "Paints copies of a captured detail along the stroke, each turned to follow it. Capture any detail on "
+               "the model with Capture from view (Ctrl+Alt+C), or pick a VDM.";
+    case BrushType::Morph:
+        return "Pulls the surface back toward a stored shape: pick a selection set with Shape as the Morph Target in "
+               "Tool > Selection Sets. Alt pushes away. Works at any subdivision level.";
     default:
         return "";
     }
@@ -397,7 +421,7 @@ std::vector<BrushItem> PickerUi::brushItems(App& app, bool libraryFiles) {
         BrushItem b;
         b.kind = BrushItem::Kind::Type;
         b.index = i;
-        b.name = brushName(BrushType(i));
+        b.name = brushLabel(BrushType(i));
         b.description = brushTypeDescription(i);
         items.push_back(std::move(b));
     }
@@ -408,8 +432,8 @@ std::vector<BrushItem> PickerUi::brushItems(App& app, bool libraryFiles) {
     items.push_back(std::move(paint));
     BrushItem guides;
     guides.kind = BrushItem::Kind::Guides;
-    guides.name = "QRemesh Guides";
-    guides.description = "ZBrush's ZRemesher Guides: draw curves on the model for QRemesh's edge loops to follow (a curve "
+    guides.name = "Quad Remesh Guides";
+    guides.description = "ZBrush's ZRemesher Guides: draw curves on the model for Quad Remesh's edge loops to follow (a curve "
                          "that ends where it started makes a loop). Alt+click a curve to delete it.";
     items.push_back(std::move(guides));
     for (int i = 0; i < int(app.doc_.brushes.size()); ++i) {
@@ -423,6 +447,9 @@ std::vector<BrushItem> PickerUi::brushItems(App& app, bool libraryFiles) {
         switch (r.origin.source) {
         case BrushSource::Studio:
             b.tag = "studio";
+            break;
+        case BrushSource::Pack:
+            b.tag = r.origin.pack;
             break;
         case BrushSource::Gallery:
             b.tag = "gallery";
@@ -605,7 +632,7 @@ void drawBrushGrid(App& app, GridMode mode) {
                 x = 0.0f;
             x += w + 3.0f;
             const bool on = !typed.empty() && typed[0] == char('a' + k);
-            if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(kAccent));
+            if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(kAccent()));
             if (ImGui::SmallButton(text)) {
                 if (popup)
                     s.typed = std::string(1, char('a' + k));
@@ -636,7 +663,7 @@ void drawBrushGrid(App& app, GridMode mode) {
         std::string footer = b.kind == BrushItem::Kind::Recipe
                                  ? brushOriginText(app.doc_.brushes[size_t(b.index)])
                              : b.kind == BrushItem::Kind::File   ? "Library file - pick to load it"
-                             : b.kind == BrushItem::Kind::Guides ? "Tool > Geometry > QRemesh"
+                             : b.kind == BrushItem::Kind::Guides ? "Tool > Geometry > Quad Remesh"
                                                                  : "Built-in brush";
         quickInfo(tex, glyph, b.name, b.description, footer);
         ui::HelpText(b.name.c_str(), nullptr, b.description.c_str(), "Brush");
@@ -796,7 +823,7 @@ void drawVdmGrid(App& app, GridMode mode) {
         }
         const std::string text = v->builtin ? "Built-in vector displacement map (CC0)." : "Vector displacement map from your library.";
         quickInfo(tex, ICON_LC_STAMP, v->name, text, v->path.empty() ? std::string() : v->path);
-        ui::HelpText(v->name.c_str(), nullptr, "Stamp this vector displacement map with the VDM brush (DragRect).",
+        ui::HelpText(v->name.c_str(), nullptr, "Stamp this vector displacement map with the VDM brush (Drag Stamp).",
                      "Brush > Vector Displacement");
         if (!v->builtin && ImGui::BeginPopupContextItem()) {
             ImGui::TextDisabled("%s", v->name.c_str());
@@ -816,19 +843,18 @@ void drawAlphaGrid(App& app, GridMode mode) {
     const float tile = 64.0f * app.uiScale_;
     const int columns = columnsFor(tile, mode);
     const BrushAlpha& current = app.doc_.brushAlpha;
-    static const char* const names[] = {"Round", "Square", "Noise"};
-    static const char* const help[] = {"The plain round falloff (no alpha).", "A square stamp with soft edges.",
-                                       "A noisy stamp for rough, organic texture."};
     sectionHeader("Built-in");
     int column = 0;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < int(BrushAlpha::builtins().size()); ++i) {
         tileGrid(column, columns);
-        const bool on = lower(current.name) == lower(names[i]) || (i == 0 && current.empty());
+        const std::string& name = builtinAlpha(i).name;
+        const std::string help = BrushAlpha::builtinHelp(name);
+        const bool on = lower(current.name) == lower(name) || (i == 0 && current.empty());
         const ImTextureID tex = app.thumbs_.alpha(builtinAlpha(i));
-        if (AssetTile((std::string(names[i]) + "##alpha").c_str(), tex, ICON_LC_CIRCLE_DASHED, names[i], tile, on))
-            app.runCommand("brush_set_alpha", {{"name", lower(names[i])}});
-        quickInfo(tex, ICON_LC_CIRCLE_DASHED, names[i], help[i]);
-        ui::HelpText(names[i], nullptr, help[i], "Alpha");
+        if (AssetTile((name + "##alpha").c_str(), tex, ICON_LC_CIRCLE_DASHED, name.c_str(), tile, on))
+            app.runCommand("brush_set_alpha", {{"name", name}});
+        quickInfo(tex, ICON_LC_CIRCLE_DASHED, name.c_str(), help.c_str());
+        ui::HelpText(name.c_str(), nullptr, help.c_str(), "Alpha");
     }
     // The loaded image alpha, then images in the library's Alphas folder.
     const bool custom = !current.empty() && lower(current.name) != "square" && lower(current.name) != "noise";
@@ -859,6 +885,18 @@ void drawAlphaGrid(App& app, GridMode mode) {
             quickInfo(tex, ICON_LC_IMAGE, e.name, "Image in your library's Alphas folder.", e.path);
         }
     }
+    if (!app.packAlphas().empty()) { // alphas from installed packs, tagged with the pack's name
+        sectionHeader("Packs");
+        column = 0;
+        for (const PackContentItem& it : app.packAlphas()) {
+            tileGrid(column, columns);
+            const std::string label = it.label();
+            const ImTextureID tex = app.thumbs_.file(it.file);
+            if (AssetTile((label + "##alphapack" + it.file).c_str(), tex, ICON_LC_IMAGE, label, tile, false))
+                app.runCommand("brush_set_alpha", {{"path", it.file}, {"invert", app.alphaInvert_}});
+            quickInfo(tex, ICON_LC_IMAGE, label, ("From the pack " + it.packName + ".").c_str(), it.file);
+        }
+    }
     ImGui::Dummy(ImVec2(0, 2));
     if (ImGui::Button(ICON_LC_FOLDER_OPEN "  Load image...", ImVec2(mode == GridMode::Popup ? 0.0f : -1.0f, 0)))
         SDL_ShowOpenFileDialog(App::onAlphaChosen, &app, app.window_, kAlphaFilters, 2, nullptr, false);
@@ -878,8 +916,10 @@ void drawMaterialGrid(App& app, GridMode mode) {
     int column = 0;
     int hovered = -2;
     const int active = s.previewing ? s.savedMatcap : app.renderSettings_.matcap;
+    app.materialListShown(); // just opened: pick up images added to the MatCaps folder meanwhile
     for (int k = 0; k <= matcapCount(); ++k) {
         const int i = k < matcapCount() ? matcapInListOrder(k) : -1; // the MatCaps (the default first), then Studio
+        if (i >= 0 && !isMatcapListed(i)) continue; // removed
         tileGrid(column, columns);
         const char* name = i < 0 ? "Studio" : matcapName(i);
         const ImTextureID tex = app.thumbs_.material(i);
@@ -896,8 +936,25 @@ void drawMaterialGrid(App& app, GridMode mode) {
                                               "rim, so strokes read without glare."
                      : i == 0 ? "Made for sculpting: a strong key light, crisp highlights and deep cavities so "
                                 "every stroke reads."
-                              : "MatCap material: the whole lit look in one image.",
+                     : isCustomMatcap(i) ? "Your own Lit Sphere. Right-click to remove it."
+                              : "Lit Sphere material: the whole lit look in one image.",
                      "Material");
+        if (isCustomMatcap(i) && ImGui::BeginPopupContextItem()) {
+            ImGui::TextDisabled("%s", name);
+            if (const CustomMatcap* c = customMatcap(i); c && !c->path.empty()) { // the file name; the folder is long
+                const std::u8string file = std::filesystem::path(std::u8string(c->path.begin(), c->path.end())).filename().u8string();
+                ImGui::TextDisabled("%s", reinterpret_cast<const char*>(file.c_str()));
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Remove##matcap")) {
+                if (popup && s.previewing) { // put the real material back before it can go
+                    app.renderSettings_.matcap = s.savedMatcap;
+                    s.previewing = false;
+                }
+                app.runCommand("remove_matcap", {{"name", std::string(name)}});
+            }
+            ImGui::EndPopup();
+        }
     }
     // ZBrush's "Preview Material On Mesh": hovering a material shows it on the model until the pointer leaves.
     if (popup && st().open) {
@@ -953,7 +1010,11 @@ void PickerUi::sizePopup(App& app, Slider which) {
     State& s = st();
     s.slider = int(which);
     s.sliderSmooth = app.activeBrush() == BrushType::Smooth;
-    s.sliderAt = ImGui::GetIO().MousePos;
+    // The brush cursor's own position (SDL's window coordinates, the brush ring's centre) rather than ImGui's
+    // MousePos: on Windows ImGui's comes from the global cursor minus the window position while no button is held,
+    // and pen drivers' stray mouse events move it too, so the slider opened away from the cursor (#9).
+    s.sliderAt = ImVec2(app.mouseX_, app.mouseY_);
+    s.sliderPlaced = false;
     s.sliderFrame = ImGui::GetFrameCount();
     s.sliderTyped.clear();
     s.sliderWasActive = false;
@@ -1021,6 +1082,9 @@ void drawPickers(App& app) {
                     pickerTitle(ICON_LC_SPLINE, "Stroke", nullptr);
                     ImGui::Spacing();
                     drawStrokeGrid(app, GridMode::Popup);
+                    // Continuous (#31) here too, beside the strokes, as in the Stroke palette (#43)
+                    ImGui::Spacing();
+                    ui::ActionButton(app, "stroke.continuous", ImVec2(-1.0f, 0.0f));
                 }
                 ImGui::End();
                 break;
@@ -1068,7 +1132,7 @@ void drawPickers(App& app) {
                                 "change it.",
                                 &app.radiusPx_, 2.0f, 800.0f, 1.0f}
                       : which == PickerUi::Slider::ZIntensity
-                          ? Def{s.sliderSmooth ? "Smooth Z Intensity" : "Z Intensity", "U",
+                          ? Def{s.sliderSmooth ? "Smooth Intensity" : "Intensity", "U",
                                 s.sliderSmooth ? "How strongly Smooth works (it keeps its own value, as in ZBrush: hold "
                                                  "Shift and press U to set it). Type a number and press Enter."
                                                : "How strongly the brush changes the surface (1-100). Drag, or type a "
@@ -1079,16 +1143,19 @@ void drawPickers(App& app) {
                                 "How strongly painting colours the surface (1-100). Drag, or type a number and press "
                                 "Enter.",
                                 &app.rgbIntensity_, 0.01f, 1.0f, 100.0f}
-                          : Def{"Focal Shift", "O",
+                          : Def{"Falloff", "O",
                                 "The brush falloff: below 0 a broad, hard tip, above 0 a soft point (-100..100). The "
                                 "inner ring of the cursor shows it.",
                                 &app.focalShift_, -1.0f, 1.0f, 100.0f};
         const float w = 200.0f * app.uiScale_;
-        ImGui::SetNextWindowPos(ImVec2(s.sliderAt.x - w * 0.5f, s.sliderAt.y + 14.0f), ImGuiCond_Appearing);
+        // As in ZBrush the knob (the current value) opens right under the cursor, so pressing there drags it. The
+        // first frame (hidden while the window sizes itself) measures where the knob is; the window then stays put.
+        if (!s.sliderPlaced) s.sliderPos = ImVec2(s.sliderAt.x - w * 0.5f, s.sliderAt.y - ImGui::GetFrameHeight() * 0.5f);
+        ImGui::SetNextWindowPos(s.sliderPos, ImGuiCond_Always);
         if (s.sliderFrame == ImGui::GetFrameCount()) ImGui::SetNextWindowFocus();
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, theme::rounding(6.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, kPanelBg);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, kPanelBg());
         bool close = false;
         if (ImGui::Begin((std::string(d.name) + "##cursor").c_str(), nullptr,
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
@@ -1134,6 +1201,21 @@ void drawPickers(App& app) {
                     *d.value = std::clamp(shown / d.shownScale, d.lo, d.hi);
             }
             ImGui::LogText("%s %.0f", d.name, double(*d.value * d.shownScale));
+            {
+                // The knob's centre as ImGui's slider draws it (2 px padding, GrabMinSize wide; Draw Size is logarithmic).
+                const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+                const float grab = std::min(ImGui::GetStyle().GrabMinSize, hi.x - lo.x - 4.0f);
+                const float v = std::clamp(*d.value, d.lo, d.hi);
+                const float t = which == PickerUi::Slider::DrawSize ? std::log(v / d.lo) / std::log(d.hi / d.lo)
+                                                                    : (v - d.lo) / (d.hi - d.lo);
+                s.sliderKnob = ImVec2(lo.x + 2.0f + grab * 0.5f + t * (hi.x - lo.x - 4.0f - grab), (lo.y + hi.y) * 0.5f);
+                if (!s.sliderPlaced) {
+                    const ImVec2 win = ImGui::GetWindowPos(), size = ImGui::GetWindowSize(), view = ImGui::GetIO().DisplaySize;
+                    s.sliderPos = ImVec2(std::clamp(s.sliderAt.x - (s.sliderKnob.x - win.x), 0.0f, std::max(0.0f, view.x - size.x)),
+                                         std::clamp(s.sliderAt.y - (s.sliderKnob.y - win.y), 0.0f, std::max(0.0f, view.y - size.y)));
+                    s.sliderPlaced = true;
+                }
+            }
             ui::HelpText(d.name, d.key, d.help, "Draw");
             // CKW-SIZE-DRAG workaround: item deactivation isn't a mouse release
             // (pen/mouse source changes or focus changes can deactivate it while held).
@@ -1158,13 +1240,20 @@ void drawPickers(App& app) {
             }
             const bool clicked =
                 ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-            if (clicked && !first && !s.sliderWasActive && !onSlider && !ImGui::IsWindowHovered()) close = true;
+            if (clicked && !first && !s.sliderWasActive && !onSlider && !ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) close = true;
         }
         ImGui::End();
         ImGui::PopStyleColor();
         ImGui::PopStyleVar(2);
         if (close) s.slider = -1;
     }
+}
+
+bool PickerUi::sliderKnob(ImVec2& knob) {
+    const State& s = st();
+    if (s.slider < 0 || !s.sliderPlaced) return false;
+    knob = s.sliderKnob;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1282,17 +1371,17 @@ void App::drawColorWidget(float width) {
                      ImGui::ColorConvertFloat4ToU32(ImVec4(r1, g1, b1, 1)), stripW * 0.5f,
                      i == 0 ? ImDrawFlags_RoundCornersTop : i == 5 ? ImDrawFlags_RoundCornersBottom : ImDrawFlags_RoundCornersNone);
     }
-    dl->AddRect(hs, hsMax, kFieldEdge, stripW * 0.5f, 0, 1.0f * s);
+    dl->AddRect(hs, hsMax, kFieldEdge, theme::rounding(stripW * 0.5f), 0, 1.0f * s);
     const float ny = std::clamp(hs.y + h * squareH, hs.y + 2.5f * s, hsMax.y - 2.5f * s);
     const ImVec2 na(hs.x - 1.0f * s, ny - 1.5f * s), nb(hsMax.x + 1.0f * s, ny + 1.5f * s);
-    dl->AddRect(ImVec2(na.x - 1.0f * s, na.y - 1.0f * s), ImVec2(nb.x + 1.0f * s, nb.y + 1.0f * s), kMarkerDark, 2.0f * s, 0,
+    dl->AddRect(ImVec2(na.x - 1.0f * s, na.y - 1.0f * s), ImVec2(nb.x + 1.0f * s, nb.y + 1.0f * s), kMarkerDark, theme::rounding(2.0f * s), 0,
                 1.0f * s);
-    dl->AddRectFilled(na, nb, kMarkerLight, 1.5f * s);
+    dl->AddRectFilled(na, nb, kMarkerLight, theme::rounding(1.5f * s));
 
     ImGui::PopStyleVar();
     ImGui::PopID();
     ImGui::EndGroup();
-    ui::HelpText("Colour", "C", "The polypaint colour (C over the model picks one).", "Left shelf");
+    ui::HelpText("Colour", "C", "The vertex paint colour (C over the model picks one).", "Left shelf");
 
     // Two swatches, like ZBrush's main and secondary colour: clicking either swaps them ("Alternate"). Equal halves of
     // the column, main on the left, the same gap as between the square and the strip.

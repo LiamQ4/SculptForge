@@ -54,12 +54,12 @@ void App::initCameraController() {
                 return {false, "Use FOV 5-120 degrees or lens 7-270 mm"};
             if (args.contains("mm")) camera_.setFocalLengthMm(float(mm));
             else if (args.contains("fov")) camera_.fovY = glm::radians(float(fov));
-            camera_.orthographic = !argBool(args, "perspective", !camera_.orthographic);
+            camera_.ortho = !argBool(args, "perspective", !camera_.ortho);
             crkwCanvasWidth_ = int(w); crkwCanvasHeight_ = int(h);
             crkwCanvasDraft_[0] = int(w); crkwCanvasDraft_[1] = int(h);
             crkwCanvasFixed_ = argBool(args, "fixed", crkwCanvasFixed_);
             updateCameraAspect(); doc.modified = true;
-            return {true, std::string(camera_.orthographic ? "Orthographic" : "Perspective") + " camera, canvas " +
+            return {true, std::string(camera_.ortho ? "Orthographic" : "Perspective") + " camera, canvas " +
                 std::to_string(int(w)) + "x" + std::to_string(int(h))};
         }});
     commands_.add({"crkw_camera_export", "Render the current camera to a PNG at the selected canvas pixel resolution.",
@@ -86,11 +86,11 @@ void App::drawCameraController() {
     ImGui::SetNextWindowSize(ImVec2(310 * uiScale_, 0), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(shell_.rightShelf.x - 320 * uiScale_, shell_.canvas.y + 12 * uiScale_), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("CRKW Camera", &showCameraController_, ImGuiWindowFlags_AlwaysAutoResize)) {
-        if (ImGui::RadioButton("Persp##camera.persp", !camera_.orthographic)) runCommand("crkw_camera", {{"perspective", true}});
+        if (ImGui::RadioButton("Persp##camera.persp", !camera_.ortho)) runCommand("crkw_camera", {{"perspective", true}});
         ImGui::SameLine();
-        if (ImGui::RadioButton("Ortho##camera.ortho", camera_.orthographic)) runCommand("crkw_camera", {{"perspective", false}});
+        if (ImGui::RadioButton("Ortho##camera.ortho", camera_.ortho)) runCommand("crkw_camera", {{"perspective", false}});
         ImGui::Separator();
-        ImGui::BeginDisabled(camera_.orthographic);
+        ImGui::BeginDisabled(camera_.ortho);
         float mm = camera_.focalLengthMm(), fov = glm::degrees(camera_.fovY);
         ImGui::SetNextItemWidth(130 * uiScale_);
         if (ImGui::InputFloat("Lens mm##camera.mm", &mm, 0, 0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue))
@@ -100,7 +100,7 @@ void App::drawCameraController() {
             runCommand("crkw_camera", {{"fov", double(fov)}});
         ImGui::TextDisabled("Full frame: 24 mm sensor height");
         ImGui::EndDisabled();
-        if (camera_.orthographic) ImGui::TextDisabled("Lens retained for perspective mode");
+        if (camera_.ortho) ImGui::TextDisabled("Lens retained for perspective mode");
         if (ImGui::Button("Frame model##camera.frame", ImVec2(-1, 0))) camera_.frame(sceneBounds());
         ImGui::Separator();
         bool fixed = crkwCanvasFixed_;

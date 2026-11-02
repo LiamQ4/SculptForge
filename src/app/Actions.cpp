@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <string_view>
+#include <utility>
 
 namespace sf {
 
@@ -24,11 +26,25 @@ std::string trim(std::string_view s) {
     return std::string(s.substr(a, b - a));
 }
 
-// "subtool_append" -> "Subtool append"
+// "subtool_append" -> "Part append": the command's words, with the interface's names for what they name.
 std::string humanize(const std::string& name) {
-    std::string out = name;
-    for (auto& c : out)
-        if (c == '_') c = ' ';
+    static const std::pair<std::string_view, std::string_view> kWords[] = {
+        {"subtool", "part"},           {"subtools", "parts"},       {"zsphere", "forge sphere"},
+        {"zspheres", "forge spheres"}, {"polygroup", "face group"}, {"polygroups", "face groups"},
+        {"polypaint", "vertex paint"}, {"qremesh", "quad remesh"},  {"matcap", "lit sphere"},
+        {"matcaps", "lit spheres"},    {"lightbox", "library"},     {"goz", "zbrush"},
+        {"quicksave", "snapshot"}};
+    std::string out;
+    size_t start = 0;
+    while (start <= name.size()) {
+        const size_t end = std::min(name.find('_', start), name.size());
+        std::string_view word(name.data() + start, end - start);
+        for (const auto& [from, to] : kWords)
+            if (word == from) word = to;
+        if (!out.empty()) out += ' ';
+        out += word;
+        start = end + 1;
+    }
     if (!out.empty()) out[0] = char(std::toupper(static_cast<unsigned char>(out[0])));
     return out;
 }
@@ -44,6 +60,30 @@ bool isModifierKey(SDL_Keycode key) {
         return false;
     }
 }
+
+namespace {
+
+// "Numpad 1", "Numpad .", "Numpad Plus" (also "Numpad1", "Keypad 1") -> the keypad's key.
+SDL_Keycode keypadKey(const std::string& lowerName) {
+    std::string rest;
+    for (const char* prefix : {"numpad", "keypad", "kp"})
+        if (lowerName.rfind(prefix, 0) == 0) {
+            rest = trim(lowerName.substr(std::string_view(prefix).size()));
+            break;
+        }
+    if (rest.empty()) return SDLK_UNKNOWN;
+    if (rest.size() == 1 && rest[0] >= '1' && rest[0] <= '9') return SDL_Keycode(SDLK_KP_1 + (rest[0] - '1'));
+    if (rest == "0") return SDLK_KP_0;
+    if (rest == "." || rest == "period" || rest == "del") return SDLK_KP_PERIOD;
+    if (rest == "plus") return SDLK_KP_PLUS;
+    if (rest == "minus" || rest == "-") return SDLK_KP_MINUS;
+    if (rest == "/" || rest == "slash") return SDLK_KP_DIVIDE;
+    if (rest == "*" || rest == "asterisk") return SDLK_KP_MULTIPLY;
+    if (rest == "enter") return SDLK_KP_ENTER;
+    return SDLK_UNKNOWN;
+}
+
+} // namespace
 
 bool parseChord(std::string_view text, Chord& out) {
     out = Chord{};
@@ -81,6 +121,10 @@ bool parseChord(std::string_view text, Chord& out) {
         return true;
     }
     const std::string k = lower(key);
+    if (const SDL_Keycode kp = keypadKey(k); kp != SDLK_UNKNOWN) {
+        out.key = kp;
+        return true;
+    }
     if (k == "enter") key = "Return";
     else if (k == "esc") key = "Escape";
     else if (k == "comma") key = ",";
@@ -110,6 +154,17 @@ std::string keyName(SDL_Keycode key) {
     if (key > 32 && key < 127) return std::string(1, char(std::toupper(int(key))));
     if (key == SDLK_RETURN) return "Enter";
     if (key == SDLK_ESCAPE) return "Esc";
+    if (key >= SDLK_KP_1 && key <= SDLK_KP_9) return "Numpad " + std::to_string(int(key - SDLK_KP_1) + 1);
+    switch (key) { // spelled so that parseChord reads them back (a '+' would split the chord)
+    case SDLK_KP_0: return "Numpad 0";
+    case SDLK_KP_PERIOD: return "Numpad .";
+    case SDLK_KP_PLUS: return "Numpad Plus";
+    case SDLK_KP_MINUS: return "Numpad Minus";
+    case SDLK_KP_DIVIDE: return "Numpad /";
+    case SDLK_KP_MULTIPLY: return "Numpad *";
+    case SDLK_KP_ENTER: return "Numpad Enter";
+    default: break;
+    }
     const char* name = SDL_GetKeyName(key);
     return name && *name ? name : "?";
 }
@@ -156,6 +211,11 @@ void ActionRegistry::add(Action a) {
             return;
         }
     actions_.push_back(std::move(a));
+}
+
+void ActionRegistry::removePrefix(std::string_view prefix) {
+    ++revision_;
+    std::erase_if(actions_, [&](const Action& a) { return std::string_view(a.id).substr(0, prefix.size()) == prefix; });
 }
 
 const Action* ActionRegistry::find(std::string_view id) const {
@@ -227,10 +287,10 @@ void ActionRegistry::setShortcut(std::string_view id, std::string chord) {
     if (!isDefault) overrides_.emplace_back(std::string(id), std::move(chord));
 }
 
-std::string ActionRegistry::assignShortcut(std::string_view id, const std::string& chordString) {
+std::string ActionRegistry::assignShortcut(std::string_view id, const std::string& chordString, bool keepOthers) {
     Chord chord;
     if (!parseChord(chordString, chord)) {
-        setShortcut(id, "");
+        if (!keepOthers) setShortcut(id, "");
         return {};
     }
     std::string lost;
@@ -244,7 +304,11 @@ std::string ActionRegistry::assignShortcut(std::string_view id, const std::strin
         lost = other.label;
         setShortcut(other.id, keep);
     }
-    setShortcut(id, chordText(chord));
+    std::string mine = chordText(chord);
+    if (keepOthers)
+        for (const Chord& c : parseChords(shortcutText(id)))
+            if (!(c == chord)) mine += " / " + chordText(c);
+    setShortcut(id, mine);
     return lost;
 }
 

@@ -145,6 +145,61 @@ TEST(smooth_reduces_noise) {
     CHECK(spread() < before * 0.5f);
 }
 
+TEST(smooth_keep_volume_keeps_volume) {
+    // #40: the plain (Laplacian) Smooth shrinks a sphere; with keepVolume (a Taubin step) it barely changes the
+    // volume, yet still removes bumps.
+    auto volume = [](const Mesh& m) {
+        double v = 0.0;
+        for (const glm::uvec3& t : m.triangles)
+            v += double(glm::dot(m.positions[t.x], glm::cross(m.positions[t.y], m.positions[t.z]))) / 6.0;
+        return v;
+    };
+    auto spread = [](const Mesh& m) { // roughness: mean distance of each vertex from its neighbours' average
+        double sum = 0.0;
+        for (uint32_t v = 0; v < m.vertexCount(); ++v) {
+            glm::vec3 avg(0.0f);
+            for (uint32_t u : m.neighbors(v)) avg += m.positions[u];
+            avg /= float(m.neighbors(v).size());
+            sum += glm::distance(avg, m.positions[v]);
+        }
+        return sum / double(m.vertexCount());
+    };
+    auto smoothed = [&](bool keepVolume, bool noisy, double& volumeBefore, double& spreadBefore) {
+        Document d = makeDoc(makeIcosphere(4));
+        if (noisy)
+            for (size_t i = 0; i < d.mesh.vertexCount(); ++i)
+                d.mesh.positions[i] *= 1.0f + 0.04f * (float((i * 2654435761u) % 7) / 7.0f - 0.5f);
+        d.mesh.recomputeAllNormals();
+        d.bvh.build(d.mesh);
+        volumeBefore = volume(d.mesh);
+        spreadBefore = spread(d.mesh);
+        DabParams p;
+        p.radius = 3.0f; // the whole sphere, at full strength in the middle
+        p.strength = 1.0f;
+        p.keepVolume = keepVolume;
+        d.sculptor.beginStroke(d.mesh, "Smooth");
+        for (int i = 0; i < 20; ++i) {
+            p.center = glm::vec3(0, 0, i % 2 ? -1.0f : 1.0f);
+            p.viewDir = -p.center;
+            d.sculptor.dab(d.mesh, d.bvh, BrushType::Smooth, p, Symmetry{false, false, false});
+        }
+        d.sculptor.endStroke();
+        return d.mesh;
+    };
+    double v0 = 0.0, s0 = 0.0;
+    const Mesh plain = smoothed(false, false, v0, s0);
+    const double plainLoss = (v0 - volume(plain)) / v0;
+    const Mesh kept = smoothed(true, false, v0, s0);
+    const double keptChange = std::abs(volume(kept) - v0) / v0;
+    std::printf("  sphere volume change: plain %.2f%%, keep volume %.2f%%\n", 100.0 * plainLoss, 100.0 * keptChange);
+    CHECK(plainLoss > 0.02);               // the Laplacian shrinks the sphere noticeably
+    CHECK(keptChange < plainLoss * 0.25);  // the Taubin step keeps (nearly) all of it
+    // It still smooths: the bumps of a noisy sphere mostly go.
+    const Mesh noisy = smoothed(true, true, v0, s0);
+    CHECK(spread(noisy) < s0 * 0.7);
+    CHECK(std::abs(volume(noisy) - v0) / v0 < 0.02);
+}
+
 TEST(move_brush_drags_region) {
     Document d = makeDoc(makeIcosphere(4));
     DabParams p;
@@ -1095,12 +1150,16 @@ TEST(mcp_server_protocol) {
     CHECK(init["result"]["serverInfo"]["name"].asString() == "sculptforge" && init["result"]["capabilities"]["tools"].isObject());
     CHECK(handleMcpMessage(reg, d, R"({"jsonrpc":"2.0","method":"notifications/initialized"})").empty());
     Json list = call(R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})");
-    bool hasRemesh = false, schemasOk = true;
+    bool hasRemesh = false, schemasOk = true, packTools = false;
     for (const auto& t : list["result"]["tools"].items()) {
         hasRemesh = hasRemesh || t["name"].asString() == "remesh";
         schemasOk = schemasOk && t["inputSchema"]["type"].asString() == "object";
+        packTools = packTools || t["name"].asString() == "pack_install" || t["name"].asString() == "pack_remove";
     }
-    CHECK(hasRemesh && schemasOk && list["result"]["tools"].size() == reg.all().size());
+    // Every command but installing, removing and switching packs (the user's decision, never an agent's).
+    CHECK(hasRemesh && schemasOk && !packTools && list["result"]["tools"].size() == reg.all().size() - 4);
+    Json refused = call(R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"pack_install","arguments":{"path":"x.sfpack"}}})");
+    CHECK(refused.has("error"));
     Json ok = call(R"({"jsonrpc":"2.0","id":"a","method":"tools/call","params":{"name":"new_sphere","arguments":{"subdivisions":2}}})");
     CHECK(ok["id"].asString() == "a" && !ok["result"]["isError"].asBool(true) && d.mesh.triangleCount() == 320);
     CHECK(ok["result"]["content"][0]["text"].asString().find("320") != std::string::npos);
@@ -1289,10 +1348,12 @@ TEST(free_huggingface_models) {
     CHECK(wellFormed && usesImage);
     ai::AiSettings defaults;
     CHECK(defaults.generatorService == "huggingface" && defaults.hfModel == presets[0].id);
-    defaults.hfModel = "trellis-2";
+    CHECK(defaults.hfModel == "trellis-2"); // MIT, the default; Hunyuan3D carries its licence note
+    CHECK(!ai::hunyuanModel(defaults.hfModel) && ai::hunyuanModel("hunyuan3d-2.1") && ai::hunyuanModel("fal-ai/hunyuan-3d/v3.1/pro/image-to-3d"));
+    defaults.hfModel = "hunyuan3d-2.1";
     defaults.hfToken = "hf_test";
     ai::AiSettings loaded = ai::AiSettings::fromJson(defaults.toJson());
-    CHECK(loaded.hfModel == "trellis-2" && loaded.resolvedHfToken() == "hf_test");
+    CHECK(loaded.hfModel == "hunyuan3d-2.1" && loaded.resolvedHfToken() == "hf_test");
     CHECK(ai::friendlyGradioError("You have exceeded your ZeroGPU quota (120s requested vs. 0s left).").find("free GPU time") !=
           std::string::npos);
     CHECK(ai::friendlyGradioError("some other failure") == "some other failure");

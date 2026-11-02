@@ -31,6 +31,7 @@ enum class AssetKind {
     Material,  // matcap (index; -1 = Studio)
     Image,     // reference image
     Splat,     // Gaussian splat capture (.ply .splat, splat .glb)
+    Vdm,       // vector displacement map in the brush library (name; Capture from view saves these)
 };
 
 enum class Primitive { Sphere, Cube, Plane, Count };
@@ -47,7 +48,7 @@ struct AssetEntry {
 };
 
 // The LightBox tabs, in the order they are shown.
-enum class LibraryTab { Project, Tool, Brush, Alpha, Material, Image, Splats, QuickSave, Recent, Count };
+enum class LibraryTab { Project, Tool, Brush, Alpha, Material, Image, Splats, QuickSave, Recent, Packs, Count };
 const char* libraryTabName(LibraryTab tab);       // "Project"
 const char* libraryTabId(LibraryTab tab);         // "project" (UiLayout::lightboxTab)
 LibraryTab libraryTabFromId(std::string_view id); // unknown -> Project
@@ -125,12 +126,14 @@ std::string thumbnailCachePath(const std::string& cacheDir, const std::string& k
 
 // Lower-case letters and digits only ("Clay Buildup" -> "claybuildup"): what a name is typed as.
 std::string typedName(const std::string& name);
+// The name ZBrush users type for a brush SculptForge names its own way ("sharpcrease" -> "damstandard"), else "".
+std::string typedZBrushAlias(const std::string& typed);
 // Indices of `names` the typed letters keep: names starting with `typed`, or (when none does) names
 // containing it (`substring` says which). Empty `typed` keeps all.
 std::vector<size_t> filterByTyped(const std::vector<std::string>& names, const std::string& typed,
                                   bool* substring = nullptr);
 // The key badge of each kept name: ZBrush's own second letter for the brushes it shares with SculptForge
-// (B C B ClayBuildup, B D S DamStandard, B M V Move ...), otherwise the first letter after `typed` in the name
+// (B C B Clay Block, B D S Sharp Crease, B M V Move ...), otherwise the first letter after `typed` in the name
 // that no earlier name took. Returns (letter, index into names) pairs; substring matches get none.
 std::vector<std::pair<char, size_t>> letterBadges(const std::vector<std::string>& names,
                                                   const std::vector<size_t>& kept, const std::string& typed);

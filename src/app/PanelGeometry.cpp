@@ -5,7 +5,9 @@
 // Reconstruct Subdiv, Divide with Smt). The levels themselves live in core/Multires.
 #include "app/App.h"
 #include "app/Ui.h"
+#include "app/I18n.h"
 
+#include "core/Micro.h"
 #include "core/Multires.h"
 
 #include <algorithm>
@@ -60,7 +62,47 @@ void App::drawGeometrySection() {
                       subdivLevelTriangles(m, 0), subdivLevelTriangles(m, levels - 1));
         ImGui::TextDisabled("%s", info);
     } else {
-        ImGui::TextDisabled("No subdivision levels - Divide adds them");
+        ImGui::TextDisabled("%s", tr("No subdivision levels - Divide adds them"));
+    }
+
+    // Micro: displacement levels above the highest level (core/Micro.h). One row: the level slider and Divide to
+    // Micro (or Bake / Delete once there is one), so the section stays as tall as before.
+    const bool micro = hasMicro(m);
+    if (micro) microSlider_ = float(microLevel(m));
+    const float sliderW = std::floor(ImGui::GetContentRegionAvail().x * 0.42f);
+    ImGui::BeginDisabled(micro);
+    ImGui::SetNextItemWidth(sliderW);
+    {
+        const size_t est = m.triangleCount() << (2 * int(microSlider_));
+        char fmt[64];
+        std::snprintf(fmt, sizeof fmt, "Micro %%.0f (%.0fM)", double(est) / 1e6);
+        ui::SliderInside("##micro", &microSlider_, 1.0f, float(MicroMesh::kMaxLevel), fmt, ImGuiSliderFlags_AlwaysClamp);
+        microSlider_ = std::round(microSlider_);
+    }
+    ImGui::EndDisabled();
+    ui::HelpText("Micro", nullptr,
+                 "Micro levels above the highest subdivision level: each 4x the triangles, stored as one 16-bit "
+                 "displacement per point (no mesh), so 300 million triangles take about 0.4 GB and sculpt in real time. "
+                 "Move reshapes the level below and the detail rides along.",
+                 "Tool > Geometry");
+    ImGui::SameLine();
+    if (!micro) {
+        ui::ActionButton(*this, "geometry.micro_divide", ImVec2(-1, 0));
+    } else {
+        const float w = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
+        ui::ActionButton(*this, "geometry.micro_bake", ImVec2(w, 0));
+        ImGui::SameLine();
+        ui::ActionButton(*this, "geometry.micro_delete", ImVec2(-1, 0));
+        ui::ActionButton(*this, "geometry.micro_export", ImVec2(half, 0));
+        ImGui::SameLine();
+        ImGui::Checkbox(tr("Move along normals"), &doc_.sculptor.microMoveAlongNormals);
+    }
+    if (micro && m.micro) { // (a button above may have just removed it)
+        const MicroMesh& mm = *m.micro;
+        char info[128];
+        std::snprintf(info, sizeof info, "Micro %d: %.1fM triangles, %.0f MB%s", mm.level, double(mm.microTriangles()) / 1e6,
+                      double(mm.bytes()) / 1e6, mm.disp.mapped() ? ", out of core" : "");
+        ImGui::TextDisabled("%s", info);
     }
     ImGui::Separator();
 }

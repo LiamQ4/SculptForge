@@ -1,3 +1,5 @@
+run ui_look look=classic layout=zbrush
+input_style zbrush
 # Real clipboard PNG -> texture, shortcut routing, replacement, and undo.
 run new_sphere subdivisions=3
 click "Texture Map##tool.texture"

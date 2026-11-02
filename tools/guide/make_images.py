@@ -31,6 +31,7 @@ CROPS = {
     "stroke-picker": ("stroke-picker", (0, 200, 440, 360), 440),
     "alpha-picker": ("alpha-picker", (0, 310, 600, 520), 600),
     "material-picker": ("material-picker", (0, 330, 520, 590), 520),
+    "custom-matcaps": ("custom-matcaps", (382, 122, 900, 700), 518),
     "ctrl-help": ("ctrl-help", (1040, 180, 1600, 420), 560),
     "command-palette": ("command-palette", (340, 120, 980, 250), 640),
     "console": ("console", (0, 690, 1280, 900), MAX_WIDTH),
@@ -51,6 +52,7 @@ CROPS = {
     "polygroups": ("polygroups", (300, 100, 1600, 860), 960),
     "splats": ("splats", (420, 46, 1600, 900), 960),
     "user-guide": ("user-guide", (130, 140, 1190, 880), 1060),
+    "extract": ("extract", (380, 140, 1000, 740), 620),
     "make-sculptable-panel": ("sculptable-panel", (1276, 500, 1600, 960), 324),
 }
 
@@ -128,6 +130,20 @@ def remesh(shots: pathlib.Path):
     return save(img, "remesh", 900)
 
 
+def mirror_weld(shots: pathlib.Path):
+    """A head sculpted on one side, then after Mirror And Weld X."""
+    box = (420, 150, 900, 850)
+    before = Image.open(shots / "mirror-weld-before.png").convert("RGB").crop(box)
+    after = Image.open(shots / "mirror-weld-after.png").convert("RGB").crop(box)
+    img = Image.new("RGB", (before.width * 2 + 12, before.height), (20, 20, 22))
+    img.paste(before, (0, 0))
+    img.paste(after, (before.width + 12, 0))
+    d = ImageDraw.Draw(img)
+    label(d, (before.width // 2, 24), "Sculpted on one side", 20, "mt")
+    label(d, (before.width + 12 + after.width // 2, 24), "After Mirror And Weld X", 20, "mt")
+    return save(img, "mirror-weld", 900)
+
+
 def subdivision(shots: pathlib.Path):
     box = (250, 125, 1070, 890)
     names = [("sdiv-1", "SDiv 1: 108 triangles"), ("sdiv-3", "SDiv 3: 1,728"), ("sdiv-6", "SDiv 6: 110,592")]
@@ -143,7 +159,7 @@ def subdivision(shots: pathlib.Path):
 
 def dyntopo(shots: pathlib.Path):
     box = (300, 125, 1020, 845)
-    names = [("dyntopo-wire", "Dynamic on: new triangles where the brush went"), ("dyntopo-shaded", "Snake Hook horns")]
+    names = [("dyntopo-wire", "Dynamic on: new triangles where the brush went"), ("dyntopo-shaded", "Tendril horns")]
     panels = [Image.open(shots / f"{n}.png").convert("RGB").crop(box) for n, _ in names]
     w, h = panels[0].size
     img = Image.new("RGB", (w * 2 + 12, h), (20, 20, 22))
@@ -156,7 +172,7 @@ def dyntopo(shots: pathlib.Path):
 
 def qremesh_guides(shots: pathlib.Path):
     box = (440, 290, 880, 720)
-    names = [("guides-without", "QRemesh"), ("guides-drawn", "QRemesh Guides drawn"), ("guides-with", "QRemesh with guides")]
+    names = [("guides-without", "Quad Remesh"), ("guides-drawn", "Quad Remesh Guides drawn"), ("guides-with", "Quad Remesh with guides")]
     panels = [Image.open(shots / f"{n}.png").convert("RGB").crop(box) for n, _ in names]
     w, h = panels[0].size
     img = Image.new("RGB", (w * 3 + 24, h), (20, 20, 22))
@@ -181,6 +197,22 @@ def make_sculptable(shots: pathlib.Path):
     return save(img, "make-sculptable", 1200)
 
 
+def shading(shots: pathlib.Path):
+    """Smooth and Flat side by side (the same head, eyes kept smooth), with the palette's shading rows below."""
+    box = (420, 120, 1000, 870)
+    smooth = Image.open(shots / "shading-smooth.png").convert("RGB").crop(box)
+    flat = Image.open(shots / "shading-flat.png").convert("RGB").crop(box)
+    rows = Image.open(shots / "shading-palette.png").convert("RGB").crop((384, 456, 700, 550))
+    img = Image.new("RGB", (smooth.width * 2, smooth.height), (31, 31, 33))
+    img.paste(smooth, (0, 0))
+    img.paste(flat, (smooth.width, 0))
+    img.paste(rows, (img.width - rows.width - 12, img.height - rows.height - 12))
+    d = ImageDraw.Draw(img)
+    label(d, (16, 16), "Smooth")
+    label(d, (smooth.width + 16, 16), "Flat (Eyes: Smooth)")
+    return save(img, "shading", 960)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("shots", type=pathlib.Path, help="folder with the screenshots (--ui-out of shots.sfui)")
@@ -190,7 +222,7 @@ def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     composed = {"interface-overview": overview, "remesh": remesh, "subdivision-levels": subdivision,
                 "qremesh-guides": qremesh_guides, "dynamic-topology": dyntopo,
-                "make-sculptable": make_sculptable}
+                "make-sculptable": make_sculptable, "shading": shading, "mirror-weld": mirror_weld}
     wanted = lambda name: not args.only or name in args.only
     made = [make(args.shots) for name, make in composed.items() if wanted(name)]
     for name, (shot, box, width) in CROPS.items():

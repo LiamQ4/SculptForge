@@ -33,6 +33,7 @@ void actionButton(App& app, const char* id, float width = -1.0f) {
 } // namespace
 
 void SDLCALL App::onVdmChosen(void* userdata, const char* const* files, int) {
+    wakeMainLoop(); // a file dialog answered (maybe on another thread): redraw now
     if (!files || !files[0]) return;
     auto* app = static_cast<App*>(userdata);
     std::lock_guard lock(app->vdmMutex_);
@@ -40,6 +41,7 @@ void SDLCALL App::onVdmChosen(void* userdata, const char* const* files, int) {
 }
 
 void SDLCALL App::onVdmExportChosen(void* userdata, const char* const* files, int) {
+    wakeMainLoop(); // a file dialog answered (maybe on another thread): redraw now
     if (!files || !files[0]) return;
     auto* app = static_cast<App*>(userdata);
     std::lock_guard lock(app->vdmMutex_);
@@ -69,7 +71,7 @@ void App::registerVdmActions() {
     add("vdm.new_plane", "New VDM Plane", ICON_LC_GRID_3X3,
         [this] { runCommand("vdm_new_plane", {{"resolution", double(vdmPlaneRes_)}}); }, nullptr,
         "Add a flat VDM plane to sculpt a new brush on (ZBrush's VDM plane template): seen from the top, its border "
-        "masked so it stays put; the other SubTools are hidden. Sculpt anything (overhangs welcome), then Create VDM.",
+        "masked so it stays put; the other Parts are hidden. Sculpt anything (overhangs welcome), then Create VDM.",
         "vdm_new_plane");
     add("vdm.create", "Create VDM", ICON_LC_STAMP,
         [this] {
@@ -141,6 +143,8 @@ void App::dragDotTo(float x, float y) {
     p.pressure = pressureStrength_ ? pressure : 1.0f;
     p.invert = strokeInvert_;
     p.frontFacesOnly = frontFacesOnly_;
+    p.connectedOnly = uiPrefs_.connectedOnly;
+    p.viewFalloff = uiPrefs_.viewFalloff;
     p.focal = focalShift_;
     p.alpha = &doc_.brushAlpha;
     p.alphaUp = screenUpVector(0.0f);
@@ -221,7 +225,7 @@ void App::drawVdmSection() {
                  "Brush > Vector Displacement");
     actionButton(*this, "vdm.create");
     actionButton(*this, "vdm.export");
-    hint("Stamp with DragRect (drag sets size and turn) or DragDot. Z Intensity 50 presses the map at its own size; "
+    hint("Stamp with Drag Stamp (drag sets size and turn) or Slide Stamp. Intensity 50 presses the map at its own size; "
          "Alt digs it in. A VDM moves points sideways, so it needs a dense mesh: divide first, and stamp at the "
          "highest subdivision level.");
 }

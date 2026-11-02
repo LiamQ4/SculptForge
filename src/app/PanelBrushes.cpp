@@ -3,6 +3,7 @@
 //
 // Brush options panel (stroke type, lazy mouse, spray, alpha) and the
 // stroke handling of the SnakeHook brush and the DragRect stroke.
+#include "app/Theme.h"
 #include "app/App.h"
 #include "app/Ui.h"
 
@@ -15,6 +16,7 @@ namespace sf {
 
 
 void SDLCALL App::onAlphaChosen(void* userdata, const char* const* files, int) {
+    wakeMainLoop(); // a file dialog answered (maybe on another thread): redraw now
     if (!files || !files[0]) return;
     auto* app = static_cast<App*>(userdata);
     std::lock_guard lock(app->alphaMutex_);
@@ -41,7 +43,7 @@ void App::drawAlphaSection() {
     const float s = uiScale_;
     auto preview = [](ImDrawList* dl, const BrushAlpha& a, ImVec2 p0, float size, int cells) {
         const float cell = size / float(cells);
-        dl->AddRectFilled(p0, ImVec2(p0.x + size, p0.y + size), IM_COL32(0, 0, 0, 255), 3.0f);
+        dl->AddRectFilled(p0, ImVec2(p0.x + size, p0.y + size), IM_COL32(0, 0, 0, 255), theme::rounding(3.0f));
         for (int y = 0; y < cells; ++y)
             for (int x = 0; x < cells; ++x) {
                 const float u = (float(x) + 0.5f) / float(cells) * 2.0f - 1.0f, v = 1.0f - (float(y) + 0.5f) / float(cells) * 2.0f;
@@ -77,7 +79,8 @@ void App::snakeHookTo(float x, float y) {
     const glm::vec3 n = camera_.forward();
     const float denom = glm::dot(dir, n);
     if (std::abs(denom) < 1e-6f) return;
-    const glm::vec3 target = origin + dir * (glm::dot(grabLast_ - origin, n) / denom);
+    // Along the normal (App::beginAlongNormal): the tip slides out along the normal at the press.
+    const glm::vec3 target = strokeAlongNormal_ ? alongNormalTarget(x, y) : origin + dir * (glm::dot(grabLast_ - origin, n) / denom);
 
     const float pressure = strokePressure();
     DabParams p;
@@ -87,6 +90,8 @@ void App::snakeHookTo(float x, float y) {
     p.pressure = pressureStrength_ ? pressure : 1.0f;
     p.invert = strokeInvert_;
     p.focal = focalShift_;
+    p.connectedOnly = uiPrefs_.connectedOnly;
+    p.viewFalloff = uiPrefs_.viewFalloff;
     p.alpha = &doc_.brushAlpha;
     p.alphaUp = screenUpVector(0.0f);
     // Small steps keep the tip under the cursor and the pulled surface even.
@@ -95,7 +100,7 @@ void App::snakeHookTo(float x, float y) {
     p.strokeDelta = delta / float(steps);
     for (int i = 0; i < steps; ++i) {
         p.center = grabLast_;
-        doc_.sculptor.dab(doc_.mesh, doc_.bvh, BrushType::SnakeHook, p, symmetry_);
+        doc_.sculptor.dab(doc_.mesh, doc_.bvh, strokeBrush_, p, symmetry_); // SnakeHook or KelvinSnake
         grabLast_ += p.strokeDelta;
     }
 }
@@ -118,6 +123,8 @@ void App::dragRectTo(float x, float y) {
     p.pressure = pressureStrength_ ? pressure : 1.0f;
     p.invert = strokeInvert_;
     p.frontFacesOnly = frontFacesOnly_;
+    p.connectedOnly = uiPrefs_.connectedOnly;
+    p.viewFalloff = uiPrefs_.viewFalloff;
     p.focal = focalShift_;
     p.alpha = &doc_.brushAlpha;
     p.alphaUp = glm::normalize(q * glm::vec3(drag.x, -drag.y, 0.0f)); // the alpha's top follows the drag

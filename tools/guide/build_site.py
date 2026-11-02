@@ -24,6 +24,9 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SRC = ROOT / "docs" / "guide"
 SITE = "https://sculptforge.app/"
+# Chapters that were renamed: the old page stays as a small redirect so links from elsewhere keep working.
+REDIRECTS = {"subtools.html": "parts.html", "zspheres.html": "forge-spheres.html", "polypaint.html": "vertex-paint.html",
+             "polygroups.html": "face-groups.html"}
 CALLOUTS = {"tip": "Tip", "note": "Note", "zbrush": "ZBrush", "not-yet": "Not yet", "warning": "Warning",
             "important": "Important"}
 
@@ -493,7 +496,7 @@ def page_html(page: Page, index: Page, chapters, position: int) -> str:
   <meta property="og:image" content="{SITE}img/social-preview.png?v=3">
   <meta property="og:url" content="{url}">
   <link rel="stylesheet" href="../style.css?v=17">
-  <script src="../motion.js?v=10" defer></script>
+  <script src="../motion.js?v=11" defer></script>
   <script data-goatcounter="https://sculptforge.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
   <script src="search-index.js?v={len(chapters)}" defer></script>
 </head>
@@ -508,6 +511,7 @@ def page_html(page: Page, index: Page, chapters, position: int) -> str:
         <a href="../brushes.html">Brushes</a>
         <a href="index.html" aria-current="page">Guide</a>
         <a class="nav-dl" href="../index.html#download">Download</a>
+        <a class="gh" href="https://discord.gg/gWrYkEmQhH">Discord</a>
         <a class="gh" href="https://github.com/islandmed/SculptForge">GitHub</a>
       </nav>
     </div>
@@ -543,15 +547,35 @@ def page_html(page: Page, index: Page, chapters, position: int) -> str:
       </div>
       <div class="links">
         <a href="index.html">User guide</a>
+        <a href="../supporters.html">Supporters</a>
         <a href="https://github.com/islandmed/SculptForge">Source code</a>
+        <a href="https://discord.gg/gWrYkEmQhH">Community Discord</a>
         <a href="https://github.com/islandmed/SculptForge/issues">Report a problem</a>
         <a href="https://github.com/islandmed/SculptForge/blob/main/docs/ai-services.md">AI services &amp; privacy</a>
       </div>
-      <p class="fine trademarks">SculptForge is an independent project, not affiliated with or endorsed by Maxon or
-        any other company named in this guide. ZBrush is a trademark of Maxon. All other trademarks belong to their
-        owners.</p>
+      <p class="fine trademarks">ZBrush, GoZ, MatCap and other ZBrush feature names are trademarks of Maxon Computer
+        GmbH. SculptForge is not affiliated with or endorsed by Maxon. All other trademarks belong to their owners.</p>
     </div>
   </footer>
+</body>
+</html>
+"""
+
+
+def redirect_html(target: str) -> str:
+    """A page that sends visitors (and search engines) on to a renamed chapter."""
+    url = SITE + "guide/" + target
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Moved - SculptForge User Guide</title>
+  <meta name="robots" content="noindex">
+  <link rel="canonical" href="{url}">
+  <meta http-equiv="refresh" content="0; url={target}">
+</head>
+<body>
+  <p>This chapter has moved to <a href="{target}">{url}</a>.</p>
 </body>
 </html>
 """
@@ -594,6 +618,11 @@ def check(index: Page, chapters) -> list:
         for src in p.images:
             if not (SRC / src).is_file():
                 problems.append(f"{name}: image {src} doesn't exist")
+    for old_name, new_name in REDIRECTS.items():
+        if new_name[:-5] + ".md" not in pages:
+            problems.append(f"REDIRECTS: {old_name} points to {new_name}, which isn't a chapter")
+        if old_name[:-5] + ".md" in pages:
+            problems.append(f"REDIRECTS: {old_name} is a chapter again; remove the redirect")
     used = {src for p in pages.values() for src in p.images}
     for img in sorted((SRC / "images").glob("*")):
         if f"images/{img.name}" not in used:
@@ -601,11 +630,108 @@ def check(index: Page, chapters) -> list:
     return problems
 
 
+# ---------------------------------------------------------------------------
+# website/supporters.html: the credits on the website, from docs/supporters.txt (the list Help > About shows)
+# ---------------------------------------------------------------------------
+
+SUPPORTERS = ROOT / "docs" / "supporters.txt"
+SUPPORTERS_PAGE = ROOT / "website" / "supporters.html"
+
+
+def supporter_names(text: str) -> list:
+    """The same rules as parseSupporters in src/app/Support.h: one name per line, '#' lines and blank lines skipped,
+    invalid UTF-8, control and invisible formatting characters dropped, spaces trimmed, 40 characters, 2000 names."""
+    def hidden(c: str) -> bool:
+        cp = ord(c)
+        return (cp < 0x20 or 0x7F <= cp <= 0x9F or 0x200B <= cp <= 0x200F or 0x2028 <= cp <= 0x202E
+                or 0x2060 <= cp <= 0x2069 or cp == 0xFEFF)
+    names = []
+    for line in text.split("\n"):
+        if len(names) >= 2000:
+            break
+        if not line.strip(" \t\r") or line.lstrip(" \t\r").startswith("#"):
+            continue
+        kept = "".join(c for c in line if not hidden(c) and not 0xD800 <= ord(c) <= 0xDFFF)[:40].strip(" ")
+        if kept:
+            names.append(kept)
+    return names
+
+
+def supporters_html() -> str:
+    raw = SUPPORTERS.read_bytes().decode("utf-8", errors="ignore") if SUPPORTERS.exists() else ""
+    names = supporter_names(raw)
+    if names:
+        body = ('<ul class="supporters">\n' + "".join(f"          <li>{html.escape(n)}</li>\n" for n in names)
+                + "        </ul>")
+    else:
+        body = '<p class="lede">Be the first: <a href="support.html">become a member</a>.</p>'
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Supporters</title>
+  <meta name="description" content="The members who keep SculptForge free and open source for everyone.">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" type="image/svg+xml" href="img/favicon.svg?v=2">
+  <link rel="canonical" href="{SITE}supporters.html">
+  <link rel="stylesheet" href="style.css?v=18">
+  <style>
+    .supporters {{ columns: 3 14em; column-gap: 32px; padding: 0; list-style: none; }}
+    .supporters li {{ break-inside: avoid; padding: 4px 0; }}
+  </style>
+  <!-- Generated by tools/guide/build_site.py from docs/supporters.txt; edit that file, not this one. -->
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="index.html"><img src="img/logo.svg?v=2" alt="" width="34" height="34"><span>SculptForge</span></a>
+      <nav aria-label="Main">
+        <a href="guide/index.html">Guide</a>
+        <a href="studios.html">Studios</a>
+        <a class="nav-support" href="support.html">Support</a>
+        <a class="nav-dl" href="index.html#download">Download</a>
+      </nav>
+    </div>
+  </header>
+  <main id="top">
+    <section class="section">
+      <div class="wrap">
+        <p class="eyebrow">Credits</p>
+        <h1>Supporters</h1>
+        <p>Thank you to everyone who supports SculptForge. The same names are in the app, under Help &gt; About.</p>
+        {body}
+      </div>
+    </section>
+  </main>
+  <footer class="footer">
+    <div class="wrap footer-grid">
+      <div class="links">
+        <a href="index.html">Home</a>
+        <a href="support.html">Membership</a>
+        <a href="https://github.com/islandmed/SculptForge">Source code</a>
+      </div>
+      <p class="fine">Copyright © 2026 The SculptForge contributors.</p>
+    </div>
+  </footer>
+</body>
+</html>
+"""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=pathlib.Path, default=ROOT / "website" / "guide")
     ap.add_argument("--check", action="store_true", help="fail on broken links, missing images or bad characters")
+    ap.add_argument("--supporters", action="store_true", help="only write website/supporters.html (the site deploy)")
     args = ap.parse_args()
+    if args.supporters:
+        SUPPORTERS_PAGE.write_text(supporters_html(), encoding="utf-8")
+        return 0
+    if args.check and SUPPORTERS_PAGE.exists() and SUPPORTERS_PAGE.read_text(encoding="utf-8") != supporters_html():
+        print("website/supporters.html is out of date with docs/supporters.txt: run tools/guide/build_site.py",
+              file=sys.stderr)
+        return 1
     index, chapters = load_book()
     if args.check:
         problems = check(index, chapters)
@@ -620,6 +746,8 @@ def main() -> int:
     pages = [index] + [c for _, c in chapters]
     for k, page in enumerate(pages):
         (out / (page.name[:-3] + ".html")).write_text(page_html(page, index, chapters, k), encoding="utf-8")
+    for old_name, new_name in REDIRECTS.items():
+        (out / old_name).write_text(redirect_html(new_name), encoding="utf-8")
     images = out / "images"
     if images.exists():
         shutil.rmtree(images)
@@ -636,8 +764,10 @@ def main() -> int:
     # The site's sitemap (website/sitemap.xml, named in website/robots.txt): the homepage, the brushes page and
     # every guide page. Only for the real site, not --out folders.
     if out.resolve() == (ROOT / "website" / "guide").resolve():
+        SUPPORTERS_PAGE.write_text(supporters_html(), encoding="utf-8")
         urls = [SITE, SITE + "brushes.html", SITE + "mudbox-alternative.html",
-                SITE + "zbrush-alternative.html", SITE + "zbrush-linux.html", SITE + "press.html"] + [f"{SITE}guide/{p.name[:-3]}.html" for p in pages]
+                SITE + "zbrush-alternative.html", SITE + "zbrush-linux.html", SITE + "press.html",
+                SITE + "studios.html", SITE + "support.html", SITE + "supporters.html"] + [f"{SITE}guide/{p.name[:-3]}.html" for p in pages]
         (ROOT / "website" / "sitemap.xml").write_text(
             '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
             + "".join(f"  <url><loc>{html.escape(u)}</loc></url>\n" for u in urls) + "</urlset>\n", encoding="utf-8")

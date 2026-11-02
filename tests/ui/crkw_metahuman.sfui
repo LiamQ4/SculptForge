@@ -1,3 +1,5 @@
+run ui_look look=classic layout=zbrush
+input_style zbrush
 # Native panel remains usable without redistributing proprietary/local templates.
 run new_sphere subdivisions=3
 remember subtools count_before

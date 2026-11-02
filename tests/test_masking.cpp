@@ -132,7 +132,7 @@ TEST(painted_mask_protects_from_brushes) {
 TEST(mask_commands_registered) {
     const std::string schema = registry().toolSchemaJson();
     for (const char* name : {"mask_clear", "mask_all", "mask_invert", "mask_blur", "mask_sharpen", "mask_grow",
-                             "mask_shrink", "mask_by_cavity", "mask_by_polygroup", "mask_rect", "mask_lasso"}) {
+                             "mask_shrink", "mask_by_cavity", "mask_by_polygroup", "mask_border", "mask_rect", "mask_lasso"}) {
         CHECK(registry().find(name) != nullptr);
         CHECK(schema.find(std::string("\"") + name + "\"") != std::string::npos);
     }
@@ -342,4 +342,140 @@ TEST(mask_rect_and_lasso) {
     CHECK(!registry().execute(e, "mask_lasso", {{"points", std::string("0 0 1 1 0 x")}}).ok);
     CHECK(!registry().execute(e, "mask_lasso", {}).ok); // points is required
     CHECK(!registry().execute(e, "mask_rect", {{"view_proj", std::string("1 2 3")}}).ok);
+}
+
+TEST(mask_rect_and_lasso_symmetry_and_clear_outside) {
+    // #51: with symmetry the mirror image of the shape is masked too, as a mask stroke mirrors. A rectangle over
+    // x in -1..-0.4 (the front view spans the bounds) masks x < -0.4*r and, mirrored in X, x > 0.4*r.
+    Document d = makeDoc(makeIcosphere(3));
+    const Mesh& m = d.mesh;
+    const Args rect = {{"x0", -1.0}, {"y0", -1.0}, {"x1", -0.4}, {"y1", 1.0}, {"symmetry", std::string("x")}};
+    CHECK(registry().execute(d, "mask_rect", rect).ok);
+    int wrong = 0, left = 0, right = 0;
+    for (uint32_t v = 0; v < m.vertexCount(); ++v) {
+        const float x = m.positions[v].x;
+        if (std::abs(std::abs(x) - 0.4f) < 0.05f) continue; // (the rectangle's edge)
+        if ((m.mask[v] == 1.0f) != (std::abs(x) > 0.4f)) ++wrong;
+        left += m.mask[v] == 1.0f && x < 0.0f;
+        right += m.mask[v] == 1.0f && x > 0.0f;
+    }
+    CHECK(wrong == 0);
+    CHECK(left > 0 && left == right);
+    // Y and Z mirror through the same centre; a lasso takes it too. Bad axes are an error.
+    Document y = makeDoc(makeIcosphere(3));
+    CHECK(registry().execute(y, "mask_lasso", {{"points", std::string("-1.5 0.5  1.5 0.5  1.5 1.5  -1.5 1.5")},
+                                               {"symmetry", std::string("Y")}}).ok);
+    wrong = 0;
+    for (uint32_t v = 0; v < y.mesh.vertexCount(); ++v) {
+        const float py = y.mesh.positions[v].y;
+        if (std::abs(std::abs(py) - 0.5f) < 0.05f) continue;
+        if ((y.mesh.mask[v] == 1.0f) != (std::abs(py) > 0.5f)) ++wrong;
+    }
+    CHECK(wrong == 0 && countMasked(y.mesh) > 0);
+    CHECK(!registry().execute(y, "mask_rect", {{"symmetry", std::string("xw")}}).ok);
+
+    // clear_outside (#48, ZBrush's Ctrl+drag on the background): a shape that covers none of the model clears the
+    // mask, as one undo step; one that covers some masks as usual; without it a miss changes nothing.
+    const size_t before = countMasked(m);
+    CHECK(registry().execute(d, "mask_rect", {{"x0", 5.0}, {"y0", 5.0}, {"x1", 6.0}, {"y1", 6.0}}).ok);
+    CHECK(countMasked(m) == before);
+    CHECK(registry().execute(d, "mask_rect", {{"x0", 5.0}, {"y0", 5.0}, {"x1", 6.0}, {"y1", 6.0}, {"clear_outside", true}}).ok);
+    CHECK(countMasked(m, 0.0f) == 0);
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(countMasked(m) == before);
+    CHECK(registry().execute(d, "mask_rect", {{"x0", -0.1}, {"y0", -0.1}, {"x1", 0.1}, {"y1", 0.1}, {"clear_outside", true}}).ok);
+    CHECK(countMasked(m) > before);
+    // Nothing masked and nothing covered: no undo step.
+    Document e = makeDoc(makeIcosphere(2));
+    CHECK(registry().execute(e, "mask_rect", {{"x0", 5.0}, {"y0", 5.0}, {"x1", 6.0}, {"y1", 6.0}, {"clear_outside", true}}).ok);
+    CHECK(!e.undo.canUndo());
+    // Hidden parts don't count as covered.
+    Document h = makeDoc(makeIcosphere(3));
+    maskHalf(h.mesh, 0.5f);
+    h.mesh.ensureHidden();
+    for (uint32_t t = 0; t < h.mesh.triangleCount(); ++t) {
+        const glm::uvec3 tri = h.mesh.triangles[t];
+        h.mesh.hidden[t] = uint8_t(h.mesh.positions[tri.x].x < 0.0f || h.mesh.positions[tri.y].x < 0.0f ||
+                                   h.mesh.positions[tri.z].x < 0.0f);
+    }
+    CHECK(registry().execute(h, "mask_rect", {{"x0", -1.0}, {"y0", -1.0}, {"x1", -0.6}, {"y1", 1.0}, {"clear_outside", true}}).ok);
+    CHECK(countMasked(h.mesh, 0.0f) == 0);
+}
+
+// #61: Mask from the mesh border.
+TEST(mask_border_masks_plane_rim_and_rings_widen_it) {
+    Document d = makeDoc(makePlane(8)); // 9 x 9 vertices: a rim of 32, then rings of 24, 16, 8 and the centre
+    auto onRim = [](const glm::vec3& p) { return std::max(std::abs(p.x), std::abs(p.z)) > 0.99f; };
+    CommandResult r = registry().execute(d, "mask_border");
+    CHECK(r.ok);
+    CHECK(r.message.find("32 border vertices") != std::string::npos);
+    CHECK(countMasked(d.mesh) == 32);
+    bool rimOnly = true;
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) rimOnly &= (d.mesh.mask[v] == 1.0f) == onRim(d.mesh.positions[v]);
+    CHECK(rimOnly);
+    CHECK(d.undo.canUndo());
+
+    // Two rings: the rim and the ring inside it (replacing the mask), then three soft rings.
+    CHECK(registry().execute(d, "mask_border", {{"rings", 2.0}}).ok);
+    CHECK(countMasked(d.mesh) == 56);
+    CHECK(registry().execute(d, "mask_border", {{"rings", 3.0}, {"soft", true}}).ok);
+    CHECK(countMasked(d.mesh, 0.0f) == 56 + 16);
+    float rim = 0.0f, inner = 1.0f;
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) {
+        if (onRim(d.mesh.positions[v])) rim = std::max(rim, d.mesh.mask[v]);
+        else if (d.mesh.mask[v] > 0.0f) inner = std::min(inner, d.mesh.mask[v]);
+    }
+    CHECK(rim == 1.0f && inner < 0.5f); // full on the border, fading inwards
+
+    // Each is one undo step, back to no mask.
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(countMasked(d.mesh, 0.0f) == 56 && countMasked(d.mesh, 0.999f) == 56);
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(countMasked(d.mesh) == 32);
+    CHECK(registry().execute(d, "undo").ok);
+    CHECK(countMasked(d.mesh, 0.0f) == 0);
+
+    // Add keeps the current mask; strength sets the value.
+    maskHalf(d.mesh, 0.5f);
+    const size_t half = countMasked(d.mesh);
+    CHECK(registry().execute(d, "mask_border", {{"add", true}, {"strength", 0.25}}).ok);
+    CHECK(countMasked(d.mesh) == half);
+    CHECK(countMasked(d.mesh, 0.0f) > half);
+    // Ring counts are clamped (to 20), which fills this small plane.
+    CHECK(registry().execute(d, "mask_border", {{"rings", 1000.0}}).ok);
+    CHECK(countMasked(d.mesh) == d.mesh.vertexCount());
+}
+
+TEST(mask_border_closed_mesh_masks_nothing) {
+    Document d = makeDoc(makeIcosphere(3));
+    CommandResult r = registry().execute(d, "mask_border", {{"rings", 3.0}});
+    CHECK(r.ok);
+    CHECK(r.message.find("No open edges: the mesh is closed") != std::string::npos);
+    CHECK(countMasked(d.mesh, 0.0f) == 0);
+    CHECK(!d.undo.canUndo());
+    // Nor are there polygroup borders on a mesh of one polygroup.
+    r = registry().execute(d, "mask_border", {{"polygroups", true}});
+    CHECK(r.message.find("No open edges") != std::string::npos);
+    CHECK(!d.undo.canUndo());
+}
+
+TEST(mask_border_polygroup_borders) {
+    Document d = makeDoc(makeIcosphere(3));
+    Mesh& m = d.mesh;
+    m.polygroups.assign(m.triangleCount(), 0);
+    for (uint32_t t = 0; t < m.triangleCount(); ++t) {
+        const glm::uvec3 tri = m.triangles[t];
+        m.polygroups[t] = m.positions[tri.x].y + m.positions[tri.y].y + m.positions[tri.z].y > 0.0f ? 1u : 0u;
+    }
+    CHECK(registry().execute(d, "mask_border", {{"polygroups", true}}).ok);
+    const size_t seam = countMasked(m);
+    CHECK(seam > 0 && seam < m.vertexCount() / 4);
+    bool nearEquator = true;
+    for (uint32_t v = 0; v < m.vertexCount(); ++v)
+        if (m.mask[v] > 0.5f) nearEquator &= std::abs(m.positions[v].y) < 0.25f;
+    CHECK(nearEquator);
+    CHECK(registry().execute(d, "mask_border", {{"polygroups", true}, {"rings", 3.0}}).ok);
+    CHECK(countMasked(m) > seam);
+    // Without polygroups the closed sphere still has no border to mask.
+    CHECK(registry().execute(d, "mask_border").message.find("No open edges") != std::string::npos);
 }

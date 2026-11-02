@@ -1,3 +1,10 @@
+# CRKW tools are reachable from the upstream task-menu layout too.
+run ui_look look=forge layout=sculptforge
+click "Mesh##menu.mesh"
+expect "CrokedWillo##section.ckw"
+key escape
+run ui_look look=classic layout=zbrush
+input_style zbrush
 # CRKW: resizing a brush must leave shelves and menus visible.
 run new_sphere subdivisions=3
 mouse_move 0.5 0.5

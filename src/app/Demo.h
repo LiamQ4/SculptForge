@@ -65,6 +65,12 @@ public:
     std::string shortcutsMarkdown() const; // dump_shortcuts: the default shortcuts as Markdown tables
     // A screenshot requested by a `shot` step: the frame loop saves the next frame there.
     std::string takeShotRequest() { return std::exchange(shotRequest_, std::string()); }
+    // The last screenshot's pixels (RGBA, top row first), for the luma@X,Y values.
+    void setLastShot(std::vector<uint8_t> rgba, int w, int h) {
+        lastShot_ = std::move(rgba);
+        lastShotW_ = w;
+        lastShotH_ = h;
+    }
 
 private:
     using Step = std::function<bool(float t)>; // returns true when done; t = seconds since the step began
@@ -91,7 +97,8 @@ private:
     void fail(int line, const std::string& message);
     bool parseStep(int line, const std::vector<std::string>& words, std::string& error);
     void testClick(int line, const std::string& label, int button, bool doubleClick);
-    void testKey(int line, const std::string& combo);
+    // phase: 0 press and release, 1 press only (key_down), 2 release only (key_up).
+    void testKey(int line, const std::string& combo, int phase = 0);
     void testKeyNow(SDL_Keycode key, SDL_Keymod mods);
     double query(const std::string& name, bool& known) const;
 
@@ -104,14 +111,15 @@ private:
 
     // Input injection.
     void mouseMotion(float x, float y, SDL_MouseID which = 0); // which = SDL_PEN_MOUSEID: synthesized from a pen
-    void mouseButton(bool down, int button, SDL_MouseID which = 0);
+    void mouseButton(bool down, int button, SDL_MouseID which = 0, int clicks = 1);
     // Pen events as SDL3 sends them (UiTest.cpp): the pen's own event, then the mouse event SDL synthesizes.
     void penProximity(bool in);
     void penMove(float x, float y);                 // PEN_MOTION (+ mouse motion), touching or hovering
     void penPressure(float pressure);               // PEN_AXIS pressure
     void penTouch(bool down, bool eraser);          // PEN_DOWN / PEN_UP (+ left button)
     void penButtonEvent(int button, bool down);     // PEN_BUTTON_DOWN / UP (+ SDL 3.4's mouse button)
-    void penStroke(std::function<ImVec2(float u)> path, float p0, float p1, bool eraser, bool leave, float seconds);
+    void penStroke(std::function<ImVec2(float u)> path, float p0, float p1, bool eraser, bool leave, float seconds,
+                   std::function<void()> afterSample = {}); // afterSample: e.g. a driver's stray mouse event
 
     // World -> screen in window coordinates.
     ImVec2 project(const glm::vec3& p) const;
@@ -150,15 +158,24 @@ private:
     bool testing_ = false;
     std::vector<std::string> failures_;
     std::string frameText_, shotRequest_, shotDir_, scriptName_, lineText_;
+    std::vector<uint8_t> lastShot_;
+    int lastShotW_ = 0, lastShotH_ = 0;
     std::string scriptDir_; // the .sfui script's folder: relative `drop` paths, $SCRIPT_DIR in env steps
+    std::string expandLibrary(std::string text) const; // $LIBRARY -> the LightBox library folder (UiTest.cpp)
     SDL_Keymod held_ = SDL_KMOD_NONE; // modifiers held by `hold` (Ctrl to mask, Ctrl+Shift to hide...)
     // Simulated pen (pen_* steps).
     static constexpr SDL_PenID kTestPen = 1;
     bool penIn_ = false, penDown_ = false, penEraser_ = false;
+    ImVec2 penAt_{960, 540}; // the simulated pen (mouse_ is SDL's shared cursor, which stray mouse events move too)
     SDL_PenInputFlags penState_ = 0;
     // `snapshot` saves the active mesh; moved* values compare against it. `remember` keeps values for $NAME.
     std::vector<glm::vec3> basePositions_, baseNormals_;
     std::map<std::string, double> remembered_;
+    // Simulated SpaceMouse (spacemouse* steps): an SDL virtual joystick with a SpaceMouse Compact's ids.
+    SDL_JoystickID virtualSpaceMouse_ = 0;
+    SDL_Joystick* virtualSpaceMouseHandle_ = nullptr;
+    bool attachVirtualSpaceMouse();
+    void detachVirtualSpaceMouse();
 };
 
 } // namespace sf

@@ -5,6 +5,7 @@
 #include "core/IndexBits.h"
 #include "core/Mesh.h"
 
+#include <functional>
 #include <span>
 #include <vector>
 
@@ -27,10 +28,19 @@ public:
     // Appends every vertex within `radius` of `center` to `out` (cleared first), in increasing index order.
     // Ignores visibility; brushes use sf::brushVertices, which filters hidden ones.
     void queryVertices(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const;
+    // queryVertices for an infinite cylinder: every vertex within `radius` of the line through `point` along
+    // `axis` (a brush whose falloff is measured on screen reaches through the model along the view).
+    void queryVerticesCylinder(const Mesh& mesh, const glm::vec3& point, const glm::vec3& axis, float radius,
+                               std::vector<uint32_t>& out) const;
     // Appends every triangle whose bounds touch the sphere (cleared first; hidden ones included).
     void queryTriangles(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const;
-    // Updates bounds after the given vertices moved. Bounds only ever grow
-    // conservatively for ancestors, which keeps queries correct.
+    // Calls fn(triangles of the leaf) for every leaf whose box touches the sphere (hidden triangles included);
+    // no per-triangle test, for callers that only need where the triangles are (texture painting's tiles).
+    void forEachLeafInSphere(const glm::vec3& center, float radius,
+                             const std::function<void(std::span<const uint32_t>)>& fn) const;
+    // Updates bounds after the given vertices moved. A few leaves grow their ancestors' bounds (conservatively,
+    // which keeps queries correct); many leaves (a big brush) recompute their ancestors from their children, in
+    // parallel.
     void refit(const Mesh& mesh, std::span<const uint32_t> movedVerts);
     // refit() after only vertices the last queryVertices() returned moved (brush dabs): the query already
     // found the leaves holding them, so this skips looking them up.
@@ -38,6 +48,12 @@ public:
     // The leaves holding the vertices the last queryVertices() returned, and refit() given such leaves (from
     // one or more queries, each once: the Move brush keeps them for its whole stroke).
     std::span<const uint32_t> queriedLeaves() const { return queryLeaves_; }
+    // The triangles of a leaf (empty for an inner node): every triangle with a vertex a query found is in one of
+    // the leaves it listed.
+    std::span<const uint32_t> leafTriangles(uint32_t leaf) const {
+        const Node& n = nodes_[leaf];
+        return n.count > 0 ? std::span<const uint32_t>(triIndices_.data() + n.first, n.count) : std::span<const uint32_t>();
+    }
     void refitLeaves(const Mesh& mesh, std::span<const uint32_t> leaves);
     // Recomputes every box (same tree) after most of the mesh moved, e.g. a whole SubTool transformed.
     void refitAll(const Mesh& mesh);
@@ -83,13 +99,17 @@ private:
     size_t unusedEntries_ = 0, editsSinceBuild_ = 0;
     static constexpr uint32_t kNoLeaf = ~0u;
     void editLeaf(uint32_t leaf);
+    void refitAncestors(std::span<const uint32_t> leaves); // refitLeaves for many leaves, in parallel
     void splitLeaf(const Mesh& mesh, uint32_t leaf);
 
+    template <class Shape>
+    void queryVerticesIn(const Mesh& mesh, const Shape& shape, std::vector<uint32_t>& out) const;
     mutable IndexBits vertBits_;               // queryVertices: the vertices found so far
     mutable std::vector<uint32_t> queryLeaves_; // the leaves holding them, for refitQueried()
     mutable std::vector<uint32_t> queryTasks_, queryNext_;
     mutable std::vector<std::vector<uint32_t>> queryParts_;
     IndexBits leafBits_; // refit: the leaves to recompute
+    std::vector<uint8_t> nodeDirty_; // refitAncestors: the inner nodes to recompute (all 0 between calls)
     std::vector<uint32_t> scratchLeaves_;
     mutable std::vector<uint32_t> stack_;
 };

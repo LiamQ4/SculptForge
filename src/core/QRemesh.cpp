@@ -9,6 +9,7 @@
 #include "core/QRemesh.h"
 
 #include "core/Parallel.h"
+#include "core/QRemeshInternal.h"
 #include "core/SurfaceQuery.h"
 
 #include <algorithm>
@@ -133,13 +134,7 @@ inline vec3 positionRound(const vec3& o, const vec3& q, const vec3& n, const vec
 
 // --- Working surface ------------------------------------------------------------------------------------
 
-struct WorkMesh {
-    std::vector<vec3> P;
-    std::vector<glm::uvec3> T;
-    std::vector<uint32_t> group;  // per triangle
-    std::vector<vec3> color;      // per vertex (only with usePolypaint)
-    std::vector<uint8_t> cutEdge; // filled later: per boundary segment, 1 = made by the symmetry cut
-};
+using qr::WorkMesh;
 
 // Keeps the side of the plane (axis coordinate >= 0), splitting the triangles that cross it.
 WorkMesh cutAtPlane(const WorkMesh& in, int axis, float eps) {
@@ -1187,12 +1182,7 @@ void splitLargeFaces(PolyMesh& pm) {
 
 // --- Quads, relaxation, attributes ----------------------------------------------------------------------
 
-struct QuadMesh {
-    std::vector<vec3> P;
-    std::vector<uint8_t> feature; // per vertex: lies on a hard edge / border line
-    std::vector<glm::uvec4> quads; // counter-clockwise
-    std::vector<glm::uvec3> tris;  // pieces kept as they were (the lattice found no quads on them)
-};
+using qr::QuadMesh;
 
 // Every n-sided face becomes n quads (corner, edge midpoint, centre, edge midpoint).
 QuadMesh splitIntoQuads(const PolyMesh& pm) {
@@ -1793,7 +1783,7 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
             std::fprintf(stderr, "qremesh %.2f: %.3f s\n", f,
                          std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
         if (progress && !progress(std::clamp(f, 0.0f, 1.0f))) {
-            error = "QRemesh cancelled";
+            error = "Quad Remesh cancelled";
             return false;
         }
         return true;
@@ -1804,7 +1794,7 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
                          std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
     };
     if (source.triangleCount() == 0) {
-        error = "QRemesh: the SubTool is empty";
+        error = "Quad Remesh: the Part is empty";
         return false;
     }
     const int target = std::clamp(opt.targetQuads, 16, 2'000'000);
@@ -1820,7 +1810,7 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
     const AABB box = source.bounds();
     const float diag = glm::length(box.extent());
     if (!(diag > 0.0f)) {
-        error = "QRemesh: the SubTool has no size";
+        error = "Quad Remesh: the Part has no size";
         return false;
     }
 
@@ -1872,7 +1862,7 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
         for (vec3& p : work.P) p[axis] -= center;
         work = cutAtPlane(work, axis, 1e-6f * diag);
         if (work.T.empty()) {
-            error = "QRemesh: nothing on the positive side of the symmetry plane";
+            error = "Quad Remesh: nothing on the positive side of the symmetry plane";
             return false;
         }
     }
@@ -2029,13 +2019,33 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
         trisDone += parts[i].T.size();
         const std::function<bool(float)> pieceReport = [&](float f) { return report(f0 + (f1 - f0) * f); };
         PieceResult r;
-        // A piece the lattice misses is tried again finer, then kept as it is (its own triangles).
         double want = budget[i];
+        bool doneByV2 = false;
+        if (opt.method == QRemeshMethod::V2) {
+            qr::FieldPieceResult fr;
+            bool cancelled = false;
+            const bool ok = qr::remeshPieceV2(parts[i], axis, want, opt, diag, guides, pieceReport, fr, cancelled);
+            if (cancelled) {
+                error = "Quad Remesh cancelled";
+                return false;
+            }
+            st.attempts += fr.attempts;
+            st.singularities += fr.singularities;
+            if (ok && !fr.mesh.quads.empty()) {
+                r.mesh = std::move(fr.mesh);
+                r.seam = std::move(fr.seam);
+                doneByV2 = true;
+            } else {
+                ++st.fallbackPieces;
+                if (timing) std::fprintf(stderr, "  piece %zu: Quad Remesh 2 fell back to legacy (%s)\n", i, fr.why.c_str());
+            }
+        }
+        // A piece the lattice misses is tried again finer, then kept as it is (its own triangles).
         for (int attempt = 0; attempt < 3 && r.mesh.quads.empty(); ++attempt) {
             r = PieceResult{};
             want = budget[i] * std::pow(2.5, attempt);
             if (!remeshPiece(parts[i], axis, want, opt, diag, guides, pieceReport, mark, r)) {
-                error = "QRemesh cancelled";
+                error = "Quad Remesh cancelled";
                 return false;
             }
             st.attempts += r.attempts;
@@ -2043,12 +2053,12 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
         // The lattice round a guide can go wrong by chance (where the field's singularities land, which the
         // smallest rounding differences move): a broken loop or a fan by a guide is tried with other starts for
         // the field, keeping the best.
-        for (uint32_t seed = 1; seed <= 2 && r.guideDefects > 0 && !r.mesh.quads.empty(); ++seed) {
+        for (uint32_t seed = 1; seed <= 2 && r.guideDefects > 0 && !r.mesh.quads.empty() && !doneByV2; ++seed) {
             QRemeshOptions again = opt;
             again.seed = opt.seed + seed * 7919u;
             PieceResult other;
             if (!remeshPiece(parts[i], axis, want, again, diag, guides, pieceReport, mark, other)) {
-                error = "QRemesh cancelled";
+                error = "Quad Remesh cancelled";
                 return false;
             }
             st.attempts += other.attempts;
@@ -2067,11 +2077,12 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
                          partArea[i], budget[i], r.mesh.quads.size());
         qm.P.insert(qm.P.end(), r.mesh.P.begin(), r.mesh.P.end());
         for (const glm::uvec4& q : r.mesh.quads) qm.quads.push_back(q + glm::uvec4(base));
+        for (const glm::uvec3& t : r.mesh.tris) qm.tris.push_back(t + glm::uvec3(base));
         seam.insert(seam.end(), r.seam.begin(), r.seam.end());
     }
     parts.clear();
     if (qm.quads.empty() && qm.tris.empty()) {
-        error = "QRemesh could not build quads on this surface (try a higher Target or turn Keep Groups off)";
+        error = "Quad Remesh could not build quads on this surface (try a higher Target or turn Keep Groups off)";
         return false;
     }
     if (!report(0.94f)) return false;
@@ -2114,13 +2125,31 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
     Mesh m;
     m.positions = qm.P;
     m.triangles.reserve(qm.quads.size() * 2 + qm.tris.size());
+    // Each quad split along a diagonal that isn't an edge of another face (else that edge would be used by four
+    // triangles), the shorter one when both are free.
+    std::unordered_map<uint64_t, uint8_t> quadEdges;
+    for (const auto& q : qm.quads)
+        for (int k = 0; k < 4; ++k) quadEdges[edgeKey(q[k], q[(k + 1) % 4])] = 1;
+    for (const glm::uvec3& t : qm.tris)
+        for (int k = 0; k < 3; ++k) quadEdges[edgeKey(t[k], t[(k + 1) % 3])] = 1;
     for (const auto& q : qm.quads) {
         const uint32_t t = uint32_t(m.triangles.size());
-        m.triangles.push_back({q.x, q.y, q.z});
-        m.triangles.push_back({q.x, q.z, q.w});
+        const bool xzTaken = quadEdges.count(edgeKey(q.x, q.z)) > 0, ywTaken = quadEdges.count(edgeKey(q.y, q.w)) > 0;
+        const bool useYW = (xzTaken && !ywTaken) ||
+                           (xzTaken == ywTaken && glm::length(qm.P[q.y] - qm.P[q.w]) < 0.98f * glm::length(qm.P[q.x] - qm.P[q.z]));
+        if (useYW) {
+            m.triangles.push_back({q.y, q.z, q.w});
+            m.triangles.push_back({q.y, q.w, q.x});
+            quadEdges[edgeKey(q.y, q.w)] = 1; // two quads with the same diagonal would also share it four ways
+        } else {
+            m.triangles.push_back({q.x, q.y, q.z});
+            m.triangles.push_back({q.x, q.z, q.w});
+            quadEdges[edgeKey(q.x, q.z)] = 1;
+        }
         m.pairQuad(t, t + 1);
     }
     for (const glm::uvec3& t : qm.tris) m.triangles.push_back(t);
+    if (!m.quadPartners.empty()) m.quadPartners.resize(m.triangles.size(), Mesh::kNoQuad); // the triangles after the quads
     if (!report(0.96f)) return false;
 
     // Attributes from the closest point of the original sculpt.
@@ -2179,7 +2208,9 @@ bool qremesh(const Mesh& source, const QRemeshOptions& opt, Mesh& out, std::stri
             for (int k = 0; k < 4; ++k) len += glm::length(qm.P[q[k]] - qm.P[q[(k + 1) % 4]]), ++cnt;
         st.edgeLength = cnt ? float(len / double(cnt)) : 0.0f;
     }
+    st.method = opt.method;
     st.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    if (opt.measureQuality) st.quality = quadQuality(m, &source);
     if (stats) *stats = st;
     out = std::move(m);
     return report(1.0f);

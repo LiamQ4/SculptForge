@@ -1,3 +1,5 @@
+run ui_look look=classic layout=zbrush
+input_style zbrush
 # Per-SubTool texture cards target their own mesh and preserve independent undo histories.
 run new_sphere subdivisions=2 ; subtool_rename to=Head ; uv_auto resolution=1024
 run texture_import path="$SCRIPT_DIR/data/phone/photo.png"

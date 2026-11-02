@@ -1,3 +1,5 @@
+run ui_look look=classic layout=zbrush
+input_style zbrush
 run new_sphere subdivisions=4
 expect "Camera##crkw.camera"
 click "Camera##crkw.camera"

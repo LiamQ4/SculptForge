@@ -213,7 +213,8 @@ void DynamicTopology::killVertex(uint32_t v) {
     for (size_t k = 0; k < mirrorMaps_.size(); ++k) {
         const uint32_t w = mirrorOf(k, v);
         if (w == kNone) continue;
-        if (mirrorOf(k, w) == v) mirrorMaps_[k].stamp[w] = 0;
+        const size_t back = k < mirrorInverse_.size() ? mirrorInverse_[k] : k;
+        if (mirrorOf(back, w) == v) mirrorMaps_[back].stamp[w] = 0;
         mirrorMaps_[k].stamp[v] = 0;
     }
 }
@@ -446,16 +447,28 @@ bool DynamicTopology::inside(uint32_t a, uint32_t b, bool mirrored) const {
     };
     if (within(center_)) return true;
     if (!mirrored) return false;
-    for (const glm::vec3& s : mirrorSigns_)
-        if (within(center_ * s)) return true;
+    for (const SymCopy& s : mirrorSigns_)
+        if (within(s.point(center_))) return true;
     return false;
 }
 
-// The triangles under the brush, and the slivers under its mirror images. Operations are found on the brush's
-// side and done on every side at once (orbit); the slivers are the exception, since a brush can squash a
-// triangle on one side only (overlapping mirrored dabs), and they must be repaired where they are.
+// Operations are found on the brush's side and done on every side at once (orbit), which needs each edge's
+// mirror images. A mesh whose sides aren't mirrored (QRemesh's quads, a model edited without symmetry) has none
+// to find, and its other sides were left coarse while the brush moved them too (#23): an edge under a mirror
+// image of the brush whose own images are missing is remeshed where it is, as the brush's side is.
+bool DynamicTopology::candidate(uint32_t a, uint32_t b) const {
+    if (inside(a, b)) return true;
+    if (mirrorSigns_.empty() || !inside(a, b, true)) return false;
+    orbit(a, b, orbitScratch_);
+    return orbitIncomplete_;
+}
+
+// The triangles under the brush and under its mirror images (for the edges candidate() takes there), and the
+// slivers under all of them: a brush can squash a triangle on one side only (overlapping mirrored dabs), and
+// they must be repaired where they are.
 void DynamicTopology::queryRegion() {
     bvh_->queryTriangles(*mesh_, center_, radius_, regionTris_);
+    mirrorTris_.clear();
     slivers_.clear();
     const auto& p = mesh_->positions;
     auto addSlivers = [&](const std::vector<uint32_t>& tris) {
@@ -466,10 +479,13 @@ void DynamicTopology::queryRegion() {
     };
     addSlivers(regionTris_);
     std::vector<uint32_t> more;
-    for (const glm::vec3& s : mirrorSigns_) {
-        bvh_->queryTriangles(*mesh_, center_ * s, radius_, more);
+    for (const SymCopy& s : mirrorSigns_) {
+        bvh_->queryTriangles(*mesh_, s.point(center_), radius_, more);
         addSlivers(more);
+        mirrorTris_.insert(mirrorTris_.end(), more.begin(), more.end());
     }
+    std::sort(mirrorTris_.begin(), mirrorTris_.end());
+    mirrorTris_.erase(std::unique(mirrorTris_.begin(), mirrorTris_.end()), mirrorTris_.end());
     std::sort(slivers_.begin(), slivers_.end());
     slivers_.erase(std::unique(slivers_.begin(), slivers_.end()), slivers_.end());
 }
@@ -585,8 +601,14 @@ void DynamicTopology::setMirror(size_t k, uint32_t v, uint32_t w) {
     }
     map.to[v] = w;
     map.stamp[v] = mirrorStamp_;
-    map.to[w] = v;
-    map.stamp[w] = mirrorStamp_;
+    // The inverse copy maps w back to v (the same map for a mirror).
+    MirrorMap& back = mirrorMaps_[k < mirrorInverse_.size() ? mirrorInverse_[k] : k];
+    if (back.to.size() < need) {
+        back.to.resize(need + need / 4, kNone);
+        back.stamp.resize(need + need / 4, 0);
+    }
+    back.to[w] = v;
+    back.stamp[w] = mirrorStamp_;
 }
 
 // Pairs each vertex with the vertex at its mirror image (within eps_), for every mirror; only pairs that
@@ -643,11 +665,11 @@ void DynamicTopology::matchMirrors(const std::vector<uint32_t>& verts) {
         return best;
     };
     for (size_t k = 0; k < mirrorSigns_.size(); ++k) {
-        const glm::vec3 s = mirrorSigns_[k];
+        const SymCopy& s = mirrorSigns_[k];
         for (uint32_t v : verts) {
             if (mirrorOf(k, v) != kNone) continue; // (its partner found it first)
-            const uint32_t w = nearest(m.positions[v] * s);
-            if (w == kNone || nearest(m.positions[w] * s) != v) continue;
+            const uint32_t w = nearest(s.point(m.positions[v]));
+            if (w == kNone || nearest(s.inversePoint(m.positions[w])) != v) continue;
             setMirror(k, v, w);
         }
     }
@@ -746,7 +768,7 @@ uint32_t DynamicTopology::split(uint32_t a, uint32_t b) {
 void DynamicTopology::pushEdgesAround(uint32_t v, bool longer) {
     ring(v, scratch2_);
     for (uint32_t u : scratch2_) {
-        if (deadV_[u] || !inside(v, u)) continue;
+        if (deadV_[u] || !candidate(v, u)) continue;
         const float l = len2(v, u);
         if (longer ? l > splitLen2_ : l < collapseLen2_) {
             heap_.push_back({longer ? l : -l, std::min(u, v), std::max(u, v)});
@@ -824,6 +846,17 @@ void DynamicTopology::splitPass() {
             if (a > b && edgeTriangles(a, b, tris) != 1) continue;
             const float l = len2(a, b);
             if (l > splitLen2_ && inside(a, b)) heap_.push_back({l, std::min(a, b), std::max(a, b)});
+        }
+    }
+    // Under the mirror images: only edges whose image on the brush's side is missing (the others are split
+    // with it, by splitOrbit).
+    for (uint32_t t : mirrorTris_) {
+        const glm::uvec3 tri = mesh_->triangles[t];
+        for (int c = 0; c < 3; ++c) {
+            const uint32_t a = tri[c], b = tri[(c + 1) % 3];
+            if (a > b && edgeTriangles(a, b, tris) != 1) continue;
+            const float l = len2(a, b);
+            if (l > splitLen2_ && !inside(a, b) && candidate(a, b)) heap_.push_back({l, std::min(a, b), std::max(a, b)});
         }
     }
     auto less = [](const Edge& x, const Edge& y) {
@@ -976,6 +1009,16 @@ void DynamicTopology::collapsePass() {
             if (l < collapseLen2_ && inside(a, b)) heap_.push_back({-l, std::min(a, b), std::max(a, b)});
         }
     }
+    for (uint32_t t : mirrorTris_) { // (as in splitPass)
+        if (t >= mesh_->triangleCount() || deadT_[t]) continue;
+        const glm::uvec3 tri = mesh_->triangles[t];
+        for (int c = 0; c < 3; ++c) {
+            const uint32_t a = tri[c], b = tri[(c + 1) % 3];
+            if (a > b && edgeTriangles(a, b, tris) != 1) continue;
+            const float l = len2(a, b);
+            if (l < collapseLen2_ && !inside(a, b) && candidate(a, b)) heap_.push_back({-l, std::min(a, b), std::max(a, b)});
+        }
+    }
     for (uint32_t t : slivers_) {
         if (t >= mesh_->triangleCount() || deadT_[t]) continue;
         const glm::uvec3 tri = mesh_->triangles[t];
@@ -1111,7 +1154,7 @@ void DynamicTopology::flipPass() {
             const glm::uvec3& tri = mesh_->triangles[t];
             for (int c = 0; c < 3; ++c) {
                 const uint32_t a = tri[c], b = tri[(c + 1) % 3];
-                if (a < b && inside(a, b)) candidates.emplace_back(a, b);
+                if (a < b && candidate(a, b)) candidates.emplace_back(a, b);
             }
         }
     }
@@ -1169,8 +1212,8 @@ void DynamicTopology::relaxPass() {
     for (uint32_t v : changedV_) {
         if (deadV_[v] || locked(v)) continue;
         bool in = glm::dot(m.positions[v] - center_, m.positions[v] - center_) <= r2;
-        for (const glm::vec3& s : mirrorSigns_) {
-            const glm::vec3 d0 = m.positions[v] - center_ * s;
+        for (const SymCopy& s : mirrorSigns_) {
+            const glm::vec3 d0 = m.positions[v] - s.point(center_);
             in = in || glm::dot(d0, d0) <= r2;
         }
         if (!in) continue;
@@ -1233,8 +1276,8 @@ void DynamicTopology::gatherRegion() {
     const float reach = radius_ * 1.25f + target_ * 2.0f;
     bvh_->queryTriangles(*mesh_, center_, reach, tris);
     addCorners(tris);
-    for (const glm::vec3& s : mirrorSigns_) {
-        bvh_->queryTriangles(*mesh_, center_ * s, reach, tris);
+    for (const SymCopy& s : mirrorSigns_) {
+        bvh_->queryTriangles(*mesh_, s.point(center_), reach, tris);
         addCorners(tris);
     }
     // Matched within a third of the edge length (the target, or the mesh's own where it is finer, so the
@@ -1255,7 +1298,7 @@ void DynamicTopology::gatherRegion() {
 }
 
 bool DynamicTopology::remesh(Mesh& mesh, BVH& bvh, const glm::vec3& center, float radius, float edgeLength,
-                             std::span<const glm::vec3> mirrors) {
+                             std::span<const SymCopy> mirrors) {
     const auto clock = std::chrono::steady_clock::now();
     moved_.clear();
     recordedNow_.clear();
@@ -1287,6 +1330,12 @@ bool DynamicTopology::remesh(Mesh& mesh, BVH& bvh, const glm::vec3& center, floa
     splitLen2_ = (edgeLength * 4.0f / 3.0f) * (edgeLength * 4.0f / 3.0f);
     collapseLen2_ = (edgeLength * 0.6f) * (edgeLength * 0.6f);
     mirrorSigns_.assign(mirrors.size() > 1 ? mirrors.begin() + 1 : mirrors.end(), mirrors.end());
+    // Each copy's inverse (a mirror is its own; a radial turn's is the opposite turn), without the identity.
+    mirrorInverse_.clear();
+    if (!mirrorSigns_.empty()) {
+        const std::vector<size_t> inv = symmetryInverses(mirrors);
+        for (size_t k = 1; k < inv.size(); ++k) mirrorInverse_.push_back(inv[k] > 0 ? inv[k] - 1 : k - 1);
+    }
     mirrorMaps_.resize(mirrorSigns_.size());
     if (++mirrorStamp_ == 0) { // (wrapped: forget every old entry)
         for (MirrorMap& map : mirrorMaps_) std::fill(map.stamp.begin(), map.stamp.end(), 0);

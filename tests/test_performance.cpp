@@ -10,6 +10,7 @@
 #include "core/Benchmark.h"
 #include "core/BrushRecipe.h"
 #include "core/IndexBits.h"
+#include "core/Multires.h"
 #include "core/Primitives.h"
 #include "core/ThreadPool.h"
 #include "core/UploadOrder.h"
@@ -146,6 +147,81 @@ TEST(parallel_normals_match_full_recompute) {
     float worst = 0.0f;
     for (size_t v = 0; v < partial.size(); ++v) worst = std::max(worst, glm::length(partial[v] - m.normals[v]));
     CHECK(worst < 1e-5f);
+}
+
+TEST(upload_runs_of_a_big_brush_match_one_thread) {
+    // A brush over a good part of the mesh (more marked vertices than dirtyRuns walks on one thread, under the
+    // three quarters it uploads whole): the GPU blocks are marked in parallel, and the runs are exactly the ones
+    // a single thread finds, every slot of every marked vertex in one.
+    Mesh m = makeBenchSphere(1600000);
+    BVH bvh;
+    bvh.build(m);
+    UploadOrder order;
+    order.build(m);
+    m.clearDirty();
+    Sculptor s;
+    s.beginStroke(m, "Standard");
+    DabParams p;
+    p.center = glm::vec3(0.0f, 0.0f, 1.0f);
+    p.radius = 1.0f;
+    s.dab(m, bvh, BrushType::Standard, p, Symmetry{});
+    size_t dirty = 0;
+    for (uint32_t v = 0; v < m.vertexCount(); ++v) dirty += m.vertexDirty(v);
+    CHECK(dirty > 65536 && dirty * 4 < m.vertexCount() * 3);
+    std::vector<std::pair<uint32_t, uint32_t>> par, ser;
+    order.dirtyRuns(m, par);
+    serially([&] { order.dirtyRuns(m, ser); });
+    CHECK(par == ser && !par.empty());
+    CHECK(!(par.size() == 1 && par[0].first == 0 && par[0].second == order.size())); // (not everything)
+    std::vector<uint8_t> inRun(order.size(), 0);
+    for (const auto& [b, e] : par)
+        for (uint32_t g = b; g < e; ++g) inRun[g] = 1;
+    bool covered = true;
+    std::vector<uint32_t> slots;
+    for (uint32_t v = 0; v < m.vertexCount() && covered; ++v)
+        if (m.vertexDirty(v)) {
+            order.slotsOf(v, slots);
+            for (uint32_t g : slots) covered = covered && inRun[g];
+        }
+    CHECK(covered);
+}
+
+TEST(dab_normals_from_the_query_leaves_match_a_full_recompute) {
+    // A dab's normals are recomputed for the corners of the BVH leaves its queries listed: every normal comes
+    // out exactly as recomputeAllNormals has it, and every vertex whose normal changed is marked for upload.
+    // On a plain mesh and on a level made by Divide (implicit adjacency), with symmetry, for several brushes.
+    for (int divided = 0; divided < 2; ++divided) {
+        Mesh m = divided ? makeIcosphere(4) : makeBenchSphere(300000);
+        if (divided) {
+            std::string err;
+            CHECK(subdivDivide(m, true, err) && subdivDivide(m, true, err));
+            CHECK(m.implicitAdjacency());
+        }
+        BVH bvh;
+        bvh.build(m);
+        Sculptor s;
+        s.beginStroke(m, "Standard");
+        bool same = true, marked = true;
+        for (BrushType type : {BrushType::Standard, BrushType::Smooth, BrushType::Clay, BrushType::Vdm}) {
+            const std::vector<glm::vec3> before = m.normals;
+            m.clearDirty();
+            DabParams p;
+            p.center = glm::normalize(glm::vec3(0.4f, 0.3f, 0.8f));
+            p.viewDir = -p.center;
+            p.radius = 0.5f;
+            p.strength = 0.7f;
+            s.dab(m, bvh, type, p, Symmetry{});
+            Mesh fresh = m;
+            fresh.recomputeAllNormals();
+            for (uint32_t v = 0; v < m.vertexCount(); ++v) {
+                same = same && m.normals[v] == fresh.normals[v];
+                if (m.normals[v] != before[v]) marked = marked && m.vertexDirty(v);
+            }
+        }
+        CHECK(same);
+        CHECK(marked);
+        s.endStroke();
+    }
 }
 
 TEST(upload_runs_cover_changed_vertices) {
@@ -296,6 +372,42 @@ TEST(index_bits_list_members_in_order) {
     ser.take(b);
     CHECK(a == b && a.size() == n && bitsSeen == n && words == (n + 63) / 64);
     CHECK(std::is_sorted(a.begin(), a.end()));
+}
+
+TEST(bvh_refit_of_many_leaves_in_parallel) {
+    // A big brush refits so many leaves that their ancestors are recomputed in parallel (BVH::refitAncestors):
+    // the tree then finds exactly what brute force does, the same on one thread, and after the vertices move
+    // back (the boxes shrink) as well.
+    Document d = sphereDoc(7);
+    const std::vector<glm::vec3> start = d.mesh.positions;
+    std::vector<uint32_t> moved;
+    const glm::vec3 c(0.0f, 0.0f, 1.0f);
+    d.bvh.queryVertices(d.mesh, c, 1.3f, moved);
+    CHECK(d.bvh.queriedLeaves().size() > 4096); // (the parallel path)
+    auto check = [&](BVH& bvh) {
+        std::vector<uint32_t> found;
+        bool ok = true;
+        for (int i = 0; i < 24; ++i) {
+            const glm::vec3 q = glm::normalize(glm::vec3(std::sin(float(i)), std::cos(float(i) * 1.3f), 0.7f)) * 1.05f;
+            bvh.queryVertices(d.mesh, q, 0.12f, found);
+            size_t brute = 0;
+            for (const glm::vec3& p : d.mesh.positions) brute += glm::distance(p, q) <= 0.12f;
+            RayHit h;
+            const bool hit = bvh.raycast(d.mesh, q * 3.0f, -q, h);
+            ok = ok && found.size() == brute && hit;
+        }
+        return ok;
+    };
+    for (uint32_t v : moved) d.mesh.positions[v] *= 1.0f + 0.15f * (1.0f + std::sin(float(v) * 0.01f));
+    BVH serialTree = d.bvh;
+    d.bvh.refitQueried(d.mesh);
+    serially([&] { serialTree.refit(d.mesh, moved); });
+    CHECK(check(d.bvh));
+    CHECK(check(serialTree));
+    // Back where they were: the boxes shrink.
+    d.mesh.positions = start;
+    d.bvh.refit(d.mesh, moved);
+    CHECK(check(d.bvh));
 }
 
 TEST(bvh_query_lists_inside_vertices_in_order) {
@@ -452,5 +564,22 @@ TEST(zip_round_trip_and_zip64) {
         for (size_t i = 0; same && i < back.size(); ++i) same = back[i].name == entries[i].name && back[i].data == entries[i].data;
         CHECK(same);
         std::filesystem::remove(path);
+    }
+}
+
+TEST(benchmark_standard_head) {
+    // Proof mode's standard scenes (standard-15m / standard-33m) sculpt a procedural head: the size asked for, a
+    // face (the nose the frontmost point, near the middle), taller than wide, the same every time it is built.
+    for (size_t want : {size_t(300000), size_t(1200000)}) {
+        const Mesh a = makeBenchHead(want), b = makeBenchHead(want);
+        CHECK(a.triangleCount() > want * 8 / 10 && a.triangleCount() < want * 12 / 10);
+        CHECK(a.positions == b.positions);
+        glm::vec3 lo(1e9f), hi(-1e9f), front(0.0f, 0.0f, -1e9f);
+        for (const glm::vec3& p : a.positions) {
+            lo = glm::min(lo, p), hi = glm::max(hi, p);
+            if (p.z > front.z) front = p;
+        }
+        CHECK(std::abs(front.x) < 0.05f && front.y > -0.3f && front.y < 0.2f && front.z > 1.0f);
+        CHECK(hi.y - lo.y > (hi.x - lo.x) * 1.1f);
     }
 }

@@ -10,13 +10,22 @@
 #include "core/QRemeshGuides.h"
 #include "core/Sculpt.h"
 #include "core/Splats.h"
+#include "core/TextureChannels.h"
 #include "core/Undo.h"
+#include "core/Uv.h"
 #include "core/Vdm.h"
 
+#include <map>
 #include <string>
 #include <utility>
 
 namespace sf {
+
+// How a SubTool is shaded in the view: as the scene says (the Material palette's Flat shading), or always smooth
+// or always flat (faceted: every polygon's own face normal). Display only; saved in projects.
+enum class Shading : uint8_t { Default, Smooth, Flat };
+const char* shadingName(Shading s);           // "default", "smooth", "flat"
+bool parseShading(const std::string& name, Shading& out);
 
 // One object in the scene, like a ZBrush SubTool: a body, the eyes, the
 // teeth, a sword. Each keeps its own mesh, attributes, layers and undo
@@ -28,6 +37,7 @@ struct SubTool {
     uint32_t id = 0; // stable for the session (renderer slots, UI selection)
     std::string name;
     bool visible = true;
+    Shading shading = Shading::Default; // per-SubTool override of the scene's shading
     // Inactive SubTools only (empty while active).
     Mesh mesh;
     BVH bvh;
@@ -37,6 +47,21 @@ struct SubTool {
     bool bvhDirty = false;
     uint64_t cleanRevision = 0;
     std::vector<QRemeshGuide> qremeshGuides; // QRemesh Guides (core/QRemeshGuides.h)
+};
+
+// An undo step that added SubTool `id` at list position `at` (UndoRecord::subtool): `stashed` holds the SubTool
+// while it's undone.
+struct SubtoolStep {
+    uint32_t id = 0;
+    int at = 0;
+    std::unique_ptr<SubTool> stashed;
+};
+
+// Extract's preview (core/ExtractMirror.h): SubTool `id`, made from the mask of SubTool `source` as it was at
+// that SubTool's undo revision `revision`, shown until Accept turns it into an undoable step. id 0 = none.
+struct ExtractPreview {
+    uint32_t id = 0, source = 0;
+    uint64_t revision = 0;
 };
 
 // Everything that makes up the open scene: the mesh, its acceleration
@@ -57,6 +82,10 @@ struct Document {
     int activeBrush = -1; // index into `brushes`, -1 = use a built-in brush type
     BrushAlpha brushAlpha; // stamp shaping every brush's falloff (empty = round); brush_set_alpha
     glm::vec3 paintColor{0.22f, 0.22f, 0.22f}; // current polypaint colour (linear RGB; see set_color); a mid grey
+    // Material texture painting (core/TextureChannels.h): what the Paint brush lays on the material channels
+    // (paint_material; its colour is paintColor), and the channel the view shows on its own (channel_view).
+    BrushMaterial paintMaterial;
+    Channel channelView = Channel::BaseColor;
     // Vector displacement maps for the VDM brush (core/Vdm.h): the built-ins, then the studio and user
     // library's .sfvdm files and any loaded this session. `brushVdm` is the one the VDM brush stamps.
     std::vector<std::shared_ptr<const VectorDisplacement>> vdms = builtinVdms();
@@ -75,6 +104,9 @@ struct Document {
     // QRemesh Guides of the active SubTool: curves QRemesh's edge loops follow (core/QRemeshGuides.h). Not part
     // of undo (Delete Last / Clear remove them); editing them sets `modified`.
     std::vector<QRemeshGuide> qremeshGuides;
+    // The UV Editor's selection on the active SubTool (core/Uv.h); dropped when another SubTool is picked or the
+    // triangles change (UvSelection::valid). Not part of undo.
+    UvSelection uvSelection;
 
     void syncBvh() {
         if (bvhDirty) bvh.build(mesh);
@@ -87,6 +119,9 @@ struct Document {
     // the app fills it before saving and applies it after opening; the core
     // keeps it as loaded so CLI and scripts round-trip it unchanged.
     Json projectSettings = Json::object();
+    // Files the app keeps inside the project (the custom MatCap the view uses: "matcaps/<name>.png"), by name.
+    // Saved under attachments/ and loaded back as they were; names are letters, digits, space . _ - and '/'.
+    std::map<std::string, std::vector<uint8_t>> projectFiles;
 
     // Unsaved changes: any undoable edit (in any SubTool), splat edit or
     // `modified` since the last markClean() (save, open, new scene).
@@ -119,6 +154,19 @@ struct Document {
     void moveSubtool(int i, int direction);
     // Index of the SubTool called `name` (exact match, first one), or -1.
     int findSubtool(const std::string& name) const;
+    // Index of the SubTool with this id, or -1.
+    int subtoolIndex(uint32_t id) const;
+    // Undoes or redoes a SubtoolStep: takes the SubTool out of the list into the step, or puts it back. False
+    // when there was nothing to do (the SubTool was deleted since, or it's the active or the last one).
+    bool applySubtoolStep(SubtoolStep& step);
+
+    // The Extract preview waiting for Accept, if any (see ExtractPreview).
+    ExtractPreview extractPreview;
+    // True while the preview SubTool exists, its source is active and unchanged since.
+    bool extractPreviewCurrent() const;
+    // Removes the preview SubTool (if any); `staleOnly`: only when it's no longer current.
+    void dropExtractPreview(bool staleOnly = false);
+
     // A name not used by any SubTool yet ("Eye", "Eye 2", ...).
     std::string uniqueSubtoolName(const std::string& wanted) const;
     // Bounds of every visible SubTool.
