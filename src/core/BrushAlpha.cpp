@@ -15,6 +15,8 @@ namespace sf {
 namespace {
 
 constexpr int kBuiltinSize = 128;
+// The size generate() fills: kBuiltinSize, or larger while BrushAlpha::builtinAt makes one (a Stencil spans the view).
+thread_local int gGenerateSize = kBuiltinSize;
 
 float smooth01(float t) {
     t = std::clamp(t, 0.0f, 1.0f);
@@ -44,13 +46,14 @@ template <class F>
 BrushAlpha generate(std::string name, F&& f) {
     BrushAlpha a;
     a.name = std::move(name);
-    a.width = a.height = kBuiltinSize;
-    a.values.resize(size_t(kBuiltinSize) * kBuiltinSize);
-    for (int y = 0; y < kBuiltinSize; ++y)
-        for (int x = 0; x < kBuiltinSize; ++x) {
-            const float u = (float(x) + 0.5f) / kBuiltinSize * 2.0f - 1.0f;
-            const float v = 1.0f - (float(y) + 0.5f) / kBuiltinSize * 2.0f;
-            a.values[size_t(y) * kBuiltinSize + size_t(x)] = std::clamp(f(u, v), 0.0f, 1.0f);
+    const int n = gGenerateSize;
+    a.width = a.height = n;
+    a.values.resize(size_t(n) * size_t(n));
+    for (int y = 0; y < n; ++y)
+        for (int x = 0; x < n; ++x) {
+            const float u = (float(x) + 0.5f) / float(n) * 2.0f - 1.0f;
+            const float v = 1.0f - (float(y) + 0.5f) / float(n) * 2.0f;
+            a.values[size_t(y) * size_t(n) + size_t(x)] = std::clamp(f(u, v), 0.0f, 1.0f);
         }
     return a;
 }
@@ -276,12 +279,212 @@ const Generated kGenerated[] = {
              return (1.0f - smooth01(std::hypot(u - cx, v - cy) / (cell * 0.32f))) * squareEdge(u, v);
          });
      }},
+    {"Cobblestone", "Rounded stones packed together with grooves between, for paths, walls and rough ground.",
+     [] {
+         return generate("Cobblestone", [](float u, float v) {
+             float f1, f2;
+             uint32_t id = 0;
+             worley(u * 3.2f + 40.0f, v * 3.2f + 40.0f, 91, f1, f2, &id);
+             const float edge = smooth01((f2 - f1) / 0.32f); // 0 in the grooves, 1 inside a stone
+             const float dome = std::sqrt(std::max(0.0f, edge)) * (0.8f + 0.2f * float(id & 0xffu) / 255.0f);
+             const float rough = fbm(u * 10.0f + 3.0f, v * 10.0f, 93) * 0.15f;
+             return std::clamp(dome * 0.85f + rough * edge, 0.0f, 1.0f) * squareEdge(u, v);
+         });
+     }},
+    {"Leather Grain", "Fine irregular creases between small pebbled bumps, for leather, hide and elephant skin.",
+     [] {
+         return generate("Leather Grain", [](float u, float v) {
+             float f1, f2;
+             worley(u * 11.0f + 7.0f, v * 11.0f + 7.0f, 95, f1, f2);
+             const float pebble = smooth01((f2 - f1) / 0.22f);
+             float g1, g2;
+             worley(u * 4.0f + 13.0f, v * 4.0f + 13.0f, 97, g1, g2);
+             const float crease = smooth01((g2 - g1) / 0.06f); // a sparse web of deeper creases
+             return std::clamp(pebble * 0.7f * crease + 0.15f * fbm(u * 20.0f, v * 20.0f, 99), 0.0f, 1.0f) *
+                    squareEdge(u, v);
+         });
+     }},
+    {"Hex Plates", "A honeycomb of flat hexagonal plates with bevelled gaps, for armour, sci-fi panels and shells.",
+     [] {
+         return generate("Hex Plates", [](float u, float v) {
+             const float scale = 3.0f; // plates across
+             float x = (u + 1.0f) * scale, y = (v + 1.0f) * scale;
+             // Nearest centre on a hex lattice (two offset rectangular grids).
+             const float w = 1.0f, h = 1.7320508f;
+             auto near = [&](float ox, float oy) {
+                 const float cx = (std::floor((x - ox) / w) + 0.5f) * w + ox;
+                 const float cy = (std::floor((y - oy) / h) + 0.5f) * h + oy;
+                 return glm::vec2(x - cx, y - cy);
+             };
+             glm::vec2 a = near(0.0f, 0.0f), b = near(0.5f, h * 0.5f);
+             const glm::vec2 d = glm::dot(a, a) < glm::dot(b, b) ? a : b;
+             // Hexagon distance (flat sides left and right).
+             const glm::vec2 q = glm::abs(d);
+             const float hex = std::max(q.x, q.x * 0.5f + q.y * 0.8660254f);
+             return smooth01((0.5f - hex) / 0.09f) * squareEdge(u, v);
+         });
+     }},
+    {"Knit", "Rows of interlocking V-shaped loops, for knitted wool and chunky fabric.",
+     [] {
+         return generate("Knit", [](float u, float v) {
+             const float cols = 5.0f, rows = 7.0f;
+             const float x = (u + 1.0f) * cols * 0.5f, y = (v + 1.0f) * rows * 0.5f;
+             const float fx = x - std::floor(x) - 0.5f, fy = y - std::floor(y);
+             // Each stitch is two leaning loops meeting at the bottom like a V.
+             const float lx = std::abs(fx) - 0.25f - 0.15f * (fy - 0.5f);
+             const float loop = std::sqrt(std::max(0.0f, 1.0f - (lx * lx) / 0.04f - (fy - 0.5f) * (fy - 0.5f) / 0.36f));
+             return loop * squareEdge(u, v);
+         });
+     }},
+    {"Bolt", "One hexagonal bolt head on a round washer, for machines and hard-surface props (stamp it).",
+     [] {
+         return generate("Bolt", [](float u, float v) {
+             const float r = std::hypot(u, v);
+             const float washer = 0.45f * (1.0f - smooth01((r - 0.82f) / 0.06f));
+             const glm::vec2 q = glm::abs(glm::vec2(u, v));
+             const float hex = std::max(q.x * 0.8660254f + q.y * 0.5f, q.y);
+             const float head = (1.0f - smooth01((hex - 0.55f) / 0.04f)) * (0.85f + 0.15f * (1.0f - r));
+             return std::max(washer, head);
+         });
+     }},
+    {"Chips", "Broken, angular chips knocked out of an edge, for worn stone, wood and painted metal.",
+     [] {
+         return generate("Chips", [](float u, float v) {
+             float f1, f2;
+             uint32_t id = 0;
+             worley(u * 4.5f + 60.0f, v * 4.5f + 60.0f, 101, f1, f2, &id);
+             if ((id & 3u) == 0u) return 0.0f; // a quarter of the cells stay whole
+             const float facet = 1.0f - smooth01(f1 / (0.35f + 0.2f * float((id >> 2) & 0xffu) / 255.0f));
+             return std::clamp(facet * 1.6f, 0.0f, 1.0f) * roundEdge(u, v);
+         });
+     }},
+    {"Weathered Grain", "Long, uneven grain lines with worn-down soft wood between, for old boards and driftwood.",
+     [] {
+         return generate("Weathered Grain", [](float u, float v) {
+             const float warp = (fbm(u * 1.5f + 9.0f, v * 0.5f, 111, 3) - 0.5f) * 0.9f;
+             const float line = 1.0f - std::abs(std::sin((u * 5.0f + warp) * kPi));
+             const float hard = std::pow(line, 2.5f);                        // thin hard late-wood lines
+             const float wear = fbm(u * 3.0f, v * 7.0f + 5.0f, 113, 3);      // soft wood wears away in patches
+             return std::clamp(hard * (0.45f + 0.7f * wear) + 0.2f * wear, 0.0f, 1.0f) * squareEdge(u, v);
+         });
+     }},
+    {"Splinters", "A fan of thin, sharp splinters and torn fibres, for broken planks and snapped wood.",
+     [] {
+         return generate("Splinters", [](float u, float v) {
+             float best = 0.0f;
+             for (int k = 0; k < 9; ++k) {
+                 const float h = hash01(k, 3, 117);
+                 const float x0 = (float(k) - 4.0f) * 0.17f + (h - 0.5f) * 0.1f;
+                 const float len = 0.45f + 0.5f * hash01(k, 5, 119);
+                 const float lean = (hash01(k, 7, 121) - 0.5f) * 0.35f;
+                 const float y0 = -0.9f, y1 = -0.9f + len * 1.8f;
+                 const float d = segmentDistance(u, v, x0, y0, x0 + lean * (y1 - y0), y1);
+                 const float along = smooth01((v - y0) / std::max(y1 - y0, 0.01f));
+                 const float width = 0.075f * (1.0f - along * 0.85f) + 0.008f; // tapers to a point
+                 best = std::max(best, 1.0f - smooth01(d / width));
+             }
+             return best * squareEdge(u, v);
+         });
+     }},
+    {"Grain Cracks", "Narrow splits that run along the grain and fork, for dried and checked timber.",
+     [] {
+         return generate("Grain Cracks", [](float u, float v) {
+             float best = 0.0f;
+             for (int k = 0; k < 4; ++k) {
+                 const float cx = (float(k) - 1.5f) * 0.45f + (hash01(k, 2, 123) - 0.5f) * 0.2f;
+                 const float len = 0.6f + 0.35f * hash01(k, 4, 125);
+                 const float off = (hash01(k, 6, 127) - 0.5f) * 0.5f;
+                 const float wob = (fbm(v * 3.0f + float(k) * 5.0f, 2.0f, 129, 2) - 0.5f) * 0.18f;
+                 const float d = std::abs(u - cx - wob - 0.12f * (v + off) * (hash01(k, 8, 131) - 0.5f));
+                 const float taper = smooth01((len - std::abs(v - off)) / 0.3f);
+                 best = std::max(best, (1.0f - smooth01(d / (0.045f * taper + 0.006f))) * taper);
+             }
+             return best * squareEdge(u, v);
+         });
+     }},
+    {"Knot", "A round knot where the grain bends around a dark core, for boards, beams and trunks.",
+     [] {
+         return generate("Knot", [](float u, float v) {
+             const float r = std::hypot(u * 1.15f, v * 0.85f);
+             const float rings = 0.5f + 0.5f * std::cos(r * 9.0f * kPi + (fbm(u * 3.0f + 2.0f, v * 3.0f, 133) - 0.5f));
+             const float core = 1.0f - smooth01(r / 0.28f);
+             const float body = (1.0f - smooth01((r - 0.45f) / 0.35f)) * (0.55f + 0.3f * rings);
+             const float lines = (1.0f - smooth01(std::abs(v) / 0.9f)) * 0.15f * (0.5f + 0.5f * std::sin(u * 14.0f));
+             return std::clamp(std::max(body, core) + lines, 0.0f, 1.0f) * roundEdge(u, v);
+         });
+     }},
+    {"End Rings", "Concentric growth rings with radial checks, as on a sawn log end.",
+     [] {
+         return generate("End Rings", [](float u, float v) {
+             const float cx = 0.08f, cy = -0.05f; // the pith sits a little off centre
+             const float r = std::hypot(u - cx, v - cy) * (1.0f + 0.04f * std::sin(std::atan2(v - cy, u - cx) * 3.0f));
+             const float wob = (fbm(u * 2.5f + 1.0f, v * 2.5f, 135) - 0.5f) * 0.12f;
+             const float ring = std::pow(0.5f + 0.5f * std::cos((r + wob) * 13.0f * kPi * 0.5f), 1.6f);
+             const float ang = std::atan2(v - cy, u - cx);
+             const float check = smooth01(std::abs(std::sin(ang * 2.5f + 0.7f)) * 6.0f - 5.0f) * smooth01(r / 0.2f);
+             return std::clamp(ring * (1.0f - 0.8f * check), 0.0f, 1.0f) * roundEdge(u, v);
+         });
+     }},
+    {"Plank Seams", "Two boards meeting at a dark seam, with grain and nail dimples, for floors, decks and doors.",
+     [] {
+         return generate("Plank Seams", [](float u, float v) {
+             const float seam = smooth01((std::abs(u) - 0.035f) / 0.09f);   // 0 in the seam, 1 on the boards
+             const float side = u < 0.0f ? 0.0f : 1.0f;
+             const float level = 0.72f + 0.14f * side;                       // each board sits at its own height
+             const float grain = 0.1f * std::sin((u * 26.0f + 3.0f * fbm(u * 2.0f, v * 0.7f, 139)) * kPi);
+             const float nail = 1.0f - smooth01(std::hypot(std::abs(u) - 0.55f, std::fmod(std::abs(v) + 0.5f, 1.0f) - 0.5f) / 0.09f);
+             return std::clamp(seam * (level + grain) - 0.3f * nail * seam, 0.0f, 1.0f) * squareEdge(u, v);
+         });
+     }},
+    // Procedural stand-ins for scanned boards (the alpha pool, core/AlphaOptions.h, takes real scans from a folder).
+    {"Procedural Wood Straight", "Made in code, not a scan: fine straight grain lines with pores, for planed boards.",
+     [] {
+         return generate("Procedural Wood Straight", [](float u, float v) {
+             const float warp = (fbm(u * 1.2f + 3.0f, v * 0.35f, 141, 3) - 0.5f) * 0.35f;
+             const float ring = 0.5f + 0.5f * std::sin((u * 11.0f + warp) * kPi);
+             const float late = std::pow(ring, 3.0f);                       // thin hard late-wood lines
+             const float pores = fbm(u * 14.0f, v * 1.6f + 7.0f, 143, 2);   // long, thin pores along the grain
+             const float fine = std::pow(std::max(pores - 0.48f, 0.0f) * 3.0f, 1.5f);
+             return std::clamp(0.25f + 0.55f * late - 0.45f * fine, 0.0f, 1.0f) * squareEdge(u, v);
+         });
+     }},
+    {"Procedural Wood Cathedral", "Made in code, not a scan: nested pointed arches of flat-sawn grain, for boards and veneers.",
+     [] {
+         return generate("Procedural Wood Cathedral", [](float u, float v) {
+             const float wob = (fbm(u * 2.0f + 5.0f, v * 1.0f, 145, 3) - 0.5f) * 0.25f;
+             const float d = std::abs(u) * 1.6f + (1.0f - (v * 0.5f + 0.5f)) * 0.55f * (1.0f - std::abs(u)) + wob; // arches opening downward
+             const float rings = 0.5f + 0.5f * std::cos(d * 9.0f * kPi * 0.5f);
+             const float late = std::pow(rings, 2.2f);
+             const float fibre = fbm(u * 18.0f, v * 2.0f + 11.0f, 147, 2);
+             return std::clamp(0.2f + 0.65f * late + 0.15f * fibre, 0.0f, 1.0f) * squareEdge(u, v);
+         });
+     }},
+    {"Procedural Wood Weathered", "Made in code, not a scan: sun-bleached board with raised grain, worn pits and a few checks.",
+     [] {
+         return generate("Procedural Wood Weathered", [](float u, float v) {
+             const float warp = (fbm(u * 1.4f + 2.0f, v * 0.4f, 149, 3) - 0.5f) * 0.6f;
+             const float line = std::pow(1.0f - std::abs(std::sin((u * 7.0f + warp) * kPi)), 3.0f);
+             const float wear = fbm(u * 4.0f, v * 2.5f + 3.0f, 151, 3);
+             const float pit = smooth01((fbm(u * 22.0f, v * 22.0f, 153, 2) - 0.62f) / 0.12f);
+             const float check = (1.0f - smooth01(std::abs(u - 0.35f - 0.1f * std::sin(v * 5.0f)) / 0.015f)) * smooth01((0.7f - std::abs(v)) / 0.2f);
+             return std::clamp(line * (0.4f + 0.8f * wear) + 0.15f * wear - 0.35f * pit - 0.5f * check, 0.0f, 1.0f) * squareEdge(u, v);
+         });
+     }},
 };
 
 } // namespace
 
 float BrushAlpha::sample(float u, float v) const {
     if (u < -1.0f || u > 1.0f || v < -1.0f || v > 1.0f) return 0.0f;
+    if (tiled()) { // each tile shows the whole alpha: its own -1..1 square
+        auto wrap = [](float t, int n) {
+            const float s = (t * 0.5f + 0.5f) * float(n);
+            const float f = std::min(s - std::floor(s), 1.0f);
+            return f * 2.0f - 1.0f;
+        };
+        u = wrap(u, tileX);
+        v = wrap(v, tileY);
+    }
     if (empty()) return brushFalloff(std::sqrt(u * u + v * v), 1.0f);
     // Bilinear lookup; pixel centres span the -1..1 square.
     const float px = std::clamp((u * 0.5f + 0.5f) * float(width) - 0.5f, 0.0f, float(width - 1));
@@ -297,7 +500,7 @@ float BrushAlpha::sample(float u, float v) const {
 
 float BrushAlpha::stamp(float u, float v, float focal) const {
     const float d = std::sqrt(u * u + v * v);
-    if (empty()) return d < 1.0f ? brushFalloff(d, 1.0f, focal) : 0.0f;
+    if (empty() && !tiled()) return d < 1.0f ? brushFalloff(d, 1.0f, focal) : 0.0f;
     const float a = sample(u, v);
     return a > 0.0f ? a * alphaFalloff(d, 1.0f, focal) : 0.0f;
 }
@@ -362,6 +565,18 @@ bool BrushAlpha::builtin(const std::string& name, BrushAlpha& out) {
     return false;
 }
 
+bool BrushAlpha::builtinAt(const std::string& name, int size, BrushAlpha& out) {
+    const std::string key = lookupKey(name);
+    for (const Generated& g : kGenerated)
+        if (lookupKey(g.name) == key) {
+            gGenerateSize = std::clamp(size, 8, 4096);
+            out = g.make();
+            gGenerateSize = kBuiltinSize;
+            return true;
+        }
+    return builtin(name, out); // (Round, Square, Noise: as made)
+}
+
 BrushAlpha BrushAlpha::fromImage(const Image& image, std::string name, bool invert) {
     BrushAlpha a;
     a.name = std::move(name);
@@ -398,6 +613,8 @@ void registerBrushCommands(CommandRegistry& registry) {
                           auto stem = std::filesystem::path(std::u8string(path.begin(), path.end())).stem().u8string();
                           doc.brushAlpha = BrushAlpha::fromImage(img, std::string(stem.begin(), stem.end()),
                                                                  argBool(a, "invert", false));
+                          doc.brushAlpha.path = path;
+                          doc.brushAlpha.inverted = argBool(a, "invert", false);
                           return {true, "Alpha '" + doc.brushAlpha.name + "' (" + std::to_string(doc.brushAlpha.width) +
                                             "x" + std::to_string(doc.brushAlpha.height) + ")"};
                       }

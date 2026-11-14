@@ -2,14 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Supporting SculptForge (memberships on the website; the app stays free and behaves the same for everyone). The
-// app only ever opens the fixed links below in the browser (the membership page, its four Stripe checkout pages and the
-// community Discord invite): no
-// payment code, no network, no tracking, no licence checks. Pure helpers, unit tested: the supporters list compiled
-// in from docs/supporters.txt (shown as plain text in Help > About), when the one optional reminder may show, and
-// when the support card may show at launch.
+// app only ever opens the fixed links below in the browser (the membership page, its Stripe checkout pages and the
+// community Discord invite): no payment code, no tracking, no licence checks. "I'm already a member" uses the member
+// builds' GitHub sign-in (core/MemberBuilds.h), nothing of its own. Pure helpers, unit tested: the supporters list
+// compiled in from docs/supporters.txt and the Founding Members from website/founding.json (plain text in Help >
+// About), and when the membership cards may show.
 #pragma once
 
+#include "core/Json.h"
+#include "core/UpdateCheck.h"
+
 #include <algorithm>
+#include <cstdio>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -21,18 +25,40 @@ namespace sf {
 inline constexpr const char* kSupportUrl = "https://sculptforge.app/support.html";
 // The official community Discord (a permanent invite; the same link as on the website and in the README).
 inline constexpr const char* kDiscordUrl = "https://discord.gg/gWrYkEmQhH";
-// The same Stripe checkout links as website/support.html (tests/test_support.cpp checks they match).
-inline constexpr const char* kSupportUrlSupporter = "https://buy.stripe.com/aFacN5h1t6L8cP14ad4F201"; // $5 / month
-inline constexpr const char* kSupportUrlInsider = "https://buy.stripe.com/dRmdR94eH4D06qD9ux4F202";   // $20 / month
-// Studio ($300 / month, the whole company). Founding Studio: the first 10 studios lock in $150 / month for as long as
-// they stay subscribed. When the 10 are taken, set kFoundingStudioOpen = false here and FOUNDING_STUDIO_OPEN = false in
-// website/studio-offer.js (the one switch on the site); nothing else changes.
-inline constexpr bool kFoundingStudioOpen = true;
-inline constexpr const char* kSupportUrlStudioFounding = "https://buy.stripe.com/3cI00j12v5H4g1dgWZ4F204"; // $150 / month, locked
-inline constexpr const char* kSupportUrlStudioRegular = "https://buy.stripe.com/9B66oH8uXd9w16j2254F205"; // $300 / month
-inline constexpr const char* kSupportUrlStudio = kFoundingStudioOpen ? kSupportUrlStudioFounding : kSupportUrlStudioRegular;
-inline constexpr const char* kSupportUrlOnce = "https://buy.stripe.com/4gM7sL8uXc5s4iv5eh4F200";      // one-time Supporter (pay what you want, $5 minimum)
-// The promise next to Insider preview builds. Worded the same in the app, on the membership page and in the guide
+// The community places the Welcome dialog's icon row opens (in this order, like the strip in assets/branding/social); the same
+// accounts as the website's footer. Opened on a click only; the app makes no request to any of them.
+struct SocialLink { const char* name; const char* url; };
+inline constexpr SocialLink kSocialLinks[] = {
+    {"Discord", kDiscordUrl},
+    {"GitHub", "https://github.com/islandmed/SculptForge"},
+    {"X", "https://x.com/SculptForgeApp?utm_source=app&utm_medium=welcome"},
+    {"Bluesky", "https://bsky.app/profile/sculptforge.bsky.social?utm_source=app&utm_medium=welcome"},
+    {"Instagram", "https://www.instagram.com/sculptforge.app?utm_source=app&utm_medium=welcome"},
+    {"Facebook", "https://www.facebook.com/profile.php?id=61596196961617&utm_source=app&utm_medium=welcome"},
+};
+inline constexpr int kSocialCount = int(sizeof(kSocialLinks) / sizeof(kSocialLinks[0]));
+
+// Two memberships: Member ($5 / month or $48 / year) and Studio (a flat $300 / month for the whole studio, any number of
+// artists; the first 5 studios pay a flat $150 as Founding Studios). The same Stripe checkout links as website/support.html
+// and studios.html (tests/test_support.cpp checks they match). An empty yearly link hides the yearly choice in the
+// app and on the site. The card's Studio button opens the studio page (its own build is set up by email first).
+// Each checkout link carries ?client_reference_id=app-card (kSupportSourceTag: lowercase letters, digits and dashes
+// only, no personal data) so a membership started in the app is attributed to it; the site tags its links at runtime
+// the same way (website/motion.js), so the tests compare the links without the query.
+inline constexpr const char* kSupportSourceTag = "app-card";
+inline constexpr const char* kSupportUrlMember = "https://buy.stripe.com/aFacN5h1t6L8cP14ad4F201?client_reference_id=app-card";   // $5 / month
+inline constexpr const char* kSupportUrlMemberYearly = "https://buy.stripe.com/aFa5kD4eHfhE2an6il4F206?client_reference_id=app-card"; // $48 / year
+inline constexpr const char* kSupportUrlStudio = "https://buy.stripe.com/3cI00j12v5H4g1dgWZ4F204?client_reference_id=app-card";   // Founding Studio, $150 / month
+inline constexpr const char* kStudioPageUrl = "https://sculptforge.app/studios.html#membership";
+// The membership terms (refunds, cancelling): the page website/support.html and studios.html link to.
+inline constexpr const char* kTermsUrl = "https://sculptforge.app/terms.html";
+// The fixed links the membership cards may open (App::openSupportLink refuses anything else).
+inline bool supportLinkAllowed(std::string_view url) {
+    for (const char* u : {kSupportUrlMember, kSupportUrlMemberYearly, kSupportUrlStudio, kStudioPageUrl, kTermsUrl})
+        if (u[0] != '\0' && url == u) return true;
+    return false;
+}
+// The promise next to members' early builds. Worded the same in the app, on the membership page and in the guide
 // (tests/test_support.cpp checks the membership page).
 inline constexpr const char* kFreeReleaseNote =
     "Every release stays free for everyone; bug-fix and security releases go out to everyone the same day.";
@@ -98,55 +124,228 @@ inline std::vector<std::string> parseSupporters(std::string_view text) {
     return names;
 }
 
-// --- The one optional reminder (a dismissible note, never a modal, never at launch) ---
-inline constexpr double kSupportReminderSculptSeconds = 10.0 * 3600.0; // cumulative stroke time first
-inline constexpr double kSupportReminderSessionSeconds = 10.0 * 60.0;  // and this long into the session
-inline constexpr double kSculptTimeMaxStep = 0.25; // one frame's share at most (a stall or a clock jump adds little)
+// --- Founding Members (website/founding.json, compiled in; the coordinator updates it by hand) ---
+// The first 100 members are Founding Members for good: a badge (the Discord role), their name in the credits (Help >
+// About) and on the website's members page, and their price locked for as long as they stay. The card and the
+// website stop offering it once `taken` reaches `limit`.
+struct FoundingMembers {
+    int limit = 100;
+    int taken = 0;
+    std::vector<std::string> names; // sanitised (sanitizeSupporterName); some Founding Members choose not to be listed
+    bool open() const { return taken < limit; }
+    int left() const { return std::max(0, limit - taken); }
+};
 
-// Adds one frame's `dt` seconds spent in a stroke to the cumulative sculpting time.
+// --- The membership card at good moments (PanelSupportCard.cpp) ---
+// A small card along the bottom of the canvas, never a modal, at most once a week, until someone becomes a member.
+// It waits for the moment: ~20 minutes of active sculpting in this session (stroke time, not idle time), a Save
+// Render, the first start after an update, the monthly challenge's results (website/latest.json's `challenge`), or a
+// milestone (the 10th start, 10 hours of sculpting, the 100th save: counted on this computer only, never sent).
+// Never mid-stroke or while a background job runs, never in tests, renders, demos or CI, never for a member signed in
+// for member builds (or verified once). Its buttons: Become a member, Not now (a week; after the 3rd a month; after
+// the 6th only the first start after an update) and I'm already a member, which signs in with GitHub (Preferences >
+// Updates > Member builds' sign-in): access to the member repository hides it for good and turns member builds on;
+// no sign-in (cancelled, declined, no access) hides it for three months.
+// The full card at launch (the memberships side by side) shows on the first start only and from Help > Support.
+inline constexpr double kMemberCardSculptSeconds = 20.0 * 60.0; // active stroke time in this session
+inline constexpr double kSculptTimeMaxStep = 0.25; // one frame's share at most (a stall or a clock jump adds little)
+inline constexpr int64_t kMemberCardIntervalSeconds = 7 * 24 * 3600; // at most once a week (and "Not now")
+inline constexpr int64_t kMemberCardNoSignInSeconds = 90 * 24 * 3600; // "I'm already a member" without a sign-in
+inline constexpr int64_t kMemberCardMonthlySeconds = 30 * 24 * 3600; // after the 3rd "Not now"
+inline constexpr int kMemberCardMonthlyAfter = 3;  // "Not now"s before the card is monthly
+inline constexpr int kMemberCardUpdatesOnlyAfter = 6; // "Not now"s before it only comes with an update
+// The milestones (once each): the 10th start, 10 hours of sculpting (stroke time, every session), the 100th save.
+inline constexpr int kMilestoneStarts = 10;
+inline constexpr double kMilestoneSculptSeconds = 10.0 * 3600.0;
+inline constexpr int kMilestoneSaves = 100;
+
+// Adds one frame's `dt` seconds spent in a stroke to the sculpting time.
 inline double addSculptTime(double total, double dt) {
-    if (!(total >= 0.0) || total > 1e9) total = 0.0; // (a damaged prefs value)
+    if (!(total >= 0.0) || total > 1e9) total = 0.0; // (a damaged value)
     if (!(dt > 0.0)) return total;
     return total + std::min(dt, kSculptTimeMaxStep);
 }
 
-// Whether the reminder shows now: after kSupportReminderSculptSeconds of sculpting, at least
-// kSupportReminderSessionSeconds into this session, between strokes, and only if it was never shown or dismissed.
-inline bool supportReminderDue(double sculptSeconds, double sessionSeconds, bool stroking, bool alreadyShown) {
-    return !alreadyShown && !stroking && sculptSeconds >= kSupportReminderSculptSeconds &&
-           sessionSeconds >= kSupportReminderSessionSeconds;
-}
-
-// --- The support card at launch (PanelSupportCard.cpp) ---
-// Shown only while the app starts, never mid-session: on the first start after install, on the first start of each
-// new version, and otherwise at most once every seven days. "Maybe later" hides it for 30 days, updates included. Never
-// once "I'm already a supporter" was chosen or it was turned off in Preferences > Support, and never in tests, renders,
-// demos, benchmarks or CI (testMode).
-inline constexpr int64_t kSupportCardIntervalSeconds = 7 * 24 * 3600;
-inline constexpr int64_t kSupportCardLaterSeconds = 30 * 24 * 3600;
-
 struct SupportCardPrefs {
-    bool enabled = true;         // Preferences > Support > Show the support card at launch
-    bool supporter = false;      // "I'm already a supporter": never again
-    int64_t shownAt = 0;         // seconds since 1970 when it last showed (0: never)
-    std::string shownVersion;    // the version it last showed in ("" before 0.10.4)
-    int64_t laterAt = 0;         // seconds since 1970 when "Maybe later" was chosen (0: never)
+    bool supporter = false;      // a member: never again (a verified sign-in; or "I'm already a member" before 0.11.1)
+    int64_t shownAt = 0;         // seconds since 1970 when a membership card last showed (0: never)
+    int64_t hiddenUntil = 0;     // "Not now" or a sign-in that didn't happen: nothing before this (0: none)
+    std::string challengeSeen;   // the last monthly challenge result the card knew of (latest.json's challenge.id)
+    int notNow = 0;              // "Not now"s so far (the backoff)
+    int shownCount = 0;          // small cards shown (which honest line comes next)
+    // The milestones' counts, on this computer only (project.json; nothing is ever sent).
+    int starts = 0;              // interactive starts
+    double sculptSeconds = 0.0;  // stroke time, every session
+    int saves = 0;               // project saves
+    unsigned milestonesShown = 0; // bits: 1 starts, 2 sculpting hours, 4 saves
+    SupportFeed feed;            // the last update check's "support" block (the card's honest line)
 };
 
-enum class SupportCardReason { None, FirstRun, Updated, Weekly };
+enum class SupportCardReason { None, FirstRun, Manual };
 
-inline SupportCardReason supportCardDue(const SupportCardPrefs& p, bool firstRun, std::string_view version, int64_t now,
-                                        bool testMode) {
-    if (testMode || !p.enabled || p.supporter) return SupportCardReason::None;
-    if (firstRun) return SupportCardReason::FirstRun;
-    // (a clock set back before "Maybe later" ends the 30 days, so a damaged value can't hide it for good)
-    if (p.laterAt > 0 && now >= p.laterAt && now - p.laterAt < kSupportCardLaterSeconds) return SupportCardReason::None;
-    if (p.shownVersion != version) return SupportCardReason::Updated;
-    const int64_t since = now - p.shownAt;
-    // (a clock set far back counts as due, so a damaged value can't hide it for good, nor show it every start)
-    if (p.shownAt <= 0 || since >= kSupportCardIntervalSeconds || since <= -kSupportCardIntervalSeconds)
-        return SupportCardReason::Weekly;
-    return SupportCardReason::None;
+// The full card at launch: the first start after install only (Help > Support and the welcome open it by hand).
+inline SupportCardReason supportCardDue(const SupportCardPrefs& p, bool firstRun, bool testMode) {
+    if (testMode || p.supporter || !firstRun) return SupportCardReason::None;
+    return SupportCardReason::FirstRun;
+}
+
+enum class MemberMoment { None, Sculpted, SavedRender, Updated, Challenge, Starts, SculptHours, Saves };
+
+// How long between cards: a week; a month after the 3rd "Not now" (and from then on).
+inline int64_t memberCardInterval(int notNow) {
+    return notNow >= kMemberCardMonthlyAfter ? kMemberCardMonthlySeconds : kMemberCardIntervalSeconds;
+}
+
+// Whether a moment may bring the card at all (the weekly or monthly limit, the snooze, members; after the 6th "Not
+// now", only an update's): checked when the moment happens; a moment that may not is dropped, not saved for later
+// (a milestone stays due: it is checked again at the next start, save or sculpting minute).
+inline bool memberMomentAllowed(const SupportCardPrefs& p, bool signedInMember, int64_t now, bool testMode,
+                                MemberMoment m = MemberMoment::None) {
+    if (testMode || p.supporter || signedInMember) return false;
+    if (p.notNow >= kMemberCardUpdatesOnlyAfter && m != MemberMoment::Updated) return false;
+    // (a clock set back past a snooze, or a snooze longer than it can be, ends it: a damaged value can't hide it for good)
+    if (p.hiddenUntil > now && p.hiddenUntil - now <= kMemberCardNoSignInSeconds) return false;
+    const int64_t since = now - p.shownAt, interval = memberCardInterval(p.notNow);
+    return p.shownAt <= 0 || since >= interval || since <= -interval;
+}
+
+inline unsigned milestoneBit(MemberMoment m) {
+    return m == MemberMoment::Starts ? 1u : m == MemberMoment::SculptHours ? 2u : m == MemberMoment::Saves ? 4u : 0u;
+}
+
+// The milestone reached and not yet shown (starts first, then sculpting hours, then saves); None for none.
+inline MemberMoment milestoneDue(const SupportCardPrefs& p) {
+    const auto due = [&](MemberMoment m, bool reached) { return reached && !(p.milestonesShown & milestoneBit(m)); };
+    if (due(MemberMoment::Starts, p.starts >= kMilestoneStarts)) return MemberMoment::Starts;
+    if (due(MemberMoment::SculptHours, p.sculptSeconds >= kMilestoneSculptSeconds)) return MemberMoment::SculptHours;
+    if (due(MemberMoment::Saves, p.saves >= kMilestoneSaves)) return MemberMoment::Saves;
+    return MemberMoment::None;
+}
+
+// One line of the card, translatable: `format` (an English tr() key with at most one %d / %s pair) and its values.
+struct CardLine {
+    const char* format = nullptr; // nullptr: no line
+    int a = 0, b = 0;
+    std::string text;             // the %s value (a list of names)
+    bool textFirst = false;       // the format takes %s before the numbers
+};
+
+// `format` is line.format or its translation (same placeholders, same order).
+inline std::string formatCardLine(const CardLine& line, const char* format) {
+    if (!line.format || !format) return {};
+    char buf[512];
+    if (line.textFirst) std::snprintf(buf, sizeof buf, format, line.text.c_str());
+    else std::snprintf(buf, sizeof buf, format, line.a, line.b);
+    return buf;
+}
+
+// The milestone's words, with the true number at the time it shows (the hours whole, rounded down).
+inline CardLine milestoneLine(MemberMoment m, const SupportCardPrefs& p) {
+    CardLine l;
+    switch (m) {
+    case MemberMoment::Starts:
+        l.format = "You've opened SculptForge %d times. Members keep it free and growing.";
+        l.a = p.starts;
+        break;
+    case MemberMoment::SculptHours:
+        l.format = "You've sculpted %d hours in SculptForge. Members keep it free and growing.";
+        l.a = int(std::min(p.sculptSeconds / 3600.0, 1e6));
+        break;
+    case MemberMoment::Saves:
+        l.format = "You've saved your work %d times in SculptForge. Members keep it free and growing.";
+        l.a = p.saves;
+        break;
+    default: break;
+    }
+    return l;
+}
+
+// The honest lines the feed's "support" block allows (none: the card keeps its usual Founding Members line). Only
+// what the numbers say: no countdowns, no "only N left", nothing that isn't in the feed.
+inline std::vector<CardLine> supportFeedLines(const SupportFeed& f) {
+    std::vector<CardLine> out;
+    if (!f.funded.empty()) {
+        CardLine l;
+        l.format = "Members funded this month: %s.";
+        l.textFirst = true;
+        for (size_t i = 0; i < f.funded.size(); ++i) {
+            const std::string name = sanitizeSupporterName(f.funded[i]);
+            if (name.empty()) continue;
+            if (!l.text.empty()) l.text += ", ";
+            l.text += name;
+        }
+        if (!l.text.empty()) out.push_back(std::move(l));
+    }
+    if (f.foundingLimit >= 1 && f.foundingTaken >= 0 && f.foundingTaken < f.foundingLimit) {
+        CardLine l;
+        l.format = "Founding Members so far: %d of %d. A badge, your name in the credits and your price locked for good.";
+        l.a = f.foundingTaken, l.b = f.foundingLimit;
+        out.push_back(std::move(l));
+    }
+    if (f.memberRequests > 0) {
+        CardLine l;
+        l.format = f.memberRequests == 1 ? "%d change in this release was a member's request."
+                                         : "%d changes in this release were members' requests.";
+        l.a = f.memberRequests;
+        out.push_back(std::move(l));
+    }
+    return out;
+}
+
+// The line for the `shown`th card: the feed's lines in turn; no line (format nullptr) without them.
+inline CardLine supportFeedLine(const SupportFeed& f, int shown) {
+    const std::vector<CardLine> lines = supportFeedLines(f);
+    if (lines.empty()) return {};
+    return lines[size_t(std::max(0, shown)) % lines.size()];
+}
+
+// A moment allowed, the card waits for a calm frame: no stroke, no background job, no other card or dialog.
+inline bool memberCardMayOpen(bool stroking, bool jobRunning, bool otherCardOpen) {
+    return !stroking && !jobRunning && !otherCardOpen;
+}
+
+// The sculpting moment: this session's stroke time reached kMemberCardSculptSeconds (once per session).
+inline bool sculptMomentDue(double sessionSculptSeconds, bool alreadyThisSession) {
+    return !alreadyThisSession && sessionSculptSeconds >= kMemberCardSculptSeconds;
+}
+
+enum class MemberCardChoice { Become, NotNow, SignedIn, NoSignIn };
+
+// What a choice on the card leaves in the preferences. Become a member opens the checkout and snoozes like "Not now"
+// without counting as one (the card comes back in a week unless they sign in or say they're a member).
+inline void applyMemberCardChoice(SupportCardPrefs& p, MemberCardChoice c, int64_t now) {
+    switch (c) {
+    case MemberCardChoice::Become: p.hiddenUntil = now + memberCardInterval(p.notNow); break;
+    case MemberCardChoice::NotNow:
+        p.notNow = std::min(p.notNow + 1, 1000);
+        p.hiddenUntil = now + memberCardInterval(p.notNow);
+        break;
+    case MemberCardChoice::SignedIn: p.supporter = true; break;
+    case MemberCardChoice::NoSignIn: p.hiddenUntil = now + kMemberCardNoSignInSeconds; break;
+    }
+}
+
+// The compiled-in website/founding.json (PanelSupport.cpp).
+const FoundingMembers& foundingMembers();
+
+// website/founding.json: {"limit": 100, "taken": 37, "names": ["...", ...]}. Anything missing or odd keeps the
+// defaults (100, 0, none); taken is clamped to 0..limit, names sanitised and capped like the supporters list.
+inline FoundingMembers parseFoundingMembers(const std::string& json) {
+    FoundingMembers f;
+    Json j;
+    std::string error;
+    if (!Json::parse(json, j, error) || !j.isObject()) return f;
+    const double limit = j["limit"].asNumber(100.0), taken = j["taken"].asNumber(0.0);
+    if (limit >= 1.0 && limit <= 100000.0) f.limit = int(limit);
+    if (taken >= 0.0) f.taken = int(std::min(taken, double(f.limit)));
+    if (j["names"].isArray())
+        for (const Json& n : j["names"].items()) {
+            if (f.names.size() >= kSupportersMax) break;
+            if (!n.isString()) continue;
+            std::string name = sanitizeSupporterName(n.asString());
+            if (!name.empty()) f.names.push_back(std::move(name));
+        }
+    return f;
 }
 
 } // namespace sf

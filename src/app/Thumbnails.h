@@ -14,7 +14,7 @@
 #include "core/BrushAlpha.h"
 #include "core/BrushRecipe.h"
 #include "core/Image.h"
-#include "core/Matcap.h"
+#include "core/LitSphere.h"
 #include "core/Mesh.h"
 #include "core/Vdm.h"
 
@@ -47,10 +47,12 @@ public:
     ImTextureID recipe(const BrushRecipe& recipe);
     ImTextureID alpha(const BrushAlpha& alpha);
     ImTextureID vdm(const std::shared_ptr<const VectorDisplacement>& vdm); // one stamp of the map on a plane
-    ImTextureID material(int matcap);     // -1 = Studio
+    ImTextureID material(int litsphere);     // -1 = Studio
     ImTextureID primitive(int primitive); // Primitive (AssetLibrary.h)
     // Projects (their embedded thumbnail.png, else rendered once), meshes and images.
     ImTextureID file(const std::string& path);
+    // An insert set's item (core/Parts.h InsertSetItem): object `object` of a model file, or the whole file (-1).
+    ImTextureID insertSetItem(const std::string& file, int object);
     // Every frame on the main thread with the GL context current.
     void pump(Renderer& renderer);
 
@@ -63,12 +65,12 @@ private:
     struct Result {
         Image image;                // ready to upload (cache hit, image file, alpha, project thumbnail)
         std::unique_ptr<Mesh> mesh; // needs a render
-        int matcap = defaultMatcap(); // -1 = Studio
+        int litsphere = defaultLitSphere(); // -1 = Studio
         float yaw = 30.0f, pitch = -15.0f; // degrees
         float zoom = 0.92f;                // camera distance relative to framing the whole mesh
         float distance = 0.0f;             // > 0: this camera distance from the origin instead
         std::string label;                 // for SCULPTFORGE_THUMBNAIL_CACHE debugging
-        bool polypaint = false;
+        bool vertexpaint = false;
         bool store = true; // write to the disk cache
     };
     using Producer = std::function<Result()>;
@@ -100,6 +102,7 @@ private:
         bool exists = false;
     };
     std::unordered_map<std::string, Stat> stats_; // file stats, refreshed every 2 s
+    Stat& stat(const std::string& path);
 };
 
 } // namespace sf

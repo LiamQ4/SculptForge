@@ -1,11 +1,16 @@
 # Gaussian splats
 
+![A Gaussian splat capture made from the lion, with the mesh hidden and the Splats button on the right shelf](images/splats.jpg)
+
+> **In short:**
+> - Use Gaussian splats as a reference to sculpt against.
+> - **Make sculptable** turns a capture into an animation-ready mesh with its colours.
+> - **Sculpt to splats** turns a sculpt into splats.
+
 Gaussian splats are the format behind phone and photogrammetry captures from apps such as Polycam, Luma,
 Postshot, Scaniverse and KIRI. SculptForge uses them three ways: as a reference to sculpt against, as a source
 for a sculptable, animation-ready mesh with its colours, and as an output when you turn a sculpt into splats. This chapter covers all
 three.
-
-![A splat capture loaded next to the sculpt, with the Splats palette in the right tray](images/splats.jpg)
 
 To make a splat yourself from a phone video or photos, see [Scan an object into a splat](scan-to-splat.md).
 
@@ -26,7 +31,7 @@ A PLY file can hold either a mesh or splats; SculptForge tells them apart by the
    double-click it in the Library **Splats** tab.
 2. The splats load **next to** your sculpt: the current mesh stays, and the capture is drawn around it as a
    reference.
-3. The **Splats** palette moves into the right tray by itself, and a **Splats** button appears on the right
+3. **Render > Gaussian Splats** moves into the right tray by itself, and a **Splats** button appears on the right
    shelf to show or hide the capture.
 
 Most captures arrive upside down, off-centre and at an arbitrary scale. Use the buttons in the **Splats**
@@ -50,14 +55,14 @@ The palette also shows the number of splats and their spherical-harmonic degree 
 
 ## Make a capture sculptable
 
-**Make sculptable** (under **From scan** in the **Splats** palette) turns the capture into a clean Part you
+**Make sculptable** (under **From scan** in **Render > Gaussian Splats**) turns the capture into a clean Part you
 can sculpt and animate: a watertight surface without floaters, quad topology with loops round the eyes and
 mouth when it is a head, and the capture's colours. The splats stay, hidden. It has its own chapter:
 [From scan to sculptable mesh](scan-to-sculptable.md).
 
 ## Turn a sculpt into splats
 
-**Sculpt to splats** (in the **Splats** palette when no splats are loaded, or from the command palette) covers
+**Sculpt to splats** (in **Render > Gaussian Splats** when no splats are loaded, or from the command palette) covers
 the visible Parts with flat, oriented splats with soft clay shading baked in. Use it to show a sculpt in
 splat viewers, web scenes or engines that render 3D Gaussian splats. It replaces any loaded splats.
 
@@ -69,7 +74,7 @@ sculptforge-cli -c 'open path=bust.glb; mesh_to_splats count=500000 shading=true
 
 ## Save splats
 
-Click **Save splats...** in the **Splats** palette, or **File > Save Splats...**. Choose the format by the
+Click **Save splats...** in **Render > Gaussian Splats**, or **File > Save Splats...**. Choose the format by the
 file type: PLY (for SuperSplat, Postshot and most tools), glTF (`.glb` with `KHR_gaussian_splatting`) or
 OpenUSD (`.usda` / `.usdz`). The `splat_save` command also writes `.splat`.
 
@@ -82,7 +87,12 @@ as a `ParticleField3DGaussianSplat` prim next to the meshes.
 
 Projects (`.sfproj`) keep loaded splats and their placement.
 
-**Clear** in the **Splats** palette removes the capture.
+**Clear** in **Render > Gaussian Splats** removes the capture.
+
+## Splats with Blender
+
+Splats go to Blender 5.3 and back with one click, view-dependent colour and placement intact: see
+[Splats with Blender](blender.md#splats-with-blender).
 
 ## From scripts
 
@@ -110,6 +120,7 @@ To render only the splats headless, use `sculptforge scan.ply --render scan.png 
 ## See also
 
 - [From scan to sculptable mesh](scan-to-sculptable.md): Make sculptable in detail
+- [Working with Blender](blender.md#splats-with-blender): send splats to Blender 5.3 and back
 - [Image and text to 3D](generate-3d.md): another way to get a base mesh
 - [Subdivide, Remesh, Decimate and LODs](geometry.md): clean up a converted mesh
 - [Exporting](exporting.md): USD and glTF exports that carry splats

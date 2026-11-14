@@ -49,10 +49,17 @@ std::string lower(std::string s) {
 
 bool isSpaceMouseDevice(uint16_t vendor, uint16_t product, const std::string& name) {
     if (vendor == kVendor3Dconnexion) return std::find(std::begin(kNot6Dof), std::end(kNot6Dof), product) == std::end(kNot6Dof);
-    if (vendor == kVendorLogitech) {
-        if (std::find(std::begin(kLogitechSpaceMice), std::end(kLogitechSpaceMice), product) != std::end(kLogitechSpaceMice))
-            return true;
-        const std::string n = lower(name);
+    if (vendor == kVendorLogitech &&
+        std::find(std::begin(kLogitechSpaceMice), std::end(kLogitechSpaceMice), product) != std::end(kLogitechSpaceMice))
+        return true;
+    // By name (#104): a Logitech-id model missing above; a device whose vendor id the system could not read (0,
+    // seen over Bluetooth); any other id when the name says 3Dconnexion (a driver's virtual device). Never the
+    // CadMouse or the keyboards.
+    const std::string n = lower(name);
+    for (const char* word : {"cadmouse", "keyboard", "numpad"})
+        if (n.find(word) != std::string::npos) return false;
+    if (n.find("3dconnexion") != std::string::npos) return true;
+    if (vendor == kVendorLogitech || vendor == 0) {
         for (const char* word : {"spacemouse", "space mouse", "spacenavigator", "space navigator", "spacepilot",
                                  "spaceexplorer", "spaceball", "spacetraveler"})
             if (n.find(word) != std::string::npos) return true;
@@ -70,6 +77,7 @@ Json toJson(const SpaceMouseSettings& s) {
     j.set("invert", invert);
     j.set("turntable", s.turntable);
     j.set("dominant", s.dominant);
+    j.set("holdWhileStroking", s.holdWhileStroking);
     Json buttons = Json::array();
     for (const std::string& b : s.buttons) buttons.push(b);
     j.set("buttons", buttons);
@@ -87,6 +95,7 @@ void fromJson(const Json& j, SpaceMouseSettings& s) {
         for (size_t i = 0; i < s.invert.size() && i < inv.size(); ++i) s.invert[i] = inv[i].asBool(s.invert[i]);
     s.turntable = j["turntable"].asBool(s.turntable);
     s.dominant = j["dominant"].asBool(s.dominant);
+    s.holdWhileStroking = j["holdWhileStroking"].asBool(s.holdWhileStroking);
     if (const Json& b = j["buttons"]; b.isArray())
         for (size_t i = 0; i < s.buttons.size() && i < b.size(); ++i)
             if (b[i].isString()) s.buttons[i] = b[i].asString();
@@ -99,6 +108,14 @@ float spaceMouseDeadZone(float value, float deadZone) {
     const float a = std::abs(value);
     if (a <= deadZone) return 0.0f;
     return std::copysign((a - deadZone) / (1.0f - deadZone), value);
+}
+
+bool spaceMouseStirred(const std::array<float, kSmAxes>& axes, const SpaceMouseSettings& s) {
+    if (!s.enabled) return false;
+    const float threshold = std::max(s.deadZone * 0.5f, 0.01f);
+    for (float a : axes)
+        if (std::abs(a) > threshold) return true;
+    return false;
 }
 
 SpaceMouseMotion spaceMouseMotion(const std::array<float, kSmAxes>& axes, float dt, const SpaceMouseSettings& s) {

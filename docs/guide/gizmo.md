@@ -1,20 +1,28 @@
 # Moving, rotating and posing (Gizmo)
 
+![A figure posed with the Gizmo](images/wn-0120-pose.jpg)
+
+> **In short:**
+> - The Gizmo moves, rotates and scales a whole Part, or only its unmasked part.
+> - Use it to place parts, fix proportions and pose a limb from its pivot.
+> - Hold <kbd>Shift</kbd> while dragging to snap.
+
 The Gizmo moves, rotates and scales a whole Part, or only the part of it you haven't masked. Use it to
 place parts (an eye in its socket, a sword in a hand), to fix proportions, and to pose: mask the body, put the
-pivot at the shoulder and swing the arm. It works like ZBrush's Gizmo 3D, with the same keys.
+pivot at the shoulder and swing the arm. It works, with the same keys.
 
 ![The Gizmo's Move, Scale and Rotate modes; the handle under the cursor turns yellow](images/gizmo-modes.jpg)
 
-## The three modes
+## The modes
 
-Press a key, or click the button on the top shelf (they're also in the **Transform** palette):
+Press a key, or click the button on the top shelf (they're also in **Sculpt > Symmetry & Gizmo**):
 
 | Key | Mode | What you drag |
 |---|---|---|
 | <kbd>W</kbd> | **Move** | An **arrow** moves along that axis. A **square** moves in its plane. The **ring in the centre** moves freely in the view plane |
-| <kbd>E</kbd> | **Scale** | A **box** stretches along that axis. The **disc in the centre** scales evenly: drag right or up to grow, left or down to shrink |
+| <kbd>E</kbd> | **Scale** | A **ball** at the end of an axis stretches along it. The **ball in the centre** scales evenly: drag right or up to grow, left or down to shrink |
 | <kbd>R</kbd> | **Rotate** | A **ring** turns about that axis. The **outer white ring** turns about the view direction |
+| <kbd>Shift</kbd>+<kbd>W</kbd> | **All** | Every handle at once: see [All handles at once](#all-handles-at-once) |
 | <kbd>Q</kbd> | **Draw** | Back to sculpting: brushes work again and the gizmo goes away |
 
 Pressing the same key again also goes back to Draw. X is red, Y green and Z blue; the handle under the cursor
@@ -24,6 +32,27 @@ turns yellow. While the gizmo is on, dragging anywhere off its handles still tur
 While you drag, the amount shows beside the gizmo (the distance, the angle or the percentage), and a rotation
 draws the swept angle as a slice. Each drag is **one undo step** (<kbd>Ctrl</kbd>+<kbd>Z</kbd>), and the gizmo
 goes back with it.
+
+### All handles at once
+
+**All** (<kbd>Shift</kbd>+<kbd>W</kbd>, or **All** beside Rotate) puts move, rotate and scale on one gizmo, so you
+can place, turn and size a part without switching modes:
+
+- Each axis is a thin line with a **ball** part way out and an **arrow** at its end, well inside the rings. The
+  arrow (and the line) moves along that axis; the ball stretches along it. Both hide while their axis points
+  straight at you (they would sit on the centre); turn the view a little to bring them back.
+- The **squares** between the axes move in their plane, and the **ring in the centre** moves freely, as in Move.
+- The **rings** turn about each axis and the **white ring** around them turns in the view, as in Rotate. A ring
+  seen edge-on fades, so the axis lines lying along it stay clear.
+- The four **white tabs** on the outside scale evenly: drag right or up to grow, left or down to shrink.
+
+![All mode: each axis a line with its scale ball and move arrow inside the rings (X lit up under the cursor), the squares between them, the white view ring, the white even-scale tabs outermost](images/gizmo-all.jpg)
+
+Where handles cross, the one you see on top is the one you get: the centre first, then the balls and the tabs,
+then an arrow or a square over a ring. Snapping, the readout, posing with a mask, <kbd>Alt</kbd>+drag for the
+pivot and one undo step per drag all work as in the single modes. Scripts switch modes with
+`gizmo_mode mode=all` (or `move`, `scale`, `rotate`, `draw`); like every action, **All** can take another key in
+**Edit > Preferences > Hotkeys**.
 
 ### Snapping
 
@@ -45,7 +74,7 @@ Turn **Mask** off in the Gizmo panel to move the whole Part whatever the mask.
 
 ## Posing a limb
 
-1. Mask what should stay: for an arm, everything but the arm (<kbd>Ctrl</kbd>+paint, or **Mask Lasso**).
+1. Mask what should stay: for an arm, everything but the arm (<kbd>Ctrl</kbd>+paint, or **Lasso Mask**).
 2. Press <kbd>R</kbd>. The gizmo jumps to the centre of the unmasked arm.
 3. Put the pivot at the joint: hold <kbd>Alt</kbd> and click the model at the shoulder or elbow. (Or click
    **To Surface**, then click the model.)
@@ -77,6 +106,8 @@ will move (the Part, or its unmasked part) and follows it when you change the ma
 | Put the pivot on the surface | <kbd>Alt</kbd>+click the model, or **To Surface** then click the model |
 | Type the pivot | The three numbers under the mode buttons in the Gizmo panel |
 | Go back to the centre, with world axes | **Reset** |
+| Put the Part's bounding-box centre on the world origin 0,0,0 | **Center on origin** (one undo step; with **All Parts** every visible Part moves together and keeps its place among the others) |
+| Rest the Part on the floor (lowest point at Y = 0) | **Drop to floor** |
 
 After a drag the gizmo moves (and with **Surface** axes, turns) with what it moved.
 
@@ -88,26 +119,36 @@ for sliding a part along itself, or for twisting a forearm about its own length.
 
 ## Typing exact values
 
-The **Gizmo** panel opens in the corner of the canvas while the gizmo is on. Under the options it has
-**Move** (X, Y, Z), **Rotate** (degrees about X, then Y, then Z) and **Scale** (percent). Type the amounts and
-click **Apply**: the model moves, turns and scales by them about the pivot, along the gizmo's axes, in one undo
-step. **Clear** sets them back to 0 and 100%. The values stay after Apply, so clicking Apply again repeats the
-step (rotate by 15 degrees, again, again).
+The **Gizmo** panel opens in the corner of the canvas while the gizmo is on. Under the options it has **Move** (X, Y,
+Z), **Rotate** (degrees about X, then Y, then Z) and **Scale** (percent). Type the amounts and click **Apply**: the
+model moves, turns and scales by them about the pivot, along the gizmo's axes, in one undo step.
+
+**Clear** sets them back to 0 and 100%. The values stay after Apply, so clicking Apply again repeats the step (rotate
+by 15 degrees, again, again).
 
 ## All Parts
 
-Turn on **All Parts** in the panel to move every visible Part together (ZBrush's Transpose All), for
+Turn on **All Parts** in the panel to move every visible Part together, for
 example to turn a whole character with its eyes, teeth and clothes. The pivot is the centre of all of them. Each
 Part gets its own undo step: undo goes back in the active Part, and selecting another Part undoes its
 part.
 
+**Folder**, beside it, moves the visible Parts in the active Part's [folder](parts.md#folders) together, for
+example both eyes. Right-click a folder's header in the Parts list > **Move with the gizmo** turns it on for you.
+
 ## What a transform keeps
 
-A transform only changes where the vertices are. Face Groups, quads, UVs, vertex paint, textures, the mask and
-the topology stay as they are. [Sculpt layers](layers.md) move with the surface: the base and every layer's
-offsets are transformed together, so a layer you sculpted on a forearm stays on it after posing, and layer
-sliders keep working. With [subdivision levels](subdivision-levels.md) you can pose at a low level: the detail of
-the higher levels, sculpt layers included, turns with it when you step back up. Projects save the result, and the gizmo's pivot and options too.
+A transform only changes where the vertices are. Face Groups, quads, UVs, vertex paint, textures, the mask and the
+topology stay as they are. With **Base mesh** active, [sculpt layers](layers.md) move with the surface: the base and
+every layer's offsets are transformed together, so a layer you sculpted on a forearm stays on it after posing, and
+layer sliders keep working.
+
+With a sculpt layer active, the transform goes into that layer, like a stroke: the base stays, and the layer's weight
+dials the move in and out (a pose as a blend shape). A layer whose weight is 0 can't be transformed into. With
+[subdivision levels](subdivision-levels.md) you can pose at a low level: the detail of the higher levels, sculpt
+layers included, turns with it when you step back up.
+
+Projects save the result, and the gizmo's pivot and options too.
 
 ## Scripting
 
@@ -130,7 +171,7 @@ transform scale=2 all=true
 | `masked` | `true` (default) leaves masked parts; `false` moves everything |
 | `falloff` | Soft joint width as a share of the size, 0-1 (default 0) |
 | `symmetry` | Mirror a masked transform across these planes, e.g. `x` |
-| `all` | Every visible Part (Transpose All) |
+| `all` | Every visible Part, moved, rotated and scaled together |
 
 ## Speed
 

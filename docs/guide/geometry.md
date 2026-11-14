@@ -1,5 +1,12 @@
 # Subdivide, remesh, decimate and LODs
 
+![A head after Voxel Remesh](images/quick-tour/02-voxel.jpg)
+
+> **In short:**
+> - Subdivide, remesh, decimate, make symmetric and build LODs for the active Part.
+> - Everything except the LOD preview is undoable with <kbd>Ctrl</kbd>+<kbd>Z</kbd>.
+> - Find the tools in **Tool > Geometry**, grouped by what you do.
+
 These tools change the topology of the active Part: add resolution for detail, rebuild an even surface,
 reduce the triangle count, make it symmetric, or make a chain of levels of detail for a game engine. This
 chapter explains what each one does to your mesh and its attributes, and when to use it.
@@ -7,25 +14,30 @@ chapter explains what each one does to your mesh and its attributes, and when to
 All of them work on the **active Part** and, except the LOD preview, are undoable with
 <kbd>Ctrl</kbd>+<kbd>Z</kbd>.
 
+In **Tool > Geometry** they are grouped by what you do: **Levels** (see [Subdivision levels](subdivision-levels.md)),
+**Micro Detail**, **Resolution** (Decimate, Quad Remesh, Subdivide), **Cleanup** (Fill Holes) and **Symmetry**
+(Make Symmetric).
+
 ## At a glance
 
 | Tool | Where | Triangles | Quads | Keeps sculpt layers | Keeps mask and vertex paint | Keeps face groups, hidden faces, UVs |
 |---|---|---|---|---|---|---|
-| Divide (levels) | **Tool > Geometry > Divide**, <kbd>Ctrl</kbd>+<kbd>D</kbd> | x4 per level, lower levels kept | Each quad becomes four (Catmull-Clark) | Yes | Yes (interpolated) | Yes |
+| Add Level | **Tool > Geometry > Add Level**, <kbd>Ctrl</kbd>+<kbd>D</kbd> | x4 per level, lower levels kept | Each quad becomes four (Catmull-Clark) | Yes | Yes (interpolated) | Yes |
 | Subdivide | **Tool > Geometry > Subdivide** | x4 per level | Each quad becomes four | Yes | Yes (interpolated) | Yes |
 | Voxel Remesh | **Tool > Remesh > Voxel Remesh** | Set by resolution | All quads (new ones) | Baked in | Yes (transferred) | No (reset); a texture is kept on new UVs with Keep Texture |
-| Quad Remesh | **Tool > Geometry > Quad Remesh** | Set by Target Polygons | All quads, with edge loops | Baked in | Yes (transferred) | Face Groups with Keep Groups; no hidden faces; a texture is kept on new UVs with Keep Texture |
+| Quad Remesh | **Tool > Geometry > Quad Remesh** | Set by Target Quads | All quads, with edge loops | Baked in | Yes (transferred) | Face Groups with Follow Face Groups; no hidden faces; a texture is kept on new UVs with Keep Texture |
 | Decimate | **Tool > Geometry > Decimate** | Reduced | No, all triangles | Yes | Yes | Yes |
-| Mirror And Weld | **Tool > Geometry > Modify Topology** | Twice the kept side | Yes | Yes | Yes (mirrored) | Yes (mirrored) |
+| Make Symmetric | **Tool > Geometry > Symmetry** | Twice the kept side | Yes | Yes | Yes (mirrored) | Yes (mirrored) |
 | LOD chain | **Tool > Export** | One level per ratio step | LOD0 keeps them; lower levels are triangles | Yes, on every level | Yes | Yes |
 
 ## Quads and triangles
 
-SculptForge sculpts on triangles, but it remembers which pairs of triangles were one quad. A model you open
-from ZBrush (Send to ZBrush), Blender or Maya (OBJ, FBX, PLY, USD) keeps its quads: **Wire** draws them as quads, without
-the diagonal, and OBJ, FBX, PLY, USD and GoZ-compatible exports write them back as quads, corner for corner. Polygons with
-more than four sides are split into triangles. The new **Plane** and **Cube** are made of quads, and so is the
-result of a voxel remesh.
+SculptForge sculpts on triangles, but it remembers which pairs of triangles were one quad. A model you open from the
+Bridge, Blender or Maya (OBJ, FBX, PLY, USD) keeps its quads: **Wire** draws them as quads, without the diagonal, and
+OBJ, FBX, PLY, USD and Bridge exports write them back as quads, corner for corner.
+
+Polygons with more than four sides are split into triangles. The new **Plane** and **Cube** are made of quads, and so
+is the result of a voxel remesh.
 
 Sculpting, masking, vertex paint, sculpt layers, undo, Parts and project files all keep the quads. Subdivide
 turns every quad into four quads. Two things turn quads into triangles:
@@ -36,16 +48,14 @@ turns every quad into four quads. Two things turn quads into triangles:
 
 glTF (`.glb`) and STL only hold triangles, so those exports always write triangles.
 
-> **ZBrush:** Besides keeping the quads you bring in, SculptForge can make new ones from any mesh: **Quad Remesh**
-> (like ZRemesher) builds quads with flowing edge loops. See [Quad retopology](retopology.md).
-
 ## Subdivide
 
-For sculpting at several resolutions use **Divide** (<kbd>Ctrl</kbd>+<kbd>D</kbd>), which keeps the lower levels to
-step back to: see [Subdivision levels](subdivision-levels.md). **Subdivide** is the one-way version.
+For sculpting at several resolutions use **Add Level** (<kbd>Ctrl</kbd>+<kbd>D</kbd>), which keeps the lower levels to
+step back to: see [Subdivision levels](subdivision-levels.md). **Subdivide (removes levels)** is the one-way
+version; on a Part with levels it asks before removing them.
 
 **Tool > Geometry > Subdivide** smooths the mesh with Loop subdivision. Each level
-multiplies the triangle count by four and rounds off the shape slightly, like ZBrush's Divide with Smt on.
+multiplies the triangle count by four and rounds off the shape slightly.
 
 - Sculpt layers are subdivided with the mesh, so blend shapes keep working.
 - Mask, vertex paint and UVs are interpolated; face groups and hidden faces carry over.
@@ -57,20 +67,44 @@ multiplies the triangle count by four and rounds off the shape slightly, like ZB
 > levels back). Voxel Remesh, Decimate and Quad Remesh do the same. To add triangles only where you sculpt, use
 > [Dynamic topology](dynamic-topology.md).
 
-> **Tip:** The title strip shows the vertex and triangle counts of the whole scene. A few million triangles sculpt
+> **Tip:** The bar along the top shows the triangle count of the whole scene. A few million triangles sculpt
 > smoothly on a recent GPU; go up a level only when you need finer detail.
 
 ## Voxel remesh
 
-**Tool > Remesh > Voxel Remesh** rebuilds the active Part as an even, watertight surface, like ZBrush's DynaMesh.
+**Tool > Remesh > Voxel Remesh** rebuilds the active Part as an even, watertight surface.
 Use it to:
 
 - fuse overlapping pieces into one surface (append a sphere, overlap it, merge, remesh);
 - even out stretched triangles after heavy Move or Tendril work;
 - clean up scans, splat conversions and AI-generated models before sculpting.
 
-The **Resolution** slider next to the button sets how many voxels span the longest side of the model (64 to 400 in
-the palette, default 200). Higher keeps more detail and makes more triangles.
+The **Resolution** slider next to the button sets how many voxels span the longest side of the model (32 to 4096, as
+the `remesh` command; default 200). Higher keeps more detail and makes more triangles, about four times as many for
+each doubling.
+
+Two thirds of the slider covers 32 to 512, the everyday range; the last third goes up to 2048 and then 4096
+(Ctrl+click it to type a number). The line under it estimates the result, *About 1.6M triangles*, from the Part's
+surface area (fine detail smaller than a voxel counts there, so a dense scan comes out somewhat lower).
+
+512 is safe on an 8 GB computer: a 28M-triangle scan remeshes at 512 in about 8 s (14 s on 4 cores) into about
+760,000 triangles; a round 2M-triangle sculpt, which fills its box, in about 3 s (5 s on 4 cores) into about 2.5
+million triangles, with about 2 GB of memory at its peak.
+
+Above 512 only the voxels near the surface are stored, so memory grows with the surface, not the volume: a sculpted
+head remeshes at 1024 into about 5.6 million triangles in about 3 s (5 s on 4 cores; 0.8 GB at its peak) and at
+2048 into about 22 million in about 9 s (21 s on 4 cores; 3 GB). At 4096 the same head would be about 90 million
+triangles and needs over 16 GB, so on most computers it says so instead of starting. Above 512:
+
+- the estimate line also shows the memory the remesh needs, in red when that is more than is free now;
+- the first remesh asks once, with the estimate (**Remesh** or **Cancel**); it asks again after the Resolution has
+  been back at 512 or less;
+- a remesh that won't fit in the free memory doesn't start: the status line says how much it needs and how much is
+  free. Lower the Resolution or close other apps;
+- it runs in the background with a progress bar; **Cancel** stops it within seconds and the Part stays as it was.
+
+Sculpting tens of millions of triangles needs a fast computer: **Decimate** or a lower Resolution makes the result
+lighter.
 
 ![Wireframe of a model before and after a voxel remesh](images/remesh.jpg)
 
@@ -97,22 +131,54 @@ What happens to your data:
 To remesh several Parts into one, first combine them with **Merge visible...** or **Merge down...** in
 [Parts](parts.md#merge-parts).
 
-> **ZBrush:** There is no Project option, Groups-aware remesh or Blur slider yet. Like ZBrush's DynaMesh, the remesh
-> produces an even grid of quads, not flowing edge loops. For quads with edge loops that follow the forms, use
-> [Quad Remesh](retopology.md) (like ZRemesher), and Project All to get the detail back.
+### Quick Remesh
+
+Remesh as you sculpt, without going to the palette (#121). Turn on **Tool > Remesh > Quick Remesh**, then:
+
+- press <kbd>Shift</kbd>+<kbd>R</kbd>, or
+- hold <kbd>N</kbd> and click or drag on the background (anywhere off the model; on the model it stays a brush
+  stroke).
+
+Either one remeshes the active Part at the **Resolution** above, with **Keep Masked** and **Keep Texture** as set
+there. It runs in the background with the same progress bar and **Cancel**, so you can keep sculpting; the status bar
+says when it's done and how many triangles the Part has now.
+
+Each remesh is one undo step. If you sculpt or undo while it runs, it doesn't throw that work away: it remeshes the
+Part again as it is now.
+
+Both keys change in **Edit > Preferences > Hotkeys** (*Quick Remesh* and *Quick Remesh (hold and drag)*). Neither
+<kbd>Shift</kbd>+<kbd>R</kbd> nor <kbd>N</kbd> is used by any key style, and holding <kbd>N</kbd> changes no other
+drag on the background: without it, a drag there turns, pans or zooms the view, or draws the mask and hide shapes,
+exactly as your key style says. With Quick Remesh off, the keys only tell you where to turn it on.
+
+**Remesh after each stroke** (off by default) does it for you: when you lift the pen after a stroke that stretched the
+surface (edges pulled to more than 1.6 times their length, as a long Move or Snake Hook pull does), the active Part is
+remeshed in the background. Strokes that don't stretch anything, and masking or painting, never remesh.
+
+Sculpting never waits for it. It skips Parts with subdivision levels, sculpt layers or a painted texture (Keep
+Texture), where a remesh would bake or drop them; use the button or <kbd>Shift</kbd>+<kbd>R</kbd> there.
 
 ## Quad Remesh
 
-**Tool > Geometry > Quad Remesh** is automatic quad retopology, like ZBrush's ZRemesher: it rebuilds the Part as
-clean quads whose edge loops follow the forms, close to a target polygon count, with Keep Groups, Adaptive Size,
-vertex paint density and symmetry. **Project All** (**Tool > Parts > Project**) brings the sculpted detail back onto
+**Tool > Geometry > Quad Remesh** is automatic quad retopology: it rebuilds the Part as
+clean quads whose edge loops follow the forms, close to a target polygon count, with Follow Face Groups, Size Variation,
+vertex paint density and symmetry. **Project Detail** (**Tool > Parts > Project**) brings the sculpted detail back onto
 the new topology after you divide it. Both have their own chapter: [Quad retopology and detail
 projection](retopology.md).
 
+## Fill Holes
+
+**Tool > Geometry > Fill Holes** caps every open boundary of the active Part, such as a hole, an open bottom or the
+rim of an extracted shell. The new patch's triangles are sized like the ones around the hole, and the patch follows
+the curve of the surface around it, so a hole in a sphere closes round, not flat. The rest of the Part is not changed.
+
+The patches get a [face group](face-groups.md) of their own, so you can mask or hide them in one click. Fill Holes
+makes an open scan or an extracted part watertight without a remesh. <kbd>Ctrl</kbd>+<kbd>Z</kbd> brings the holes
+back.
+
 ## Decimate
 
-**Tool > Geometry > Decimate** reduces the triangle count while keeping the shape, using quadric edge collapse (the
-same family of algorithm as ZBrush's Decimation Master). The **Keep** slider next to the button sets the fraction
+**Tool > Geometry > Decimate** reduces the triangle count while keeping the shape, using quadric edge collapse. The **Keep** slider next to the button sets the fraction
 of triangles to keep (0.05 to 0.95, default 0.50).
 
 Decimation keeps open borders in place, and because it only removes vertices, every remaining vertex keeps its
@@ -128,14 +194,14 @@ scan down to something you can work with.
 > **Tip:** Decimate a duplicate Part (**Tool > Parts > Duplicate**) when you want to keep the full-resolution
 > sculpt in the same project.
 
-## Mirror And Weld
+## Make Symmetric
 
-**Mirror And Weld**, in **Tool > Geometry > Modify Topology**, makes a model symmetric: it keeps the half on the
+**Make Symmetric**, in **Tool > Geometry > Symmetry**, makes a model symmetric: it keeps the half on the
 + side of the chosen axis (+X is the model's left, your right when you look at its face), mirrors it onto the
 other side and welds the two halves along the middle into one watertight mesh. Use it after sculpting one side
 without symmetry, to finish a half model, or to repair a model whose sides have drifted apart.
 
-![A head with a scar and a brow ridge on one side, then the same head after Mirror And Weld X](images/mirror-weld.jpg)
+![A head with a scar and a brow ridge on one side, then the same head after Make Symmetric X](images/mirror-weld.jpg)
 
 - Pick the axis with **X**, **Y** and **Z** beside the button (X is on by default). With several on, they apply
   one after the other.
@@ -144,14 +210,51 @@ without symmetry, to finish a half model, or to repair a model whose sides have 
   from the plane are welded onto it, which closes a half model whose seam isn't exactly at 0.
 - Face Groups, vertex paint, the mask, UVs, quads and sculpt layers are kept; the mirrored side takes the kept side's.
   Subdivision levels are removed (undo restores them), as with the other tools on this page.
-- To keep the **other** side, flip the model first with **Tool > Deformation > Mirror**, or run
+- To keep the **other** side, flip the model first with **Tool > Geometry > Symmetry > Mirror**, or run
   `mirror_and_weld side=negative`.
 
 ## Mirror
 
-**Tool > Deformation > Mirror** flips the Part across the plane through the origin on the chosen axes, with its
+**Tool > Geometry > Symmetry > Mirror** flips the Part across the plane through the origin on the chosen axes, with its
 surface still facing outward. Face Groups, vertex paint, UVs and layers come along; subdivision levels are removed
 (undo restores them). `mirror pivot=center` flips it in place about its own centre instead.
+
+## Merge by Distance
+
+**Tool > Geometry > Merge by Distance** merges the points of the active Part that are closer together than the
+**Distance** slider into one. Use it on an import whose triangles don't share their points (an STL, or a model
+another program split at its seams): until they are merged, every triangle is loose and a brush tears the surface
+apart.
+
+- The line under the slider counts the points that will merge, and those points show on the model in orange while
+  the section is open. On meshes with more than 1.5 million points the count updates when you let go of the slider.
+- **0** merges only points exactly on top of each other. The slider goes up to 2% of the Part's size; scripts can use
+  any distance.
+- Points are taken in order: each one within the distance of a point kept before it merges into the nearest of them
+  and takes its position, mask, vertex paint and sculpt layer offsets. Triangles that collapse (two corners on one
+  point) are removed, and so are points no triangle uses.
+- One undo step. Subdivision levels are removed (undo restores them).
+
+## Find Problems
+
+**Tool > Geometry > Find Problems** looks for what makes a mesh hard to sculpt, remesh, 3D print or export. **Check**
+counts the problems; it changes nothing. Each problem found gets a row with its count and a **Fix** button that
+changes only what that row names, as one undo step.
+
+| Row | What it is | What Fix does |
+|---|---|---|
+| **Non-manifold edges** | Edges shared by three or more triangles (a fin, a wall inside the mesh, two solids touching along an edge) | Pulls the edge apart; nothing is deleted. Solids that only touch come apart closed; a fin or wall comes loose, which leaves its edge open (a hole) |
+| **Holes** | Open boundary loops | Caps each with a patch, as [Fill Holes](#fill-holes) does. The edge of a loose fin or sheet isn't capped (the cap would lie on it) |
+| **Duplicate triangles** | Triangles on the same three points as another, either way round | Deletes the copies |
+| **Degenerate triangles** | Triangles that use one point twice | Deletes them |
+| **Zero-area triangles** | Three different points in one line (a sliver) | Collapses each one's shortest edge |
+| **Flipped triangles** | Triangles wound against their neighbours, or a closed piece that is inside out | Turns them to match the rest of their piece, and closed pieces right way out (a piece inside another, such as a hollow's inner wall or an eye, keeps its way) |
+| **Isolated points** | Points no triangle uses | Removes them |
+
+**Fix all** fixes every row except **Holes**, in one undo step: a mesh can be open on purpose (a cloth panel, a
+mask, a relief), so holes are only capped when you click their own **Fix**. One fix can cause another (collapsing a
+sliver can leave a duplicate), so Fix all checks again and repeats until nothing but holes is left. After any fix
+the list checks again, and whatever is still there is explained under the rows (**Not fixed:**), with why.
 
 ## LOD chains
 
@@ -185,11 +288,12 @@ See [Exporting](exporting.md) for these exports and their options.
 
 ## Undo and safety
 
-Subdivide, remesh, Quad Remesh, decimate, Mirror And Weld, Mirror and delete hidden are single undo steps on the
+Subdivide, remesh, Quad Remesh, decimate, Make Symmetric, Mirror, Merge by Distance, every Find Problems fix and
+Remove Hidden are single undo steps on the
 active Part. They can use a lot of memory on dense meshes, and undo keeps a full copy of the previous mesh for
 each of them. Before a big change on a heavy sculpt:
 
-- **Snapshot** (**File > Save Snapshot**, title strip) keeps a timestamped copy of the scene without touching your project file; see
+- **Snapshot** (**File > Save Snapshot**) keeps a timestamped copy of the scene without touching your project file; see
   [Projects](projects.md#snapshots).
 - **Duplicate** the Part to keep the old version side by side.
 
@@ -198,22 +302,24 @@ each of them. Before a big change on a heavy sculpt:
 | Command | Options |
 |---|---|
 | `subdivide` | `levels` 1-4 (default 1) |
-| `remesh` | `resolution` 32-512 voxels across the longest side (default 200); `keep_texture` (default true) |
+| `remesh` | `resolution` 32-4096 voxels across the longest side (default 200; above 512 it stops with a message when it won't fit in the free memory); `keep_texture` (default true) |
 | `decimate` | `ratio` 0.01-1 of the triangles to keep (default 0.5), or `triangles` for an exact target |
-| `qremesh` | `target` quads (default 5000), `adaptive`, `keep_groups`, `detect_edges`, `use_polypaint`, `symmetry`, `keep_original`, `keep_texture`; see [Quad retopology](retopology.md#scripting) |
+| `qremesh` | `target` quads (default 5000), `adaptive`, `keep_groups`, `detect_edges`, `use_vertexpaint`, `symmetry`, `keep_original`, `keep_texture`; see [Quad retopology](retopology.md#scripting) |
+| `close_holes` | `max_edges` closes only holes with at most that many boundary edges (default 0: all); `refine` (default true; false: as few triangles as possible); `new_group` (default true) |
 | `mirror_and_weld` | `axis` x, y, z or several, e.g. `xz` (default x); `side` positive (default) or negative |
 | `mirror` | `axis` (default x); `pivot` origin (default) or center |
+| `weld_points` | `distance` in scene units (0: only exactly coincident points); `preview=true` only counts them |
+| `mesh_check` | Lists the problems, e.g. `holes=2 flipped=14` |
+| `mesh_fix` | `issue` non_manifold, holes, duplicate, degenerate, zero_area, flipped, isolated or all (all but holes) |
 | `export_lods` | `path` (base name), `levels` 1-8 including LOD0 (default 4), `ratio` 0.1-0.9 (default 0.5) |
 
 ```sh
 sculptforge-cli -c 'open path=scan.obj; remesh resolution=256; decimate triangles=200000; export_lods path=out/rock.glb levels=4 ratio=0.5'
 ```
 
-The command line accepts a wider remesh range (32-512) than the palette slider.
-
 ## See also
 
-- [Quad retopology and detail projection](retopology.md): Quad Remesh and Project All
+- [Quad retopology and detail projection](retopology.md): Quad Remesh and Project Detail
 - [Parts](parts.md): merge pieces before a remesh, duplicate before a decimate
 - [Sculpt layers and blend shapes](layers.md)
 - [Exporting](exporting.md): LOD chains, FBX for Unreal, Send to Unreal

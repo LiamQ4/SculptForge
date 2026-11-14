@@ -25,10 +25,68 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 SRC = ROOT / "docs" / "guide"
 SITE = "https://sculptforge.app/"
 # Chapters that were renamed: the old page stays as a small redirect so links from elsewhere keep working.
-REDIRECTS = {"subtools.html": "parts.html", "zspheres.html": "forge-spheres.html", "polypaint.html": "vertex-paint.html",
-             "polygroups.html": "face-groups.html"}
-CALLOUTS = {"tip": "Tip", "note": "Note", "zbrush": "ZBrush", "not-yet": "Not yet", "warning": "Warning",
-            "important": "Important"}
+REDIRECTS: dict[str, str] = {}
+CALLOUTS = {"tip": "Tip", "note": "Note", "experienced": "Experienced sculptor?", "not-yet": "Not yet", "warning": "Warning",
+            "important": "Important", "short": "In short", "new": "New"}
+# The contents' groups (index.md "## ..."): each gives its chapters an accent colour (style.css [data-section]), so the
+# guide's parts don't read as one flat tone. A group not listed gets the brand orange.
+SECTIONS = {"Getting started": "start", "Sculpting": "sculpt", "AI and capture": "ai", "Files and pipelines": "files",
+            "Reference": "ref", "Getting help": "help"}
+
+# ---------------------------------------------------------------------------
+# Site header nav and footer social row: the hand-written pages carry the same markup; motion.js moves everything but
+# Support and Download into the menu panel.
+# ---------------------------------------------------------------------------
+
+NAV_SHOP = "https://sculptforge-shop.fourthwall.com/?utm_source=site&amp;utm_medium=nav"
+
+# (label, path under the site root, extra attributes)
+NAV_MENU = [("Features", "index.html#features"), ("Demos", "index.html#demos"), ("Brushes", "brushes.html"),
+        ("Guide", "guide/index.html"), ("For studios", "studios.html"), ("About", "why.html"), ("Shop", NAV_SHOP)]
+
+NAV_SOCIALS = [("Discord", "discord", "https://discord.gg/gWrYkEmQhH"),
+           ("GitHub", "github", "https://github.com/islandmed/SculptForge"),
+           ("X", "x", "https://x.com/SculptForgeApp?utm_source=site&amp;utm_medium={m}"),
+           ("Bluesky", "bluesky", "https://bsky.app/profile/sculptforge.bsky.social?utm_source=site&amp;utm_medium={m}"),
+           ("Instagram", "instagram", "https://www.instagram.com/sculptforge.app?utm_source=site&amp;utm_medium={m}"),
+           ("Facebook", "facebook", "https://www.facebook.com/profile.php?id=61596196961617&amp;utm_source=site&amp;utm_medium={m}")]
+
+
+def social_links(prefix, medium):
+    out = []
+    for label, sym, url in NAV_SOCIALS:
+        out.append(f'<a class="gh" href="{url.format(m=medium)}" rel="noopener" aria-label="{label}" title="{label}">'
+                   f'<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">'
+                   f'<use href="{prefix}img/social.svg#{sym}"/></svg></a>')
+    return out
+
+
+def header_nav(prefix, page="", indent="      ", index=False):
+    """prefix: '' for pages in the site root, '../' for guide chapters. page: this page's path under the root."""
+    def href(path):
+        if path.startswith("http"):
+            return path
+        if index and path.startswith("index.html#"):
+            return path[len("index.html"):]
+        return prefix + path
+
+    lines = []
+    for label, path in NAV_MENU:
+        cur = ' aria-current="page"' if page and (page == path or (label == "Guide" and page.startswith("guide/"))) else ""
+        rel = ' rel="noopener"' if path.startswith("http") else ""
+        lines.append(f'<a href="{href(path)}"{rel}{cur}>{label}</a>')
+    lines.append('<span class="nav-social">' + "".join(social_links(prefix, "nav")) + "</span>")
+    lines.append(f'<a class="nav-support" href="{prefix}support.html">Support</a>')
+    lines.append(f'<a class="nav-dl" href="{"#download" if index else prefix + "index.html#download"}">Download</a>')
+    lines.append('<button class="nav-toggle" type="button" aria-controls="site-menu" aria-expanded="false" '
+                 'aria-label="Menu"><span></span><span></span><span></span></button>')
+    body = "\n".join(f"{indent}  {l}" for l in lines)
+    return f'{indent}<nav aria-label="Main">\n{body}\n{indent}</nav>'
+
+
+def footer_social(prefix, indent="        "):
+    return f'{indent}<div class="social" role="group" aria-label="Follow SculptForge">' + "".join(social_links(prefix, "footer")) + "</div>"
+
 
 # ---------------------------------------------------------------------------
 # Markdown subset -> HTML
@@ -103,6 +161,14 @@ def inline(text: str, links: list) -> str:
                 out.append("&amp;")
                 i += 1
             continue
+        if text.startswith("**", i) and not bold:  # **Edit > Preferences > Input**: a menu path, one chip per step
+            close = text.find("**", i + 2)
+            inner = text[i + 2:close] if close != -1 else ""
+            if " > " in inner and not any(ch in inner for ch in "[`<*"):
+                steps = [html.escape(html.unescape(x.strip())) for x in inner.split(" > ")]
+                out.append('<span class="path">' + "<i>&#8250;</i>".join(f"<span>{x}</span>" for x in steps) + "</span>")
+                i = close + 2
+                continue
         if text.startswith("**", i):
             out.append("</strong>" if bold else "<strong>")
             bold = not bold
@@ -182,12 +248,15 @@ def is_separator(line: str) -> bool:
 
 
 class Page:
-    def __init__(self, name: str, text: str):
+    def __init__(self, name: str, text: str, used=None, shift: int = 0):
         self.name = name  # "masking.md"
+        self.used = set() if used is None else used  # heading anchors taken (shared by What's New's parts)
+        self.shift = shift  # added to heading levels (What's New's folded versions: ### becomes h4)
         self.title = ""
         self.headings = []  # (level, text, anchor)
         self.links = []
         self.images = []
+        self.loops = []  # site-only hero loops (../media/x.mp4)
         self.chars = text
         self.text_blocks = []  # (anchor, heading, plain text) for the search index
         self.body = self.render(text)
@@ -195,7 +264,7 @@ class Page:
     def render(self, md: str) -> str:
         lines = md.split("\n")
         out = []
-        used = set()
+        used = self.used
         para = []
         list_stack = []  # open list tags, by nesting level
         item_open = [False, False]
@@ -228,6 +297,7 @@ class Page:
 
         i = 0
         pending_item = None  # [level, tag, text] being collected (wrapped list items)
+        hero_done, loop = False, ""
 
         def flush_item():
             nonlocal pending_item
@@ -247,11 +317,43 @@ class Page:
                 close_lists()
                 i += 1
                 continue
+            m = re.match(r"^<!-- loop: (\S+) -->$", t)
+            if m:  # the next (hero) image plays this muted loop on the site; the app shows the image
+                loop = m.group(1)
+                i += 1
+                continue
             if t.startswith("<!--"):
                 flush_para(); flush_item(); close_lists()
                 while i < len(lines) and "-->" not in lines[i]:
                     i += 1
                 i += 1
+                continue
+            if t.startswith("```cards"):  # [Title](target) | images/x.jpg | blurb
+                flush_para(); flush_item(); close_lists()
+                cards = []
+                i += 1
+                while i < len(lines) and not lines[i].strip().startswith("```"):
+                    cells = table_cells(lines[i]) if lines[i].strip() else []
+                    i += 1
+                    if not cells:
+                        continue
+                    mc = re.match(r"^\[(.*)\]\((.*)\)$", cells[0])
+                    title, target = (mc.group(1), mc.group(2).strip()) if mc else (cells[0], "")
+                    img = cells[1] if len(cells) > 1 else ""
+                    blurb = cells[2] if len(cells) > 2 else ""
+                    if target:
+                        self.links.append(target)
+                    pic = ""
+                    if img:
+                        self.images.append(img)
+                        size = image_size(SRC / img)
+                        dims = f' width="{size[0]}" height="{size[1]}"' if size else ""
+                        pic = f'<img src="{html.escape(img)}" alt=""{dims} loading="lazy" decoding="async">'
+                    cards.append(f'<a class="guide-card" href="{html.escape(md_link(target))}">{pic}'
+                                 f'<strong>{html.escape(title)}</strong><span>{inline(blurb, self.links)}</span></a>')
+                    search_text.append(f"{title} {plain(inline(blurb, []))}")
+                i += 1
+                out.append('<div class="guide-cards">' + "".join(cards) + "</div>")
                 continue
             if t.startswith("```"):
                 flush_para(); flush_item(); close_lists()
@@ -274,6 +376,8 @@ class Page:
             if m:
                 flush_para(); flush_item(); close_lists()
                 level = min(len(m.group(1)), 3)
+                if level > 1:
+                    level = min(level + self.shift, 4)
                 rendered = inline(m.group(2).strip(), self.links)
                 text = plain(rendered)
                 anchor = slugify(text)
@@ -310,9 +414,15 @@ class Page:
                 continue
             if t.startswith(">"):
                 flush_para(); flush_item(); close_lists()
-                parts = []
+                parts, items = [], []  # "> - item" lines are the callout's bullets
                 while i < len(lines) and lines[i].strip().startswith(">"):
-                    parts.append(lines[i].strip()[1:].strip())
+                    line = lines[i].strip()[1:].strip()
+                    if re.match(r"^[-*+] ", line):
+                        items.append(line[2:].strip())
+                    elif items:
+                        items[-1] += " " + line
+                    else:
+                        parts.append(line)
                     i += 1
                 text = " ".join(parts)
                 kind = "note"
@@ -323,8 +433,25 @@ class Page:
                         if label.lower() == name.lower():
                             kind = key
                 rendered = inline(text, self.links)
-                out.append(f'<aside class="callout callout-{kind}"><p>{rendered}</p></aside>')
-                search_text.append(plain(rendered))
+                lis = "".join(f"<li>{inline(x, self.links)}</li>" for x in items)
+                body = (f"<p>{rendered}</p>" if text else "") + (f"<ul>{lis}</ul>" if items else "")
+                out.append(f'<aside class="callout callout-{kind}">{body}</aside>')
+                search_text.append(plain(body))
+                continue
+            if t == "<details>":  # a folded section: <details> / <summary>Label</summary> ... </details>
+                flush_para(); flush_item(); close_lists()
+                summary = ""
+                if i + 1 < len(lines) and lines[i + 1].strip().startswith("<summary>"):
+                    i += 1
+                    summary = lines[i].strip()[len("<summary>"):].replace("</summary>", "").strip()
+                out.append(f'<details class="fold"><summary>{inline(summary, self.links)}</summary>')
+                search_text.append(summary)
+                i += 1
+                continue
+            if t == "</details>":
+                flush_para(); flush_item(); close_lists()
+                out.append("</details>")
+                i += 1
                 continue
             m = re.match(r"^!\[(.*)\]\((.*)\)$", t)
             if m:
@@ -333,6 +460,19 @@ class Page:
                 self.images.append(src)
                 size = image_size(SRC / src)
                 dims = f' width="{size[0]}" height="{size[1]}"' if size else ""
+                if not hero_done and not self.headings:  # the chapter's hero: full width, no caption
+                    hero_done = True
+                    if loop:
+                        self.loops.append(loop)
+                        out.append(f'<figure class="guide-hero"><video src="{html.escape(loop)}" poster="{html.escape(src)}"{dims} '
+                                   f'autoplay muted loop playsinline preload="metadata" aria-label="{html.escape(alt)}">'
+                                   f'</video></figure>')
+                    else:
+                        out.append(f'<figure class="guide-hero"><img src="{html.escape(src)}" alt="{html.escape(alt)}"{dims} '
+                                   f'decoding="async"></figure>')
+                    search_text.append(alt)
+                    i += 1
+                    continue
                 out.append(f'<figure class="shot"><a href="{html.escape(src)}" class="zoom"><img src="{html.escape(src)}" '
                            f'alt="{html.escape(alt)}"{dims} loading="lazy" decoding="async"></a>'
                            f'<figcaption>{inline(alt, [])}</figcaption></figure>')
@@ -406,6 +546,378 @@ def image_size(path: pathlib.Path):
 
 
 # ---------------------------------------------------------------------------
+# What's New (whats-new.md): the data in each version's ```features block, the newest versions in full and the older
+# ones folded into groups. Mirrors src/core/WhatsNew.cpp, which the app uses for the same chapter and its pop-up.
+# ---------------------------------------------------------------------------
+
+WHATS_NEW = "whats-new.md"
+WN_DETAILED, WN_SERIES_GROUPS, WN_MAX_HIGHLIGHTS = 3, 2, 6
+WN_KEYS = {"date", "tagline", "highlight", "title", "line", "image", "action", "link", "clip", "frames"}
+
+
+def version_parts(v: str) -> list:
+    return [int(x) if x.isdigit() else 0 for x in v.split(".")]
+
+
+def compare_versions(a: str, b: str) -> int:
+    x, y = version_parts(a), version_parts(b)
+    n = max(len(x), len(y))
+    x, y = x + [0] * (n - len(x)), y + [0] * (n - len(y))
+    return (x > y) - (x < y)
+
+
+def series(v: str) -> str:
+    p = version_parts(v) + [0, 0]
+    return f"{p[0]}.{p[1]}"
+
+
+def project_version() -> str:
+    m = re.search(r"project\(SculptForge VERSION (\S+)", (ROOT / "CMakeLists.txt").read_text(encoding="utf-8"))
+    return m.group(1) if m else ""
+
+
+def project_prerelease() -> str:
+    """CMakeLists.txt's SCULPTFORGE_PRERELEASE ("beta.1" while a beta of the project version is out, else "")."""
+    m = re.search(r'^set\(SCULPTFORGE_PRERELEASE "([^"]*)"\)', (ROOT / "CMakeLists.txt").read_text(encoding="utf-8"), re.M)
+    return m.group(1) if m else ""
+
+
+def parse_features(text: str) -> dict:
+    """The features block: date, tagline, highlights, then cards (each starts with title:). Raises ValueError."""
+    v = {"date": "", "tagline": "", "highlights": [], "cards": []}
+    for k, raw in enumerate(text.split("\n"), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if not sep or key not in WN_KEYS:
+            raise ValueError(f"line {k}: " + (f"unknown key '{key}'" if sep else "expected 'key: value'"))
+        if key == "title":
+            v["cards"].append({"title": value, "line": "", "image": "", "action": "", "link": "", "clip": "", "frames": ""})
+        elif key in ("line", "image", "action", "link", "clip", "frames"):
+            if not v["cards"]:
+                raise ValueError(f"line {k}: '{key}' before the card's 'title'")
+            if key == "frames" and not re.fullmatch(r"\S+ \d{1,2}x\d{1,2} \d{1,2}", value):
+                raise ValueError(f"line {k}: frames wants 'path COLSxROWS FPS'")
+            v["cards"][-1][key] = value
+        elif key == "highlight":
+            v["highlights"].append(value)
+        else:
+            v[key] = value
+    for c in v["cards"]:
+        if not (c["title"] and c["line"] and c["action"]):
+            raise ValueError(f"card '{c['title']}' needs a title, a line and an action")
+    return v
+
+
+def split_highlight(h: str):
+    title, sep, rest = h.partition(": ")
+    return (title.strip(), rest.strip()) if sep else ("", h)
+
+
+def build_whats_new(md: str, current: str):
+    """(intro markdown, versions, groups, problems). Versions newer than CURRENT are left out; each version has
+    version, anchor, date, tagline, highlights, cards and body (its markdown without the heading and the block)."""
+    lines = md.split("\n")
+    starts = [i for i, l in enumerate(lines) if re.match(r"^## Version \S+$", l.strip())]
+    intro = "\n".join(lines[:starts[0]] if starts else lines)
+    versions, problems = [], []
+    for n, s in enumerate(starts):
+        end = starts[n + 1] if n + 1 < len(starts) else len(lines)
+        name = lines[s].strip()[len("## Version "):]
+        body = lines[s + 1:end]
+        data = {"date": "", "tagline": "", "highlights": [], "cards": []}
+        k = 0
+        while k < len(body) and not body[k].strip():
+            k += 1
+        if k < len(body) and body[k].strip() == "```features":
+            e = k + 1
+            while e < len(body) and body[e].strip() != "```":
+                e += 1
+            try:
+                data = parse_features("\n".join(body[k + 1:e]))
+            except ValueError as err:
+                problems.append(f"{WHATS_NEW}: Version {name}: {err}")
+            body = body[:k] + body[e + 1:]
+        if current and compare_versions(name, current) > 0:
+            continue  # not released yet
+        versions.append(dict(data, version=name, anchor=slugify("Version " + name), body="\n".join(body)))
+    detailed = min(WN_DETAILED, len(versions))
+    groups, seen = [], []
+    for i in range(detailed, len(versions)):
+        s = series(versions[i]["version"])
+        if s not in seen:
+            seen.append(s)
+        slot = min(seen.index(s), WN_SERIES_GROUPS)
+        while len(groups) <= slot:
+            groups.append({"versions": []})
+        groups[slot]["versions"].append(i)
+    for g, group in enumerate(groups):
+        newest, oldest = versions[group["versions"][0]], versions[group["versions"][-1]]
+        if len(group["versions"]) == 1:
+            label = newest["version"]
+        elif g == WN_SERIES_GROUPS:
+            label = series(newest["version"]) + " and earlier"
+        elif any(series(versions[i]["version"]) == series(newest["version"]) for i in range(detailed)):
+            label = f"{oldest['version']} to {newest['version']}"
+        else:
+            label = series(newest["version"]) + ".x"
+        order = sorted(group["versions"], key=lambda i: -len(versions[i]["highlights"]))  # stable: newest first on ties
+        picked, rnd = [], 0
+        while len(picked) < WN_MAX_HIGHLIGHTS:
+            any_left = False
+            for i in order:
+                hs = versions[i]["highlights"]
+                if rnd < len(hs):
+                    any_left = True
+                    if len(picked) < WN_MAX_HIGHLIGHTS:
+                        picked.append((i, hs[rnd]))
+            if not any_left:
+                break
+            rnd += 1
+        picked.sort(key=lambda p: p[0])
+        group.update(label=label, anchor="versions-" + slugify(label), highlights=[h for _, h in picked])
+        group["summary"] = ", ".join(t for t, _ in map(split_highlight, group["highlights"]) if t)
+    return intro, versions, groups, problems
+
+
+def card_link(card: dict) -> str:
+    """Where a card's button goes on the website: its link, else its guide: action; "" for app-only actions."""
+    target = card.get("link") or (card["action"][len("guide:"):] if card["action"].startswith("guide:") else "")
+    return md_link(target) if target else ""
+
+
+class WhatsNewPage(Page):
+    """whats-new.md: version bands with their feature cards and "All changes", then the folded groups."""
+
+    def __init__(self, name: str, text: str):
+        intro, self.versions, self.groups, self.problems = build_whats_new(text, project_version())
+        self.detailed = min(WN_DETAILED, len(self.versions))
+        # The plain chapter (released versions, no data blocks): headings, links, search and the checks.
+        plain = intro + "\n" + "\n".join(f"## Version {v['version']}\n{v['body']}" for v in self.versions)
+        super().__init__(name, plain)
+        self.chars = text
+        # Every card picture, also those of a version not released yet (it ships with the next one).
+        # Clips too: the video the website plays, and the frame sheet the app plays (shipped with the guide).
+        self.images += [src for src in re.findall(r"^image:\s*(\S+)\s*$", text, re.M) if src not in self.images]
+        self.images += [src for src in re.findall(r"^(?:clip|frames):\s*(\S+)", text, re.M) if src not in self.images]
+        for v in self.versions:
+            for c in v["cards"]:
+                if c.get("link"):
+                    self.links.append(c["link"])
+                elif c["action"].startswith("guide:"):
+                    self.links.append(c["action"][len("guide:"):])
+        self.toc_sections = [(f"Version {v['version']}", v["anchor"]) for v in self.versions[:self.detailed]] + \
+                            [(g["label"], g["anchor"]) for g in self.groups]
+        self.extra_anchors = {g["anchor"] for g in self.groups}
+        self.body = self.render_whats_new(intro)
+
+    def render_whats_new(self, intro: str) -> str:
+        used = set()
+        out = [Page(self.name, intro, used).body]
+
+        def cards(v):
+            items = []
+            for c in v["cards"]:
+                img = ""
+                if c["image"]:
+                    size = image_size(SRC / c["image"])
+                    dims = f' width="{size[0]}" height="{size[1]}"' if size else ""
+                    img = (f'<img src="{html.escape(c["image"])}" alt=""{dims} loading="lazy" decoding="async">')
+                    if c.get("clip"):  # the clip plays in place of the picture, which stays as its poster
+                        img = (f'<video src="{html.escape(c["clip"])}" poster="{html.escape(c["image"])}"{dims} muted '
+                               f'loop playsinline autoplay preload="none"></video>')
+                href = card_link(c)
+                more = (f'<a class="wn-more" href="{html.escape(href)}">'
+                        f'{"Read more" if c["action"].startswith("guide:") else "How it works"}'
+                        f'<span aria-hidden="true"> &rarr;</span></a>') if href else ""
+                items.append(f'<article class="wn-card"><div class="wn-pic">{img}</div><div class="wn-card-body">'
+                             f'<h3>{inline(c["title"], [])}</h3><p>{inline(c["line"], [])}</p>{more}</div></article>')
+            return f'<div class="wn-cards wn-n{len(items)}">' + "".join(items) + "</div>" if items else ""
+
+        def date_html(v):
+            return f'<time datetime="{html.escape(v["date"])}">{html.escape(v["date"])}</time>' if v["date"] else ""
+
+        for n, v in enumerate(self.versions[:self.detailed]):
+            used.add(v["anchor"])
+            body = Page(self.name, v["body"], used).body
+            out.append(
+                f'<section class="wn-version" id="{v["anchor"]}"><header class="wn-band">'
+                f'<h2>Version {html.escape(v["version"])}<a class="anchor" href="#{v["anchor"]}" '
+                f'aria-label="Link to this version">#</a></h2>{date_html(v)}'
+                + (f'<p class="wn-tagline">{inline(v["tagline"], [])}</p>' if v["tagline"] else "") + "</header>"
+                + cards(v)
+                + f'<details class="wn-all"{" open" if n == 0 else ""}><summary>All changes</summary>'
+                  f'<div class="wn-body">{body}</div></details></section>')
+        if self.groups:
+            out.append('<p class="wn-earlier">Earlier versions</p>')
+        for g in self.groups:
+            used.add(g["anchor"])
+            items = "".join(f"<li><strong>{inline(t, [])}</strong>: {inline(r, [])}</li>" if t else f"<li>{inline(r, [])}</li>"
+                            for t, r in map(split_highlight, g["highlights"]))
+            inner = []
+            for i in g["versions"]:
+                v = self.versions[i]
+                used.add(v["anchor"])
+                inner.append(f'<h3 id="{v["anchor"]}" class="wn-ver">Version {html.escape(v["version"])}'
+                             f'{date_html(v)}</h3>' + Page(self.name, v["body"], used, shift=1).body)
+            out.append(
+                f'<section class="wn-group" id="{g["anchor"]}"><header class="wn-band wn-band-small">'
+                f'<h2>{html.escape(g["label"])}<a class="anchor" href="#{g["anchor"]}" aria-label="Link to these versions">#</a>'
+                f'</h2></header><ul class="wn-highlights">{items}</ul>'
+                f'<details class="wn-all"><summary>All changes</summary><div class="wn-body">{"".join(inner)}</div>'
+                f'</details></section>')
+        # A link into a folded section opens it.
+        out.append("<script>(function(){function o(){var h=location.hash.slice(1);if(!h)return;var e=document.getElementById(h);"
+                   "for(var p=e;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;if(e)e.scrollIntoView();}"
+                   "addEventListener('hashchange',o);o();})();</script>")
+        return "\n".join(out)
+
+
+
+# The home page's release area (website/index.html #whats-new, between the whats-new markers): the newest versions
+# as cards with their first picture, then the older ones as groups of highlights, all linking into the guide chapter.
+HOME = ROOT / "website" / "index.html"
+HOME_START, HOME_END = "<!-- whats-new:start", "<!-- whats-new:end -->"
+NEWS_SCRIPT = ('<script>(function(){var b=document.querySelector(".news-bar");if(!b)return;try{if(localStorage.getItem("sf-news-x")===b.dataset.version)b.hidden=true}catch(e){}\n'
+               'b.querySelector(".news-bar-x").onclick=function(){b.hidden=true;try{localStorage.setItem("sf-news-x",b.dataset.version)}catch(e){}}})()</script>')
+HERO_START, HERO_END = "<!-- hero-news:start -->", "<!-- hero-news:end -->"
+NEWS_START, NEWS_END = "<!-- news-hero:start", "<!-- news-hero:end -->"
+CHANGELOG_URL = "https://github.com/islandmed/SculptForge/blob/main/CHANGELOG.md"
+
+
+# Two-key shortcuts stay off the home cards: the home page shows the broad features (the guide and the changelog still name them).
+HOME_HIDE = re.compile(r"two[- ]keys?\b|\bkeys? in a row", re.I)
+
+
+def home_tagline(tagline: str) -> str:
+    """A tagline for a home card: its ';'-separated parts without those the home page hides."""
+    return "; ".join(p for p in re.split(r";\s*", tagline) if not HOME_HIDE.search(p))
+
+
+def home_whats_new(page: "WhatsNewPage") -> str:
+    vs = page.versions[:page.detailed]
+    out = []
+    if vs:  # no tagline here: the announcement bar says the release news once, the cards carry the details
+        out.append(f'        <p class="section-lede"><a href="guide/whats-new.html">Everything that changed</a> &middot; '
+                   f'<a href="{CHANGELOG_URL}">changelog</a></p>')
+    out.append('        <div class="wn-home">')
+    for n, v in enumerate(vs):
+        keep = lambda s: not HOME_HIDE.search(s)
+        titles = [x for x in [split_highlight(h)[0] for h in v["highlights"] if split_highlight(h)[0]] if keep(x)] or \
+            [c["title"] for c in v["cards"] if keep(c["title"])]
+        first = next((c for c in v["cards"] if c["image"]), None)
+        pic, clip = (first["image"], first.get("clip", "")) if first else ("", "")
+        img = (f'<div class="wn-pic"><img src="guide/{html.escape(pic)}" alt="" width="600" height="340" loading="lazy" '
+               f'decoding="async"></div>') if pic else ""  # no picture of its own: a text-only card, not filler art
+        if clip:  # the first card's clip plays on the home page too, its picture as the poster
+            img = (f'<div class="wn-pic"><video src="guide/{html.escape(clip)}" poster="guide/{html.escape(pic)}" width="600" '
+                   f'height="340" muted loop playsinline autoplay></video></div>')
+        items = "".join(f"<li>{inline(c['title'], [])}</li>" for c in v["cards"] if keep(c["title"])) or \
+            "".join(f"<li>{inline(r[:1].upper() + r[1:], [])}</li>" for _, r in map(split_highlight, v["highlights"]) if keep(r))
+        tag = "" if n == 0 else home_tagline(v["tagline"])  # the newest release's tagline is the bar's, said once
+        out.append(f'          <article class="wn-home-card"><a href="guide/whats-new.html#{v["anchor"]}">{img}'
+                   f'<div class="wn-card-body"><h3>{html.escape(", ".join(titles[:3]) or "Version " + v["version"])} '
+                   f'<small>new in {html.escape(v["version"])}</small></h3>'
+                   + (f'<p>{inline(tag, [])}</p>' if tag else "")
+                   + f'<ul>{items}</ul></div></a></article>')
+    out.append("        </div>")
+    if page.groups:
+        out.append('        <div class="wn-home-groups">')
+        for g in page.groups:
+            items = "".join(f"<li>{inline(tt, [])}</li>" for tt, _ in map(split_highlight, g["highlights"]) if tt)
+            out.append(f'          <a class="wn-home-group" href="guide/whats-new.html#{g["anchor"]}"><h3>{html.escape(g["label"])}</h3>'
+                       f'<ul>{items}</ul><span>All changes &rarr;</span></a>')
+        out.append("        </div>")
+    return "\n".join(out)
+
+
+def news_hero(page: "WhatsNewPage") -> str:
+    """The announcement bar under the nav: the newest version's tagline as one line, linking to its What's New entry.
+    A bar already written for that version (data-version) is kept, so an edited line survives the next build."""
+    v = page.versions[0]
+    text = re.sub(r"<[^>]+>", "", inline((v["tagline"] or f"Version {v['version']}").rstrip("."), []))
+    ver = html.escape(v["version"])
+    return (f'    <aside class="news-bar" data-version="{ver}" aria-label="Latest release">\n'
+            f'      <div class="wrap news-bar-inner">\n'
+            f'        <a class="news-bar-link" href="guide/whats-new.html#{v["anchor"]}"><span class="news-pill">New</span>'
+            f'<span class="news-bar-text">{text}</span><span class="news-bar-go" aria-hidden="true">&rarr;</span></a>\n'
+            f'        <button class="news-bar-x" type="button" aria-label="Dismiss this announcement">&times;</button>\n'
+            f'      </div>\n    </aside>\n    {NEWS_SCRIPT}\n')
+
+
+def write_news_hero(t: str, page: "WhatsNewPage") -> str:
+    """T with the announcement bar brought up to the newest version (only when its data-version differs: an edited
+    line for the same version stays) and the hero's news line emptied: the bar is the one place the page says the
+    release news. No markers or no versions: unchanged (never blocks a release)."""
+    if not page.versions:
+        return t
+    ver = html.escape(page.versions[0]["version"])
+    a = t.find(NEWS_START)
+    b = t.find(NEWS_END, a)
+    if a >= 0 and b >= 0:
+        a = t.index("\n", a) + 1
+        if f'data-version="{ver}"' not in t[a:b]:
+            t = t[:a] + news_hero(page) + "    " + t[b:]
+    a = t.find(HERO_START)
+    b = t.find(HERO_END, a)
+    if a >= 0 and b >= 0:
+        t = t[:a + len(HERO_START)] + "\n          " + t[b:]
+    return t
+
+
+README = ROOT / "README.md"
+README_NEWS = re.compile(r'^(  <strong>New in )([^:<]+)(:</strong> .*)$', re.M)
+
+
+def readme_news(page: "WhatsNewPage") -> str:
+    """The README's top "New in X" line for the newest version: its tagline, linked to the guide page of its first card
+    (else to its What's New entry), like the site's hero line."""
+    v = page.versions[0]
+    text = re.sub(r"<[^>]+>", "", inline((v["tagline"] or f"Version {v['version']}").rstrip("."), []))
+    card = next((c for c in v["cards"] if c.get("link") or c["action"].startswith("guide:")), None)
+    target = (card.get("link") or card["action"][len("guide:"):]) if card else f"whats-new.html#{v['anchor']}"
+    first = text.split(" ", 1)[0]
+    if not any(ch.isupper() for ch in first[1:]):  # "The user guide" -> "the user guide"; a name like SculptForge stays
+        text = text[:1].lower() + text[1:]
+    return (f'  <strong>New in {html.escape(v["version"])}:</strong> {text} '
+            f'(<a href="https://sculptforge.app/guide/{target}">how it works</a>)')
+
+
+def write_readme_news(page: "WhatsNewPage") -> str:
+    """README.md's "New in X" line brought up to the newest version; the same version's (hand-edited) line stays.
+    No README, no line or no versions: unchanged (never blocks a release)."""
+    if not page.versions or not README.exists():
+        return ""
+    t = README.read_text(encoding="utf-8")
+    m = README_NEWS.search(t)
+    if not m or m.group(2) == page.versions[0]["version"]:
+        return t
+    return t[:m.start()] + readme_news(page) + t[m.end():]
+
+
+def write_home(page: "WhatsNewPage", check_only: bool) -> bool:
+    """Writes the release area into website/index.html; with CHECK_ONLY, True when it is already up to date. A beta
+    leaves the home page alone: it keeps showing the stable release until that version ships."""
+    if project_prerelease():
+        return True
+    t = HOME.read_text(encoding="utf-8")
+    a = t.find(HOME_START)
+    b = t.find(HOME_END, a)
+    if a < 0 or b < 0:
+        sys.exit(f"{HOME}: no {HOME_START} ... {HOME_END} markers in #whats-new")
+    a = t.index("\n", a) + 1
+    new = write_news_hero(t[:a] + home_whats_new(page) + "\n        " + t[b:], page)
+    rd = write_readme_news(page)
+    if check_only:
+        return new == t and (not rd or rd == README.read_text(encoding="utf-8"))
+    HOME.write_text(new, encoding="utf-8")
+    if rd:
+        README.write_text(rd, encoding="utf-8")
+    return True
+
+# ---------------------------------------------------------------------------
 # The book
 # ---------------------------------------------------------------------------
 
@@ -424,13 +936,15 @@ def load_book():
             path = SRC / m.group(2)
             if not path.exists():
                 sys.exit(f"index.md lists {m.group(2)}, which doesn't exist")
-            page = Page(m.group(2), path.read_text(encoding="utf-8"))
+            cls = WhatsNewPage if m.group(2) == WHATS_NEW else Page
+            page = cls(m.group(2), path.read_text(encoding="utf-8"))
             chapters.append((group, page))
     return index, chapters
 
 
 def page_html(page: Page, index: Page, chapters, position: int) -> str:
     current = page.name
+    section = next((SECTIONS.get(g, "brand") for g, ch in chapters if ch.name == current), "brand")
     toc = ['<nav class="toc" aria-label="User guide">',
            f'<a class="toc-home{" current" if current == "index.md" else ""}" href="index.html">Contents</a>']
     group = None
@@ -438,17 +952,17 @@ def page_html(page: Page, index: Page, chapters, position: int) -> str:
         if g != group:
             if group is not None:
                 toc.append("</ul>")
-            toc.append(f'<p class="toc-group">{html.escape(g)}</p><ul>')
+            toc.append(f'<p class="toc-group" data-section="{SECTIONS.get(g, "brand")}">{html.escape(g)}</p><ul>')
             group = g
         is_cur = ch.name == current
         href = ch.name[:-3] + ".html"
         current_attr = ' class="current" aria-current="page"' if is_cur else ""
         toc.append(f'<li><a href="{href}"{current_attr}>{html.escape(ch.title)}</a>')
         if is_cur:
-            subs = [h for h in ch.headings if h[0] == 2]
+            subs = getattr(ch, "toc_sections", None) or [(t, a) for lvl, t, a in ch.headings if lvl == 2]
             if subs:
                 toc.append('<ul class="toc-sections">' + "".join(
-                    f'<li><a href="#{a}">{html.escape(t)}</a></li>' for _, t, a in subs) + "</ul>")
+                    f'<li><a href="#{a}">{html.escape(t)}</a></li>' for t, a in subs) + "</ul>")
         toc.append("</li>")
     toc.append("</ul></nav>")
 
@@ -465,11 +979,11 @@ def page_html(page: Page, index: Page, chapters, position: int) -> str:
                      f'{html.escape(titles[k + 1])}</a>')
     pager.append("</nav>")
 
-    on_page = [h for h in page.headings if h[0] == 2]
+    on_page = getattr(page, "toc_sections", None) or [(t, a) for lvl, t, a in page.headings if lvl == 2]
     aside = ""
     if len(on_page) >= 3:
         aside = ('<aside class="on-page" aria-label="On this page"><p>On this page</p><ul>' +
-                 "".join(f'<li><a href="#{a}">{html.escape(t)}</a></li>' for _, t, a in on_page) + "</ul></aside>")
+                 "".join(f'<li><a href="#{a}">{html.escape(t)}</a></li>' for t, a in on_page) + "</ul></aside>")
 
     title = "SculptForge User Guide" if current == "index.md" else f"{page.title} - SculptForge User Guide"
     first_p = re.search(r"<p>(.*?)</p>", page.body, re.S)
@@ -486,34 +1000,27 @@ def page_html(page: Page, index: Page, chapters, position: int) -> str:
   <meta name="description" content="{desc}">
   <meta name="theme-color" content="#111114">
   <meta name="color-scheme" content="dark">
-  <link rel="icon" type="image/svg+xml" href="../img/favicon.svg?v=2">
-  <link rel="icon" type="image/png" href="../img/favicon-64.png?v=2">
-  <link rel="apple-touch-icon" href="../img/icon-256.png?v=2">
+  <link rel="icon" type="image/png" sizes="32x32" href="../img/favicon-32.png?v=7">
+  <link rel="icon" type="image/png" sizes="64x64" href="../img/favicon-64.png?v=7">
+  <link rel="apple-touch-icon" href="../img/apple-touch-icon.png?v=7">
   <link rel="canonical" href="{url}">
   <meta property="og:type" content="article">
   <meta property="og:title" content="{html.escape(title)}">
   <meta property="og:description" content="{desc}">
-  <meta property="og:image" content="{SITE}img/social-preview.png?v=3">
+  <meta property="og:image" content="{SITE}img/social-preview.png?v=5">
   <meta property="og:url" content="{url}">
-  <link rel="stylesheet" href="../style.css?v=17">
-  <script src="../motion.js?v=11" defer></script>
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="../style.css?v=40">
+  <script src="../motion.js?v=15" defer></script>
   <script data-goatcounter="https://sculptforge.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
   <script src="search-index.js?v={len(chapters)}" defer></script>
 </head>
-<body class="guide-page" data-prev="{names[k - 1][:-3] + '.html' if k > 0 else ''}" data-next="{names[k + 1][:-3] + '.html' if k + 1 < len(names) else ''}">
+<body class="guide-page" data-section="{section}" data-prev="{names[k - 1][:-3] + '.html' if k > 0 else ''}" data-next="{names[k + 1][:-3] + '.html' if k + 1 < len(names) else ''}">
   <div class="scroll-progress" aria-hidden="true"></div>
   <header class="nav">
     <div class="wrap nav-inner">
-      <a class="brand" href="../index.html"><img src="../img/logo.svg?v=2" alt="" width="34" height="34"><span>SculptForge</span></a>
-      <nav aria-label="Main">
-        <a href="../index.html#features">Features</a>
-        <a href="../index.html#demos">Demos</a>
-        <a href="../brushes.html">Brushes</a>
-        <a href="index.html" aria-current="page">Guide</a>
-        <a class="nav-dl" href="../index.html#download">Download</a>
-        <a class="gh" href="https://discord.gg/gWrYkEmQhH">Discord</a>
-        <a class="gh" href="https://github.com/islandmed/SculptForge">GitHub</a>
-      </nav>
+      <a class="brand" href="../index.html"><img class="brand-wordmark" src="../img/logo-wordmark-dark.svg" width="137" height="32" alt="SculptForge"><img class="brand-cube" src="../img/logo-cube.svg" width="38" height="40" alt="SculptForge"></a>
+{header_nav("../", "guide/index.html")}
     </div>
   </header>
   <div class="wrap guide-layout">
@@ -541,20 +1048,21 @@ def page_html(page: Page, index: Page, chapters, position: int) -> str:
   <footer class="footer">
     <div class="wrap footer-grid">
       <div>
-        <a class="brand" href="../index.html"><img src="../img/logo.svg?v=2" alt="" width="28" height="28"><span>SculptForge</span></a>
+        <a class="brand" href="../index.html"><img class="brand-wordmark" src="../img/logo-wordmark-dark.svg" width="103" height="24" alt="SculptForge"><img class="brand-cube" src="../img/logo-cube.svg" width="30" height="32" alt="SculptForge"></a>
         <p class="fine">Copyright © 2026 The SculptForge contributors.<br>The SculptForge User Guide is part of
           SculptForge, licensed under the <a href="https://github.com/islandmed/SculptForge/blob/main/LICENSE">GNU GPL v3.0 or later</a>.</p>
       </div>
       <div class="links">
+        <a href="../performance/">Performance</a>
         <a href="index.html">User guide</a>
-        <a href="../supporters.html">Supporters</a>
+        <a href="../supporters.html">Members</a>
         <a href="https://github.com/islandmed/SculptForge">Source code</a>
         <a href="https://discord.gg/gWrYkEmQhH">Community Discord</a>
         <a href="https://github.com/islandmed/SculptForge/issues">Report a problem</a>
         <a href="https://github.com/islandmed/SculptForge/blob/main/docs/ai-services.md">AI services &amp; privacy</a>
+{footer_social("../")}
       </div>
-      <p class="fine trademarks">ZBrush, GoZ, MatCap and other ZBrush feature names are trademarks of Maxon Computer
-        GmbH. SculptForge is not affiliated with or endorsed by Maxon. All other trademarks belong to their owners.</p>
+      <p class="fine trademarks">SculptForge is an independent project. Product names are trademarks of their respective owners.</p>
     </div>
   </footer>
 </body>
@@ -591,7 +1099,23 @@ def check(index: Page, chapters) -> list:
     pages = {"index.md": index}
     pages.update({c.name: c for _, c in chapters})
     anchors = {name: {a for _, _, a in p.headings} | ({slugify(p.title)} if p.title else set())
-               for name, p in pages.items()}
+               | getattr(p, "extra_anchors", set()) for name, p in pages.items()}
+    wn = pages.get(WHATS_NEW)
+    if isinstance(wn, WhatsNewPage):
+        problems += wn.problems
+        if wn.versions and re.search(r"\w: ", wn.versions[0]["tagline"]):
+            problems.append(f"{WHATS_NEW}: Version {wn.versions[0]['version']}: the tagline is the headline and up to 2 short "
+                            "items, sentence case, no 'X: verb' colon chains (the site bar, README and feed show it)")
+        for v in wn.versions:
+            if not v["date"]:
+                problems.append(f"{WHATS_NEW}: Version {v['version']} has no ```features block with its date")
+            for c in v["cards"]:
+                if not 1 <= len(c["title"].split()) <= 6:
+                    problems.append(f"{WHATS_NEW}: Version {v['version']}: card title '{c['title']}' should be 3-5 words")
+                if c["image"] and c["image"].startswith("images/wn-") and image_size(SRC / c["image"]) not in (None, (600, 340)):
+                    problems.append(f"{WHATS_NEW}: {c['image']} should be 600x340 (tools/guide/make_images.py --whats-new)")
+            if v["cards"] and not 1 <= len(v["cards"]) <= 5:
+                problems.append(f"{WHATS_NEW}: Version {v['version']} has {len(v['cards'])} cards; the window shows 1 to 5")
     listed = set(pages)
     for f in sorted(SRC.glob("*.md")):
         if f.name not in listed:
@@ -618,15 +1142,19 @@ def check(index: Page, chapters) -> list:
         for src in p.images:
             if not (SRC / src).is_file():
                 problems.append(f"{name}: image {src} doesn't exist")
+        for src in getattr(p, "loops", []):
+            if not (ROOT / "website" / "guide" / src).resolve().is_file():
+                problems.append(f"{name}: loop {src} doesn't exist (website/media)")
     for old_name, new_name in REDIRECTS.items():
         if new_name[:-5] + ".md" not in pages:
             problems.append(f"REDIRECTS: {old_name} points to {new_name}, which isn't a chapter")
         if old_name[:-5] + ".md" in pages:
             problems.append(f"REDIRECTS: {old_name} is a chapter again; remove the redirect")
     used = {src for p in pages.values() for src in p.images}
-    for img in sorted((SRC / "images").glob("*")):
-        if f"images/{img.name}" not in used:
-            problems.append(f"images/{img.name}: not used by any page")
+    for img in sorted(f for f in (SRC / "images").rglob("*") if f.is_file()):  # also images/<chapter>/*
+        rel = img.relative_to(SRC).as_posix()
+        if rel not in used:
+            problems.append(f"{rel}: not used by any page")
     return problems
 
 
@@ -636,6 +1164,26 @@ def check(index: Page, chapters) -> list:
 
 SUPPORTERS = ROOT / "docs" / "supporters.txt"
 SUPPORTERS_PAGE = ROOT / "website" / "supporters.html"
+FOUNDING = ROOT / "website" / "founding.json"  # the app's compiled copy (Help > About), refreshed each release
+# The site's live copy (site lane, no app release): written by ~/Work/.sf/members/onboard.py within a minute or two of
+# a payment, from members.csv. When it is there it is the whole truth for this page and support.html:
+# {"limit": 100, "taken": 3, "names": [Founding Members' credit names], "members": [every credited name],
+#  "studios": 0, "updated": "..."}. --app-credits copies it into founding.json + docs/supporters.txt for a release.
+LIVE_MEMBERS = ROOT / "website" / "members-live.json"
+
+
+def live_members():
+    try:
+        f = json.loads(LIVE_MEMBERS.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(f, dict) or not isinstance(f.get("names"), list) or not isinstance(f.get("members"), list):
+        return None
+    return f
+
+
+def name_list(listed) -> list:
+    return supporter_names("\n".join(n.replace("\n", " ") for n in listed if isinstance(n, str)))
 
 
 def supporter_names(text: str) -> list:
@@ -657,59 +1205,110 @@ def supporter_names(text: str) -> list:
     return names
 
 
-def supporters_html() -> str:
+def credited_names():
+    """(every credited name, the Founding Members' credit names): only names members chose to be credited with."""
+    live = live_members()
+    if live:
+        return name_list(live["members"]), name_list(live["names"])
     raw = SUPPORTERS.read_bytes().decode("utf-8", errors="ignore") if SUPPORTERS.exists() else ""
-    names = supporter_names(raw)
+    try:
+        f = json.loads(FOUNDING.read_text(encoding="utf-8"))
+        fnames = name_list(f.get("names")) if isinstance(f, dict) and isinstance(f.get("names"), list) else []
+    except (OSError, ValueError):
+        fnames = []
+    return supporter_names(raw), fnames
+
+
+# support.html's thanks line under the Member tier: the same Founding Members as supporters.html#founding, rewritten
+# with it (--supporters, which onboarding runs), so it never goes stale. Hidden while there are none.
+SUPPORT_PAGE = ROOT / "website" / "support.html"
+THANKS_RE = re.compile(r'<p class="founding-thanks"[^>]*>.*?</p>', re.S)
+THANKS_SHOWN = 10  # past this, "and N more" (the full list is one click away)
+
+
+def founding_thanks_html(fnames: list) -> str:
+    if not fnames:
+        return '<p class="founding-thanks" hidden></p>'
+    link = lambda t: f'<a href="supporters.html#founding">{t}</a>'
+    if len(fnames) == 1:
+        return f'<p class="founding-thanks">Thank you, {link(html.escape(fnames[0]))}, our first Founding Member.</p>'
+    shown = [html.escape(n) for n in fnames[:THANKS_SHOWN]]
+    more = len(fnames) - len(shown)
+    text = (", ".join(shown) + f" and {more} more") if more else (", ".join(shown[:-1]) + " and " + shown[-1])
+    return f'<p class="founding-thanks">Thank you to our first Founding Members: {link(text)}.</p>'
+
+
+def support_page_html(text: str) -> str:
+    return THANKS_RE.sub(lambda _: founding_thanks_html(credited_names()[1]), text, count=1)
+
+
+def write_support_page() -> None:
+    if SUPPORT_PAGE.exists():
+        text = SUPPORT_PAGE.read_text(encoding="utf-8")
+        new = support_page_html(text)
+        if new != text:
+            SUPPORT_PAGE.write_text(new, encoding="utf-8")
+
+
+def supporters_html() -> str:
+    names, fnames = credited_names()
     if names:
         body = ('<ul class="supporters">\n' + "".join(f"          <li>{html.escape(n)}</li>\n" for n in names)
                 + "        </ul>")
     else:
         body = '<p class="lede">Be the first: <a href="support.html">become a member</a>.</p>'
+    founding = ""
+    if fnames:  # (parseFoundingMembers in src/app/Support.h: the same names in Help > About)
+        founding = ('\n    <section class="section alt" id="founding">\n      <div class="wrap">\n'
+                    '        <h2>Founding Members</h2>\n        <p>The first 100 members, with our thanks for good.</p>\n'
+                    '        <ul class="supporters">\n'
+                    + "".join(f"          <li>{html.escape(n)}</li>\n" for n in fnames)
+                    + "        </ul>\n      </div>\n    </section>")
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Supporters</title>
+  <title>Members</title>
   <meta name="description" content="The members who keep SculptForge free and open source for everyone.">
   <meta name="color-scheme" content="dark light">
-  <link rel="icon" type="image/svg+xml" href="img/favicon.svg?v=2">
+  <link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png?v=7">
   <link rel="canonical" href="{SITE}supporters.html">
-  <link rel="stylesheet" href="style.css?v=18">
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="style.css?v=40">
   <style>
     .supporters {{ columns: 3 14em; column-gap: 32px; padding: 0; list-style: none; }}
     .supporters li {{ break-inside: avoid; padding: 4px 0; }}
   </style>
-  <!-- Generated by tools/guide/build_site.py from docs/supporters.txt; edit that file, not this one. -->
+  <!-- Generated by tools/guide/build_site.py from website/members-live.json (else docs/supporters.txt and website/founding.json); edit those, not this one. -->
 </head>
 <body>
   <header class="nav">
     <div class="wrap nav-inner">
-      <a class="brand" href="index.html"><img src="img/logo.svg?v=2" alt="" width="34" height="34"><span>SculptForge</span></a>
-      <nav aria-label="Main">
-        <a href="guide/index.html">Guide</a>
-        <a href="studios.html">Studios</a>
-        <a class="nav-support" href="support.html">Support</a>
-        <a class="nav-dl" href="index.html#download">Download</a>
-      </nav>
+      <a class="brand" href="index.html"><img class="brand-wordmark" src="img/logo-wordmark-dark.svg" width="137" height="32" alt="SculptForge"><img class="brand-cube" src="img/logo-cube.svg" width="38" height="40" alt="SculptForge"></a>
+{header_nav("", "supporters.html")}
     </div>
   </header>
   <main id="top">
     <section class="section">
       <div class="wrap">
         <p class="eyebrow">Credits</p>
-        <h1>Supporters</h1>
-        <p>Thank you to everyone who supports SculptForge. The same names are in the app, under Help &gt; About.</p>
+        <h1>Members</h1>
+        <p>Thank you to every SculptForge member. The same names are in the app, under Help &gt; About.</p>
         {body}
       </div>
-    </section>
+    </section>{founding}
   </main>
   <footer class="footer">
     <div class="wrap footer-grid">
       <div class="links">
+        <a href="performance/">Performance</a>
         <a href="index.html">Home</a>
         <a href="support.html">Membership</a>
+        <a href="terms.html">Terms</a>
+        <a href="jobs.html">Jobs</a>
         <a href="https://github.com/islandmed/SculptForge">Source code</a>
+{footer_social("")}
       </div>
       <p class="fine">Copyright © 2026 The SculptForge contributors.</p>
     </div>
@@ -719,22 +1318,51 @@ def supporters_html() -> str:
 """
 
 
+def app_credits() -> int:
+    """The release step: the app's Help > About lists and the card's fallback count, from the site's live copy."""
+    live = live_members()
+    if not live:
+        print("no website/members-live.json: the app copies stay as they are")
+        return 0
+    f = {"limit": int(live.get("limit", 100)), "taken": int(live.get("taken", 0)), "names": name_list(live["names"])}
+    FOUNDING.write_text(json.dumps(f, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    raw = SUPPORTERS.read_text(encoding="utf-8") if SUPPORTERS.exists() else ""
+    head = "".join(l + "\n" for l in raw.split("\n") if l.lstrip(" \t\r").startswith("#"))
+    SUPPORTERS.write_text(head + "".join(n + "\n" for n in name_list(live["members"])), encoding="utf-8")
+    print(f"founding.json: {f['taken']} of {f['limit']}, {len(f['names'])} names; supporters.txt: {len(live['members'])} names")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=pathlib.Path, default=ROOT / "website" / "guide")
     ap.add_argument("--check", action="store_true", help="fail on broken links, missing images or bad characters")
     ap.add_argument("--supporters", action="store_true", help="only write website/supporters.html (the site deploy)")
+    ap.add_argument("--app-credits", action="store_true",
+                    help="copy website/members-live.json into the app's compiled copies (founding.json, docs/supporters.txt)")
     args = ap.parse_args()
+    if args.app_credits:
+        return app_credits()
     if args.supporters:
         SUPPORTERS_PAGE.write_text(supporters_html(), encoding="utf-8")
+        write_support_page()
         return 0
     if args.check and SUPPORTERS_PAGE.exists() and SUPPORTERS_PAGE.read_text(encoding="utf-8") != supporters_html():
-        print("website/supporters.html is out of date with docs/supporters.txt: run tools/guide/build_site.py",
+        print("website/supporters.html is out of date with website/members-live.json / docs/supporters.txt: run tools/guide/build_site.py",
               file=sys.stderr)
         return 1
+    if args.check and SUPPORT_PAGE.exists():
+        text = SUPPORT_PAGE.read_text(encoding="utf-8")
+        if not THANKS_RE.search(text) or support_page_html(text) != text:
+            print("website/support.html: the Founding Members thanks line is missing or out of date: run tools/guide/build_site.py",
+                  file=sys.stderr)
+            return 1
     index, chapters = load_book()
+    wn = next((c for _, c in chapters if isinstance(c, WhatsNewPage)), None)
     if args.check:
         problems = check(index, chapters)
+        if wn and args.out.resolve() == (ROOT / "website" / "guide").resolve() and not write_home(wn, True):
+            problems.append("website/index.html: the What's New area is out of date with whats-new.md: run tools/guide/build_site.py")
         for p in problems:
             print(p, file=sys.stderr)
         if problems:
@@ -765,9 +1393,13 @@ def main() -> int:
     # every guide page. Only for the real site, not --out folders.
     if out.resolve() == (ROOT / "website" / "guide").resolve():
         SUPPORTERS_PAGE.write_text(supporters_html(), encoding="utf-8")
-        urls = [SITE, SITE + "brushes.html", SITE + "mudbox-alternative.html",
-                SITE + "zbrush-alternative.html", SITE + "zbrush-linux.html", SITE + "press.html",
-                SITE + "studios.html", SITE + "support.html", SITE + "supporters.html"] + [f"{SITE}guide/{p.name[:-3]}.html" for p in pages]
+        write_support_page()
+        if wn:
+            write_home(wn, False)
+        urls = [SITE, SITE + "brushes.html", SITE + "press.html",
+                SITE + "studios.html", SITE + "ai.html", SITE + "support.html", SITE + "terms.html", SITE + "jobs.html", SITE + "queue.html", SITE + "vote.html",
+                SITE + "supporters.html", SITE + "why.html", SITE + "code-signing.html",
+                SITE + "performance/", SITE + "llms.txt"] + [f"{SITE}guide/{p.name[:-3]}.html" for p in pages]
         (ROOT / "website" / "sitemap.xml").write_text(
             '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
             + "".join(f"  <url><loc>{html.escape(u)}</loc></url>\n" for u in urls) + "</urlset>\n", encoding="utf-8")

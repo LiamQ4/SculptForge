@@ -1,5 +1,5 @@
 # #62: Preferences > Input > Start strokes off the model (off by default: a drag on the background turns the view).
-run ui_look look=classic layout=zbrush        # written for the Classic look and the ZBrush-style palette bar and shelves
+run ui_look look=classic layout=classic        # written for the Classic look and the classic palette bar and shelves
 run new_sphere subdivisions=4
 key f
 camera 0 0
@@ -87,3 +87,23 @@ expect_value air_strokes == 0
 expect_value shortcut_conflicts == 0
 drag_path -0.3 0.5 0.5 0.5
 expect_value camera_yaw != $yaw2
+
+# View > Lock camera is the same switch, and the status bar says CAMERA LOCKED while it is on (#62 follow-up).
+run ui_look look=forge layout=sculptforge
+wait 0.2
+expect_no_text CAMERA LOCKED
+click "View##menu.view"
+hold ctrl
+hover "Lock camera##view.lock_camera"
+expect_help "Shift+L"
+hold none
+click "Lock camera##view.lock_camera"
+expect_value air_strokes == 1
+key escape
+wait 0.1
+expect_text CAMERA LOCKED
+shot lock_camera
+key shift+l
+expect_value air_strokes == 0
+wait 0.1
+expect_no_text CAMERA LOCKED

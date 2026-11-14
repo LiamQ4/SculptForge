@@ -3,6 +3,7 @@
 #include "core/Image.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -82,6 +83,31 @@ bool Image::savePng(const std::string& path, std::string& error) const {
     return true;
 }
 
+bool Image::saveJpg(const std::string& path, int quality, std::string& error) const {
+    if (empty()) {
+        error = "Empty image";
+        return false;
+    }
+    std::vector<uint8_t> rgb(size_t(width) * size_t(height) * 3);
+    for (size_t i = 0, n = size_t(width) * size_t(height); i < n; ++i)
+        for (int c = 0; c < 3; ++c) rgb[i * 3 + size_t(c)] = uint8_t(unsigned(rgba[i * 4 + size_t(c)]) * rgba[i * 4 + 3] / 255u);
+    std::vector<uint8_t> jpg;
+    auto write = [](void* ctx, void* data, int size) {
+        auto* o = static_cast<std::vector<uint8_t>*>(ctx);
+        o->insert(o->end(), static_cast<uint8_t*>(data), static_cast<uint8_t*>(data) + size);
+    };
+    if (!stbi_write_jpg_to_func(write, &jpg, width, height, 3, rgb.data(), std::clamp(quality, 1, 100))) {
+        error = "JPEG encoding failed";
+        return false;
+    }
+    std::ofstream f(std::filesystem::path(std::u8string(path.begin(), path.end())), std::ios::binary);
+    if (!f.write(reinterpret_cast<const char*>(jpg.data()), std::streamsize(jpg.size()))) {
+        error = "Cannot write " + path;
+        return false;
+    }
+    return true;
+}
+
 Image Image::downscaled(int maxSide) const {
     if (empty() || std::max(width, height) <= maxSide) return *this;
     const float f = float(std::max(width, height)) / float(maxSide);
@@ -153,6 +179,11 @@ bool Image::load(const std::string& path, Image& out, std::string& error) {
         return false;
     }
     return decode(bytes.data(), bytes.size(), out, error);
+}
+
+bool Image::dimensions(const unsigned char* bytes, size_t size, int& width, int& height) {
+    int channels = 0;
+    return size <= size_t(INT_MAX) && stbi_info_from_memory(bytes, int(size), &width, &height, &channels) == 1;
 }
 
 bool Image::decode(const unsigned char* bytes, size_t size, Image& out, std::string& error) {

@@ -12,6 +12,37 @@ sculptforge-cli --bench ...                     # the same without the GPU (CI, 
 Machine for all figures: Apple M1 Pro (8 performance + 2 efficiency cores, 32 GB unified memory, 30 GB usable
 under Asahi Linux), integrated GPU, Mesa 26.1 (OpenGL 4.6). How the benchmark works is described under v0.5 below.
 
+## Alpha stamps on curved surfaces (fix/dragstamp-curvature, #174)
+
+Drag Stamp, Slide Stamp and a stroke's first (stamp) dab with an alpha now cover the visible surface under their whole footprint, so a big stamp on a curved model has no gaps. On a 28M-triangle model at the floor tier, the largest alpha stamps take about 100 ms longer (once per stamp: the moves of a drag keep the cheaper region and the release's final stamp pays it); Dots, Spray and plain strokes are unchanged.
+
+## 0.10.9: background dabs, Move once a frame (perf/bigbrush-p99)
+
+`--benchmark standard` placed every stroke in the frame loop (predictive strokes are off by default), and on the
+33M head one 240 px dab moves 3-11M vertices (the symmetric brush covers a large part of the face). Where one such
+frame went (`SF_FRAME_LOG=40 SF_STROKE_LOG=1 SF_SYNC_LOG=1`): the dab 70-220 ms (kernel 20-100, normals 40-100,
+BVH refit 10-30), then the vertex upload 40-110 ms (packing 30-75, cluster bounds 12-32), then the swap. Every step
+was already threaded and near memory bandwidth, so the work can't fit a frame; it has to leave the frame.
+
+From 2M vertices a sculpt stroke now uses the solver thread without the preview (`App::backgroundDabs`,
+`SF_BACKGROUND_DABS=0/1`): the same dabs in the same order, packed into the two-part upload there. A batch is about
+a frame of work (at least 10 ms), the frame waits up to 12.5 ms for it (so light dabs still show in the frame that
+placed them) and otherwise keeps drawing, and the next frame commits it. The same dabs through either path give the
+same mesh, bit for bit, positions and normals (`ui_stroke_background`; `--measure-stroke 3,120` and `3,240` with
+`SF_MEASURE_VERIFY=1` on a subdivided sphere). The benchmark scene itself isn't reproducible to that level: two
+frame-loop runs with every dab placed differ by up to 0.26, as much as one of each. Frame p99 / worst stall ms,
+before (quiet) -> after (provisional: load 3-4, the quiet run is still to do):
+
+| Phase | 15M | 33M |
+|---|---|---|
+| Clay large | 77 / 136 -> 31 / 34 | 139 / 154 -> 31 / 40 |
+| 240 px brush | 139 / 172 -> 31 / 36 | 306 / 325 -> 33 / 41 |
+| Pen lift (240 px) | 20 ms -> 0 | 162 ms -> 0 |
+
+On the sphere (`new_sphere subdivisions=9`) at 120 px (`--measure-stroke 3,120`, background dabs forced) the
+stroke places as many dabs (156 vs 141 in the frame loop) with about the same lag (62 vs 53 ms). Each 240 px dab at 33M still takes 100-200 ms, so the surface
+trails the pointer by about a dab while the view stays smooth.
+
 ## Next version: predictive strokes (feat/zero-latency)
 
 A stroke on a heavy mesh used to run in the frame loop: each frame placed a dab (45-50 ms at 21M with a 200 px
@@ -306,6 +337,27 @@ The app reads the power source with `SDL_GetPowerInfo` at start and every 5 seco
 half the upload budget and 60 Hz (unless set by hand), and the status bar says so. The `draft_brush` override
 (on / off) wins over both. `draftBrushMode` is a flag for the brush engine; the brushes don't read it yet.
 
+### Hardware tiers (core/HardwareTier.h, feat/hw-tiers)
+
+A second axis beside the render profile: **Floor** (shown as Essential) / **Standard** / **High** / **Extreme**, from
+the probed memory sizes, GPU type and threads, capped by the calibration (Standard needs 120M triangles/s, High 300M,
+Extreme 1000M; a dab over 2 ms stops at Standard). The render profile still sets the view's budgets from measured
+speed, unchanged. The tier sets `TierConfig::budgets` (TierBudgets), which the advanced levels read: Focus Detail
+(resident MB, GPU pool, ms per frame, streaming threshold), coarse LOD, micro and 1B-scene ceilings, the dense
+stroke knobs, 16K textures. **Floor's budgets are the constants every machine used before tiers**
+(tests/test_hardware_tier.cpp pins them), so the floor tier can't regress; the readers set higher tiers' values as
+they measure them.
+
+- `SF_HW_SIMULATE=floor|standard|high|extreme` forces a tier (floor keeps the integrated-GPU render budgets and 4
+  threads as before); `SF_TIER_<NAME>=<value>` pins one budget (`SF_TIER_FOCUS_RESIDENT_MB=1024`); `SF_COMPUTE=cpu|gpu`;
+  `SF_TURBO=1`.
+- Memory guard: once a second, free RAM (MemAvailable etc.) and free VRAM (NVX / ATI meminfo); under max(1 GB, RAM/10)
+  (or 256 MB VRAM) for 2 s steps the tier in effect down one level; over max(3 GB, RAM/4) for 60 s steps back up; at
+  most one change per 10 s.
+- Turbo: AA off while the view moves or a stroke runs, the motion proxy from half the threshold (even with Fast
+  Navigation off), 75 % resolution while moving, the detected tier's budgets if a lower one was set by hand. It
+  changes no saved setting.
+
 ### Render triangle budget and the frame governor
 
 `renderTriangleBudget()` (core/HardwareProfile.h) is the number of triangles the 3D view may draw per frame to
@@ -581,7 +633,7 @@ of a dab with a dense mesh is the serial search for the triangles under the brus
 sculptforge --bench --bench-dyntopo --bench-sizes 0.25,1,4
 ```
 
-Spheres without subdivision levels (Sculptris Pro works on such meshes only), dynamic topology on with relative
+Spheres without subdivision levels (dynamic topology works on such meshes only), dynamic topology on with relative
 detail, strokes with X symmetry. Each row starts from the same sphere. "remesh" is the dynamic topology work of a
 dab (gathering the area, matching mirror images, splits, collapses, flips, relaxing, filling the freed slots,
 rings and normals of what changed, BVH edits); "GPU upload" sends the clusters whose triangles changed as patches
@@ -644,7 +696,7 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 Dynamic topology touches hot paths (Mesh::neighbors / vertexTriangles, BVH traversal, the renderer's vertex
 gather), so the regular benchmark was run at 33M against main at ffb3747 built the same way, alternating the
 two builds: memory is identical (3070 MB RSS, 37 / 17.1 / 29 B per triangle for mesh / BVH / levels, 14.8 B on
-the GPU) and every brush, Lower / Higher Res, project and orbit time is within run-to-run noise (for example
+the GPU) and every brush, Lower / Higher Level, project and orbit time is within run-to-run noise (for example
 Standard 7.60 / 7.54 ms, Clay 7.31-7.50 / 7.35-7.53 ms, Fast Navigation 3.4-3.7 / 3.3-3.6 ms; base / feat/dyntopo).
 
 ### Known limits
@@ -677,7 +729,7 @@ with its before / after tables and known limits, follows the summary.
 | Mask / Paint, one dab | 5.6 / 7.0 ms | **2.5 / 3.5 ms** |
 | First GPU upload | 701 ms | **423 ms** |
 | Opening the project | 4.7 s | **2.1 s** |
-| Lower Res after sculpting | 1588 ms | **829 ms** |
+| Lower Level after sculpting | 1588 ms | **829 ms** |
 | Largest Divide | 50M (fixed limit) | **from the memory: about 160M on 32 GB** |
 
 The vertex counts per dab differ because 0.6 also fixes the benchmark sphere (New Cube left a few vertices
@@ -731,10 +783,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 995k, after edits) | 99 |
-| Higher Res (back up) | 2 |
-| Lower Res again (no edits) | 5 |
-| Higher Res again (no edits) | 1 |
+| Lower Level (to 995k, after edits) | 99 |
+| Higher Level (back up) | 2 |
+| Lower Level again (no edits) | 5 |
+| Higher Level again (no edits) | 1 |
 | Save project (165 MB) | 53 |
 | Open project | 279 |
 | Open project: memory (RSS) | +408 MB, peak +453 MB |
@@ -779,10 +831,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 4.0M, after edits) | 404 |
-| Higher Res (back up) | 5 |
-| Lower Res again (no edits) | 18 |
-| Higher Res again (no edits) | 5 |
+| Lower Level (to 4.0M, after edits) | 404 |
+| Higher Level (back up) | 5 |
+| Lower Level again (no edits) | 18 |
+| Higher Level again (no edits) | 5 |
 | Save project (658 MB) | 206 |
 | Open project | 1030 |
 | Open project: memory (RSS) | +1567 MB, peak +1822 MB |
@@ -827,10 +879,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 8.3M, after edits) | 829 |
-| Higher Res (back up) | 10 |
-| Lower Res again (no edits) | 42 |
-| Higher Res again (no edits) | 10 |
+| Lower Level (to 8.3M, after edits) | 829 |
+| Higher Level (back up) | 10 |
+| Lower Level again (no edits) | 42 |
+| Higher Level again (no edits) | 10 |
 | Save project (1373 MB) | 427 |
 | Open project | 2132 |
 | Open project: memory (RSS) | +3226 MB, peak +3769 MB |
@@ -864,8 +916,8 @@ of two runs, before and after alternating.
 | Divide up to 33M (the benchmark's setup) | 2428 ms | **1415 ms** |
 | Open project | 4721 ms, the whole 1.9 GB file read into memory first | **2137 ms**, peak 1.15x the scene (+3.5 GB, peak +4.0 GB) |
 | Save project | 663 ms, 1.9 GB file | **433 ms, 1.37 GB** |
-| Lower Res after sculpting | 1543 ms | **876 ms** |
-| Higher / Lower Res without edits | 10 / 40 ms | 8-13 / 43-55 ms |
+| Lower Level after sculpting | 1543 ms | **876 ms** |
+| Higher / Lower Level without edits | 10 / 40 ms | 8-13 / 43-55 ms |
 | Medium dab (Standard), GPU upload included | 11.1 ms | 13.7 ms (CPU-only runs: 9.16 -> 9.09 ms) |
 | Large dab (radius 0.4) | 62.6 ms | 64.8 ms |
 | Smooth / Clay dab | 5.47 / 6.57 ms | 5.77 / 7.02 ms |
@@ -883,12 +935,12 @@ GPU upload). Undo is the same or faster.
   vertices as coarse vertices, then edge points, then face points, and lays its triangles out polygon by polygon
   (`generateFaces`). Such a level stores no triangles or quad pairs (in `SubdivLevel::data`), no child maps and no
   per-triangle parents and corner codes; all of them follow from the coarse polygons. The working mesh gets its
-  triangles generated when the level is entered. Levels from Reconstruct Subdiv, imports and older projects whose
+  triangles generated when the level is entered. Levels from Rebuild Lower Levels, imports and older projects whose
   numbering matches are recognised as generated; other levels keep the old path.
 - **Details or positions, not both**: a level that isn't stale keeps its positions and no detail; the detail is
   fitted to the positions when a lower level is about to change (before the levels above are marked stale), and
   dropped again once a stale level is evaluated. Folding edits at the current level into the stack no longer
-  re-fits every level's detail, which is why Lower Res after sculpting got faster.
+  re-fits every level's detail, which is why Lower Level after sculpting got faster.
 - **Coarse topology**: exact capacities (the polygon lists were reserved for all triangles), the quad pairing and
   the UV corner table are derived (a byte per quad says which diagonal it has).
 - **Implicit adjacency** (`Mesh::implicitAdjacency`): the working mesh of a generated level (manifold, coarse
@@ -986,10 +1038,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 995k, after edits) | 191 |
-| Higher Res (back up) | 1 |
-| Lower Res again (no edits) | 5 |
-| Higher Res again (no edits) | 1 |
+| Lower Level (to 995k, after edits) | 191 |
+| Higher Level (back up) | 1 |
+| Lower Level again (no edits) | 5 |
+| Higher Level again (no edits) | 1 |
 | Save project (228 MB) | 91 |
 | Open project | 573 |
 | Orbit: frame time, 4x antialiasing | 5.0 (200 fps) |
@@ -1024,10 +1076,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 4.0M, after edits) | 780 |
-| Higher Res (back up) | 5 |
-| Lower Res again (no edits) | 19 |
-| Higher Res again (no edits) | 5 |
+| Lower Level (to 4.0M, after edits) | 780 |
+| Higher Level (back up) | 5 |
+| Lower Level again (no edits) | 19 |
+| Higher Level again (no edits) | 5 |
 | Save project (913 MB) | 345 |
 | Open project | 2199 |
 | Orbit: frame time, 4x antialiasing | 11.6 (86 fps) |
@@ -1062,10 +1114,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 8.3M, after edits) | 1583 |
-| Higher Res (back up) | 10 |
-| Lower Res again (no edits) | 40 |
-| Higher Res again (no edits) | 10 |
+| Lower Level (to 8.3M, after edits) | 1583 |
+| Higher Level (back up) | 10 |
+| Lower Level again (no edits) | 40 |
+| Higher Level again (no edits) | 10 |
 | Save project (1905 MB) | 663 |
 | Open project | 4721 |
 | Orbit: frame time, 4x antialiasing | 20.9 (48 fps) |
@@ -1105,10 +1157,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 995k, after edits) | 110 |
-| Higher Res (back up) | 1 |
-| Lower Res again (no edits) | 5 |
-| Higher Res again (no edits) | 2 |
+| Lower Level (to 995k, after edits) | 110 |
+| Higher Level (back up) | 1 |
+| Lower Level again (no edits) | 5 |
+| Higher Level again (no edits) | 2 |
 | Save project (165 MB) | 54 |
 | Open project | 298 |
 | Open project: memory (RSS) | +414 MB, peak +457 MB |
@@ -1145,10 +1197,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 4.0M, after edits) | 434 |
-| Higher Res (back up) | 5 |
-| Lower Res again (no edits) | 24 |
-| Higher Res again (no edits) | 6 |
+| Lower Level (to 4.0M, after edits) | 434 |
+| Higher Level (back up) | 5 |
+| Lower Level again (no edits) | 24 |
+| Higher Level again (no edits) | 6 |
 | Save project (658 MB) | 231 |
 | Open project | 1047 |
 | Open project: memory (RSS) | +1621 MB, peak +1875 MB |
@@ -1185,10 +1237,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 8.3M, after edits) | 876 |
-| Higher Res (back up) | 13 |
-| Lower Res again (no edits) | 55 |
-| Higher Res again (no edits) | 11 |
+| Lower Level (to 8.3M, after edits) | 876 |
+| Higher Level (back up) | 13 |
+| Lower Level again (no edits) | 55 |
+| Higher Level again (no edits) | 11 |
 | Save project (1373 MB) | 433 |
 | Open project | 2137 |
 | Open project: memory (RSS) | +3475 MB, peak +4017 MB |
@@ -1228,10 +1280,10 @@ Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit s
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 15.9M, after edits) | 1551 |
-| Higher Res (back up) | 25 |
-| Lower Res again (no edits) | 76 |
-| Higher Res again (no edits) | 21 |
+| Lower Level (to 15.9M, after edits) | 1551 |
+| Higher Level (back up) | 25 |
+| Lower Level again (no edits) | 76 |
+| Higher Level again (no edits) | 21 |
 | Save project (2633 MB) | 846 |
 | Open project | 6307 |
 | Open project: memory (RSS) | +6822 MB, peak +7821 MB |
@@ -1269,10 +1321,10 @@ Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit s
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 26.0M, after edits) | 2776 |
-| Higher Res (back up) | 32 |
-| Lower Res again (no edits) | 133 |
-| Higher Res again (no edits) | 32 |
+| Lower Level (to 26.0M, after edits) | 2776 |
+| Higher Level (back up) | 32 |
+| Lower Level again (no edits) | 133 |
+| Higher Level again (no edits) | 32 |
 
 
 The v0.6 performance batch ran as three branches side by side (mem, brush, view); each adds its own subsection
@@ -1548,7 +1600,7 @@ Shelf and Library thumbnails differ in the UI tests only because they arrive soo
 - Back faces are drawn (twice the work on huge meshes) on open meshes, with hidden polygons, when the eye is
   inside the mesh's bounds or the near plane cuts it: the cases where they can show. On a closed mesh, a lobe
   pushed through the surface so that it is inside out (winding below zero) would show a hole where its back
-  faces are culled; ZBrush culls back faces always.
+  faces are culled.
 - The proxy is coarse on a mesh with fine detail (detail under 2.5 edges disappears while moving), and the first
   move after opening or dividing a big mesh waits for it (126 ms at 33M, 408 ms at 104M).
 - 33M orbiting is 8.7 ms with antialiasing: what's left is 16M sub-pixel triangles a frame, which only a level
@@ -1594,10 +1646,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 995k, after edits) | 184 |
-| Higher Res (back up) | 1 |
-| Lower Res again (no edits) | 5 |
-| Higher Res again (no edits) | 1 |
+| Lower Level (to 995k, after edits) | 184 |
+| Higher Level (back up) | 1 |
+| Lower Level again (no edits) | 5 |
+| Higher Level again (no edits) | 1 |
 | Orbit: frame time, 4x antialiasing | 5.0 (199 fps) |
 | Orbit: frame time, Fast Navigation (no antialiasing) | 3.2 (308 fps) |
 
@@ -1630,10 +1682,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 4.0M, after edits) | 766 |
-| Higher Res (back up) | 5 |
-| Lower Res again (no edits) | 21 |
-| Higher Res again (no edits) | 5 |
+| Lower Level (to 4.0M, after edits) | 766 |
+| Higher Level (back up) | 5 |
+| Lower Level again (no edits) | 21 |
+| Higher Level again (no edits) | 5 |
 | Orbit: frame time, 4x antialiasing | 11.8 (84 fps) |
 | Orbit: frame time, Fast Navigation (no antialiasing) | 8.7 (115 fps) |
 
@@ -1666,10 +1718,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 8.3M, after edits) | 1588 |
-| Higher Res (back up) | 10 |
-| Lower Res again (no edits) | 40 |
-| Higher Res again (no edits) | 10 |
+| Lower Level (to 8.3M, after edits) | 1588 |
+| Higher Level (back up) | 10 |
+| Lower Level again (no edits) | 40 |
+| Higher Level again (no edits) | 10 |
 | Orbit: frame time, 4x antialiasing | 20.6 (49 fps) |
 | Orbit: frame time, Fast Navigation (no antialiasing) | 14.8 (68 fps) |
 
@@ -1707,10 +1759,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 995k, after edits) | 175 |
-| Higher Res (back up) | 1 |
-| Lower Res again (no edits) | 5 |
-| Higher Res again (no edits) | 1 |
+| Lower Level (to 995k, after edits) | 175 |
+| Higher Level (back up) | 1 |
+| Lower Level again (no edits) | 5 |
+| Higher Level again (no edits) | 1 |
 | Motion proxy build (first move after an upload) | 16 |
 | Orbit: frame time, 4x antialiasing | 2.9 (347 fps) |
 | Orbit: frame time, no antialiasing | 1.7 (605 fps) |
@@ -1749,10 +1801,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 4.0M, after edits) | 748 |
-| Higher Res (back up) | 5 |
-| Lower Res again (no edits) | 25 |
-| Higher Res again (no edits) | 7 |
+| Lower Level (to 4.0M, after edits) | 748 |
+| Higher Level (back up) | 5 |
+| Lower Level again (no edits) | 25 |
+| Higher Level again (no edits) | 7 |
 | Motion proxy build (first move after an upload) | 68 |
 | Orbit: frame time, 4x antialiasing | 4.9 (202 fps) |
 | Orbit: frame time, no antialiasing | 3.2 (317 fps) |
@@ -1791,10 +1843,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 8.3M, after edits) | 1557 |
-| Higher Res (back up) | 10 |
-| Lower Res again (no edits) | 41 |
-| Higher Res again (no edits) | 10 |
+| Lower Level (to 8.3M, after edits) | 1557 |
+| Higher Level (back up) | 10 |
+| Lower Level again (no edits) | 41 |
+| Higher Level again (no edits) | 10 |
 | Motion proxy build (first move after an upload) | 142 |
 | Orbit: frame time, 4x antialiasing | 8.7 (115 fps) |
 | Orbit: frame time, no antialiasing | 6.1 (163 fps) |
@@ -1837,10 +1889,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 8.3M, after edits) | 1541 |
-| Higher Res (back up) | 10 |
-| Lower Res again (no edits) | 40 |
-| Higher Res again (no edits) | 10 |
+| Lower Level (to 8.3M, after edits) | 1541 |
+| Higher Level (back up) | 10 |
+| Lower Level again (no edits) | 40 |
+| Higher Level again (no edits) | 10 |
 | Motion proxy build (first move after an upload) | 127 |
 | Orbit: frame time, 4x antialiasing | 15.3 (66 fps) |
 | Orbit: frame time, no antialiasing | 12.2 (82 fps) |
@@ -1883,10 +1935,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 15.9M, after edits) | 2842 |
-| Higher Res (back up) | 19 |
-| Lower Res again (no edits) | 77 |
-| Higher Res again (no edits) | 19 |
+| Lower Level (to 15.9M, after edits) | 2842 |
+| Higher Level (back up) | 19 |
+| Lower Level again (no edits) | 77 |
+| Higher Level again (no edits) | 19 |
 | Motion proxy build (first move after an upload) | 241 |
 | Orbit: frame time, 4x antialiasing | 14.0 (71 fps) |
 | Orbit: frame time, no antialiasing | 11.3 (88 fps) |
@@ -1941,7 +1993,7 @@ sculptforge-cli --bench ...      # the same without the GPU (CI, servers)
 The benchmark (core/Benchmark.cpp, app/Bench.cpp) builds a sphere the way a sculptor gets one: a quad cube
 projected onto a sphere and divided (Catmull-Clark) to about 4, 16 and 33 million triangles, so the mesh has
 subdivision levels and the vertex numbering of a divided mesh. It then runs a stroke with each brush, with X
-symmetry on as in the app, a medium Draw Size (radius 0.12 on the unit sphere, about 64 pixels on a 1080p view
+symmetry on as in the app, a medium Size (radius 0.12 on the unit sphere, about 64 pixels on a 1080p view
 framing the model) and dabs 0.15 radius apart, and times per dab: the brush kernel (finding and moving the
 vertices), the normal update, the BVH refit, the pick, and with the GPU the upload of what the dab changed
 (`glFinish` included). Per stroke it times the undo record, undo and redo; then stepping subdivision levels,
@@ -1965,8 +2017,8 @@ machine before the changes.
 | Orbit, Fast Navigation (no AA while moving) | **3.1 ms** | **8.0 ms** | **14.0 ms (71 fps)** |
 | Undo / redo of a 40-dab medium stroke | 7.7 -> **3.4 ms** | 33 -> **12 ms** | 71 -> **24 ms** |
 | Undo of a 40-dab large stroke | 28 -> **11 ms** | 116 -> **38 ms** | 286 -> **77 ms** |
-| Lower Res after sculpting (folds the edits into the levels) | 300 -> **175 ms** | 1338 -> **718 ms** | 4245 -> **1539 ms** |
-| Higher Res / Lower Res without edits | 2-5 -> **1-5 ms** | 5-20 -> **5-20 ms** | 37-320 -> **10-41 ms** |
+| Lower Level after sculpting (folds the edits into the levels) | 300 -> **175 ms** | 1338 -> **718 ms** | 4245 -> **1539 ms** |
+| Higher Level / Lower Level without edits | 2-5 -> **1-5 ms** | 5-20 -> **5-20 ms** | 37-320 -> **10-41 ms** |
 | Save project | 768 -> **81 ms** | 3060 -> **321 ms** | 8115 -> **677 ms** (1.9 GB) |
 | Open project | 1696 -> **550 ms** | 8130 -> **2278 ms** | 15487 -> **5679 ms** |
 | BVH build (open, import, level change without cache) | 693 -> **215 ms** | 2912 -> **829 ms** | 6285 -> **1747 ms** |
@@ -2064,10 +2116,10 @@ Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit s
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 995k, after edits) | 300 |
-| Higher Res (back up) | 2 |
-| Lower Res again (no edits) | 5 |
-| Higher Res again (no edits) | 2 |
+| Lower Level (to 995k, after edits) | 300 |
+| Higher Level (back up) | 2 |
+| Lower Level again (no edits) | 5 |
+| Higher Level again (no edits) | 2 |
 | Save project (228 MB) | 768 |
 | Open project | 1696 |
 
@@ -2099,10 +2151,10 @@ Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit s
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 4.0M, after edits) | 1338 |
-| Higher Res (back up) | 5 |
-| Lower Res again (no edits) | 20 |
-| Higher Res again (no edits) | 5 |
+| Lower Level (to 4.0M, after edits) | 1338 |
+| Higher Level (back up) | 5 |
+| Lower Level again (no edits) | 20 |
+| Higher Level again (no edits) | 5 |
 | Save project (913 MB) | 3060 |
 | Open project | 8130 |
 
@@ -2134,10 +2186,10 @@ Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit s
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 8.3M, after edits) | 4245 |
-| Higher Res (back up) | 37 |
-| Lower Res again (no edits) | 320 |
-| Higher Res again (no edits) | 64 |
+| Lower Level (to 8.3M, after edits) | 4245 |
+| Higher Level (back up) | 37 |
+| Lower Level again (no edits) | 320 |
+| Higher Level again (no edits) | 64 |
 | Save project (1905 MB) | 8115 |
 | Open project | 15487 |
 
@@ -2174,10 +2226,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 995k, after edits) | 475 |
-| Higher Res (back up) | 2 |
-| Lower Res again (no edits) | 7 |
-| Higher Res again (no edits) | 2 |
+| Lower Level (to 995k, after edits) | 475 |
+| Higher Level (back up) | 2 |
+| Lower Level again (no edits) | 7 |
+| Higher Level again (no edits) | 2 |
 | Save project (228 MB) | 908 |
 | Open project | 2026 |
 | Orbit: frame time | 5.1 (194 fps) |
@@ -2215,10 +2267,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 4.0M, after edits) | 1492 |
-| Higher Res (back up) | 7 |
-| Lower Res again (no edits) | 20 |
-| Higher Res again (no edits) | 5 |
+| Lower Level (to 4.0M, after edits) | 1492 |
+| Higher Level (back up) | 7 |
+| Lower Level again (no edits) | 20 |
+| Higher Level again (no edits) | 5 |
 | Save project (913 MB) | 3134 |
 | Open project | 8582 |
 | Orbit: frame time | 12.7 (79 fps) |
@@ -2256,10 +2308,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 8.3M, after edits) | 2846 |
-| Higher Res (back up) | 10 |
-| Lower Res again (no edits) | 43 |
-| Higher Res again (no edits) | 10 |
+| Lower Level (to 8.3M, after edits) | 2846 |
+| Higher Level (back up) | 10 |
+| Lower Level again (no edits) | 43 |
+| Higher Level again (no edits) | 10 |
 | Orbit: frame time | 30.4 (33 fps) |
 
 ### After (feat/perf)
@@ -2296,10 +2348,10 @@ Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit s
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 995k, after edits) | 175 |
-| Higher Res (back up) | 1 |
-| Lower Res again (no edits) | 5 |
-| Higher Res again (no edits) | 1 |
+| Lower Level (to 995k, after edits) | 175 |
+| Higher Level (back up) | 1 |
+| Lower Level again (no edits) | 5 |
+| Higher Level again (no edits) | 1 |
 | Save project (228 MB) | 81 |
 | Open project | 550 |
 
@@ -2331,10 +2383,10 @@ Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit s
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 4.0M, after edits) | 718 |
-| Higher Res (back up) | 5 |
-| Lower Res again (no edits) | 20 |
-| Higher Res again (no edits) | 5 |
+| Lower Level (to 4.0M, after edits) | 718 |
+| Higher Level (back up) | 5 |
+| Lower Level again (no edits) | 20 |
+| Higher Level again (no edits) | 5 |
 | Save project (913 MB) | 321 |
 | Open project | 2278 |
 
@@ -2366,10 +2418,10 @@ Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit s
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 8.3M, after edits) | 1539 |
-| Higher Res (back up) | 10 |
-| Lower Res again (no edits) | 41 |
-| Higher Res again (no edits) | 10 |
+| Lower Level (to 8.3M, after edits) | 1539 |
+| Higher Level (back up) | 10 |
+| Lower Level again (no edits) | 41 |
+| Higher Level again (no edits) | 10 |
 | Save project (1905 MB) | 677 |
 | Open project | 5679 |
 
@@ -2406,10 +2458,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 995k, after edits) | 170 |
-| Higher Res (back up) | 1 |
-| Lower Res again (no edits) | 5 |
-| Higher Res again (no edits) | 1 |
+| Lower Level (to 995k, after edits) | 170 |
+| Higher Level (back up) | 1 |
+| Lower Level again (no edits) | 5 |
+| Higher Level again (no edits) | 1 |
 | Save project (228 MB) | 81 |
 | Open project | 572 |
 | Orbit: frame time, 4x antialiasing | 5.0 (201 fps) |
@@ -2448,10 +2500,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 4.0M, after edits) | 717 |
-| Higher Res (back up) | 5 |
-| Lower Res again (no edits) | 20 |
-| Higher Res again (no edits) | 5 |
+| Lower Level (to 4.0M, after edits) | 717 |
+| Higher Level (back up) | 5 |
+| Lower Level again (no edits) | 20 |
+| Higher Level again (no edits) | 5 |
 | Save project (913 MB) | 357 |
 | Open project | 2279 |
 | Orbit: frame time, 4x antialiasing | 11.8 (85 fps) |
@@ -2490,10 +2542,10 @@ Threads: 10, GPU: Apple M1 Pro (G13S C0), OpenGL 4.6 (Core Profile) Mesa 26.1.8.
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 8.3M, after edits) | 1529 |
-| Higher Res (back up) | 11 |
-| Lower Res again (no edits) | 55 |
-| Higher Res again (no edits) | 14 |
+| Lower Level (to 8.3M, after edits) | 1529 |
+| Higher Level (back up) | 11 |
+| Lower Level again (no edits) | 55 |
+| Higher Level again (no edits) | 14 |
 | Orbit: frame time, 4x antialiasing | 20.6 (49 fps) |
 | Orbit: frame time, Fast Navigation (no antialiasing) | 14.0 (71 fps) |
 
@@ -2529,7 +2581,7 @@ Threads: 10. Brushes use X symmetry (two dabs per step), radius 0.12 on a unit s
 
 | Operation | ms |
 |---|---:|
-| Lower Res (to 15.9M, after edits) | 2793 |
-| Higher Res (back up) | 20 |
-| Lower Res again (no edits) | 79 |
-| Higher Res again (no edits) | 20 |
+| Lower Level (to 15.9M, after edits) | 2793 |
+| Higher Level (back up) | 20 |
+| Lower Level again (no edits) | 79 |
+| Higher Level again (no edits) | 20 |

@@ -9,6 +9,7 @@
 #include "core/Commands.h"
 #include "core/FrameGovernor.h"
 #include "core/HardwareProfile.h"
+#include "core/ThreadPool.h"
 #include "core/TierConfig.h"
 
 #include <cmath>
@@ -269,6 +270,29 @@ TEST(hw_profile_mapping) {
             prev = p;
         }
     }
+}
+
+// #184: threads = 32 by hand on a many-core machine reached the pool as 16.
+TEST(hw_profile_threads_override_past_16) {
+    const HardwareInfo h = machine("NVIDIA Corporation", "NVIDIA GeForce RTX 4090/PCIe/SSE2", 24564, 65536, 96);
+    ProfileOverrides o;
+    o.threads = 32;
+    const HardwareProfile p = mapProfile(h, measured(15000.0, 25.0, 0.2, 40.0), o);
+    CHECK(p.automatic.threads == 16); // the default stays
+    CHECK(p.settings.threads == 32);
+    // Saved and read back (the next start), then the pool takes it.
+    HardwareProfile back;
+    CHECK(hardwareProfileFromJson(hardwareProfileToJson(p), back));
+    CHECK(back.settings.threads == 32);
+    CHECK(ThreadPool::sharedSizeFor(back.settings.threads, 0, 96) == 32);
+    // Above the hardware's threads the profile stops at them.
+    o.threads = 200;
+    CHECK(mapProfile(h, measured(15000.0, 25.0, 0.2, 40.0), o).settings.threads == 96);
+    // No override: every hardware thread up to 16; SF_THREADS only when nothing was set.
+    CHECK(ThreadPool::sharedSizeFor(0, 0, 96) == 16);
+    CHECK(ThreadPool::sharedSizeFor(0, 0, 8) == 8);
+    CHECK(ThreadPool::sharedSizeFor(0, 4, 96) == 4);
+    CHECK(ThreadPool::sharedSizeFor(32, 4, 96) == 32);
 }
 
 TEST(hw_profile_overrides) {
@@ -676,6 +700,31 @@ TEST(governor_target_120) {
     CHECK(g.budget() < g60.budget()); // half the frame time, fewer triangles
     g60.setTargetFps(120);
     CHECK(std::abs(g60.targetMs() - 1000.0 / 120.0) < 1e-9);
+}
+
+TEST(hw_stroke_shade_budget) {
+    // A micro stroke's shading per frame: the points budget, held to TierConfig::strokeShadeMs at the measured cost.
+    CHECK(TierConfig().strokeShadeMs == 10.0);
+    CHECK(strokeShadeBudget(1u << 20, 10.0, 0.0, 300) == (1u << 20));      // cost not measured yet: the points
+    CHECK(strokeShadeBudget(1u << 20, 0.0, 20.0, 300) == (1u << 20));      // off
+    CHECK(strokeShadeBudget(1u << 20, 10.0, 20.0, 300) == 500000);         // 10 ms at 20 ns a point
+    CHECK(strokeShadeBudget(1u << 20, 10.0, 2.0, 300) == (1u << 20));      // fast enough: the points still cap it
+    CHECK(strokeShadeBudget(0, 10.0, 20.0, 300) == 500000);                // no points limit
+    CHECK(strokeShadeBudget(1u << 20, 10.0, 1e9, 300) == 300);             // at least one patch and its ring
+}
+
+TEST(hw_micro_shade_budget) {
+    // A micro level's shading per frame: still frames all of the points; strokes and a moving view 10 ms of them.
+    TierConfig t;
+    t.shadeBudgetPoints = 1u << 20;
+    t.draftBrushMode = false; // continuous normals
+    CHECK(microShadeBudget(t, false, false, 30.0, 300) == (1u << 20)); // still: the points (nothing waits)
+    CHECK(microShadeBudget(t, false, true, 30.0, 300) == 333333);      // orbit: 10 ms at 30 ns a point
+    CHECK(microShadeBudget(t, true, false, 30.0, 300) == 333333);      // stroke: the same
+    CHECK(microShadeBudget(t, false, true, 0.0, 300) == (1u << 20));   // cost not measured yet: the points
+    t.draftBrushMode = true;
+    CHECK(microShadeBudget(t, true, false, 2.0, 300) == (1u << 18));   // draft stroke: a quarter, fast enough
+    CHECK(microShadeBudget(t, false, true, 2.0, 300) == (1u << 20));   // a moving view isn't a draft stroke
 }
 
 TEST(hw_tier_config) {

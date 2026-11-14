@@ -1,7 +1,7 @@
 # The interface language (#44), Preferences > Interface > Language: Español translates the palette bar, the
-# palettes, the shelves and the Ctrl-help; brush and tool names (SubTool, QRemesh, Clay Buildup) stay as they are.
+# palettes, the shelves and the Ctrl-help; brush and tool names (Part, QRemesh, Clay Block) stay as they are.
 # The "##" ids don't change, so every button works the same in either language, and English comes back unchanged.
-run ui_look look=classic layout=zbrush        # written for the Classic look and the ZBrush-style palette bar and shelves
+run ui_look look=classic layout=classic        # written for the Classic look and the classic palette bar and shelves
 run new_sphere subdivisions=2
 click "Preferences##palette.preferences"
 click "Interface##preferences.interface"
@@ -13,7 +13,7 @@ expect "Preferencias##palette.preferences"
 expect "Interfaz##preferences.interface"
 expect "Entrada##preferences.input"
 expect_text "Escala de la interfaz"
-expect_no_text "Popup Info opacity"
+expect_no_text "Help box opacity"
 shot preferencias
 key escape
 
@@ -24,17 +24,17 @@ expect "Dibujar##tool.draw"
 expect "Mover##tool.move"
 expect_text "Tamaño de dibujo"
 expect_text "Intensidad"
-expect "Clay Block##brush.claybuildup"
+expect "Clay Block##brush.clayblock"
 expect "Move##brush.move"
-expect "Piezas##tool.subtool"
+expect "Piezas##tool.part"
 
-# Tool > Geometry: the translated Divide divides.
+# Tool > Geometry: the translated Add Level adds a level.
 click "Geometría##tool.geometry"
 expect_value sdiv_levels == 0
 expect_text "Sin niveles de subdivisión"
-click "Dividir##geometry.divide"
+click "Añadir nivel##geometry.divide"
 expect_value sdiv_levels == 2
-expect "Res. menor##geometry.lower_res"
+expect "Nivel inferior##geometry.lower_res"
 shot geometria
 click "Geometría##tool.geometry"
 
@@ -54,8 +54,8 @@ hold none
 
 # The command palette finds commands by their Spanish names too.
 key f3
-type "##Command palette" Dividir
-expect "Dividir##pal.geometry.divide"
+type "##Command palette" Añadir
+expect "Añadir nivel##pal.geometry.divide"
 key escape
 
 # Back to English: the same items with their English labels.
@@ -67,4 +67,42 @@ expect_no_text "Idioma"
 key escape
 expect "Geometry##tool.geometry"
 expect "Draw##tool.draw"
-expect_text "Draw Size"
+expect_text "Size"
+
+# Traditional Chinese (#114): the UI fonts are built again with the Chinese glyphs (the shots show no "?" boxes);
+# the "##" ids stay, so the same clicks work, and brush names stay in English.
+click "Preferences##palette.preferences"
+click "繁體中文##language.zh-TW"
+expect_text "語言"
+expect "偏好設定##palette.preferences"
+expect "界面##preferences.interface"
+shot zh_preferences
+key escape
+expect "檔案##palette.file"
+expect "工具##palette.tool"
+expect "繪製##tool.draw"
+expect "Clay Block##brush.clayblock"
+click "幾何##tool.geometry"
+click "新增層級##geometry.divide"
+expect_value sdiv_levels == 3
+shot zh_geometry
+click "幾何##tool.geometry"
+
+# Simplified Chinese: from Traditional straight to Simplified (the fonts switch to the SC subset), mainland terms.
+click "偏好設定##palette.preferences"
+click "简体中文##language.zh-CN"
+expect_text "语言"
+expect "偏好设置##palette.preferences"
+shot zh_hans_preferences
+key escape
+expect "文件##palette.file"
+expect "绘制##tool.draw"
+expect "Clay Block##brush.clayblock"
+click "几何##tool.geometry"
+expect_text "细分"
+shot zh_hans_geometry
+click "几何##tool.geometry"
+click "偏好设置##palette.preferences"
+click "English##language.en"
+expect "Preferences##palette.preferences"
+key escape

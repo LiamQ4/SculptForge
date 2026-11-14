@@ -50,6 +50,10 @@ struct BenchOptions {
     // a base sphere at micro level `microLevel` (4: 256 micro triangles per base triangle).
     bool micro = false;
     int microLevel = 4;
+    // Focus Detail instead (--bench-focus, core/FocusDetail.h): the standard-1b asset (a billion micro triangles
+    // streamed from a detail file), or a head of `focusBase` base triangles at micro level `microLevel`.
+    bool focus = false;
+    size_t focusBase = 0;
     std::function<void(const std::string&)> log; // progress lines (optional)
     std::function<void(const std::string&)> partial; // the report so far, after each size (optional)
 };
@@ -77,20 +81,29 @@ Mesh makeBenchSphere(size_t triangles);
 // eye sockets, nose, cheekbones, jaw, ears, neck) of about `triangles` triangles, with subdivision levels. Made
 // from a formula, not a file, so every build and platform sculpts the same surface.
 Mesh makeBenchHead(size_t triangles);
+// The core-200m research scene (docs/design/core-200m.md, phase 1; --benchmark core-200m, off by default): the
+// bench head at micro level 5 with procedural detail, about 200 million micro triangles, held in memory. Written
+// once as a project in the swap folder (a few seconds) so the benchmark measures opening it; returns its path,
+// or "" with `error`. `millions` picks the size (core-100m: 100, the same head with half the base triangles).
+std::string core200mScenePath(std::string& error, const std::function<void(const std::string&)>& log = {},
+                              int millions = 200);
+// The scene itself, built in memory (what core200mScenePath saves): `baseTriangles` base triangles at `level`.
+Mesh makeCore200mMesh(size_t baseTriangles = 195313, int level = 5);
 
 // Resident memory of this process in bytes (0 where unknown).
 size_t residentBytes();
-// The most resident memory since the last reset (Linux: VmHWM; 0 where unknown); the reset returns residentBytes().
+// The most resident memory since the last reset (Linux: VmHWM; Windows / macOS: sampled by residentBytes() after a
+// reset, the system's peak before one; 0 where unknown); the reset returns residentBytes().
 size_t peakResidentBytes();
 size_t resetPeakResidentBytes();
 
-// What the scene holds in memory, summed over SubTools (Preferences > Performance, perf_info).
+// What the scene holds in memory, summed over Parts (Preferences > Performance, perf_info).
 struct MemoryUse {
     size_t mesh = 0;   // meshes with topology (Mesh::memoryBytes)
     size_t bvh = 0;    // acceleration structures
     size_t levels = 0; // subdivision level stacks (subdivBytes)
     size_t undo = 0;   // undo history (UndoStack::undoBytes)
-    size_t gpu = 0;    // vertex and index buffers the renderer keeps for the visible SubTools (an estimate)
+    size_t gpu = 0;    // vertex and index buffers the renderer keeps for the visible Parts (an estimate)
     size_t textures = 0; // painted textures (core/Texture.h): colour, layers, material channels (each texture once)
     size_t channels = 0; // of `textures`, every material channel tile alive (copies and undo steps too; TileImage::liveBytes)
     size_t paintCaches = 0; // texture painting caches of dense meshes (UV tile bins, texel maps), shared per UV layout

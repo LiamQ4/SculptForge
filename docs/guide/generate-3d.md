@@ -1,24 +1,31 @@
 # Image and text to 3D
 
+![The Generate 3D window with a sketch loaded and the Hugging Face service selected](images/generate-3d.jpg)
+
+> **In short:**
+> - Turn a picture or a written description into a 3D model you can sculpt.
+> - Use free Hugging Face models, your own ComfyUI server, paid services or an offline blockout.
+> - Generate for form, then remesh for topology.
+
 SculptForge can turn a picture or a written description into a full 3D model that you can sculpt straight
 away. This chapter covers the **Generate 3D** window, the services it can use (free Hugging Face models, your
 own ComfyUI server, paid fal.ai or Meshy, your own command line, or an offline blockout) and the offline image
 tools: relief, inflate and stamp.
 
-![The Generate 3D window with a sketch loaded and the Hugging Face service selected](images/generate-3d.jpg)
-
 ## How it works
 
+Generate for form, remesh for topology: one pass is never asked to deliver both.
+
 1. You give SculptForge an image (a sketch, concept art, a photo of a figurine) or a short description.
-2. The service you picked reconstructs a complete mesh: front, back, limbs and all.
-3. SculptForge opens the result as a new scene and, unless you turn it off, **voxel-remeshes** it into one
-   even, watertight surface, so the brushes behave the same as on any other sculpt.
+2. The service you picked reconstructs complete meshes, front, back, limbs and all: up to three **candidates** at
+   once, shown side by side as a shaded thumbnail over a flat black silhouette.
+3. You pick the strongest form. It becomes a Part, exactly as generated.
+4. **Use as sculpting base** rebuilds it as a clean, even mesh to sculpt on: a Voxel Remesh, then (unless you turn
+   it off) a Quad Remesh into clean quads with one subdivision level that holds the detail. The model as generated
+   can stay as a hidden Part, to Project Detail from later.
 
 Nothing leaves your computer until you choose a hosted service and press **Generate 3D model**. For exactly
 what is sent where, see [AI services and privacy](#privacy-and-model-licences) below.
-
-> **ZBrush:** ZBrush has no built-in image-to-3D. The closest workflow is blocking out a base mesh by hand
-> with DynaMesh or Forge Spheres; here you get a starting shape in seconds and refine it with the usual brushes.
 
 ## Open the Generate 3D window
 
@@ -26,13 +33,13 @@ Any of these opens it:
 
 - Drop an image file (PNG, JPG, BMP, TGA, PSD or GIF) onto the SculptForge window. The image is loaded as the
   picture for the **From image** tab and the window opens.
-- Open the **Generate** palette and click **Generate 3D**.
+- Open **Mesh > Generate 3D** and click **Generate 3D**.
 - Press <kbd>F3</kbd>, type `generate` and press <kbd>Enter</kbd>.
 
 The window has two tabs, **From image** and **From text**.
 
-> **Warning:** A generated model replaces the current scene without asking, and arrives as a new, untitled
-> scene. Save your work (<kbd>Ctrl</kbd>+<kbd>S</kbd>) before you generate.
+A picked model joins the scene as a new Part named **Generated**, placed beside your work. Only an untitled scene
+you haven't touched (the starting sphere) is replaced by it.
 
 ## Generate from an image
 
@@ -41,13 +48,47 @@ The window has two tabs, **From image** and **From text**.
 2. Pick a service in the drop-down under **Full 3D model (AI reconstruction)**. The default is **Hugging Face
    - free models**.
 3. Set the service's options (model, token or key, see below).
-4. Leave **Remesh for sculpting** on and set its **Resolution** (96 to 400, default 256). Higher keeps more
-   detail and makes more triangles.
-5. Click **Generate 3D model**. A progress bar shows the queue position and progress; **Cancel** stops the
-   job.
+4. Set **Candidates** (1 to 3): how many shapes to make at once. Free and local services start at 3. Paid
+   services (fal.ai, Meshy, Hyper3D) start at 1, because each candidate is one generation billed to your key;
+   above 1 the window says how many are billed.
+5. Leave **Remove flat background** on (the default) to drop the flat plane a picture's background often
+   becomes: a thin wall behind or a ground under the subject that covers most of the model's bounds. A relief
+   or a coin on its own is kept. The status line says when a plane was removed.
+6. Click **Generate 3D model**. A progress bar shows the queue position and progress ("1 of 3 ready" with
+   several candidates); **Cancel** stops the job.
 
-When it finishes, the status line reports the triangle count before and after remeshing, for example
-"Generated model imported (412000 tris, remeshed to 180000) - ready to sculpt".
+### Pick the strongest form
+
+With more than one candidate, **Pick the strongest form** shows each one as a shaded thumbnail over its silhouette,
+flat black on a light background. Judge the outline, not the detail: a strong silhouette sculpts well, and fine detail
+is what you add next.
+
+Click a picture or **Pick A** / **Pick B** / **Pick C**. If a service ignores the random seed and sends the same shape
+twice, the window says "Same shape as A".
+
+The others are discarded, unless **Keep the others as hidden Parts** is on: then they stay in the Parts list,
+hidden ("Option A", "Option C"), in the same place as the pick, to compare or use later. **Discard all** drops every candidate. With one candidate there is nothing to
+compare, so it lands at once.
+
+### Use as sculpting base
+
+Generated meshes are uneven, often holey and full of overlapping pieces: good form, poor topology. Under
+**Sculpting base**:
+
+- **Then Quad Remesh** (on by default): after the Voxel Remesh, clean all-quad topology of about
+  resolution² / 2 quads (32768 at 256), then one subdivision level projected onto the model so the detail
+  survives. Step down to the quad cage with <kbd>Shift</kbd>+<kbd>D</kbd>. Off: the even, watertight triangle
+  surface of the Voxel Remesh alone (about a second).
+- **Resolution** (96 to 400, default 256): higher keeps more detail.
+- **Keep a high-detail copy (hidden)** (on by default, for experts): the model as generated stays as a hidden Part
+  right below the base, named "Reference". Divide the base, then click **Project Detail from the
+  high-detail copy** to bring the fine detail back onto it.
+
+Click **Use as sculpting base**. The status line reports the result, for example "Sculpting base ready: remeshed to
+32768 quads (2 subdivision levels)".
+
+Quad Remesh takes about 10 to 25 seconds on a typical model; the progress bar shows it and the window stays usable.
+Undo goes back to the model as generated.
 
 ### Pictures that work well
 
@@ -70,8 +111,9 @@ Which model runs depends on the service:
 | Service | Text-to-3D model |
 |---|---|
 | Hugging Face | Hunyuan3D 2 mini Turbo (Tencent), or Hunyuan3D 2 if you chose it in **Model**. Any other choice uses Turbo |
-| fal.ai | Hunyuan3D 3.1 Rapid (Tencent) |
+| fal.ai | Rodin 2.5 (Hyper3D) when it is the chosen **Model** (Rodin 2.5 or Rodin 2.5 Fast), otherwise Hunyuan3D 3.1 Rapid (Tencent) |
 | Meshy | Meshy's own text-to-3D model |
+| Hyper3D Rodin (direct) | Rodin Gen-2.5 at the chosen **Tier** |
 | ComfyUI | The text workflow you choose (the bundled `text-to-3d` uses FLUX.1 schnell and Hunyuan3D 2.1) |
 
 ## Services
@@ -91,32 +133,45 @@ This runs each model author's own public demo on Hugging Face's shared ZeroGPU h
 
 | Model | Notes |
 |---|---|
-| TRELLIS.2 (Microsoft) | The default. The most detail, MIT licence. Needs a free Hugging Face token |
-| Hunyuan3D 2.1 (Tencent) | Detailed shapes, about 20 seconds, no token needed |
+| Hunyuan3D 2.1 (Tencent) | The default. Detailed shapes, about 20 seconds, no token needed |
+| TRELLIS.2 (Microsoft) | Best detail, MIT licence. Needs a free Hugging Face token |
 | Hunyuan3D 2 mini Turbo (Tencent) | The fastest, about 6 seconds |
 | Hunyuan3D 2 (Tencent) | |
-
-The Hunyuan3D models' licence doesn't cover use in the European Union, the United Kingdom or South Korea; the
-panel says so when one is picked. See [AI services](https://github.com/islandmed/SculptForge/blob/main/docs/ai-services.md)
-for each model's licence.
 | Stable Fast 3D (Stability AI) | Quick and simple, removes the background itself |
+
+If you never picked a model, SculptForge uses the default, so updates that change it reach you; a model you pick
+(and save) is kept. If you pick TRELLIS.2 without a token, Hunyuan3D 2.1 runs instead and the status line says
+"TRELLIS.2 needs a free Hugging Face token (Edit > Preferences > AI); used Hunyuan3D 2.1 instead."
+
+The Hunyuan3D models' licence doesn't cover use in the European Union, the United Kingdom or South Korea. The
+first time a Hunyuan3D model runs, a notice says so, and it stays in the **Model** picker's tooltip. See
+[AI services](https://github.com/islandmed/SculptForge/blob/main/docs/ai-services.md) for each model's licence.
 
 GPU time is rationed per person per day, there can be a queue at busy times, and a demo can be paused or
 changed by its owner. To raise the allowance, create a free token with read access at
-huggingface.co/settings/tokens and paste it into **HF token** (or set the `HF_TOKEN` environment variable).
+huggingface.co/settings/tokens and paste it into **HF token** or **Edit > Preferences > AI** (or set the `HF_TOKEN`
+environment variable).
 When the allowance runs out you see "Hugging Face's free GPU time is used up for now"; add a token, wait for
 it to refill, or pick another model.
 
 > **Warning:** The Hunyuan3D models are under the Tencent Hunyuan Community License, which does not cover use
-> in the European Union, the United Kingdom or South Korea. If you work there, choose TRELLIS.2, Stable Fast
-> 3D or a paid service. Each model has its own licence; read it before using results commercially.
+> in the European Union, the United Kingdom or South Korea. If you work there, choose TRELLIS.2 (free token),
+> Stable Fast 3D or a paid service. Each model has its own licence; read it before using results commercially.
 
-### fal.ai and Meshy (paid)
+### fal.ai, Meshy and Hyper3D (paid)
 
-- **fal.ai**: choose a **Model** (TRELLIS.2, Hunyuan3D 3.1 Pro, Hunyuan3D 3.1 Rapid or Meshy 6) or type any
-  fal model id into **Model id**. Paste your key from fal.ai/dashboard/keys into **API key**, or set
+- **fal.ai**: choose a **Model** (TRELLIS.2, Hunyuan3D 3.1 Pro, Hunyuan3D 3.1 Rapid, Meshy 6, Rodin 2.5 or
+  Rodin 2.5 Fast) or type any fal model id into **Model id**. Rodin 2.5 (Hyper3D) works from an image or a
+  description; SculptForge asks it for the shape only (GLB, no materials). Rodin 2.5 Fast is cheaper and
+  low poly (up to about 20K triangles), fine as a blockout before remeshing. Paste your key from fal.ai/dashboard/keys into **API key**, or set
   `FAL_KEY`.
 - **Meshy**: paste your key from meshy.ai (API settings) into **API key**, or set `MESHY_API_KEY`.
+- **Hyper3D Rodin (direct)**: Rodin Gen-2.5 on Hyper3D's own service, from an image or a description. Choose
+  a **Tier** (Extreme Low is the fastest; Extreme High costs more credits) and paste your key from the API
+  dashboard at hyper3d.ai into **API key**, then **Save settings**: the key goes into the system keychain. It
+  stays off until you add a key. Your image or description goes to Hyper3D (api.hyper3d.com) and nowhere else,
+  and SculptForge asks for the shape only (GLB, no materials). Basic API access (Creator plans) covers Extreme
+  Low and Low; the other tiers need Full access.
 
 Generations are billed to your account with that service. Errors such as "The API key was rejected", "Out of
 credits on this account" or "Rate limited" come from the service.
@@ -157,10 +212,11 @@ For error messages and their fixes, see [Troubleshooting](troubleshooting.md#com
 
 ### My generator command
 
-Runs any command line on your computer: a local open-source model, a studio service, or a script that calls a
-cloud API. Type the command into the box. It must contain `{input}` (replaced with the image path) and
-`{output}` (replaced with the path to write, ending in `.glb`). Both are quoted for you, so don't add quotes.
-The command must write a GLB file to `{output}` and exit with status 0.
+Runs any command line on your computer: a local open-source model, a studio service, or a script that calls a cloud
+API. Type the command into the box. It must contain `{input}` (replaced with the image path) and `{output}` (replaced
+with the path to write, ending in `.glb`).
+
+Both are quoted for you, so don't add quotes. The command must write a GLB file to `{output}` and exit with status 0.
 
 The box starts with a command that runs SculptForge's own silhouette inflation, which is a quick way to check
 that the pipeline works:
@@ -196,7 +252,7 @@ SculptForge. Keys in `ai.json` are readable only by your user account. See
 ## Quick shapes from an image (offline)
 
 The **From image** tab also has three offline tools under **Quick shapes (offline)**. They need no network and
-run instantly. The same tools are in the **Generate** palette as **Relief**, **Inflate** and **Stamp**.
+run instantly. The same tools are in **Mesh > Generate 3D** as **Relief**, **Inflate** and **Stamp**.
 
 | Tool | What it makes | Settings |
 |---|---|---|
@@ -211,22 +267,29 @@ run instantly. The same tools are in the **Generate** palette as **Relief**, **I
 
 Generated meshes are a starting point. A typical next pass:
 
-1. Check the size of the remeshed result in the title strip (Verts, Tris). If the detail is too soft, generate
-   again with a higher **Resolution**, or run **Tool > Remesh > Voxel Remesh** at a higher value on the
-   result.
+1. Check the size of the remeshed result in the bar along the top (the triangle count). If the detail is too soft, divide once more
+   (<kbd>Ctrl</kbd>+<kbd>D</kbd>) and **Project Detail from the high-detail copy**, or press **Use as sculpting base**
+   again with a higher **Resolution** after Undo. **Tool > Remesh** has Quad Remesh (first) and Voxel Remesh for
+   another pass.
 2. Turn on **X** symmetry if the subject is symmetrical, and sculpt the forms with Clay Block, Move and Sharp Crease ([Sculpting and brushes](sculpting.md)).
-3. Save a project (<kbd>Ctrl</kbd>+<kbd>S</kbd>): generated scenes start untitled.
+3. Save a project (<kbd>Ctrl</kbd>+<kbd>S</kbd>).
 
 ## From scripts and agents
 
 The same services are available as commands, in the console, `sculptforge-cli`, Python and MCP agents:
 
 ```sh
-# free (Hunyuan3D 2.1 on Hugging Face)
+# free, no token (Hunyuan3D 2.1 on Hugging Face, the default)
 sculptforge-cli -c 'image_to_3d path=hero.png; export_glb path=hero.glb'
 
-# TRELLIS.2 with a Hugging Face token
+# TRELLIS.2, best detail, with a free Hugging Face token (without one, Hunyuan3D 2.1 runs and says so)
 HF_TOKEN=hf_... sculptforge-cli -c 'image_to_3d path=hero.png model=trellis-2; export_glb path=hero.glb'
+
+# keep a flat background plane the service made (removed by default; remove_flat_background does it later)
+sculptforge-cli -c 'image_to_3d path=hero.png remove_background=false; export_glb path=hero.glb'
+
+# voxel remesh instead of the default Quad Remesh
+sculptforge-cli -c 'image_to_3d path=hero.png remesh=voxel; export_glb path=hero.glb'
 
 # fal.ai, keeping the raw (not remeshed) result
 FAL_KEY=... sculptforge-cli -c 'image_to_3d path=hero.png service=fal model=fal-ai/trellis-2 remesh=false; export_glb path=hero.glb'
@@ -244,8 +307,8 @@ sculptforge-cli -c 'image_inflate path=sketch.png thickness=0.7; save_project pa
 
 | Command | Key parameters |
 |---|---|
-| `image_to_3d` | `path` (required), `service` (`huggingface`, `fal`, `meshy`, `comfyui`, `command`, `inflate`), `model`, `workflow`, `url`, `seed`, `remesh` (default true), `resolution` (64 to 512, default 256) |
-| `text_to_3d` | `prompt` (required), `service` (`huggingface`, `fal`, `meshy`, `comfyui`), `model`, `workflow`, `url`, `seed`, `remesh`, `resolution` |
+| `image_to_3d` | `path` (required), `service` (`huggingface`, `fal`, `meshy`, `comfyui`, `command`, `inflate`), `model`, `workflow`, `url`, `seed`, `remesh` (`quad`, the default; `voxel`; `false`), `resolution` (64 to 512, default 256), `levels` (quad: 0 to 2 subdivision levels, default 1) |
+| `text_to_3d` | `prompt` (required), `service` (`huggingface`, `fal`, `meshy`, `comfyui`), `model`, `workflow`, `url`, `seed`, `remesh`, `resolution`, `levels` |
 | `image_relief` | `path` (required), `depth` (default 0.12), `resolution` (default 384), `invert` |
 | `image_inflate` | `path` (required), `thickness` (default 1), `resolution` (default 160), `subdivisions` (default 1) |
 | `image_project` | `path` (required), `depth` (default 0.03), `invert`. Projects from the front (+Z) |
@@ -256,6 +319,8 @@ Without `service=`, commands use the settings you saved in the app. See
 
 ## Privacy and model licences
 
+- Your art is never uploaded or used for training. AI features run only when you use them and can be turned off. Off (**Edit > Preferences > AI**, or `SF_AI=off`) hides Generate 3D; Relief, Inflate and Stamp stay. See
+  [Turning AI off](interface.md#turning-ai-off).
 - SculptForge has no servers of its own and no telemetry. A hosted service receives only the prepared image
   (or your text) and your key or token, if any.
 - The free Hugging Face option runs the model authors' own demos; SculptForge does not host or bundle any
@@ -264,13 +329,16 @@ Without `service=`, commands use the settings you saved in the app. See
   (not for use in the EU, UK or South Korea); Stable Fast 3D uses the Stability AI Community License (free
   under US $1M annual revenue). Read the licence before commercial use.
 - With ComfyUI, the picture goes only to the server address you entered.
+- Before the first request to a hosted service (each Hugging Face Space family, fal.ai, Meshy, Hyper3D, or a
+  ComfyUI on another computer), the panel says what is sent, where, and who pays, and nothing goes until you press
+  **Allow**. See [What leaves your computer](interface.md#what-leaves-your-computer).
 
 The full table of what is sent where is in `docs/ai-services.md` in the SculptForge repository.
 
 ## See also
 
 - [Sculpting and brushes](sculpting.md): refine the generated model
-- [Subdivide, Remesh, Decimate and LODs](geometry.md): voxel remesh in detail
+- [Subdivide, Remesh, Decimate and LODs](geometry.md): Quad Remesh and voxel remesh in detail
 - [Gaussian splats](splats.md): start from a phone capture instead of a picture
 - [Scripting and automation](scripting.md): batch generation from the command line
 - [Troubleshooting](troubleshooting.md#ai-services): quota and connection messages

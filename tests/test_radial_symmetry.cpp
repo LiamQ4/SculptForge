@@ -8,7 +8,7 @@
 
 #include "core/Commands.h"
 #include "core/Masking.h"
-#include "core/Polypaint.h"
+#include "core/VertexPaint.h"
 #include "core/Primitives.h"
 
 #include <algorithm>
@@ -88,7 +88,7 @@ TEST(radial_copies_count_and_order) {
         for (const SymCopy& c : mr) mirrored += c.handedness() < 0.0f;
         CHECK(mirrored == n);
     }
-    // X and Z mirrors make a half turn about Y, which an even radial count already has: no duplicates.
+    // X and Z mirrors make a half turn about Y, which an even radial copies already has: no duplicates.
     Symmetry xzr = radial(8, 1);
     xzr.x = xzr.z = true;
     CHECK(Sculptor::copies(xzr).size() == 16);

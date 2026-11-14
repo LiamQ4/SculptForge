@@ -1,0 +1,238 @@
+# Trademarks: how SculptForge names things
+
+SculptForge uses its own names for its own features and never another company's marks, anywhere in this
+repository: code, comments, identifiers, file names, tests, docs, history and tools. **This file is the only place
+the marks are written out**, so that the check below has a list and old files can still be read.
+`tools/check_marks.py` enforces it on every tracked file and path (ctest `marks`, and the CI job "Trademarks" that
+every pull request and push to main must pass).
+
+## The rules
+
+1. **No third-party sculpting-app marks** in anything in this repository: the app (menus, tooltips, commands,
+   dialogs, brush, alpha and material names), code identifiers and comments, file names, tests, the user guide,
+   the website (titles, meta and social tags, preview images), README, CHANGELOG and release notes, store listings,
+   design docs, tools, workflows, issue templates and outreach. That includes the product names and their feature
+   names (the patterns below).
+2. **Describe by function.** Our names: Forge Spheres, Lit Sphere, Part, Face group, Library, Vertex Paint, Bridge,
+   Classic sculpting keys, Classic layout, voxel remesh, QRemesh, dynamic topology, Sharp Crease, Clay Block,
+   Tendril, Plane Trim, Raise / Lower. A feature someone knows from another app is found in the command palette by
+   what it does.
+3. **No comparison copy.** Never "clone", "replacement", "alternative to ...", or price and feature tables against
+   other products.
+4. **Never copy** another app's icons, art, documentation text, assets, brush names or SDK code; never decompile
+   it; no reader for its proprietary files and no plug-in that runs inside it; never train or test AI on its output.
+5. **Exceptions: none in the tree.** Two things still need the old bytes, and neither spells them:
+   - The Bridge file format and its shared folder (`src/io/BridgeProtocol.h`,
+     `addons/blender/sculptforge_bridge/bridge_protocol.py`): byte escapes under neutral names, listed below.
+   - Files older SculptForge versions wrote (projects, configs, keymaps, radial menus, packs, scripts and macros)
+     are read through `src/core/LegacyNames.h`: a hash per old word, listed below, mapped to today's word on load
+     and never written. Not carried over: the environment variable for studio Lit Sphere folders (now
+     `SCULPTFORGE_LITSPHERE_PATH`) and the old command-line flag for face-group colours (now `--facegroups`).
+6. **History stays.** Git history and tags are not rewritten. Old release pages and assets are removed after a
+   release replaces them (`tools/release/scrub_old_releases.sh`).
+
+## The patterns
+
+`tools/check_marks.py` reads this block (case-insensitive regular expressions, one per line). A space in a pattern
+also matches a hyphen, underscore, dot or several spaces, and words joined by `-` `_` `.` are also read squashed, so
+spelling variants hit too. It reads binary files as well: zip archives and zlib streams member by member, and the
+strings of SculptForge's own formats (projects, brushes, packs, Bridge files). Bridge test files are stored with a
+neutral header that the UI test's `copy` replaces with the format's bytes. Add a mark here; never add an exception
+elsewhere.
+
+<!-- marks:begin -->
+    z ?brush
+    pixologic
+    maxon
+    \bgoz(?!o)
+    gozbrush
+    dyna ?mesh
+    z ?remesher
+    sculptris
+    subtools?|\bsub tools?\b
+    poly ?paint
+    z ?modeler
+    lightbox|\blight box\b
+    z ?spheres?
+    matcaps?|\bmat caps?\b
+    fiber ?mesh
+    lightcap|\blight cap\b
+    \bpixols?\b
+    z ?script
+    z ?plug(?:in)?s?\b
+    \bspotlight\b
+    shadow ?box
+    nano ?mesh
+    array ?mesh
+    live ?boolean
+    \bz ?(?:add|sub)\b
+    insert ?multi ?mesh
+    \bimm\b
+    poly ?groups?(?!s)
+    projection ?master
+    hd ?geometry
+    decimation ?master
+    uv ?master
+    clip ?curve
+    trim ?curve
+    poly ?group ?it
+    panel ?loops
+    dam_? ?standard
+    clay ?buildup
+    \bh ?polish\b
+    trim ?dynamic
+    move ?topological
+    \bztools?\b
+    \.ztl\b
+    mudbox
+    \bnomad\b
+    sculptgl
+    3d-?coat
+    gizmo ?3d
+    \bpoly ?f(?:rame)?\b
+    \btranspose ?all\b
+    transpose ?master
+    proxy ?pose
+<!-- marks:end -->
+
+## Their interface's labels (#117)
+
+Their exact UI labels are theirs too: SculptForge names its controls by function. Scripts and saved files keep
+their old ids (`config.store`, `rgb_intensity`, `focal`, `subdiv_lower`...); only what people read changed.
+`tools/check_marks.py` checks these as well (case-insensitive, with the space: code identifiers don't match).
+
+| Was | Now |
+|---|---|
+| Store Config (Ctrl+Shift+I) | gone: preferences save themselves; Save Layout keeps the layout; `config.store` is Save Preferences Now, no key |
+| Restore Standard UI / Restore Custom UI | Reset Layout and Shortcuts / Revert to Saved Layout |
+| Enable Customize | Customize Shelves |
+| Save UI / Load UI | Export Interface / Import Interface |
+| Draw Size / Z Intensity / RGB Intensity / Focal Shift | Size / Intensity / Colour intensity / Falloff |
+| Popup Info / Quick Info Opacity | Ctrl+hover help / Help box opacity |
+| Lower Res / Higher Res / Del Lower / Del Higher | Lower Level / Higher Level / Delete Lower / Delete Higher |
+| Project All / PA Blur | Project Detail / Blur |
+| Mask Lasso / Mask Rect | Lasso Mask / Rectangle Mask |
+| Radial Count | Radial Copies |
+| Group Masked | Group from Mask |
+| Thick / E Smt / Double / TCorne / TBorder (Extract) | Thickness / Edge Smooth / Both Sides / Corners / Border (scripts: `triangle_corners`, `triangle_border`; the old names still read) |
+| Modify Topology / Mirror And Weld | Symmetry / Make Symmetric |
+| Reconstruct Subdiv / Delete Lower / Delete Higher | Rebuild Lower Levels / Remove Below / Remove Above |
+| Divide / Smt / SDiv | Add Level / Smooth / Level |
+| Close Holes / Delete Hidden | Fill Holes / Remove Hidden |
+| Target Polygons / Half / Same / Double / Adaptive Size / Keep Groups / Detect Edges / Curves Strength | Target Quads / 50% / 100% / 200% / Size Variation / Follow Face Groups / Keep Hard Edges / Guide Strength |
+| Tool sub-palettes Deformation / Texture Map / Display; Preferences > Config | Reshape / Texture Image / Viewport Look (ordered by task); Saving & Layouts (ids `tool.deformation`, `tool.texture`, `tool.display`, `preferences.config` kept) |
+| Check Mesh / Inflate Balloon | Find Problems / Balloon |
+
+<!-- labels:begin -->
+    store ?config
+    restore (?:standard|custom) ui
+    enable customize
+    \b(?:save|load) ui\b
+    \bdraw size
+    \bz intensity
+    \brgb intensity
+    focal shift
+    popup info
+    quick info
+    \blower res\b
+    \bhigher res\b
+    \bdel (?:lower|higher)\b
+    \bproject all\b
+    \bpa blur\b
+    mask lasso
+    \bmask rect\b
+    radial count
+    group masked
+    (?-i:\bE Smt\b)
+    (?-i:\bTCorne\b)
+    (?-i:\bTBorder\b)
+    modify topology
+    mirror (?:and|&) weld
+    reconstruct subdiv
+    \bdelete (?:lower|higher|hidden)\b
+    close holes
+    \bsdiv\b
+    (?-i:\bSmt\b)
+    target polygons
+    adaptive size
+    curves strength
+    detect edges
+    \bkeep groups\b
+    \bhalf ?/ ?same ?/ ?double\b
+    tool > deformation
+    tool > display\b
+    preferences > config\b
+    (?-i:Texture Map)
+    (?-i:Check Mesh)
+    inflate balloon
+<!-- labels:end -->
+
+One-word labels that are everyday words in prose and code are refused only as a whole interface label: a string
+literal that is just the word (`"Divide"`, `"Divide##x"`) or a bold term in the guide (`**Divide**`), case as shown.
+The abbreviation above (`(?-i:...)`) is matched case as shown too, so the `geometry.smt` action id (kept, like #117's
+ids) doesn't count.
+
+<!-- whole-labels:begin -->
+    Divide
+    Deformation
+    Config
+<!-- whole-labels:end -->
+
+## Old words read on load (src/core/LegacyNames.h)
+
+FNV-1a 64 of the lower-case word. `tests/test_legacy_names.cpp` checks `LegacyNames.h` against this table.
+
+| Id | Old word | Today | Hash |
+|---|---|---|---|
+| W1 | `zbrush` | `classic` | `0x77AF1E52C70C5CDB` |
+| W2 | `subtool` | `part` | `0x50329458AC585F77` |
+| W3 | `zsphere` | `forgesphere` | `0x7A3173B83AFDBBD0` |
+| W4 | `polygroup` | `facegroup` | `0xEFC9B9E5E56A64CE` |
+| W5 | `polypaint` | `vertexpaint` | `0x06C84E19C9C3D005` |
+| W6 | `matcap` | `litsphere` | `0xEB424D5C1B5FCC43` |
+| W7 | `lightbox` | `library` | `0xFB0FEB36194770D0` |
+| W8 | `damstandard` | `sharpcrease` | `0xBCFC81F111856264` |
+| W9 | `claybuildup` | `clayblock` | `0xC1D54DDDFE279385` |
+| W10 | `zadd` | `raise` | `0x4265616148F33BEC` |
+| W11 | `zsub` | `lower` | `0xDE377B61A12DA42D` |
+| W12 | `goz` | `bridge` | `0xD4F75918FABCC503` |
+| W13 | `polyf` | `wire` | `0x90F1043555FF3A33` |
+
+Whole names, matched only as the entire string (the word alone is an everyday one a user's own brush may hold):
+
+| Id | Old name | Today | Hash |
+|---|---|---|---|
+| N1 | `brush.recipe.stone chisel` | `brush.recipe.Stone Carve` | `0x71FEDAD706F8BDF4` |
+| N2 | `stone chisel` | `Stone Carve` | `0xA8D1CB6C0FF343FC` |
+| N3 | `tcorne` | `triangle_corners` | `0x02E5D1FCA5703EA4` |
+| N4 | `tborder` | `triangle_border` | `0x374EB70D26D039F5` |
+| N5 | `part.extract_tcorne` | `part.extract_triangle_corners` | `0x3160EB71CE86F92D` |
+| N6 | `part.extract_tborder` | `part.extract_triangle_border` | `0xB780FCA1FA84E3DE` |
+
+## The Bridge format's bytes (src/io/BridgeProtocol.h)
+
+| Constant | Spells |
+|---|---|
+| `kExt`, `kExtLower`, `SF_BRIDGE_MESH_EXTS` | `.GoZ`, `.goz` |
+| `kHeader`, `kMagic` | `GoZb 1.0 ZBrush GoZ Binary`, `GoZb` |
+| `kNamePrefix` | `GoZMesh_` |
+| `kVendorFolder`, `kMacRoot` | `Pixologic`, `/Users/Shared/Pixologic` |
+| `kInboxFolder`, `kProjectsFolder`, `kAppsFolder` | `GoZZBrush`, `GoZProjects`, `GoZApps` |
+| `kObjectList`, `kApplicationFile`, `kProjectPathFile`, `kInfoFile`, `kConfigFile` | `GoZ_ObjectList.txt`, `GoZ_Application.txt`, `GoZ_ProjectPath.txt`, `GoZ_Info.txt`, `GoZ_Config.txt` |
+| `kNotifierWin`, `kNotifierMac` | `GoZZBrushFromApp.exe`, `.app` |
+| `kWinInstallDirs`, `kWinExe`, `kMacApp`, `kAppNameLower` | `C:\Program Files\Pixologic`, `C:\Program Files\Maxon`, `ZBrush.exe`, `ZBrush.app`, `zbrush` |
+
+## The notice
+
+ZBrush is a trademark of Maxon. SculptForge is not affiliated with or endorsed by Maxon. Where a page needs a notice
+at all, it says: "Product names are trademarks of their respective owners."
+
+Other apps SculptForge works with are named only to say what it works with ("Send to Maya", "Working with Maya",
+"Working with Blender"): no logos, icons or look-alike art of theirs, and none of their code or SDK ships with
+SculptForge (the Maya shelf script uses the `maya.cmds` and `maya.api` of the user's own Maya; the Blender add-on
+uses Blender's own `bpy`).
+
+- Autodesk and Maya are registered trademarks of Autodesk, Inc. SculptForge is not affiliated with or endorsed by
+  Autodesk.
+- Blender is a registered trademark of the Blender Foundation. SculptForge is not affiliated with or endorsed by the
+  Blender Foundation.

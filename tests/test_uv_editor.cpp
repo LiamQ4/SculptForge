@@ -1,7 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// UV Editor (core/Uv.h): UV topology, the unwrap solvers (LSCM, least stretch, polygroups, planar, unfold), cut
+// UV Editor (core/Uv.h): UV topology, the unwrap solvers (LSCM, least stretch, face groups, planar, unfold), cut
 // graphs for closed pieces, packing into one tile and across UDIM tiles, texel density, trim sheets, seams,
 // weld / split / straighten, the uv_* commands with undo, painted textures following the UVs, and the cost on
 // a million triangles.
@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <thread>
 
 using namespace sf;
 
@@ -55,7 +56,7 @@ size_t flippedTriangles(const Mesh& m) {
     return size_t(std::count(s.begin(), s.end(), -1.0f));
 }
 
-// A cube whose six sides are polygroups 1-6 (makeCube's), without UVs.
+// A cube whose six sides are face groups 1-6 (makeCube's), without UVs.
 Mesh cube(int res = 6) {
     Mesh m = makeCube(res);
     m.uvs.clear();
@@ -65,6 +66,69 @@ Mesh cube(int res = 6) {
 CommandResult run(Document& doc, const char* name, Args args = {}) {
     static CommandRegistry reg;
     return reg.execute(doc, name, args);
+}
+
+// `n` separate unit squares in a row (one UV island each, its UVs 0-1).
+Mesh squares(int n) {
+    Mesh m;
+    for (int i = 0; i < n; ++i) {
+        const uint32_t b = uint32_t(m.positions.size());
+        const float x = 2.0f * float(i);
+        m.positions.insert(m.positions.end(), {{x, 0, 0}, {x + 1, 0, 0}, {x + 1, 0, -1}, {x, 0, -1}});
+        m.triangles.push_back({b, b + 1, b + 2});
+        m.triangles.push_back({b, b + 2, b + 3});
+        m.uvs.insert(m.uvs.end(), {{0, 0}, {1, 0}, {1, 1}, {0, 0}, {1, 1}, {0, 1}});
+    }
+    m.recomputeAllNormals();
+    return m;
+}
+
+// `n` L-shaped islands of different sizes and arm lengths, every other one standing, flat in the y = 0 plane; their
+// UVs are the shape itself (counter-clockwise). Enough for the shape packer, and long enough that it wants to turn some.
+Mesh lShapes(int n) {
+    Mesh m;
+    for (int i = 0; i < n; ++i) {
+        const float s = 0.5f + 0.25f * float(i % 5), x0 = 12.0f * float(i), arm = 1.0f + 1.5f * float(i % 4);
+        glm::vec2 v[] = {{0, 0}, {1 + arm, 0}, {1 + arm, 1}, {0, 1}, {1, 1}, {1, 2 + arm * 0.5f}, {0, 2 + arm * 0.5f}};
+        if (i % 2)
+            for (glm::vec2& p : v) p = glm::vec2(-p.y, p.x);
+        const uint32_t b = uint32_t(m.positions.size());
+        for (const glm::vec2& p : v) m.positions.push_back(glm::vec3(x0 + p.x * s, 0.0f, -p.y * s));
+        const uint32_t tris[][3] = {{0, 1, 2}, {0, 2, 4}, {0, 4, 3}, {3, 4, 5}, {3, 5, 6}};
+        for (const auto& t : tris) {
+            m.triangles.push_back({b + t[0], b + t[1], b + t[2]});
+            for (uint32_t j : t) m.uvs.push_back(v[j] * 0.1f);
+        }
+    }
+    m.recomputeAllNormals();
+    return m;
+}
+
+double uvCross(glm::vec2 a, glm::vec2 b) { return double(a.x) * double(b.y) - double(a.y) * double(b.x); }
+
+// Two UV triangles overlap by more than `eps` (no separating axis among their edges).
+bool uvTrianglesOverlap(const glm::vec2* a, const glm::vec2* b, float eps) {
+    for (int k = 0; k < 2; ++k) {
+        const glm::vec2 *p = k ? b : a, *o = k ? a : b;
+        for (int e = 0; e < 3; ++e) {
+            const glm::vec2 d = p[(e + 1) % 3] - p[e], n = glm::normalize(glm::vec2(-d.y, d.x));
+            float pLo = 1e30f, pHi = -1e30f, oLo = 1e30f, oHi = -1e30f;
+            for (int j = 0; j < 3; ++j) {
+                pLo = std::min(pLo, glm::dot(n, p[j])), pHi = std::max(pHi, glm::dot(n, p[j]));
+                oLo = std::min(oLo, glm::dot(n, o[j])), oHi = std::max(oHi, glm::dot(n, o[j]));
+            }
+            if (pHi < oLo + eps || oHi < pLo + eps) return false;
+        }
+    }
+    return true;
+}
+
+std::vector<int> usedTiles(const Mesh& m) {
+    std::vector<int> tiles;
+    for (uint32_t t = 0; t < m.triangleCount(); ++t) tiles.push_back(udimTile((m.uvs[t * 3] + m.uvs[t * 3 + 1] + m.uvs[t * 3 + 2]) / 3.0f));
+    std::sort(tiles.begin(), tiles.end());
+    tiles.erase(std::unique(tiles.begin(), tiles.end()), tiles.end());
+    return tiles;
 }
 
 } // namespace
@@ -180,9 +244,9 @@ TEST(uv_unwrap_closed_sphere_gets_cut_automatically) {
     CHECK(uvStretchStats(doc.mesh).mean < 0.3f);
 }
 
-TEST(uv_unwrap_by_polygroups_gives_one_flat_island_per_side) {
+TEST(uv_unwrap_by_facegroups_gives_one_flat_island_per_side) {
     Document doc = makeDoc(cube());
-    const CommandResult r = run(doc, "uv_unwrap", {{"method", std::string("polygroups")}});
+    const CommandResult r = run(doc, "uv_unwrap", {{"method", std::string("facegroups")}});
     CHECK(r.ok);
     const UvTopology topo = buildUvTopology(doc.mesh);
     CHECK(topo.islandCount == 6);
@@ -199,7 +263,7 @@ TEST(uv_unwrap_by_polygroups_gives_one_flat_island_per_side) {
 TEST(uv_unwrap_planar_and_conformal_methods) {
     for (const char* method : {"planar", "conformal", "auto"}) {
         Document doc = makeDoc(cube(4));
-        uvSeamsFromPolygroups(doc.mesh, cornerTwins(doc.mesh));
+        uvSeamsFromFaceGroups(doc.mesh, cornerTwins(doc.mesh));
         const CommandResult r = run(doc, "uv_unwrap", {{"method", std::string(method)}});
         CHECK(r.ok);
         CHECK(doc.mesh.hasUvs());
@@ -211,7 +275,7 @@ TEST(uv_unwrap_planar_and_conformal_methods) {
 
 TEST(uv_unfold_keeps_pins_and_layout) {
     Document doc = makeDoc(cube(4));
-    CHECK(run(doc, "uv_unwrap", {{"method", std::string("polygroups")}}).ok);
+    CHECK(run(doc, "uv_unwrap", {{"method", std::string("facegroups")}}).ok);
     const std::vector<glm::vec2> before = doc.mesh.uvs;
     // Pin one corner after nudging it; Unfold keeps it there.
     const UvTopology topo = buildUvTopology(doc.mesh);
@@ -231,7 +295,7 @@ TEST(uv_unfold_keeps_pins_and_layout) {
 
 TEST(uv_pack_one_tile_and_udim_tiles) {
     Document doc = makeDoc(cube());
-    CHECK(run(doc, "uv_unwrap", {{"method", std::string("polygroups")}}).ok);
+    CHECK(run(doc, "uv_unwrap", {{"method", std::string("facegroups")}}).ok);
     // Across four UDIM tiles: six equal squares fit best four to a tile, so two tiles (1001, 1002) hold them
     // at twice the size one tile would give.
     CommandResult r = run(doc, "uv_pack", {{"tiles", 4.0}, {"margin", 16.0}});
@@ -259,6 +323,133 @@ TEST(uv_pack_one_tile_and_udim_tiles) {
     CHECK(islandBoxesDisjoint(doc.mesh, -15.0f / 1024.0f)); // boxes at least ~15 texels apart
 }
 
+TEST(uv_pack_udim_grid_columns_by_rows) {
+    // #135: the tile order of a Columns x Rows grid, and without columns UDIM order from first_tile as before.
+    UvPackOptions o;
+    o.columns = 4;
+    CHECK(uvPackTile(o, 0) == 1001 && uvPackTile(o, 3) == 1004 && uvPackTile(o, 4) == 1011 && uvPackTile(o, 11) == 1024);
+    CHECK(uvPackMaxTiles(o) == 40);
+    o.firstTile = 1008; // (only three columns are left in the row)
+    CHECK(uvPackTile(o, 2) == 1010 && uvPackTile(o, 3) == 1018 && uvPackMaxTiles(o) == 30);
+    o.columns = 0;
+    CHECK(uvPackTile(o, 3) == 1011 && uvPackMaxTiles(o) == 93);
+
+    // 10 x 2: twenty squares, one to a tile, fill 1001-1020.
+    Document doc = makeDoc(squares(20));
+    CommandResult r = run(doc, "uv_pack", {{"columns", 10.0}, {"rows", 2.0}, {"margin", 4.0}});
+    CHECK(r.ok);
+    CHECK(r.message.find("20 UDIM tiles") != std::string::npos);
+    std::vector<int> want;
+    for (int t = 1001; t <= 1020; ++t) want.push_back(t);
+    CHECK(usedTiles(doc.mesh) == want);
+    CHECK(uvsWithin(doc.mesh, glm::vec2(0.0f), glm::vec2(10.0f, 2.0f)));
+    CHECK(islandBoxesDisjoint(doc.mesh));
+
+    // 4 x 3 stays four wide: 1001-1004, 1011-1014, 1021-1024.
+    doc = makeDoc(squares(12));
+    CHECK(run(doc, "uv_pack", {{"columns", 4.0}, {"rows", 3.0}}).ok);
+    CHECK(usedTiles(doc.mesh) == std::vector<int>({1001, 1002, 1003, 1004, 1011, 1012, 1013, 1014, 1021, 1022, 1023, 1024}));
+    CHECK(uvsWithin(doc.mesh, glm::vec2(0.0f), glm::vec2(4.0f, 3.0f)));
+
+    // A fixed texel density spills up rows, never past the columns: 12 tiles' worth at 3 wide.
+    doc = makeDoc(squares(12));
+    r = run(doc, "uv_pack", {{"columns", 3.0}, {"rows", 1.0}, {"density", 900.0}, {"resolution", 1024.0}, {"margin", 4.0}});
+    CHECK(r.ok);
+    const std::vector<int> spill = usedTiles(doc.mesh);
+    CHECK(spill.size() == 12);
+    for (int t : spill) CHECK((t - 1001) % 10 < 3);
+    CHECK(std::abs(uvMeshDensity(doc.mesh, 1024) - 900.0f) < 9.0f);
+    // More than the grid holds: an error that names Columns.
+    doc = makeDoc(squares(12));
+    r = run(doc, "uv_pack", {{"columns", 1.0}, {"density", 900.0}, {"resolution", 1024.0}, {"first_tile", 1091.0}});
+    CHECK(!r.ok && r.message.find("Columns") != std::string::npos);
+
+    // A fit pack that can't fill the grid says so first; a full one doesn't.
+    doc = makeDoc(squares(3));
+    r = run(doc, "uv_pack", {{"columns", 10.0}, {"rows", 2.0}});
+    CHECK(r.ok && r.message.rfind("3 of 20 tiles used: the largest island limits the scale", 0) == 0);
+    doc = makeDoc(squares(4));
+    r = run(doc, "uv_pack", {{"columns", 2.0}, {"rows", 2.0}});
+    CHECK(r.ok && r.message.find("tiles used") == std::string::npos);
+
+    // Scripts' tiles= alone is as before: ten per row.
+    doc = makeDoc(squares(12));
+    CHECK(run(doc, "uv_pack", {{"tiles", 12.0}}).ok);
+    CHECK(usedTiles(doc.mesh).back() == 1012);
+}
+
+TEST(uv_pack_by_shape_keeps_islands_apart_unmirrored_and_at_one_density) {
+    // xatlas's quarter turn swaps u and v (a mirror): islands it turned were fitted back shrunk and on top of their
+    // neighbours. Islands are now only turned to their smallest box before xatlas sees them.
+    for (int tiles : {1, 4}) {
+        Mesh m = lShapes(24);
+        const UvTopology topo = buildUvTopology(m);
+        std::vector<double> before(m.triangleCount());
+        for (size_t t = 0; t < m.triangleCount(); ++t) before[t] = uvCross(m.uvs[t * 3 + 1] - m.uvs[t * 3], m.uvs[t * 3 + 2] - m.uvs[t * 3]);
+        UvPackOptions o;
+        o.tiles = tiles;
+        o.columns = tiles > 1 ? 2 : 0;
+        UvPackResult r;
+        std::string err;
+        CHECK(uvPack(m, topo, {}, o, r, err));
+        CHECK(r.tilesUsed == tiles);
+        CHECK(r.coverage > 0.45f && r.coverage <= 1.0f); // (measured: the islands' UV area over the tiles)
+        std::vector<double> uvArea(topo.islandCount, 0.0), area(topo.islandCount, 0.0);
+        size_t mirrored = 0, overlaps = 0;
+        for (size_t t = 0; t < m.triangleCount(); ++t) {
+            const double c = uvCross(m.uvs[t * 3 + 1] - m.uvs[t * 3], m.uvs[t * 3 + 2] - m.uvs[t * 3]);
+            if ((c > 0.0) != (before[t] > 0.0)) ++mirrored;
+            uvArea[topo.island[t]] += 0.5 * std::abs(c);
+            const glm::uvec3 tri = m.triangles[t];
+            area[topo.island[t]] += 0.5 * double(glm::length(glm::cross(m.positions[tri.y] - m.positions[tri.x], m.positions[tri.z] - m.positions[tri.x])));
+            for (size_t u = t + 1; u < m.triangleCount(); ++u)
+                if (topo.island[t] != topo.island[u] && uvTrianglesOverlap(&m.uvs[t * 3], &m.uvs[u * 3], 1e-5f)) ++overlaps;
+        }
+        CHECK(mirrored == 0);
+        CHECK(overlaps == 0);
+        if (tiles == 1) { // (across tiles the largest island may be shrunk to fit one)
+            std::vector<double> d;
+            for (uint32_t i = 0; i < topo.islandCount; ++i) d.push_back(std::sqrt(uvArea[i] / area[i]));
+            std::vector<double> sorted = d;
+            std::sort(sorted.begin(), sorted.end());
+            for (double x : d) CHECK(std::abs(x / sorted[sorted.size() / 2] - 1.0) < 0.025);
+        }
+    }
+}
+
+TEST(uv_pack_reports_progress_and_cancels) {
+    Mesh m = lShapes(24);
+    const UvTopology topo = buildUvTopology(m);
+    UvPackOptions o;
+    o.tiles = 4;
+    o.columns = 2;
+    UvPackResult r;
+    std::string err;
+    // Progress comes on the calling thread, rising.
+    const std::thread::id caller = std::this_thread::get_id();
+    std::vector<float> seen;
+    bool otherThread = false;
+    CHECK(uvPack(m, topo, {}, o, r, err, [&](float f) {
+        otherThread |= std::this_thread::get_id() != caller;
+        seen.push_back(f);
+        return true;
+    }));
+    CHECK(!otherThread);
+    CHECK(seen.size() >= 2);
+    CHECK(std::is_sorted(seen.begin(), seen.end()));
+    CHECK(seen.back() <= 1.0f);
+    // Cancelled at once, or part way: false, "Cancelled", the UVs as they were.
+    for (int after : {0, 3}) {
+        Mesh c = lShapes(24);
+        const std::vector<glm::vec2> uvs = c.uvs;
+        int calls = 0;
+        err.clear();
+        CHECK(!uvPack(c, topo, {}, o, r, err, [&](float) { return calls++ < after; }));
+        CHECK(err == "Cancelled");
+        CHECK(c.uvs == uvs);
+    }
+}
+
 TEST(uv_pack_rectangles) {
     // Sixteen quarter-tile squares fill one tile; a seventeenth needs a second; an oversized one never fits.
     std::vector<glm::vec2> sizes(16, glm::vec2(0.25f)), pos;
@@ -275,7 +466,7 @@ TEST(uv_pack_rectangles) {
 
 TEST(uv_texel_density_set_and_match) {
     Document doc = makeDoc(cube());
-    CHECK(run(doc, "uv_unwrap", {{"method", std::string("polygroups")}}).ok);
+    CHECK(run(doc, "uv_unwrap", {{"method", std::string("facegroups")}}).ok);
     // Make the islands differ, then match them.
     UvTopology topo = buildUvTopology(doc.mesh);
     std::vector<uint8_t> one(topo.islandCount, 0);
@@ -325,15 +516,15 @@ TEST(uv_trim_sheet_strips) {
     CHECK(!parseTrimStrips("banana", strips, err));
 
     Document doc = makeDoc(cube());
-    CHECK(run(doc, "uv_unwrap", {{"method", std::string("polygroups")}}).ok);
-    CHECK(run(doc, "uv_select", {{"op", std::string("polygroup")}, {"group", 1.0}, {"mode", std::string("island")}}).ok);
+    CHECK(run(doc, "uv_unwrap", {{"method", std::string("facegroups")}}).ok);
+    CHECK(run(doc, "uv_select", {{"op", std::string("facegroup")}, {"group", 1.0}, {"mode", std::string("island")}}).ok);
     CommandResult r = run(doc, "uv_trim", {{"strip", 2.0}, {"strips", std::string("4")}, {"fit_width", true}});
     CHECK(r.ok);
     // The selected island sits in strip 2 (v 0.5 - 0.75) across u 0-1.
     const UvTopology topo = buildUvTopology(doc.mesh);
     glm::vec2 lo(1e30f), hi(-1e30f);
     for (uint32_t t = 0; t < doc.mesh.triangleCount(); ++t) {
-        if (doc.mesh.polygroupAt(t) != 1) continue;
+        if (doc.mesh.facegroupAt(t) != 1) continue;
         for (uint32_t j = 0; j < 3; ++j) lo = glm::min(lo, doc.mesh.uvs[t * 3 + j]), hi = glm::max(hi, doc.mesh.uvs[t * 3 + j]);
     }
     CHECK(lo.y >= 0.5f - 1e-4f && hi.y <= 0.75f + 1e-4f);
@@ -341,9 +532,9 @@ TEST(uv_trim_sheet_strips) {
     CHECK(hi.y - lo.y > 0.2f); // filled the strip's height (less the margin)
 }
 
-TEST(uv_seams_path_polygroups_and_angle) {
+TEST(uv_seams_path_facegroups_and_angle) {
     Document doc = makeDoc(cube(4));
-    CommandResult r = run(doc, "uv_seam", {{"op", std::string("polygroups")}});
+    CommandResult r = run(doc, "uv_seam", {{"op", std::string("facegroups")}});
     CHECK(r.ok);
     CHECK(uvSeamCount(doc.mesh) == 12 * 4); // 12 cube edges, 4 segments each
     CHECK(run(doc, "uv_seam", {{"op", std::string("clear_all")}}).ok);
@@ -368,7 +559,7 @@ TEST(uv_seams_path_polygroups_and_angle) {
 
 TEST(uv_weld_split_straighten) {
     Document doc = makeDoc(cube(4));
-    CHECK(run(doc, "uv_unwrap", {{"method", std::string("polygroups")}}).ok);
+    CHECK(run(doc, "uv_unwrap", {{"method", std::string("facegroups")}}).ok);
     // Split one side's faces into two islands by its half.
     UvTopology topo = buildUvTopology(doc.mesh);
     const size_t before = topo.islandCount;
@@ -376,7 +567,7 @@ TEST(uv_weld_split_straighten) {
     for (uint32_t t = 0; t < faces.size(); ++t) {
         const glm::uvec3 tri = doc.mesh.triangles[t];
         const glm::vec3 c = (doc.mesh.positions[tri.x] + doc.mesh.positions[tri.y] + doc.mesh.positions[tri.z]) / 3.0f;
-        faces[t] = doc.mesh.polygroupAt(t) == 1 && c.x + c.y + c.z > 0.0f;
+        faces[t] = doc.mesh.facegroupAt(t) == 1 && c.x + c.y + c.z > 0.0f;
     }
     doc.uvSelection.mode = UvSelectMode::Face;
     doc.uvSelection.faces = faces;
@@ -401,7 +592,7 @@ TEST(uv_weld_split_straighten) {
 
 TEST(uv_commands_undo_redo_exactly) {
     Document doc = makeDoc(cube());
-    CHECK(run(doc, "uv_unwrap", {{"method", std::string("polygroups")}}).ok);
+    CHECK(run(doc, "uv_unwrap", {{"method", std::string("facegroups")}}).ok);
     const std::vector<glm::vec2> a = doc.mesh.uvs;
     CHECK(run(doc, "uv_transform", {{"rotate", 30.0}, {"scale", 0.5}, {"move_u", 0.1}}).ok);
     const std::vector<glm::vec2> b = doc.mesh.uvs;
@@ -423,7 +614,7 @@ TEST(uv_commands_undo_redo_exactly) {
 
 TEST(uv_selection_modes_convert) {
     Document doc = makeDoc(cube(4));
-    CHECK(run(doc, "uv_unwrap", {{"method", std::string("polygroups")}}).ok);
+    CHECK(run(doc, "uv_unwrap", {{"method", std::string("facegroups")}}).ok);
     CHECK(run(doc, "uv_select", {{"op", std::string("face")}, {"face", 0.0}, {"mode", std::string("face")}}).ok);
     CHECK(doc.uvSelection.count() == 1);
     CHECK(run(doc, "uv_select", {{"op", std::string("mode")}, {"mode", std::string("island")}}).ok);
@@ -442,13 +633,13 @@ TEST(uv_painted_texture_follows_the_new_layout) {
     // Paint each side of the cube its own colour, then repack: the model looks the same (keep_texture), but
     // with keep_texture=false the colours slide.
     Document doc = makeDoc(cube(4));
-    CHECK(run(doc, "uv_unwrap", {{"method", std::string("polygroups")}}).ok);
+    CHECK(run(doc, "uv_unwrap", {{"method", std::string("facegroups")}}).ok);
     CHECK(run(doc, "texture_create", {{"size", std::string("1024")}}).ok);
     Mesh& m = doc.mesh;
     PaintTexture& tex = *m.texture;
     bakeTexels(m, tex, [&](uint32_t t, float, float, float, int x, int y) {
         uint8_t* px = &tex.pixels[(size_t(y) * size_t(tex.width) + size_t(x)) * 4];
-        const uint32_t g = m.polygroupAt(t);
+        const uint32_t g = m.facegroupAt(t);
         px[0] = uint8_t(g * 40), px[1] = uint8_t(255 - g * 30), px[2] = uint8_t(g * 20), px[3] = 255;
     }, true);
     tex.markAllDirty();
@@ -477,7 +668,7 @@ TEST(uv_painted_texture_follows_the_new_layout) {
 
 TEST(uv_project_round_trip_keeps_seams_and_pins) {
     Document doc = makeDoc(cube(4));
-    CHECK(run(doc, "uv_seam", {{"op", std::string("polygroups")}}).ok);
+    CHECK(run(doc, "uv_seam", {{"op", std::string("facegroups")}}).ok);
     CHECK(run(doc, "uv_unwrap", {{"method", std::string("conformal")}}).ok);
     std::vector<uint32_t> corners = {0, 1, 2};
     uvSetPins(doc.mesh, corners, true);
@@ -491,19 +682,19 @@ TEST(uv_project_round_trip_keeps_seams_and_pins) {
     std::filesystem::remove(path);
 }
 
-TEST(uv_editor_million_triangles_stay_interactive) {
+TEST(nightly_uv_editor_million_triangles_stay_interactive) {
     // An 8-level icosphere: 1.3M triangles. Topology, measures, a transform and a pack are each well under the
-    // time a frame or a click can take; a full unwrap by polygroups (in the background in the app) takes seconds.
+    // time a frame or a click can take; a full unwrap by face groups (in the background in the app) takes seconds.
     Mesh m = makeIcosphere(8);
-    // Eight polygroups by octant, as seams.
-    m.ensurePolygroups();
+    // Eight face groups by octant, as seams.
+    m.ensureFaceGroups();
     for (uint32_t t = 0; t < m.triangleCount(); ++t) {
         const glm::vec3 c = m.positions[m.triangles[t].x];
-        m.polygroups[t] = (c.x > 0) + 2 * (c.y > 0) + 4 * (c.z > 0);
+        m.facegroups[t] = (c.x > 0) + 2 * (c.y > 0) + 4 * (c.z > 0);
     }
     std::printf("  %zu triangles\n", m.triangleCount());
     UvUnwrapOptions o;
-    o.method = UvUnwrapMethod::Polygroups;
+    o.method = UvUnwrapMethod::FaceGroups;
     o.iterations = 4;
     UvUnwrapResult r;
     std::string err;
@@ -538,7 +729,7 @@ TEST(uv_editor_million_triangles_stay_interactive) {
     CHECK(flippedTriangles(m) < m.triangleCount() / 1000);
 }
 
-TEST(uv_unwrap_lion_head_by_sharp_edges) {
+TEST(nightly_uv_unwrap_lion_head_by_sharp_edges) {
     // A real sculpt with holes and thin strands: the islands don't fold, overlap or leave the tile.
     Document doc;
     std::string lion = __FILE__;

@@ -1,5 +1,12 @@
 # Projects, autosave and snapshots
 
+![The Library showing project thumbnails](images/library.jpg)
+
+> **In short:**
+> - A project (`.sfproj`) saves the whole scene in one file.
+> - **File > Save** (<kbd>Ctrl</kbd>+<kbd>S</kbd>) saves; **File > Open...** (<kbd>Ctrl</kbd>+<kbd>O</kbd>) opens.
+> - Autosave, crash recovery and snapshots keep your work safe.
+
 A SculptForge project (`.sfproj`) saves your whole scene in one file, so you can close the app and carry on exactly
 where you stopped. This chapter covers saving and opening projects, the unsaved-changes prompt, recent files,
 autosave and crash recovery, snapshots, and the Library tabs that show your work.
@@ -13,7 +20,7 @@ A `.sfproj` file holds everything SculptForge knows about the scene:
 - each Part's [Quad Remesh Guides](retopology.md#quad-remesh-guides), the curves Quad Remesh's edge loops follow;
 - loaded [Gaussian splats](splats.md) and their placement;
 - your custom brushes, so a project opened on another computer still has them;
-- the camera, the material and display settings, the brush, Draw Size, Intensity (and Smooth's), RGB Intensity, Falloff, paint colour and symmetry;
+- the camera, the material and display settings, the brush, Size, Intensity (and Smooth's), Colour intensity, Falloff, paint colour and symmetry;
 - a thumbnail, shown in the Library.
 
 Undo history isn't saved: an opened project starts with a clean history.
@@ -21,20 +28,18 @@ Undo history isn't saved: an opened project starts with a clean history.
 Model formats such as OBJ, GLB or FBX can't hold all of this (masks, hidden faces, splats, brushes), so writing
 them is an export, not a save. See [Exporting](exporting.md).
 
-> **ZBrush:** A `.sfproj` is the equivalent of a ZBrush project (`.ZPR`), and saving a single Part scene is close
-> to saving a `.ZTL`. SculptForge can't read `.ZPR` files, and opens a `.ZTL` only after
-> the [ZTL Export plug-in](coming-from-zbrush.md#bring-your-ztools-over) converted it in ZBrush; otherwise bring
-> models over with [Send to ZBrush](exporting.md) or as OBJ, FBX or GLB.
-
 ## Save a project
 
 - **File > Save** (<kbd>Ctrl</kbd>+<kbd>S</kbd>) saves to the current project. The first time, it asks for a file
   name.
 - **File > Save As...** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>) saves under a new name.
-- Clicking the document name in the title strip also saves.
+- **File > Save Visible Parts As...** saves a copy with only the Parts you can see (hidden ones are left out), keeping
+  their materials, layers, folders and the scene's cameras and settings. The open project stays as it is.
+- In the Classic layout, clicking the document name in the title strip also saves.
 
-The title strip shows the document name with `*` after it while there are unsaved changes, and the window title
-starts with `*`. Any edit in any Part counts, as do splat edits and layer weight changes.
+The bar along the top shows the file name with `*` after it while there are unsaved changes, and so does the window
+title, which starts with the file name. Any edit in any Part counts, as do splat edits and layer weight changes.
+The window title and the top bar also show the SculptForge version, so a screenshot says which one you run.
 
 If you opened a model file (an OBJ, say) rather than a project, **Save** asks where to save a new `.sfproj`; the
 original model file is left alone.
@@ -52,6 +57,38 @@ original model file is left alone.
 
 When you open a project, its saved camera, material and brush settings come back too.
 
+## Start from a starter mesh
+
+Instead of a sphere, start from a base mesh with clean, even quads: **File > New from Starter Mesh** lists them,
+the Library's **Tool** tab has a **Starter meshes** folder with a thumbnail of each, and the welcome's
+**Start from a head** opens the human head straight away.
+
+| Starter mesh | What it is |
+|---|---|
+| Human Head | A neutral head and neck with loops round the eyes and mouth, for portraits |
+| Bust | Head, neck, shoulders and upper chest |
+| Full Body | A human figure in A-pose, 167 cm tall |
+| Human (male, A-pose) | An athletic adult man, 180 cm, with UVs: edge loops round the eyes, mouth, shoulders, elbows, knees, fingers and toes. The muscle definition (pecs, abs, obliques, deltoids, quads, calves) is a sculpt layer called **Definition**: turn it down in Layers for a plain body, or step down to the untouched base cage |
+| Hand, Foot, Ear | A left hand (raised, palm to the front), a left foot and ankle, a left ear |
+| Eye | An eyeball 24 mm across, with the cornea and rings of quads round the pupil |
+| Stylised Head | A cartoon head: big cranium and eyes, small nose and jaw |
+| Creature Head | A dragon or creature blockout: skull, jaw and two horns, each its own [Part](parts.md) |
+| Torso | A human torso from the neck to the upper thighs |
+| Rounded Box, Cylinder, Capsule, Ring | Hard-surface primitives with bevelled edges and quad caps |
+
+Every starter mesh is life size in centimetres, centred, standing on the ground and looking down +Z, and the
+symmetric ones are exactly symmetric, so [X symmetry](sculpting.md) works from the first stroke. The Hand, Foot,
+Ear, Head, Bust and Torso are cut from a body, so they have open edges where they were cut.
+
+A starter mesh opens with subdivision levels (two, or one for the Full Body; the Human opens at about 430 000
+triangles, its definition sculpted on the first level, and takes a third and fourth level for pores and fine detail): block out the big forms at
+**Level 1**, the base cage, and step up for the detail (see [Geometry](geometry.md)). It opens as a new, unsaved
+scene: **Save** asks for a name. Double-click a tile to open it; <kbd>Shift</kbd>+double-click appends its base
+cage as a Part, for example an Eye next to a head.
+
+The human meshes come from the MakeHuman base mesh and, for the Human (male), its shape targets, which MakeHuman
+released into the public domain (CC0); the others are made by SculptForge's own build script. You may use them for anything, including commercial work.
+
 ## The unsaved-changes prompt
 
 When the scene has unsaved changes, **New Sphere**, **New Plane**, **Open...**, **Open Recent**, dropping a model or
@@ -67,7 +104,7 @@ Dropping an image or a `.sfbrush` file never asks, because it doesn't replace th
 
 While the scene has unsaved changes, SculptForge writes a recovery copy every few minutes (every 5 minutes by
 default; it waits until you finish a stroke). Change the interval, or turn it off with 0, in
-**Preferences > Autosave** or with the **Autosave (min)** slider in the File palette (0 to 60 minutes).
+**Edit > Preferences > Autosave** or with the **Autosave (min)** slider in the File palette (0 to 60 minutes).
 
 The recovery copy is `autosave.sfproj` in the SculptForge settings folder (see
 [Troubleshooting](troubleshooting.md) for where that is on your system). It is deleted once your work is saved or
@@ -85,8 +122,8 @@ The autosave also appears first in the Library **Snapshots** tab while it exists
 
 ## Snapshots
 
-**File > Save Snapshot** (also the **Snapshot** button in the title strip) saves a timestamped copy of the whole
-scene (ZBrush users: QuickSave). Your project file, its name and its unsaved state are not changed, so a snapshot
+**File > Save Snapshot** (also the **Snapshot** button in the Classic layout's title strip) saves a timestamped copy of the whole
+scene (experienced sculptors: QuickSave). Your project file, its name and its unsaved state are not changed, so a snapshot
 is safe to take before any risky step.
 
 - Copies go to the `QuickSave` folder of your library (by default `Documents/SculptForge/QuickSave`), named like
@@ -95,7 +132,7 @@ is safe to take before any risky step.
 - They appear in the Library **Snapshots** tab, newest first, labelled with their date and time. Double-click one
   to open it. The tab also has a **Save now** button.
 
-With the ZBrush-style keys (**Preferences > Input**) <kbd>9</kbd> takes a snapshot; otherwise it has no default
+With the Classic sculpting keys (**Edit > Preferences > Input**) <kbd>9</kbd> takes a snapshot; otherwise it has no default
 shortcut. To give it one, hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>, click the **Snapshot**
 button and press a key (see [The interface](interface.md)).
 
@@ -110,13 +147,12 @@ on first use with these sub-folders:
 | `Tools` | Tool | Models to open or append as Parts |
 | `Brushes` | Brush | `.sfbrush` files |
 | `Alphas` | Alpha | Grayscale images for brush alphas |
-| `MatCaps` | Material | Lit Sphere images, loaded as materials at start-up |
+| `LitSpheres` | Material | Lit Sphere images, loaded as materials at start-up |
 | `Images` | Image | Sketches and concept art for Generate 3D |
 | `Splats` | Splats | Gaussian splat captures |
 | `QuickSave` | Snapshots | Snapshots |
 
-Change it in **Preferences > Library > Library folder**, then Store Config (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd>)
-to keep the setting.
+Change it in **Edit > Preferences > Library > Library folder**; the setting saves itself.
 
 Press <kbd>,</kbd> (comma) to show the Library. The tabs that matter for projects:
 
@@ -128,8 +164,6 @@ Press <kbd>,</kbd> (comma) to show the Library. The tabs that matter for project
 Double-click a tile to open it (you are asked about unsaved changes first). In the **Tool** tab,
 <kbd>Shift</kbd>+double-click a model to append it as a Part instead.
 
-![The Library showing project thumbnails](images/lightbox.jpg)
-
 ## Scripting
 
 | Command | What it does |
@@ -138,13 +172,14 @@ Double-click a tile to open it (you are asked about unsaved changes first). In t
 | `open_project path=work/dragon.sfproj` | Open a project (`open` also recognises `.sfproj`) |
 | `open path=scan.obj` | Open a model, splat capture or project |
 | `new_sphere subdivisions=6` / `new_plane resolution=128` | Start a new scene |
+| `new_starter_mesh name=human-head` | Start from a starter mesh (`levels=0` for the bare base cage) |
 
 Projects saved by `sculptforge-cli` or Python open in the app too. For the file layout, see
 [docs/project-format.md](https://github.com/islandmed/SculptForge/blob/main/docs/project-format.md).
 
 ## See also
 
-- [The interface](interface.md): Library, shortcuts and Store Config
+- [The interface](interface.md): Library, shortcuts and saving the layout
 - [Parts](parts.md)
 - [Exporting](exporting.md): formats for other applications
 - [Troubleshooting](troubleshooting.md): where settings and the autosave live

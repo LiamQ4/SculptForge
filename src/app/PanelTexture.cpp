@@ -1,17 +1,18 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Texture Map sub-palette (Tool palette): texture painting on UVs (core/Texture.h). Auto UV unwraps the
-// SubTool on a worker thread (core/AutoUv.h, xatlas); New gives it a 1K-8K texture, after which the Paint
+// Texture Image sub-palette (Tool palette): texture painting on UVs (core/Texture.h). Auto UV unwraps the
+// Part on a worker thread (core/AutoUv.h, xatlas); New gives it a 1K-8K texture, after which the Paint
 // brush, Rgb sculpting, fills and the Paint Layers palette work on the texture (the Vertex / Texture toggle
-// switches back). Polypaint <-> Texture convert, Import / Export load and save PNGs, Show UVs draws the
+// switches back). Vertex paint <-> Texture convert, Import / Export load and save PNGs, Show UVs draws the
 // texture with the UV layout over it. Everything but Auto UV and the file dialogs goes through commands,
 // so it is undoable and scriptable.
 #include "app/App.h"
+#include "app/NativeDialog.h"
 #include "app/Demo.h"
 #include "app/Ui.h"
 
-#include "core/Polypaint.h"
+#include "core/VertexPaint.h"
 #include "core/TextureTransfer.h"
 
 #include <IconsLucide.h>
@@ -29,7 +30,7 @@ namespace sf {
 
 namespace {
 
-constexpr const char* kPath = "Tool > Texture Map";
+constexpr const char* kPath = "Tool > Texture Image";
 constexpr int kSizes[] = {1024, 2048, 4096, 8192};
 constexpr const char* kSizeLabels[] = {"1K", "2K", "4K", "8K"};
 
@@ -38,12 +39,12 @@ enum TextureFile { kExportTexture, kImportTexture };
 struct TextureDialog {
     App* app = nullptr;
     TextureFile kind = kExportTexture;
-    uint32_t subtool = 0;
+    uint32_t part = 0;
     bool owned = false;
 };
 TextureDialog g_dialogs[2];
 std::mutex g_fileMutex;
-struct TextureFileResult { TextureFile kind; std::string path; uint32_t subtool; };
+struct TextureFileResult { TextureFile kind; std::string path; uint32_t part; };
 std::vector<TextureFileResult> g_files;
 
 const SDL_DialogFileFilter kPngFilter[] = {{"PNG image", "png"}};
@@ -57,7 +58,7 @@ void SDLCALL onTextureFile(void* user, const char* const* files, int) {
         if (d->kind == kExportTexture && std::filesystem::path(std::u8string(path.begin(), path.end())).extension().empty())
             path += ".png";
         std::lock_guard lock(g_fileMutex);
-        g_files.push_back({d->kind, std::move(path), d->subtool});
+        g_files.push_back({d->kind, std::move(path), d->part});
     }
     if (d->owned) delete d;
 }
@@ -117,15 +118,15 @@ void App::registerTextureUiActions() {
     add("draw.paint_vertex", "Vertex", "Draw", [this] { runCommand("paint_target", {{"target", std::string("vertex")}}); },
         [this] { return !paintsTexture(doc_.mesh); }, textured,
         "Paint into the vertices (vertex paint): the colour resolution is the mesh's. Shown when the Part has a "
-        "texture (Tool > Texture Map).");
+        "texture (Tool > Texture Image).");
     add("draw.paint_texture", "Texture", "Draw", [this] { runCommand("paint_target", {{"target", std::string("texture")}}); },
         [this] { return paintsTexture(doc_.mesh); }, textured,
         "Paint into the Part's texture: the colour resolution comes from the texture, not the mesh. The Paint "
         "brush, Rgb sculpting, fills and Paint Layers all work on it.");
-    // Shown on the top shelf and in the Color palette while painting a SubTool that has no texture yet.
+    // Shown on the top shelf and in the Color palette while painting a Part that has no texture yet.
     add("draw.new_texture", "New Texture", "Draw", [this] { startNewTexture(); }, nullptr,
         [this] { return !autoUv_ && doc_.mesh.triangleCount() > 0; },
-        "Start texture painting: give the Part a texture (the size chosen in Tool > Texture Map, 2K by default) "
+        "Start texture painting: give the Part a texture (the size chosen in Tool > Texture Image, 2K by default) "
         "so paint goes into texels instead of vertices, and the detail comes from the texture, not the mesh. "
         "Without UVs, Auto UV unwraps the model first (in the background, with its progress in the status bar).",
         "texture_create");
@@ -145,19 +146,19 @@ void App::registerTextureUiActions() {
         "texture_create");
     add("texture.show_uvs", "Show UVs", kPath, [this] { showUvView_ = !showUvView_; }, [this] { return showUvView_; },
         [this] { return doc_.mesh.hasUvs(); }, "Show the texture with the UV layout drawn over it, below these buttons.");
-    add("texture.from_polypaint", "Vertex Paint > Texture", kPath, [this] { runCommand("texture_from_polypaint"); }, nullptr,
+    add("texture.from_vertexpaint", "Vertex Paint > Texture", kPath, [this] { runCommand("texture_from_vertexpaint"); }, nullptr,
         [this] { return doc_.mesh.hasUvs() && doc_.mesh.hasColors(); },
         "Bake the vertex paint (all paint layers) into the active texture layer. Makes a 2K texture if there is none.",
-        "texture_from_polypaint");
-    add("texture.to_polypaint", "Texture > Vertex Paint", kPath, [this] { runCommand("polypaint_from_texture"); }, nullptr,
+        "texture_from_vertexpaint");
+    add("texture.to_vertexpaint", "Texture > Vertex Paint", kPath, [this] { runCommand("vertexpaint_from_texture"); }, nullptr,
         textured,
         "Copy the texture into the vertex paint of every vertex (detail finer than the mesh is lost).",
-        "polypaint_from_texture");
+        "vertexpaint_from_texture");
     add("texture.export", "Export Texture...", kPath,
-        [this] { SDL_ShowSaveFileDialog(onTextureFile, &g_dialogs[kExportTexture], window_, kPngFilter, 1, nullptr); },
+        [this] { sf::dialogs::saveFile(onTextureFile, &g_dialogs[kExportTexture], window_, kPngFilter, 1, nullptr); },
         nullptr, textured, "Save the texture (every visible layer composited) as a PNG image.", "texture_export");
     add("texture.import", "Import Texture...", kPath,
-        [this] { SDL_ShowOpenFileDialog(onTextureFile, &g_dialogs[kImportTexture], window_, kImageFilters, 2, nullptr, false); },
+        [this] { sf::dialogs::openFile(onTextureFile, &g_dialogs[kImportTexture], window_, kImageFilters, 2, nullptr, false); },
         nullptr, [this] { return doc_.mesh.hasUvs(); },
         "Load an image as the Part's texture (replacing its layers; undoable).", "texture_import");
     add("texture.delete", "Delete Texture", kPath, [this] { runCommand("texture_delete"); }, nullptr,
@@ -191,17 +192,32 @@ void App::startNewTexture() {
     runCommand("texture_create", {{"size", std::to_string(kSizes[std::clamp(textureSizeChoice_, 0, 3)])}});
 }
 
-void App::startAutoUv() {
+CommandResult App::startAutoUvCommand(const Args& a) {
+    if (doc_.mesh.triangleCount() == 0) return {false, "There is no mesh to unwrap"};
+    if (autoUv_) return {false, "Auto UV is already running"};
+    // (resolution as the core command reads it: core/TextureCommands.cpp)
+    const int res = a.contains("resolution") ? int(argNumber(a, "resolution", kDefaultTextureSize))
+                    : doc_.mesh.texture       ? std::max(doc_.mesh.texture->width, doc_.mesh.texture->height)
+                                              : kDefaultTextureSize;
+    startAutoUv(res, argBool(a, "keep_texture", true), true);
+    return {true, "Auto UV: unwrapping " + std::to_string(doc_.mesh.triangleCount()) + " triangles in the background"};
+}
+
+void App::startAutoUv(int resolution, bool keepTexture, bool command) {
     if (autoUv_ || doc_.mesh.triangleCount() == 0) return;
+    commandResult_.reset();
     auto job = std::make_unique<AutoUvJob>();
+    job->keepTexture = keepTexture;
+    job->command = command;
     job->progress = std::make_shared<std::atomic<float>>(0.0f);
     job->cancel = std::make_shared<std::atomic<bool>>(false);
     job->result = std::make_shared<AutoUvResult>();
     job->error = std::make_shared<std::string>();
-    job->subtool = doc_.activeSubtoolInfo().id;
+    job->part = doc_.activePartInfo().id;
     job->triangles = doc_.mesh.triangleCount();
-    const int res = doc_.mesh.texture ? std::max(doc_.mesh.texture->width, doc_.mesh.texture->height)
-                                      : kSizes[std::clamp(textureSizeChoice_, 0, 3)];
+    const int res = resolution > 0       ? resolution
+                    : doc_.mesh.texture ? std::max(doc_.mesh.texture->width, doc_.mesh.texture->height)
+                                        : kSizes[std::clamp(textureSizeChoice_, 0, 3)];
     std::promise<bool> promise;
     job->done = promise.get_future();
     std::thread([promise = std::move(promise), positions = doc_.mesh.positions, triangles = doc_.mesh.triangles, res,
@@ -222,53 +238,75 @@ void App::pollAutoUv() {
         std::lock_guard lock(g_fileMutex);
         files.swap(g_files);
     }
-    for (const auto& [kind, path, subtool] : files) {
-        if (subtool) {
+    for (const auto& [kind, path, part] : files) {
+        if (part) {
             int index = -1;
-            for (int i = 0; i < doc_.subtoolCount(); ++i)
-                if (doc_.subtools[size_t(i)].id == subtool) index = i;
-            if (index < 0) { status_ = "Texture import skipped: the target SubTool was deleted"; continue; }
-            if (index != doc_.activeSubtool) runCommand("subtool_select", {{"index", double(index)}});
+            for (int i = 0; i < doc_.partCount(); ++i)
+                if (doc_.parts[size_t(i)].id == part) index = i;
+            if (index < 0) { status_ = "Texture import skipped: the target Part was deleted"; continue; }
+            if (index != doc_.activePart) runCommand("part_select", {{"index", double(index)}});
         }
         runCommand(kind == kExportTexture ? "texture_export" : "texture_import", {{"path", path}});
         if (kind == kImportTexture && lastCommandOk_) {
             doc_.mesh.previewTexture.reset();
             doc_.mesh.previewUvs.clear();
-            if (doc_.activeSubtoolInfo().crkwMetaHuman.isObject())
-                doc_.activeSubtoolInfo().crkwMetaHuman.set("preview", "OFF");
+            if (doc_.activePartInfo().crkwMetaHuman.isObject())
+                doc_.activePartInfo().crkwMetaHuman.set("preview", "OFF");
             renderSettings_.showTexture = true;
-            renderSettings_.showPolypaint = true;
+            renderSettings_.showVertexPaint = true;
         }
     }
 
     if (!autoUv_) return;
-    if (autoUv_->done.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+    // Cancel: xatlas only looks at it between its stages (the charts stage is most of the time), so the job is
+    // dropped now; the detached worker owns copies of what it reads and its result goes nowhere.
+    const bool cancelled = autoUv_->cancel->load();
+    if (!cancelled && autoUv_->done.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
         status_ = "Auto UV: " + std::to_string(int(autoUv_->progress->load() * 100.0f)) + "%";
         return;
     }
+    if (jobWaitsForStroke()) return; // (the result lands when the stroke ends)
     const std::unique_ptr<AutoUvJob> job = std::move(autoUv_);
     const bool makeTexture = std::exchange(textureAfterAutoUv_, false);
+    // The uv_auto command's result, for whoever waits on it (console, AI link, UI test) and the console's log.
+    auto finish = [&](bool ok, const std::string& message) {
+        status_ = message;
+        if (!job->command) return;
+        commandResult_ = CommandResult{ok, message};
+        console_.print(ok ? Console::Kind::Result : Console::Kind::Error, message);
+        console_.seenStatus(status_);
+        if (!ok) SDL_Log("uv_auto failed: %s", message.c_str());
+    };
+    if (cancelled) {
+        textureAfterAutoUv_ = false;
+        finish(false, "Auto UV was cancelled");
+        return;
+    }
     if (!job->done.get()) {
-        status_ = *job->error;
+        finish(false, *job->error);
         return;
     }
-    // The SubTool it unwrapped may be inactive now, or changed topology meanwhile.
+    // The Part it unwrapped may be inactive now, or changed topology meanwhile.
     int index = -1;
-    for (int i = 0; i < doc_.subtoolCount(); ++i)
-        if (doc_.subtools[size_t(i)].id == job->subtool) index = i;
-    if (index < 0 || doc_.subtoolMesh(index).triangleCount() != job->triangles) {
-        status_ = "Auto UV skipped: the mesh changed while it was being unwrapped";
+    for (int i = 0; i < doc_.partCount(); ++i)
+        if (doc_.parts[size_t(i)].id == job->part) index = i;
+    if (index < 0 || doc_.partMesh(index).triangleCount() != job->triangles) {
+        finish(false, "Auto UV skipped: the mesh changed while it was being unwrapped");
         return;
     }
-    if (index != doc_.activeSubtool) doc_.selectSubtool(index);
-    if (doc_.sculptor.strokeActive()) endStroke();
+    const JobPart part(*this, index);
     Mesh m = doc_.mesh;
     // A painted texture and its layers move onto the new UVs, in the same undo step (core/TextureTransfer.h).
-    const std::string note = setUvsKeepingTexture(m, std::move(job->result->uvs));
+    const std::string note = setUvsKeepingTexture(m, std::move(job->result->uvs), job->keepTexture);
     doc_.replaceMeshUndoable(std::move(m), "Auto UV");
     uvLinesKey_ = 0;
+    uvEditorChanged();
     updateTitle();
     const std::string islands = "Auto UV: " + std::to_string(job->result->charts) + " UV islands";
+    if (job->command) {
+        finish(true, islands + note);
+        return;
+    }
     if (makeTexture && !hasTexture(doc_.mesh)) {
         runCommand("texture_create", {{"size", std::to_string(kSizes[std::clamp(textureSizeChoice_, 0, 3)])}});
         if (hasTexture(doc_.mesh)) status_ = islands + ", new " + std::to_string(doc_.mesh.texture->width / 1024) +
@@ -280,7 +318,7 @@ void App::pollAutoUv() {
 
 void App::pasteTextureImage() {
     if (!doc_.mesh.hasUvs()) {
-        status_ = "The SubTool needs UVs before pasting a texture";
+        status_ = "The Part needs UVs before pasting a texture";
         return;
     }
     Image image;
@@ -300,10 +338,10 @@ void App::pasteTextureImage() {
     // A MetaHuman guide would otherwise cover the texture that was just pasted.
     doc_.mesh.previewTexture.reset();
     doc_.mesh.previewUvs.clear();
-    if (doc_.activeSubtoolInfo().crkwMetaHuman.isObject())
-        doc_.activeSubtoolInfo().crkwMetaHuman.set("preview", "OFF");
+    if (doc_.activePartInfo().crkwMetaHuman.isObject())
+        doc_.activePartInfo().crkwMetaHuman.set("preview", "OFF");
     renderSettings_.showTexture = true;
-    renderSettings_.showPolypaint = true;
+    renderSettings_.showVertexPaint = true;
     status_ = "Pasted texture " + std::to_string(image.width) + "x" + std::to_string(image.height) + " (Ctrl+Z to undo)";
 }
 
@@ -321,28 +359,28 @@ void App::drawTextureManager() {
     ImGui::SetNextWindowSize(ImVec2(480 * uiScale_, 620 * uiScale_), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(340 * uiScale_, 300 * uiScale_), ImVec2(FLT_MAX, FLT_MAX));
     if (!ImGui::Begin("CRKW Texture Manager", &showTextureManager_)) { ImGui::End(); return; }
-    ImGui::TextWrapped("Hover a square and press Ctrl+V, or use Paste / Swap image. Each card controls one SubTool.");
-    ImGui::TextDisabled("Replaces texture layers. Ctrl+Z undoes the selected SubTool.");
+    ImGui::TextWrapped("Hover a square and press Ctrl+V, or use Paste / Swap image. Each card controls one Part.");
+    ImGui::TextDisabled("Replaces texture layers. Ctrl+Z undoes the selected Part.");
     ImGui::Separator();
 
-    // Separate small GPU previews work for inactive/hidden SubTools and don't depend on scene uploads.
+    // Separate small GPU previews work for inactive/hidden Parts and don't depend on scene uploads.
     std::erase_if(textureManagerPreviews_, [&](TextureManagerPreview& preview) {
-        const bool removed = std::none_of(doc_.subtools.begin(), doc_.subtools.end(),
-            [&](const SubTool& subtool) { return subtool.id == preview.subtool; });
+        const bool removed = std::none_of(doc_.parts.begin(), doc_.parts.end(),
+            [&](const Part& part) { return part.id == preview.part; });
         if (removed && preview.texture) gl::DeleteTextures(1, &preview.texture);
         return removed;
     });
     int paste = -1, browse = -1, select = -1;
     const int columns = ImGui::GetContentRegionAvail().x >= 400 * uiScale_ ? 2 : 1;
     if (ImGui::BeginTable("##texturecards", columns, ImGuiTableFlags_SizingStretchSame)) {
-        for (int i = 0; i < doc_.subtoolCount(); ++i) {
+        for (int i = 0; i < doc_.partCount(); ++i) {
             ImGui::TableNextColumn();
-            const auto& subtool = doc_.subtools[size_t(i)];
-            const Mesh& mesh = doc_.subtoolMesh(i);
+            const auto& part = doc_.parts[size_t(i)];
+            const Mesh& mesh = doc_.partMesh(i);
             const auto& source = mesh.previewTexture ? mesh.previewTexture : mesh.texture;
             const std::string suffix = std::to_string(i);
-            if (ImGui::Selectable((subtool.name + "##texture.select." + suffix).c_str(), i == doc_.activeSubtool)) select = i;
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s%s", subtool.name.c_str(), subtool.visible ? "" : " (hidden)");
+            if (ImGui::Selectable((part.name + "##texture.select." + suffix).c_str(), i == doc_.activePart)) select = i;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s%s", part.name.c_str(), part.visible ? "" : " (hidden)");
             if (source)
                 ImGui::TextDisabled("%s %dx%d", mesh.previewTexture ? "Guide" : "Texture", source->width, source->height);
             else ImGui::TextDisabled("%s", mesh.hasUvs() ? "No texture" : "No UVs");
@@ -354,7 +392,7 @@ void App::drawTextureManager() {
             const bool hovered = ImGui::IsItemHovered();
             if (hovered) {
                 imagePasteHoverFrame_ = ImGui::GetFrameCount();
-                ImGui::SetTooltip("%s: Ctrl+V to paste, click to swap image", subtool.name.c_str());
+                ImGui::SetTooltip("%s: Ctrl+V to paste, click to swap image", part.name.c_str());
                 if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) paste = i;
             }
             if (clicked) browse = i;
@@ -362,9 +400,9 @@ void App::drawTextureManager() {
             dl->AddRectFilled(p, end, ImGui::GetColorU32(ImGuiCol_FrameBg), 4 * uiScale_);
             if (source && visible && source->width > 0 && source->height > 0 && !source->pixels.empty()) {
                 auto found = std::find_if(textureManagerPreviews_.begin(), textureManagerPreviews_.end(),
-                    [&](const TextureManagerPreview& preview) { return preview.subtool == subtool.id; });
+                    [&](const TextureManagerPreview& preview) { return preview.part == part.id; });
                 if (found == textureManagerPreviews_.end()) {
-                    textureManagerPreviews_.push_back({subtool.id});
+                    textureManagerPreviews_.push_back({part.id});
                     found = std::prev(textureManagerPreviews_.end());
                 }
                 auto& preview = *found;
@@ -396,7 +434,7 @@ void App::drawTextureManager() {
                 const ImVec2 size = ImGui::CalcTextSize(text);
                 dl->AddText(ImVec2(p.x + (side - size.x) * .5f, p.y + (side - size.y) * .5f), ImGui::GetColorU32(ImGuiCol_TextDisabled), text);
             }
-            dl->AddRect(p, end, ImGui::GetColorU32(hovered || i == doc_.activeSubtool ? ImGuiCol_ButtonHovered : ImGuiCol_Border), 4 * uiScale_, 0, 2 * uiScale_);
+            dl->AddRect(p, end, ImGui::GetColorU32(hovered || i == doc_.activePart ? ImGuiCol_ButtonHovered : ImGuiCol_Border), 4 * uiScale_, 0, 2 * uiScale_);
             ImGui::BeginDisabled(!mesh.hasUvs());
             const float half = (side - ImGui::GetStyle().ItemSpacing.x) * .5f;
             if (ImGui::Button(("Paste##texture.paste." + suffix).c_str(), ImVec2(half, 0))) paste = i;
@@ -407,15 +445,15 @@ void App::drawTextureManager() {
         }
         ImGui::EndTable();
     }
-    // Defer selection until every card is drawn: switching SubTools moves their meshes.
+    // Defer selection until every card is drawn: switching Parts moves their meshes.
     const int target = paste >= 0 ? paste : browse >= 0 ? browse : select;
     if (target >= 0) {
-        if (target != doc_.activeSubtool) runCommand("subtool_select", {{"index", double(target)}});
+        if (target != doc_.activePart) runCommand("part_select", {{"index", double(target)}});
         if (paste >= 0) pasteTextureImage();
         if (browse >= 0) {
-            if (!doc_.mesh.hasUvs()) status_ = "The SubTool needs UVs before importing a texture";
-            else SDL_ShowOpenFileDialog(onTextureFile,
-                new TextureDialog{this, kImportTexture, doc_.activeSubtoolInfo().id, true}, window_, kImageFilters, 2, nullptr, false);
+            if (!doc_.mesh.hasUvs()) status_ = "The Part needs UVs before importing a texture";
+            else sf::dialogs::openFile(onTextureFile,
+                new TextureDialog{this, kImportTexture, doc_.activePartInfo().id, true}, window_, kImageFilters, 2, nullptr, false);
         }
     }
     ImGui::Separator();
@@ -431,15 +469,18 @@ void App::drawTextureMapContents() {
 
     // Status line: UVs, texture size, where paint goes.
     if (autoUv_) {
-        ImGui::ProgressBar(autoUv_->progress->load(), ImVec2(-1, 0), "Unwrapping...");
+        ImGui::ProgressBar(autoUv_->progress->load(), ImVec2(half, 0), tr("Unwrapping..."));
         ui::HelpText("Auto UV", nullptr, "Unwrapping the Part in the background; you can keep working.", kPath);
+        ImGui::SameLine();
+        if (ImGui::Button(tr("Cancel##autouv"), ImVec2(-1, 0))) autoUv_->cancel->store(true);
     } else if (!m.hasUvs()) {
-        ImGui::TextDisabled("No UVs: Auto UV makes them");
+        ImGui::TextDisabled("%s", tr("No UVs: Auto UV makes them"));
     } else if (!hasTexture(m)) {
-        ImGui::TextDisabled("UVs, no texture yet");
+        ImGui::TextDisabled("%s", tr("UVs, no texture yet"));
     } else {
         const PaintTexture& t = *m.texture;
-        ImGui::TextDisabled("%dx%d texture, %d layer%s", t.width, t.height, int(t.layers.size()) + 1, t.layers.empty() ? "" : "s");
+        ImGui::TextDisabled(tr(t.layers.empty() ? "%dx%d texture, %d layer" : "%dx%d texture, %d layers"), t.width, t.height,
+                            int(t.layers.size()) + 1);
     }
 
     // CRKW: the same hover + Ctrl+V interaction as Generate 3D's image box.
@@ -450,7 +491,7 @@ void App::drawTextureMapContents() {
     if (hovered) imagePasteHoverFrame_ = ImGui::GetFrameCount();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(p, end, ImGui::GetColorU32(ImGuiCol_FrameBg), 4 * uiScale_);
-    const GLuint texture = hasTexture(m) && !m.previewTexture ? renderer_.paintTexture(doc_.activeSubtoolInfo().id) : 0;
+    const GLuint texture = hasTexture(m) && !m.previewTexture ? renderer_.paintTexture(doc_.meshKey(doc_.activePart)) : 0;
     if (texture) {
         const float aspect = float(m.texture->width) / float(m.texture->height);
         const float h = std::min(height, width / aspect), w = h * aspect;
@@ -467,7 +508,7 @@ void App::drawTextureMapContents() {
         if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) pasteTextureImage();
     }
     if (clicked && m.hasUvs())
-        SDL_ShowOpenFileDialog(onTextureFile, &g_dialogs[kImportTexture], window_, kImageFilters, 2, nullptr, false);
+        sf::dialogs::openFile(onTextureFile, &g_dialogs[kImportTexture], window_, kImageFilters, 2, nullptr, false);
     ImGui::TextDisabled("Hover + Ctrl+V, or click to import");
     if (m.previewTexture) ImGui::TextDisabled("MetaHuman guide preview is on");
 
@@ -487,20 +528,20 @@ void App::drawTextureMapContents() {
 
     if (hasTexture(m)) {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("Paint into");
+        ImGui::TextDisabled("%s", tr("Paint into"));
         ImGui::SameLine();
         ui::Segmented(*this, {"draw.paint_vertex", "draw.paint_texture"});
     }
-    ui::ActionButton(*this, "texture.from_polypaint", ImVec2(half, 0));
+    ui::ActionButton(*this, "texture.from_vertexpaint", ImVec2(half, 0));
     ImGui::SameLine();
-    ui::ActionButton(*this, "texture.to_polypaint", ImVec2(-1, 0));
+    ui::ActionButton(*this, "texture.to_vertexpaint", ImVec2(-1, 0));
     ui::ActionButton(*this, "texture.import", ImVec2(half, 0));
     ImGui::SameLine();
     ui::ActionButton(*this, "texture.export", ImVec2(-1, 0));
     ui::ActionButton(*this, "texture.delete", ImVec2(half, 0));
     if (hasTexture(m)) {
         ImGui::SameLine();
-        ImGui::Checkbox("Show texture", &renderSettings_.showTexture);
+        ImGui::Checkbox(tr("Show texture"), &renderSettings_.showTexture);
         ui::HelpAction(*this, "view.texture");
     }
 
@@ -509,10 +550,10 @@ void App::drawTextureMapContents() {
         const float side = ImGui::GetContentRegionAvail().x;
         const ImVec2 p = ImGui::GetCursorScreenPos();
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        const GLuint tex = hasTexture(m) ? renderer_.paintTexture(doc_.activeSubtoolInfo().id) : 0;
+        const GLuint tex = hasTexture(m) ? renderer_.paintTexture(doc_.meshKey(doc_.activePart)) : 0;
         if (tex) dl->AddImage(ImTextureID(uintptr_t(tex)), p, ImVec2(p.x + side, p.y + side), ImVec2(0, 1), ImVec2(1, 0));
         else dl->AddRectFilled(p, ImVec2(p.x + side, p.y + side), IM_COL32(40, 40, 46, 255));
-        const uint64_t key = (uint64_t(doc_.activeSubtoolInfo().id) << 40) ^ uint64_t(uintptr_t(m.uvs.data())) ^ m.uvs.size();
+        const uint64_t key = (uint64_t(doc_.activePartInfo().id) << 40) ^ uint64_t(uintptr_t(m.uvs.data())) ^ m.uvs.size();
         if (key != uvLinesKey_) {
             uvLines_ = uvLayoutLines(m);
             uvLinesKey_ = key;

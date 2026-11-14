@@ -7,7 +7,7 @@
 //    a scanning app, uploaded in resumable chunks into the Captures inbox,
 //      <user library>/Captures/<yyyy-mm-dd_hhmmss>-<kind>/   (kind = splat | photo | ply)
 //    with a capture.json (kind, device, files, times); the app then runs the command for that kind;
-//  - AR requests: the active SubTool (or the scene), decimated and coloured, as USDZ (iPhone AR Quick Look) and
+//  - AR requests: the active Part (or the scene), decimated and coloured, as USDZ (iPhone AR Quick Look) and
 //    GLB (Android: sent over the WebRTC link to the website's WebXR page), re-exported after strokes while the
 //    phone is looking;
 //  - the live face feed: link/FaceFeed.h messages over WebRTC (link/PhoneRtc.h) or HTTP, and face takes.
@@ -57,7 +57,7 @@ struct PhoneLinkOptions {
     std::string inboxRoot;        // the Captures folder (created on first use)
     uint16_t port = kPhoneLinkPort;
     bool localNetworkOnly = true;
-    std::string desktopName;      // shown on the phone ("Tony's PC")
+    std::string desktopName;      // shown on the phone ("Studio PC")
     std::string version;          // SculptForge version, shown on the phone
     std::string siteUrl;          // face page; empty = kPhoneLinkSiteUrl (or SCULPTFORGE_LINK_URL)
     std::string relayUrl;         // empty = kPhoneLinkRelayUrl (or SCULPTFORGE_LINK_RELAY); "off" = none;
@@ -195,8 +195,8 @@ public:
     bool acceptFaceAnswer(const std::string& sdp, std::string& error);
     // The face page URL with the pending offer (creates one); for tests too. With `ar`, the link is for the AR page
     // (website/link/ar.html) instead: the phone asks for the sculpt over it, and each model published while it is
-    // open goes down it (`arScope` "subtool"/"scene" and `arSizeCm` are passed to the page, which asks with them).
-    bool createFaceLink(std::string& faceUrl, std::string& error, bool ar = false, const std::string& arScope = "subtool",
+    // open goes down it (`arScope` "part"/"scene" and `arSizeCm` are passed to the page, which asks with them).
+    bool createFaceLink(std::string& faceUrl, std::string& error, bool ar = false, const std::string& arScope = "part",
                         float arSizeCm = 20.0f);
     // An AR page message ({"type":"ar","scope","size"} asks for a model, {"type":"ar-ping"} says it's still
     // looking); public for tests.

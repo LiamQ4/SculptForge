@@ -1,28 +1,41 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Default actions and shortcuts, Store Config / Restore / Save / Load UI,
-// the Preferences > Config / Interface / Hotkeys / LightBox sections, the F1
-// Controls sheet (generated from the action registry) and ZBrush-style
+// Default actions and shortcuts, the preferences' autosave, Save Layout / Revert / Export / Import Interface,
+// the Preferences > Saving & Layouts / Interface / Hotkeys / Library sections, the F1
+// Controls sheet (generated from the action registry) and classic
 // shortcut assignment.
 #include "app/SettingsPath.h"
+#include "app/IconsUsed.h"
+#include "app/UiScale.h"
+#include "app/NativeDialog.h"
 #include "app/Config.h"
+#include "app/OrbitSpeed.h"
 
 #include "app/App.h"
+#include "app/UiServe.h"
 #include "app/CrashLog.h"
+#include "core/PerfTrace.h"
 #include "app/LookSchemes.h"
 #include "app/Palettes.h"
 #include "app/Ui.h"
 #include "app/I18n.h"
+#include "app/UserData.h"
+#include "core/LegacyNames.h"
 #include "core/Bake.h"
+#include "core/MaskColour.h"
+#include "core/ListSort.h"
 #include "core/Micro.h"
+#include "core/FigurePose.h"
 #include "core/Multires.h"
 #include "core/Script.h"
+#include "core/Units.h"
 
 #include <IconsLucide.h>
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cfloat>
 #include <cmath>
@@ -47,8 +60,11 @@ void lookToJson(const UiPrefs& p, Json& j) {
     look.set("matchOmarchy", p.look.matchOmarchy);
     look.set("phosphor", std::string(p.look.amber ? "amber" : "green"));
     look.set("effects", p.look.effects);
+    look.set("outlines", std::string(p.look.outlines == 0 ? "off" : p.look.outlines == 2 ? "on" : "subtle"));
+    look.set("outlineOpacity", double(p.look.outlineOpacity));
+    look.set("popupColors", std::string(p.look.rolePopups ? "role" : "plain"));
     j.set("look", std::move(look));
-    j.set("layout", std::string(p.shellLayout == 1 ? "sculptforge" : "zbrush"));
+    j.set("layout", std::string(p.shellLayout == 1 ? "sculptforge" : "classic"));
 }
 
 bool lookFromJson(const Json& j, UiPrefs& p) {
@@ -59,6 +75,12 @@ bool lookFromJson(const Json& j, UiPrefs& p) {
         p.look.matchOmarchy = look["matchOmarchy"].asBool(p.look.matchOmarchy);
         if (look["phosphor"].isString()) p.look.amber = look["phosphor"].asString() == "amber";
         p.look.effects = look["effects"].asBool(p.look.effects);
+        if (look["outlines"].isString()) {
+            const std::string o = look["outlines"].asString();
+            p.look.outlines = o == "off" ? 0 : o == "on" ? 2 : 1;
+        }
+        p.look.outlineOpacity = std::clamp(float(look["outlineOpacity"].asNumber(p.look.outlineOpacity)), 0.0f, 1.0f);
+        if (look["popupColors"].isString()) p.look.rolePopups = look["popupColors"].asString() != "plain";
     }
     if (j["layout"].isString()) p.shellLayout = j["layout"].asString() == "sculptforge" ? 1 : 0;
     return j["look"].isObject() || j["layout"].isString();
@@ -69,47 +91,98 @@ Json toJson(const UiPrefs& p) {
     j.set("popupInfo", p.popupInfo);
     j.set("helpOpacity", double(p.helpOpacity));
     j.set("tooltipDelay", double(p.tooltipDelay));
+    j.set("reduceMotion", p.reduceMotion);
     j.set("oneSubpalette", p.oneSubpalette);
     j.set("autoCollapseLeft", p.autoCollapseLeft);
     j.set("autoCollapseRight", p.autoCollapseRight);
     j.set("uiScale", double(p.uiScale));
-    j.set("lightboxAtStartup", p.lightboxAtStartup);
+    j.set("libraryAtStartup", p.libraryAtStartup);
+    j.set("startupSplash", p.startupSplash);
     j.set("libraryFolder", p.libraryFolder);
     j.set("cameraNotch", double(p.cameraNotch));
-    j.set("turntable", p.turntable);
-    j.set("inputStyle", std::string(p.inputStyle == 3 ? "maya" : p.inputStyle == 2 ? "blender" : p.inputStyle == 1 ? "sculptforge" : "zbrush"));
+    j.set("orbitLock", std::string(orbitLockName(p.orbitLock)));
+    j.set("turntable", p.orbitLock == 1);
+    j.set("inputStyle", std::string(p.inputStyle == 3 ? "maya" : p.inputStyle == 2 ? "blender" : p.inputStyle == 1 ? "sculptforge" : "classic"));
     j.set("emulateNumpad", p.emulateNumpad);
+    j.set("frameDoubleTapMs", double(p.frameDoubleTapMs));
     j.set("rightClickQuickMenu", p.rightClickQuickMenu);
+    j.set("modifierBrushes", toJson(p.modifierBrushes));
+    j.set("brushSort", p.brushSort);
+    j.set("alphaSort", p.alphaSort);
+    j.set("materialSort", p.materialSort);
+    j.set("librarySort", p.librarySort);
+    if (!p.brushSet.empty()) j.set("brushSet", p.brushSet);
     j.set("spaceCamera", p.spaceCamera);
+    j.set("emulate3Button", p.emulate3Button);
     j.set("mayaZoomHorizontal", p.mayaZoomHorizontal);
+    j.set("wheelZoomToPointer", p.wheelZoomToPointer);
+    j.set("orbitAtPointer", p.orbitAtPointer);
+    j.set("mouseOrbitSpeed", p.mouseOrbitSpeed);
     j.set("invertZoom", p.invertZoom);
+    j.set("keyNavSpeed", p.keyNavSpeed);
+    j.set("twoKeyWindow", p.twoKeyWindow);
+    j.set("quickRemesh", p.quickRemesh);
+    j.set("remeshAfterStroke", p.remeshAfterStroke);
     j.set("alongNormal", std::string(p.alongNormal == 1 ? "always" : p.alongNormal == 2 ? "never" : "invert_key"));
     j.set("connectedOnly", p.connectedOnly);
     j.set("viewFalloff", p.viewFalloff);
     j.set("dyntopoSmoothRemesh", double(p.dyntopoSmoothRemesh));
     j.set("airStrokes", p.airStrokes);
+    j.set("slideRotateKey", std::string(p.slideRotateKey == 1 ? "ctrl" : p.slideRotateKey == 2 ? "alt" : p.slideRotateKey == 3 ? "off" : "shift"));
     j.set("cursorFollowsSurface", p.cursorFollowsSurface);
+    j.set("hideRingWhileStroking", p.hideRingWhileStroking);
     j.set("timelinePosition", std::string(p.timelineTop ? "top" : "bottom"));
     j.set("showAxes", p.showAxes);
+    j.set("axisGizmoSize", std::string(p.axisGizmoSize == 0 ? "small" : p.axisGizmoSize == 2 ? "large" : "medium"));
+    j.set("showViewFigure", p.showViewFigure);
     j.set("alphabeticalPalettes", p.alphabeticalPalettes);
     lookToJson(p, j);
     j.set("language", p.language);
+    j.set("lengthUnit", p.lengthUnit);
+    j.set("fileUnit", p.fileUnit);
     j.set("tablet", toJson(p.tablet));
     j.set("spaceMouse", toJson(p.spaceMouse));
     j.set("antialiasing", double(p.antialiasing));
     j.set("fastNavigation", p.fastNavigation);
+    j.set("viewResolution", double(p.viewResolution));
     j.set("multithreading", p.multithreading);
     j.set("predictiveStrokes", p.predictiveStrokes);
     j.set("draftStrokes", p.draftStrokes);
+    j.set("liveMove", p.liveMove);
+    j.set("backgroundPreview", p.backgroundPreview);
+    j.set("fastUpload", p.fastUpload);
+    j.set("fastBigBrushes", p.fastBigBrushes);
     j.set("dyntopoConstantDetail", p.dyntopoConstantDetail);
     j.set("flatShading", p.flatShading);
     j.set("viewportCursor", double(p.viewportCursor));
     j.set("backfaceCulling", p.backfaceCulling);
+    j.set("floorGrid", p.floorGrid);
+    j.set("uvPackColumns", double(p.uvPackColumns));
+    j.set("uvPackRows", double(p.uvPackRows));
+    j.set("maskDarkness", double(p.maskDarkness));
+    if (p.maskColorCustom) j.set("maskColor", maskColorToJson(p.maskColor));
+    j.set("confirmSubdivide", p.confirmSubdivide);
+    j.set("confirmRemeshLevels", p.confirmRemeshLevels);
     j.set("background", std::string(p.gradientBackground ? "gradient" : "flat"));
     Json bg = Json::array();
     for (int i = 0; i < 3; ++i) bg.push(double(p.backgroundColor[i]));
     j.set("backgroundColor", std::move(bg));
+    j.set("showHints", p.showHints);
+    Json hints = Json::array();
+    for (const std::string& h : p.hiddenHints) hints.push(h);
+    j.set("hiddenHints", std::move(hints));
     return j;
+}
+
+const char* orbitLockName(int lock) {
+    static constexpr const char* names[4] = {"free", "y", "x", "z"};
+    return names[std::clamp(lock, 0, 3)];
+}
+
+int parseOrbitLock(std::string_view name) {
+    for (int i = 0; i < 4; ++i)
+        if (name == orbitLockName(i)) return i;
+    return name == "turntable" ? 1 : -1;
 }
 
 void fromJson(const Json& j, UiPrefs& p) {
@@ -117,24 +190,41 @@ void fromJson(const Json& j, UiPrefs& p) {
     p.popupInfo = j["popupInfo"].asBool(p.popupInfo);
     p.helpOpacity = std::clamp(float(j["helpOpacity"].asNumber(p.helpOpacity)), 0.3f, 1.0f);
     p.tooltipDelay = std::clamp(float(j["tooltipDelay"].asNumber(p.tooltipDelay)), 0.0f, 3.0f);
+    p.reduceMotion = j["reduceMotion"].asBool(p.reduceMotion);
     p.oneSubpalette = j["oneSubpalette"].asBool(p.oneSubpalette);
     p.autoCollapseLeft = j["autoCollapseLeft"].asBool(p.autoCollapseLeft);
     p.autoCollapseRight = j["autoCollapseRight"].asBool(p.autoCollapseRight);
     p.uiScale = std::clamp(float(j["uiScale"].asNumber(p.uiScale)), 0.0f, 3.0f);
-    p.lightboxAtStartup = j["lightboxAtStartup"].asBool(p.lightboxAtStartup);
+    p.libraryAtStartup = j["libraryAtStartup"].asBool(p.libraryAtStartup);
+    p.startupSplash = j["startupSplash"].asBool(p.startupSplash);
     if (j["libraryFolder"].isString()) p.libraryFolder = j["libraryFolder"].asString();
     p.cameraNotch = std::clamp(int(j["cameraNotch"].asNumber(p.cameraNotch)), 0, 2);
-    p.turntable = j["turntable"].asBool(p.turntable);
+    if (j["turntable"].asBool(false)) p.orbitLock = 1;
+    if (j["orbitLock"].isString()) p.orbitLock = std::max(parseOrbitLock(j["orbitLock"].asString()), 0);
     if (j["inputStyle"].isString()) {
         p.inputStyleSaved = true;
         const std::string style = j["inputStyle"].asString();
         p.inputStyle = style == "maya" ? 3 : style == "blender" ? 2 : style == "sculptforge" ? 1 : 0;
     }
     p.emulateNumpad = j["emulateNumpad"].asBool(p.emulateNumpad);
+    p.frameDoubleTapMs = std::clamp(int(j["frameDoubleTapMs"].asNumber(p.frameDoubleTapMs)), 0, 1000);
     p.rightClickQuickMenu = j["rightClickQuickMenu"].asBool(p.rightClickQuickMenu);
+    fromJson(j["modifierBrushes"], p.modifierBrushes);
+    for (auto [key, v] : {std::pair{"brushSort", &p.brushSort}, std::pair{"alphaSort", &p.alphaSort},
+                          std::pair{"materialSort", &p.materialSort}, std::pair{"librarySort", &p.librarySort}})
+        if (j[key].isString()) *v = listSortId(listSortFromId(j[key].asString()));
+    if (j["brushSet"].isString() && j["brushSet"].asString().size() <= 64) p.brushSet = j["brushSet"].asString();
     p.spaceCamera = j["spaceCamera"].asBool(p.spaceCamera);
+    p.emulate3Button = j["emulate3Button"].asBool(p.emulate3Button);
     p.mayaZoomHorizontal = j["mayaZoomHorizontal"].asBool(p.mayaZoomHorizontal);
+    p.wheelZoomToPointer = j["wheelZoomToPointer"].asBool(p.inputStyle == 3); // (inputStyle is read above)
+    p.orbitAtPointer = j["orbitAtPointer"].asBool(p.orbitAtPointer);
+    p.mouseOrbitSpeed = clampMouseOrbitSpeed(float(j["mouseOrbitSpeed"].asNumber(p.mouseOrbitSpeed)));
     p.invertZoom = j["invertZoom"].asBool(p.invertZoom);
+    p.twoKeyWindow = std::clamp(float(j["twoKeyWindow"].asNumber(p.twoKeyWindow)), kKeySequenceMin, kKeySequenceMax);
+    p.keyNavSpeed = std::clamp(float(j["keyNavSpeed"].asNumber(p.keyNavSpeed)), 0.1f, 5.0f);
+    p.quickRemesh = j["quickRemesh"].asBool(p.quickRemesh);
+    p.remeshAfterStroke = j["remeshAfterStroke"].asBool(p.remeshAfterStroke);
     if (j["alongNormal"].isString()) {
         const std::string a = j["alongNormal"].asString();
         p.alongNormal = a == "always" ? 1 : a == "never" ? 2 : 0;
@@ -143,11 +233,21 @@ void fromJson(const Json& j, UiPrefs& p) {
     p.viewFalloff = j["viewFalloff"].asBool(p.viewFalloff);
     p.dyntopoSmoothRemesh = std::clamp(float(j["dyntopoSmoothRemesh"].asNumber(p.dyntopoSmoothRemesh)), 0.0f, 1.0f);
     p.airStrokes = j["airStrokes"].asBool(p.airStrokes);
+    if (j["slideRotateKey"].isString()) {
+        const std::string k = j["slideRotateKey"].asString();
+        p.slideRotateKey = k == "ctrl" ? 1 : k == "alt" ? 2 : k == "off" ? 3 : 0;
+    }
     p.cursorFollowsSurface = j["cursorFollowsSurface"].asBool(p.cursorFollowsSurface);
+    p.hideRingWhileStroking = j["hideRingWhileStroking"].asBool(p.hideRingWhileStroking);
     if (j["timelinePosition"].isString()) p.timelineTop = j["timelinePosition"].asString() != "bottom";
     p.showAxes = j["showAxes"].asBool(p.showAxes);
+    if (j["axisGizmoSize"].isString()) {
+        const std::string size = j["axisGizmoSize"].asString();
+        p.axisGizmoSize = size == "small" ? 0 : size == "large" ? 2 : 1;
+    }
+    p.showViewFigure = j["showViewFigure"].asBool(p.showViewFigure);
     p.alphabeticalPalettes = j["alphabeticalPalettes"].asBool(p.alphabeticalPalettes);
-    // A ui.json from before 0.10.7 names neither: it was stored with the Classic look and the ZBrush-style layout,
+    // A ui.json from before 0.10.7 names neither: it was stored with the Classic look and the Classic layout,
     // and keeps them (the new-look card offers the new default once, PanelSupport.cpp).
     p.lookSaved = lookFromJson(j, p);
     if (!p.lookSaved) {
@@ -155,19 +255,42 @@ void fromJson(const Json& j, UiPrefs& p) {
         p.shellLayout = 0;
     }
     if (j["language"].isString()) p.language = languageCode(languageFromCode(j["language"].asString()));
+    if (const LengthUnit* u = findLengthUnit(j["lengthUnit"].asString())) p.lengthUnit = u->id;
+    if (const LengthUnit* u = findLengthUnit(j["fileUnit"].asString())) p.fileUnit = u->id;
     fromJson(j["tablet"], p.tablet);
     fromJson(j["spaceMouse"], p.spaceMouse);
     const int aa = int(j["antialiasing"].asNumber(p.antialiasing));
     p.antialiasing = aa >= 8 ? 8 : aa >= 4 ? 4 : aa >= 2 ? 2 : 1;
     p.fastNavigation = j["fastNavigation"].asBool(p.fastNavigation);
+    {
+        const int r = int(j["viewResolution"].asNumber(p.viewResolution));
+        p.viewResolution = r <= 50 ? 50 : r <= 75 ? 75 : 100;
+    }
     p.multithreading = j["multithreading"].asBool(p.multithreading);
     p.predictiveStrokes = j["predictiveStrokes"].asBool(p.predictiveStrokes);
     p.draftStrokes = j["draftStrokes"].asBool(p.draftStrokes);
+    p.liveMove = j["liveMove"].asBool(p.liveMove);
+    p.backgroundPreview = j["backgroundPreview"].asBool(p.backgroundPreview);
+    p.fastUpload = j["fastUpload"].asBool(p.fastUpload);
+    p.fastBigBrushes = j["fastBigBrushes"].asBool(p.fastBigBrushes);
     p.dyntopoConstantDetail = j["dyntopoConstantDetail"].asBool(p.dyntopoConstantDetail);
     p.flatShading = j["flatShading"].asBool(p.flatShading);
     p.viewportCursor = std::clamp(int(j["viewportCursor"].asNumber(p.viewportCursor)), 0, 1);
     p.backfaceCulling = j["backfaceCulling"].asBool(p.backfaceCulling);
+    p.floorGrid = j["floorGrid"].asBool(p.floorGrid);
+    p.uvPackColumns = std::clamp(int(j["uvPackColumns"].asNumber(p.uvPackColumns)), 1, 10);
+    p.uvPackRows = std::clamp(int(j["uvPackRows"].asNumber(p.uvPackRows)), 1, 10);
+    p.maskDarkness = std::clamp(float(j["maskDarkness"].asNumber(p.maskDarkness)), 0.0f, 1.0f);
+    p.maskColorCustom = maskColorFromJson(j["maskColor"], p.maskColor);
+    p.confirmSubdivide = j["confirmSubdivide"].asBool(p.confirmSubdivide);
+    p.confirmRemeshLevels = j["confirmRemeshLevels"].asBool(p.confirmRemeshLevels);
     if (j["background"].isString()) p.gradientBackground = j["background"].asString() != "flat";
+    p.showHints = j["showHints"].asBool(p.showHints);
+    if (const Json& hints = j["hiddenHints"]; hints.size() > 0) {
+        p.hiddenHints.clear();
+        for (size_t i = 0; i < hints.size() && i < 64; ++i)
+            if (hints[i].isString() && hints[i].asString().size() < 64) p.hiddenHints.insert(hints[i].asString());
+    }
     if (const Json& bg = j["backgroundColor"]; bg.size() == 3)
         for (int i = 0; i < 3; ++i) p.backgroundColor[i] = std::clamp(float(bg[size_t(i)].asNumber(p.backgroundColor[i])), 0.0f, 1.0f);
 }
@@ -223,7 +346,7 @@ constexpr Gesture kGestures[] = {
     {"Paint mask", "Hold Ctrl while stroking (Ctrl+Alt erases)"},
     {"Invert mask", "Ctrl + click the background"},
     {"Clear mask", "Ctrl + drag on the background (Mask Pen)"},
-    {"Mask a lasso or rectangle", "Ctrl + drag with Mask Lasso / Mask Rectangle (Tool > Masking; Ctrl+Alt unmasks)"},
+    {"Mask a lasso or rectangle", "Ctrl + drag with Lasso Mask / Rectangle Mask (Tool > Masking; Ctrl+Alt unmasks)"},
     {"Isolate face group", "Ctrl+Shift + click it (again: invert)"},
     {"Hide face group", "Ctrl+Shift+Alt + click it"},
     {"Show all", "Ctrl+Shift + click the background"},
@@ -249,7 +372,11 @@ constexpr Gesture kBlenderGestures[] = {
               "frame everything; Emulate Numpad (Preferences > Input) for the number row"},
     {"Paint mask", "M for the Mask brush, then drag (Ctrl+drag unmasks); M again goes back"},
     {"Invert / clear mask", "Ctrl+I / Alt+M"},
+    {"Select a Part", "Alt+Q over it (Alt+click masks in this style), or triple-click it"},
     {"Hide face group", "H over it (Shift+H: show only it, again: everything; Alt+H shows all)"},
+    {"Hide outside a shape", "Ctrl+Shift + drag a rectangle or lasso (add Alt: inside; shape in Tool > Visibility); "
+                             "click: isolate the face group, the background shows all"},
+    {"Cut", "Pick a Cut shape (Ctrl+Shift + click the brush tile, or Ctrl+Shift+B), then Ctrl+Shift + drag"},
     {"Brush radius / strength", "F / Shift+F, then drag or type a number"},
     {"Help on any control", "Hold Ctrl and point at it (Ctrl+Alt: scripting parameters)"},
     {"Assign a shortcut", "Ctrl+Alt + click any button, then press the key"},
@@ -266,23 +393,22 @@ constexpr Gesture kBlenderGestures[] = {
 
 void App::initUiConfig(bool deterministic) {
     uiConfigDeterministic_ = deterministic;
-    if (!options_.uiTest.empty()) {
-        // CRKW: UI tests keep their config (Store Config's ui.json, console history, recent actions) in their
-        // own folder, never the artist's -- help_console's Store Config used to overwrite the real ui.json.
-        const std::filesystem::path dir = (options_.uiOutDir.empty()
-            ? std::filesystem::temp_directory_path() / "sculptforge-ui-test" : fsPath(options_.uiOutDir)) / "config";
-        std::error_code ec;
-        std::filesystem::create_directories(dir, ec);
-        const std::u8string u8 = (dir / "").u8string();
-        configDir_.assign(u8.begin(), u8.end());
-    } else if (char* pref = appPrefPath()) {
-        configDir_ = pref;
-        SDL_free(pref);
-    }
+    configDir_ = userDataDir();
     layout_ = standardLayout(uiPrefs_.shellLayout);
     if (deterministic) return; // tests, renders and recordings always use the standard layout
     std::string err;
-    if (fileExists(uiConfigPath()) && !readUiConfig(uiConfigPath(), err)) SDL_Log("%s", err.c_str());
+    if (fileExists(uiConfigPath())) {
+        if (!readUiConfig(uiConfigPath(), err, true)) SDL_Log("%s", err.c_str());
+        if (options_.resetLayout) { // --reset-layout: the saved layout is dropped (the next save writes without it); keys and preferences stay
+            const bool customize = layout_.customize;
+            layout_ = standardLayout(uiPrefs_.shellLayout);
+            layout_.customize = customize; // (the autosave writes this; Save Layout's snapshot stays for Revert)
+        }
+    } else if (const std::string& studio = studioMode().profile.preferences; !studio.empty() && fileExists(studio)) {
+        // A studio build's first start: the studio's layout, keys and scale (core/StudioProfile.h); saved as the
+        // artist's own from the first change on.
+        if (!readUiConfig(studio, err)) SDL_Log("Studio preferences: %s", err.c_str());
+    }
 }
 
 void App::addHelpFonts(float scale) {
@@ -292,15 +418,15 @@ void App::addHelpFonts(float scale) {
     cfg.OversampleH = 2;
     fontHelpTitle_ = io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontSemiBold),
                                                     int(assets::fontSemiBold_size), 15.0f * scale, &cfg);
-    static const ImWchar kIconRanges[] = {ICON_MIN_LC, ICON_MAX_LC, 0};
-    ImFontConfig icons;
+        ImFontConfig icons;
     icons.MergeMode = true;
     icons.PixelSnapH = true;
     icons.FontDataOwnedByAtlas = false;
     icons.GlyphMinAdvanceX = 15.0f * scale;
     icons.GlyphOffset = ImVec2(0, 2.0f * scale);
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(assets::fontLucide), int(assets::fontLucide_size), 15.0f * scale,
-                                   &icons, kIconRanges);
+                                   &icons, kUsedIconRanges);
+    mergeCjkFont(15.0f * scale);
     // ProggyClean (ships inside Dear ImGui) is a pixel font: keep it at whole multiples of 13 px.
     ImFontConfig mono;
     mono.SizePixels = 13.0f * std::max(1.0f, std::floor(scale + 0.25f));
@@ -332,31 +458,56 @@ void App::initActions() {
         [this] { return doc_.undo.canUndo(); });
     add("edit.redo", "Redo", "Edit", "Ctrl+Shift+Z / Ctrl+Y", [this] { runCommand("redo"); }, ICON_LC_REDO_2, "redo", nullptr,
         [this] { return doc_.undo.canRedo(); });
-    add("geometry.subdivide", "Subdivide", "Tool > Geometry", nullptr, [this] { runCommand("subdivide"); }, nullptr, "subdivide");
-    // Subdivision levels (ZBrush Tool > Geometry; core/Multires.h).
-    add("geometry.divide", "Divide", "Tool > Geometry", "Ctrl+D", [this] { runCommand("subdiv_divide", {{"smooth", smt_}}); },
+    // Subdivide bakes: it keeps no levels, and on a Part with levels it removes them. Named and placed apart from
+    // Add Level, and it asks first on a Part with levels (Discord 11-02: "I keep pressing the wrong one").
+    add("geometry.subdivide", "Subdivide (removes levels)", "Tool > Geometry", nullptr,
+        [this] {
+            if (doc_.mesh.multires && uiPrefs_.confirmSubdivide) openSubdivideConfirm_ = true;
+            else runCommand("subdivide");
+        },
+        nullptr, "subdivide", nullptr, nullptr,
+        "Destructive: four times the polygons as one plain mesh, with no lower levels to step back to. On a Part "
+        "with subdivision levels it removes them (it asks first; Ctrl+Z brings them back). To keep levels, use "
+        "Add Level instead.");
+    // Tool > Geometry > Cleanup > Find Problems (PanelMeshCheck.cpp, its Check button): here so F3 finds it.
+    add("geometry.mesh_check", "Find Problems", "Tool > Geometry", nullptr,
+        [this] {
+            runMeshCheck();
+            status_ = meshReport_.summary();
+        },
+        nullptr, "mesh_check", nullptr, [this] { return doc_.mesh.triangleCount() > 0; },
+        "Count what makes the active Part hard to sculpt, remesh, print or export: non-manifold edges, holes, "
+        "duplicate, degenerate and flipped triangles. Changes nothing; Tool > Geometry > Find Problems lists each "
+        "with its Fix.");
+    add("geometry.close_holes", "Fill Holes", "Tool > Geometry", nullptr, [this] { runCommand("close_holes"); },
+        ICON_LC_CIRCLE_DOT, "close_holes", nullptr, nullptr,
+        "Cap every open boundary of the active Part (a hole, an open bottom, the rim of an extracted shell) with a "
+        "new patch sized like the polygons around it, so remeshing and sculpting see a closed surface. The rest of "
+        "the Part stays as it is; the patches get a face group of their own (#103).");
+    // Subdivision levels (Tool > Geometry; core/Multires.h).
+    add("geometry.divide", "Add Level", "Tool > Geometry", "Ctrl+D", [this] { runCommand("subdiv_divide", {{"smooth", smt_}}); },
         ICON_LC_GRID_2X2, "subdiv_divide", nullptr, nullptr,
-        "Add a subdivision level: four times the polygons, and the lower levels are kept, so you can step down to "
-        "shape big forms and back up to the detail. Quads stay quads (Catmull-Clark). Smt off divides without smoothing.");
-    add("geometry.smt", "Smt", "Tool > Geometry", nullptr, [this] { smt_ = !smt_; }, nullptr, nullptr,
+        "Non-destructive: add a subdivision level: four times the polygons, and the lower levels are kept, so you can step down to "
+        "shape big forms and back up to the detail. Quads stay quads (Catmull-Clark). Smooth off divides without smoothing.");
+    add("geometry.smt", "Smooth", "Tool > Geometry", nullptr, [this] { smt_ = !smt_; }, nullptr, nullptr,
         [this] { return smt_; }, nullptr,
-        "Smooth the next Divide (on by default). Off: the new level keeps the hard edges and flat faces of the one below.");
-    add("geometry.lower_res", "Lower Res", "Tool > Geometry", "Shift+D", [this] { runCommand("subdiv_lower"); },
+        "Smooth the next new level (on by default). Off: the new level keeps the hard edges and flat faces of the one below.");
+    add("geometry.lower_res", "Lower Level", "Tool > Geometry", "Shift+D", [this] { runCommand("subdiv_lower"); },
         ICON_LC_CHEVRON_DOWN, "subdiv_lower", nullptr, [this] { return subdivCurrentLevel(doc_.mesh) > 0; },
         "Step one subdivision level down (fewer polygons, for big forms). The detail of the higher levels is kept.");
-    add("geometry.higher_res", "Higher Res", "Tool > Geometry", "D", [this] { runCommand("subdiv_higher"); },
+    add("geometry.higher_res", "Higher Level", "Tool > Geometry", "D", [this] { runCommand("subdiv_higher"); },
         ICON_LC_CHEVRON_UP, "subdiv_higher", nullptr,
         [this] { return subdivCurrentLevel(doc_.mesh) + 1 < subdivLevelCount(doc_.mesh); },
         "Step one subdivision level up (more polygons, for detail). Edits made below carry the detail along.");
-    add("geometry.del_lower", "Del Lower", "Tool > Geometry", nullptr, [this] { runCommand("subdiv_delete_lower"); }, nullptr,
+    add("geometry.del_lower", "Remove Below", "Tool > Geometry", nullptr, [this] { confirmLevelDelete("subdiv_delete_lower"); }, nullptr,
         "subdiv_delete_lower", nullptr, [this] { return subdivCurrentLevel(doc_.mesh) > 0; });
-    add("geometry.del_higher", "Del Higher", "Tool > Geometry", nullptr, [this] { runCommand("subdiv_delete_higher"); }, nullptr,
+    add("geometry.del_higher", "Remove Above", "Tool > Geometry", nullptr, [this] { confirmLevelDelete("subdiv_delete_higher"); }, nullptr,
         "subdiv_delete_higher", nullptr,
         [this] { return subdivCurrentLevel(doc_.mesh) + 1 < subdivLevelCount(doc_.mesh); });
-    add("geometry.reconstruct", "Reconstruct Subdiv", "Tool > Geometry", nullptr, [this] { runCommand("subdiv_reconstruct"); },
+    add("geometry.reconstruct", "Rebuild Lower Levels", "Tool > Geometry", nullptr, [this] { runCommand("subdiv_reconstruct"); },
         nullptr, "subdiv_reconstruct", nullptr, [this] { return subdivCurrentLevel(doc_.mesh) == 0; });
     // Micro-displacement levels (Tool > Geometry > Micro; core/Micro.h).
-    add("geometry.micro_divide", "Divide to Micro", "Tool > Geometry", nullptr,
+    add("geometry.micro_divide", "Add Micro", "Tool > Geometry", nullptr,
         [this] { runCommand("micro_divide", {{"level", double(microSlider_)}}); }, ICON_LC_GRID_3X3, "micro_divide", nullptr,
         [this] { return !hasMicro(doc_.mesh) && subdivCurrentLevel(doc_.mesh) + 1 >= subdivLevelCount(doc_.mesh); },
         "Store the surface above the highest level as micro displacements: hundreds of millions of sculptable "
@@ -375,94 +526,210 @@ void App::initActions() {
         "Write the micro level as a 32-bit EXR displacement map over the base UVs (next to the project).");
     add("geometry.micro_noise", "Micro Surface Noise", "Tool > Geometry", nullptr, [this] { runCommand("micro_noise"); }, nullptr,
         "micro_noise", nullptr, [this] { return hasMicro(doc_.mesh); });
-    // Tool > SubTool > Extract, Tool > Geometry > Modify Topology, Tool > Deformation (PanelExtract.cpp).
-    add("subtool.extract", "Extract", "Tool > Parts", nullptr, [this] { runExtract(); }, nullptr, "extract", nullptr,
+    add("part.duplicate", "Duplicate Part", "Tool > Parts", "Ctrl+Shift+D", [this] { runCommand("part_duplicate"); },
+        ICON_LC_COPY, "part_duplicate", nullptr, nullptr,
+        "Copy the active Part, with its layers and attributes, and make the copy active (also in the Parts list's "
+        "right-click menu).");
+    add("part.make_boolean_mesh", "Make Boolean Mesh", "Tool > Parts", nullptr,
+        [this] { runCommand("make_boolean_mesh", booleanArgs()); }, nullptr, "make_boolean_mesh", nullptr,
+        [this] { return booleanPartIndices(doc_).size() >= 2; },
+        "Combine the shown Parts with a Boolean (Add, Subtract or Intersect, set in the Parts list) into a new Part, in "
+        "list order. They stay as they are, hidden. One undo step.");
+    add("part.split_hidden", "Split Hidden", "Tool > Parts", nullptr, [this] { runCommand("part_split_hidden"); }, nullptr,
+        "part_split_hidden", nullptr, [this] { return doc_.mesh.hasHidden(); },
+        "Move the hidden triangles of the active Part into a new Part just below it, shown. One undo step.");
+    add("part.split_masked", "Split Masked", "Tool > Parts", nullptr, [this] { runCommand("part_split_masked"); }, nullptr,
+        "part_split_masked", nullptr, [this] { return doc_.mesh.hasMask(); },
+        "Move the masked triangles (the average mask of their corners above 50%) into a new, unmasked Part just "
+        "below. One undo step.");
+    add("part.split_unmasked", "Split Unmasked", "Tool > Parts", nullptr, [this] { runCommand("part_split_unmasked"); },
+        nullptr, "part_split_unmasked", nullptr, [this] { return doc_.mesh.hasMask(); },
+        "Move the triangles that are not masked into a new Part just below; the masked ones stay. One undo step.");
+    add("geometry.delete_masked", "Delete Masked", "Tool > Visibility", nullptr, [this] { runCommand("delete_masked"); },
+        nullptr, "delete_masked", nullptr, [this] { return doc_.mesh.hasMask(); },
+        "Delete the masked triangles (the average mask of their corners above 50%) of the active Part. Ctrl+Z "
+        "brings them back.");
+    add("part.sculpt_under_cursor", "Sculpt the Part under the cursor", "Tool > Parts", "Alt+Q",
+        [this] { sculptPartUnderCursor(); }, ICON_LC_MOUSE_POINTER_CLICK, nullptr, nullptr, nullptr,
+        "Make the Part under the pointer the one you sculpt, without moving the view (each Part keeps its mask). "
+        "The same key as Blender's; Preferences > Hotkeys changes it.");
+    add("part.duplicate_linked", "Linked Duplicate", "Tool > Parts", nullptr, [this] { runCommand("part_duplicate_linked"); },
+        ICON_LC_LINK, "part_duplicate_linked", nullptr, [this] { return doc_.mesh.triangleCount() > 0; },
+        "A copy that shares the active Part's mesh, beside it: sculpt, paint or mask any of them and all change. Move "
+        "each with the Gizmo; Make Unique gives one its own mesh again. Hundreds of copies cost about one mesh.");
+    add("part.make_unique", "Make Unique", "Tool > Parts", nullptr, [this] { runCommand("part_make_unique"); },
+        ICON_LC_UNLINK, "part_make_unique", nullptr, [this] { return doc_.linkCount(doc_.activePart) > 1; },
+        "Give the active linked Part its own copy of the mesh: it stays where it is and no longer changes with the "
+        "others.");
+    // Tool > Part > Extract, Tool > Geometry > Symmetry (Make Symmetric, Mirror), Tool > Reshape (PanelExtract.cpp).
+    add("part.extract", "Make Shell", "Tool > Parts", nullptr, [this] { runExtract(); }, nullptr, "extract", nullptr,
         [this] { return doc_.mesh.hasMask(); },
         "Make a shell from the masked part of the Part (a helmet, a strap, clothing), shown as a preview below it. "
-        "Change Thick, E Smt or Double and it updates; Accept keeps it as a new Part.");
-    add("subtool.extract_accept", "Accept", "Tool > Parts", nullptr, [this] { runCommand("extract_accept"); }, nullptr,
+        "Change Thickness, Edge Smooth, Both Sides, Corners or Border and it updates; Accept keeps it as a new Part.");
+    add("part.extract_accept", "Accept", "Tool > Parts", nullptr, [this] { runCommand("extract_accept"); }, nullptr,
         "extract_accept", nullptr, [this] { return doc_.extractPreviewCurrent(); },
         "Keep the Extract preview as a new Part below this one. Ctrl+Z takes it away again.");
-    add("subtool.extract_double", "Double", "Tool > Parts", nullptr,
+    // Figure Pose (core/FigurePose.h, PanelParts.cpp).
+    add("part.figure_pose", "Pose all Parts", "Tool > Parts", nullptr, [this] { runCommand("figure_pose_begin"); }, nullptr,
+        "figure_pose_begin", nullptr, [this] { return !figurePoseActive(doc_); },
+        "Merge the visible Parts into one light Pose Mesh and pose it with the Gizmo and masks; Apply Pose gives "
+        "every Part the pose at full resolution.");
+    add("part.figure_pose_apply", "Apply Pose", "Tool > Parts", nullptr, [this] { runCommand("figure_pose_apply"); },
+        nullptr, "figure_pose_apply", nullptr, [this] { return figurePoseActive(doc_); },
+        "Give every Part the Pose Mesh's moves at full resolution, as one undo step, and remove the Pose Mesh.");
+    add("part.figure_pose_cancel", "Cancel Pose", "Tool > Parts", nullptr, [this] { runCommand("figure_pose_cancel"); },
+        nullptr, "figure_pose_cancel", nullptr, [this] { return figurePoseActive(doc_); },
+        "Remove the Pose Mesh and show the Parts again; nothing changes.");
+    add("part.extract_double", "Both Sides", "Tool > Parts", nullptr,
         [this] {
             extractDouble_ = !extractDouble_;
             if (doc_.extractPreviewCurrent()) runExtract();
         },
         nullptr, nullptr, [this] { return extractDouble_; }, nullptr,
         "Grow the extracted shell both inward and outward from the surface, instead of outward only.");
-    add("subtool.extract_tcorne", "TCorne", "Tool > Parts", nullptr,
+    add("part.extract_triangle_corners", "Corners", "Tool > Parts", nullptr,
         [this] {
-            extractTCorne_ = !extractTCorne_;
+            extractTriCorners_ = !extractTriCorners_;
             if (doc_.extractPreviewCurrent()) runExtract();
         },
-        nullptr, nullptr, [this] { return extractTCorne_; }, nullptr,
+        nullptr, nullptr, [this] { return extractTriCorners_; }, nullptr,
         "Triangle corners: where the extracted edge turns sharply, the rim is made of triangles instead of quads.");
-    add("subtool.extract_tborder", "TBorder", "Tool > Parts", nullptr,
+    add("part.extract_triangle_border", "Border", "Tool > Parts", nullptr,
         [this] {
-            extractTBorder_ = !extractTBorder_;
+            extractTriBorder_ = !extractTriBorder_;
             if (doc_.extractPreviewCurrent()) runExtract();
         },
-        nullptr, nullptr, [this] { return extractTBorder_; }, nullptr,
+        nullptr, nullptr, [this] { return extractTriBorder_; }, nullptr,
         "Triangle border: the whole rim of the extracted shell is made of triangles instead of quads.");
-    add("geometry.mirror_weld", "Mirror And Weld", "Tool > Geometry", nullptr,
+    add("geometry.mirror_weld", "Make Symmetric", "Tool > Geometry", nullptr,
         [this] { runCommand("mirror_and_weld", {{"axis", axesText(mirrorWeldAxes_)}}); }, nullptr, "mirror_and_weld",
         nullptr, [this] { return !axesText(mirrorWeldAxes_).empty() && doc_.mesh.triangleCount() > 0; },
         "Mirror the + side of the Part onto the - side across the chosen axis and weld the seam into one "
-        "watertight mesh. Face Groups and vertex paint come along. To keep the other side, Deformation > Mirror first.");
-    add("deformation.mirror", "Mirror", "Tool > Deformation", nullptr,
+        "watertight mesh. Face Groups and vertex paint come along. To keep the other side, Symmetry > Mirror first.");
+    add("deformation.mirror", "Mirror", "Tool > Geometry", nullptr,
         [this] { runCommand("mirror", {{"axis", axesText(mirrorAxes_)}}); }, nullptr, "mirror", nullptr,
         [this] { return !axesText(mirrorAxes_).empty() && doc_.mesh.vertexCount() > 0; },
-        "Flip the Part across the chosen axis, through the origin (the plane symmetry and Mirror And Weld use).");
+        "Flip the Part across the chosen axis, through the origin (the plane symmetry and Make Symmetric use).");
     for (int k = 0; k < 3; ++k) {
         static const char* const kWeldIds[3] = {"geometry.mirror_weld_x", "geometry.mirror_weld_y", "geometry.mirror_weld_z"};
         static const char* const kMirrorIds[3] = {"deformation.mirror_x", "deformation.mirror_y", "deformation.mirror_z"};
         static const char* const kNames[3] = {"X", "Y", "Z"};
         add(kWeldIds[k], kNames[k], "Tool > Geometry", nullptr, [this, k] { mirrorWeldAxes_[k] = !mirrorWeldAxes_[k]; },
             nullptr, nullptr, [this, k] { return mirrorWeldAxes_[k]; }, nullptr,
-            "An axis Mirror And Weld mirrors across (several: one after the other).");
-        add(kMirrorIds[k], kNames[k], "Tool > Deformation", nullptr, [this, k] { mirrorAxes_[k] = !mirrorAxes_[k]; }, nullptr,
+            "An axis Make Symmetric mirrors across (several: one after the other).");
+        add(kMirrorIds[k], kNames[k], "Tool > Geometry", nullptr, [this, k] { mirrorAxes_[k] = !mirrorAxes_[k]; }, nullptr,
             nullptr, [this, k] { return mirrorAxes_[k]; }, nullptr, "An axis Mirror flips along (several: one after the other).");
     }
-    // Whole-mesh deformations (core/Deform.h, PanelExtract.cpp), each by its amount slider.
+    // Whole-mesh deformations (core/Deform.h) at amount 50, for menus, keys and search; the panel has them as Stack
+    // steps with their own amount (PanelDeform.cpp).
     {
         static const char* const kIds[4] = {"deformation.polish", "deformation.relax", "deformation.smooth", "deformation.balloon"};
         static const char* const kLabels[4] = {"Polish", "Relax", "Smooth", "Balloon"};
         static const char* const kCommands[4] = {"deform_polish", "deform_relax", "deform_smooth", "deform_balloon"};
         static const char* const kHelp[4] = {
-            "Polish the whole Part by the amount beside it: fine noise and small bumps flatten out while flat areas and "
-            "sharp edges stay. The mask holds what it covers; one undo step.",
+            "Polish the whole Part (amount 50): fine noise and small bumps flatten out while flat areas and sharp "
+            "edges stay. For another amount, add a Polish step to Tool > Reshape > Stack. The mask holds what it "
+            "covers; one undo step.",
             "Relax the whole Part: the vertices even out their spacing along the surface without changing its shape "
-            "(stretched areas after big moves). The mask holds what it covers; one undo step.",
-            "Smooth the whole Part by the amount beside it (Smooth keeps volume: without shrinking it). The mask "
-            "holds what it covers; one undo step.",
-            "Fill the whole Part out toward a rounder volume, like a balloon (ZBrush's Inflate Balloon); a negative "
-            "amount lets the air out. The mask holds what it covers; one undo step."};
+            "(stretched areas after big moves). For another amount, add a Relax step to the Stack. The mask holds "
+            "what it covers; one undo step.",
+            "Smooth the whole Part (amount 50). For another amount, or to keep the volume, add a Smooth step to the "
+            "Stack. The mask holds what it covers; one undo step.",
+            "Fill the whole Part out toward a rounder volume, like a balloon (amount 50). For another amount, or a "
+            "negative one that lets the air out, add a Balloon step to the Stack. The mask holds what it covers; "
+            "one undo step."};
         for (int k = 0; k < 4; ++k)
-            add(kIds[k], kLabels[k], "Tool > Deformation", nullptr,
-                [this, k] {
-                    Args a{{"amount", double(deformAmount_[k])}};
-                    if (k == 2) a["keep_volume"] = deformKeepVolume_;
-                    runCommand(kCommands[k], a);
-                },
-                nullptr, kCommands[k], nullptr, [this, k] { return doc_.mesh.vertexCount() > 0 && deformAmount_[k] != 0.0f; },
+            add(kIds[k], kLabels[k], "Tool > Reshape", nullptr,
+                [this, k] { runCommand(kCommands[k], {{"amount", 50.0}}); }, nullptr, kCommands[k], nullptr,
+                [this] { return doc_.mesh.vertexCount() > 0; },
                 kHelp[k]);
+    }
+    // Reshape > Stack (PanelDeform.cpp, docs/design/deform-panel.md).
+    {
+        auto sel = [this]() -> DeformStep* {
+            DeformStackUi& ds = deformStack_;
+            return ds.selected >= 0 && ds.selected < int(ds.steps.size()) ? &ds.steps[size_t(ds.selected)] : nullptr;
+        };
+        auto any = [this] { return !deformStack_.steps.empty(); };
+        add("deformation.stack_apply", "Apply", "Tool > Reshape", nullptr, [this] { deformStackApply(false); }, nullptr,
+            nullptr, nullptr, any,
+            "Keep the stack's result on the Part (one undo step) and start a new stack. With Preview on, what you "
+            "see is what stays.");
+        add("deformation.stack_apply_selected", "Apply Selected", "Tool > Reshape", nullptr,
+            [this] { deformStackApply(true); }, nullptr, nullptr, nullptr, [sel] { return sel() != nullptr; },
+            "Keep only the selected step on the Part (one undo step) and take it off the stack; the rest stay to "
+            "edit.");
+        add("deformation.stack_reset", "Reset", "Tool > Reshape", nullptr, [this] { deformStackReset(); }, nullptr,
+            nullptr, nullptr, any, "Take the preview back off the Part and empty the stack.");
+        add("deformation.stack_repeat", "Repeat", "Tool > Reshape", nullptr,
+            [this, sel] {
+                if (DeformStep* st = sel()) {
+                    const DeformStep copy = *st;
+                    deformStack_.steps.insert(deformStack_.steps.begin() + deformStack_.selected + 1, copy);
+                    deformStack_.on.insert(deformStack_.on.begin() + deformStack_.selected + 1, char(1));
+                    ++deformStack_.selected;
+                    deformStackRefresh();
+                }
+            },
+            nullptr, nullptr, nullptr, [sel] { return sel() != nullptr; },
+            "Add the selected step again right after it (twice the twist, a second bend...).");
+        add("deformation.stack_remove", "Remove", "Tool > Reshape", nullptr,
+            [this, sel] {
+                if (sel()) {
+                    deformStack_.steps.erase(deformStack_.steps.begin() + deformStack_.selected);
+                    deformStack_.on.erase(deformStack_.on.begin() + deformStack_.selected);
+                    deformStack_.selected = std::min(deformStack_.selected, int(deformStack_.steps.size()) - 1);
+                    deformStackRefresh();
+                }
+            },
+            nullptr, nullptr, nullptr, [sel] { return sel() != nullptr; }, "Take the selected step off the stack.");
+        static const char* const kAxisIds[3] = {"deformation.stack_x", "deformation.stack_y", "deformation.stack_z"};
+        static const char* const kAxisNames[3] = {"X", "Y", "Z"};
+        for (int k = 0; k < 3; ++k)
+            add(kAxisIds[k], kAxisNames[k], "Tool > Reshape", nullptr,
+                [this, sel, k] {
+                    DeformStep* st = sel();
+                    if (!st) return;
+                    const uint8_t bit = uint8_t(1 << k);
+                    if ((st->options.axes & ~bit) == 0) return; // keep at least one axis
+                    st->options.axes ^= bit;
+                    deformStackRefresh();
+                },
+                nullptr, nullptr,
+                [sel, k] {
+                    const DeformStep* st = sel();
+                    return st && (st->options.axes & (1 << k));
+                },
+                [sel] {
+                    const DeformStep* st = sel();
+                    return st && deformUsesAxes(st->op);
+                },
+                "An axis the selected step works along (several: one after the other, or together for Move, Scale, "
+                "Round and Box).");
     }
     add("file.new_sphere", "New Sphere", "File", "Ctrl+N", [this] { confirmDiscard([this] { runCommand("new_sphere"); }); },
         ICON_LC_FILE_PLUS, "new_sphere");
     add("file.new_plane", "New Plane", "File", nullptr, [this] { confirmDiscard([this] { runCommand("new_plane"); }); }, nullptr,
         "new_plane");
+    add("file.new_starter", "New from Starter Mesh...", "File", nullptr, [this] { showStarterMeshes(); }, nullptr, nullptr,
+        nullptr, nullptr,
+        "Start from a base mesh: human head, bust, full body, hand, foot, ear, eye, stylised and creature heads, "
+        "torso, or a bevelled box, cylinder, capsule or ring (Library > Tool > Starter meshes).");
     add("file.open", "Open...", "File", "Ctrl+O", [this] { confirmDiscard([this] { openFileDialog(); }); }, ICON_LC_FOLDER_OPEN,
         nullptr, nullptr, nullptr, "Open a project (.sfproj), a model (.obj, .glb, .fbx, .stl, .ply, .usd ...) or splats.");
     add("file.save", "Save", "File", "Ctrl+S", [this] { saveProjectAs(false); }, ICON_LC_SAVE, nullptr, nullptr, nullptr,
         "Save the project (.sfproj: every Part, layer, brush and setting). Asks for a name the first time.");
     add("file.save_as", "Save As...", "File", "Ctrl+Shift+S", [this] { saveProjectAs(true); }, nullptr, nullptr, nullptr, nullptr,
         "Save the project under a new name.");
+    add("file.save_visible_parts", "Save Visible Parts As...", "File", nullptr, [this] { saveVisiblePartsAs(); }, nullptr, nullptr,
+        nullptr, nullptr,
+        "Save a copy of the project (.sfproj) with only the visible Parts, and their materials and layers. The open project stays as it is.");
     add("file.export_glb", "Export GLB...", "File > Export", "Ctrl+E", [this] { saveFileDialog(FileAction::ExportGlb); },
         ICON_LC_PACKAGE, nullptr, nullptr, nullptr,
         "Export the model as glTF binary, with sculpt layers as blend shapes (morph targets).");
     add("file.export_stl", "Export STL...", "File > Export", nullptr, [this] {
             static const SDL_DialogFileFilter filters[] = {{"STL", "stl"}, {"All files", "*"}};
-            SDL_ShowSaveFileDialog(onGozFileChosen, &gozDialogs_[int(GozFile::ExportStl)], window_, filters, 2, nullptr);
+            sf::dialogs::saveFile(onBridgeFileChosen, &bridgeDialogs_[int(BridgeFile::ExportStl)], window_, filters, 2, nullptr);
         },
         nullptr, nullptr, nullptr, nullptr, "Save the visible Parts as one binary STL, for 3D printing.");
     add("file.send_unreal", "Send to Unreal", "File > Export", "Ctrl+U", [this] { sendToUnreal(); }, ICON_LC_SEND, nullptr,
@@ -492,20 +759,56 @@ void App::initActions() {
     add("file.maya_folder", "Exchange folder...", "File > Maya", nullptr, [this] { chooseMayaFolder(); },
         ICON_LC_FOLDER_OPEN, nullptr, nullptr, nullptr,
         "Choose the folder SculptForge and Maya exchange meshes through (pick the same one in Maya's shelf script). "
-        "SculptForge reads and writes only there, and only when you send or get.");
+        "SculptForge reads and writes only there: when you send or get, and when Maya sends while Get "
+        "automatically is on.");
     add("brush.paste", "Paste brush", "Brush", "Ctrl+V", [this] { pasteBrush(); }, ICON_LC_CLIPBOARD_PASTE, nullptr, nullptr,
         nullptr, "Add the brush on the clipboard: a brush code someone shared, or the text of a .sfbrush file.");
-    add("brush.size_down", "Smaller brush", "Draw", "[", [this] { radiusPx_ = std::max(2.0f, radiusPx_ / 1.1f); }, nullptr,
-        nullptr, nullptr, nullptr, "Make the brush 10% smaller (hold to repeat).");
-    add("brush.size_up", "Larger brush", "Draw", "]", [this] { radiusPx_ = std::min(800.0f, radiusPx_ * 1.1f); }, nullptr,
-        nullptr, nullptr, nullptr, "Make the brush 10% larger (hold to repeat).");
+    // Per-brush settings (#78, BrushSettingsUi.cpp).
+    add("brush.save_settings", "Save Brush Settings", "Brush", nullptr, [this] { saveBrushSettings(); }, ICON_LC_SAVE,
+        nullptr, nullptr, nullptr,
+        "Every brush keeps its own Size, Intensity, Falloff, Colour intensity, stroke and alpha while you work. "
+        "This saves the current brush's, so it starts with them every time SculptForge opens.");
+    add("brush.reset_settings", "Reset Brush to Default", "Brush", nullptr, [this] { resetBrushSettings(); },
+        ICON_LC_ROTATE_CCW, nullptr, nullptr, nullptr,
+        "Put the current brush's Size, Intensity, Falloff, Colour intensity, stroke and alpha back to the values "
+        "SculptForge ships with, and forget what Save Brush Settings stored for it.");
+    // Pen pressure per brush (#122, BrushSettingsUi.cpp): segments of Brush, Brush Lab and Preferences > Tablet.
+    for (const bool size : {true, false})
+        for (const PenPressure p : {PenPressure::Global, PenPressure::On, PenPressure::Off}) {
+            const std::string id = std::string("brush.pen_") + (size ? "size_" : "strength_") + penPressureId(p);
+            const std::string switchName = std::string("Pressure > ") + (size ? "Size" : "Strength");
+            const std::string description =
+                p == PenPressure::Global
+                    ? "This brush follows " + switchName + " (Preferences > Tablet, the shelf). Grab brushes (Move, KelvinGrab, "
+                      "KelvinTwist, KelvinScale, the tendrils) start with Size off instead, since a pen's press is "
+                      "nearly weightless."
+                    : std::string("Pen pressure ") + (p == PenPressure::On ? "always scales" : "never scales") +
+                          " this brush's " + (size ? "size" : "strength") + ", whatever " + switchName +
+                          " says. Kept per brush; Save Brush Settings keeps it for next time.";
+            add(id.c_str(), p == PenPressure::Global ? "Use global" : p == PenPressure::On ? "On" : "Off",
+                size ? "Brush > Pen pressure > Size" : "Brush > Pen pressure > Strength", nullptr,
+                [this, size, p] { setPenPressure(size, p); }, nullptr, nullptr,
+                [this, size, p] { return (size ? penSize_ : penStrength_) == p; }, nullptr, description.c_str());
+        }
+    add("brush.share_size", "Share size and intensity across brushes", "Preferences > Input", nullptr,
+        [this] { setShareBrushSize(!brushSettings_.shareSizeIntensity); }, nullptr, nullptr,
+        [this] { return brushSettings_.shareSizeIntensity; }, nullptr,
+        "On: Size and Intensity stay as they are when you pick another brush (as before 0.10.8); Falloff, "
+        "Colour intensity, the stroke and the alpha still follow each brush. Off (the default): every brush keeps its own.");
+    add("brush.size_down", "Smaller brush", "Draw", "[", [this] { radiusPx_ = drawSizeStep(radiusPx_, -1, false); }, nullptr,
+        nullptr, nullptr, nullptr, "Make the brush 10% smaller (hold to repeat; Shift+[ steps one pixel).");
+    add("brush.size_up", "Larger brush", "Draw", "]", [this] { radiusPx_ = drawSizeStep(radiusPx_, 1, false); }, nullptr,
+        nullptr, nullptr, nullptr, "Make the brush 10% larger (hold to repeat; Shift+] steps one pixel).");
     add("transform.symmetry_x", "Symmetry X", "Transform", "X", [this] { symmetry_.x = !symmetry_.x; }, ICON_LC_FLIP_HORIZONTAL_2,
         nullptr, [this] { return symmetry_.x; }, nullptr, "Mirror strokes across the X axis (left / right).");
     add("view.wireframe", "Wireframe", "Render", "Shift+F", [this] { renderSettings_.wireframe = !renderSettings_.wireframe; },
         ICON_LC_GRID_3X3, nullptr, [this] { return renderSettings_.wireframe; }, nullptr,
-        "Show the mesh's polygons (quads and triangles) over the surface (ZBrush PolyFrame).");
-    add("view.frame", "Frame model", "Transform", "F", [this] { camera_.frame(sceneBounds()); }, ICON_LC_SCAN, nullptr, nullptr,
-        nullptr, "Fit the whole model in the view.");
+        "Show the mesh's polygons (quads and triangles) over the surface.");
+    add("view.frame", "Frame model", "Transform", "F", [this] { frameKeyPress(); }, ICON_LC_SCAN, nullptr, nullptr,
+        nullptr, "Fit the whole model in the view. Classic sculpting keys, with several Parts: F frames the active Part, "
+        "F twice quickly frames the whole scene.");
+    add("view.frame_scene", "Frame scene", "Transform", "", [this] { frameView(sceneBounds()); }, ICON_LC_SCAN, nullptr, nullptr,
+        nullptr, "Fit every visible Part in the view (bind a key to it: F frames the active Part on the Classic sculpting keys).");
     add("color.pick", "Pick colour", "Color", "C", [this] { pickColorUnderCursor(); }, ICON_LC_PIPETTE, nullptr, nullptr, nullptr,
         "Take the paint colour from the model under the cursor.");
     for (int i = 0; i < int(BrushType::Count); ++i) {
@@ -520,7 +823,9 @@ void App::initActions() {
                 doc_.activeBrush = -1;
                 paintMode_ = false;
                 guidesMode_ = false; // leaves the QRemesh Guides brush
+                edgesMode_ = false;  // and Edges mode
                 maskBrush_.on = false;
+                leaveDrawModesStatus(); // and Draw Tube / Append > Insert
             },
             ICON_LC_BRUSH, nullptr, [this, type] { return brush_ == type && doc_.activeBrush < 0 && !paintMode_ && !guidesMode_; }, nullptr,
             (std::string("Sculpt with the ") + brushLabel(type) + " brush.").c_str());
@@ -533,7 +838,14 @@ void App::initActions() {
         [this] { return guide_.isOpen(); }, nullptr,
         "The SculptForge user guide: every tool explained, with search. Hold Ctrl over a control and press F1 to open "
         "the chapter about it.");
-    add("help.whats_new", "What's New", "Help", nullptr, [this] { guide_.open("whats-new.md"); }, ICON_LC_SPARKLES, nullptr,
+    add("help.first_sculpt", "Your first sculpt (10 min)", "Help", nullptr, [this] { guide_.open("first-sculpt.md"); },
+        ICON_LC_GRADUATION_CAP, nullptr, nullptr, nullptr,
+        "A step-by-step lesson for complete beginners: a cute owl head from the default sphere, painted and "
+        "rendered, in about ten minutes.");
+    add("help.quick_tour", "Quick tour", "Help", nullptr, [this] { showQuickTour(0); }, ICON_LC_COMPASS, nullptr, nullptr,
+        nullptr, "Ten short slides for sculptors who know another app: where remeshing, dynamic topology, retopology, "
+                 "levels, masking, cut, brushes and baking are, each with a Show me button.");
+    add("help.whats_new", "What's New", "Help", nullptr, [this] { showWhatsNew(); }, ICON_LC_SPARKLES, nullptr,
         nullptr, nullptr, "What changed in this version and the ones before it (opens once by itself after an update).");
     add("help.check_updates", "Check for updates", "Help", nullptr, [this] { startUpdateCheck(true); }, ICON_LC_REFRESH_CW,
         nullptr, nullptr, [this] { return !updateJob_; },
@@ -543,30 +855,60 @@ void App::initActions() {
         "Version, licence and the open-source components SculptForge is built with.");
     add("help.support", "Support SculptForge...", "Help", nullptr, [this] { openSupportPage(); }, ICON_LC_HEART, nullptr,
         nullptr, nullptr,
-        "SculptForge is free and stays free. Memberships add your name to the credits, a monthly brush and "
-        "alpha pack and a roadmap vote: opens sculptforge.app/support.html in your browser. Nothing in the app changes either way.");
+        "SculptForge is free and stays free. A membership adds betas and early builds, Member Requests (one request "
+        "a month, built first and credited to you), a vote on what we build next and your name in the credits: opens sculptforge.app/support.html in your browser. Nothing in the app changes either way.");
     add("help.discord", "Join the Discord...", "Help", nullptr, [this] { openDiscordPage(); }, ICON_LC_MESSAGE_CIRCLE,
         nullptr, nullptr, nullptr,
         "The official SculptForge community on Discord: questions, tips and work in progress. Opens the invite in "
         "your browser. Bugs still go to Report a problem (GitHub issues).");
     add("help.welcome", "Welcome", "Help", nullptr, [this] { showWelcome_ = true; }, ICON_LC_SPARKLES, nullptr, nullptr,
         nullptr, "The welcome note shown the first time SculptForge starts.");
-    add("help.website", "Website & documentation", "Help", nullptr, [] { SDL_OpenURL("https://sculptforge.app/"); },
+    add("help.website", "Website & documentation", "Help", nullptr, [] { sf::dialogs::openUrl("https://sculptforge.app/"); },
         ICON_LC_BOOK_OPEN, nullptr, nullptr, nullptr, "Open the SculptForge website and user guide in your browser.");
-    add("help.report", "Report a problem", "Help", nullptr, [] { SDL_OpenURL("https://github.com/islandmed/SculptForge/issues"); },
+    add("help.report", "Report a problem", "Help", nullptr, [] { sf::dialogs::openUrl("https://github.com/islandmed/SculptForge/issues"); },
         ICON_LC_CIRCLE_ALERT, nullptr, nullptr, nullptr, "Open the issue tracker in your browser.");
     add("help.log", "Open log folder", "Help", nullptr,
         [this] {
             const std::string url = crashlog::folderUrl();
             if (url.empty()) status_ = "There is no log file (the user data folder couldn't be written).";
-            else if (!SDL_OpenURL(url.c_str()))
+            else if (!sf::dialogs::openUrl(url.c_str()))
                 status_ = "The log is " + crashlog::path() + " (couldn't open its folder: " + SDL_GetError() + ")";
         },
         ICON_LC_FILE_TEXT, nullptr, nullptr, nullptr,
         "Open the folder with sculptforge.log: what SculptForge did and, after a crash, what crashed. "
         "sculptforge-previous.log beside it is the last session's. Attach both to a problem report.");
+    add("help.log_copy", "Copy log to clipboard", "Help", nullptr,
+        [this] {
+            // The end of the log as text, for a report where a file can't be attached or found (Android keeps the app's
+            // folder out of the Files app: a Pixel owner, 11-12).
+            std::ifstream f(fsPath(crashlog::path()), std::ios::binary | std::ios::ate);
+            if (!f) {
+                status_ = "There is no log file to copy.";
+                return;
+            }
+            constexpr std::streamoff kTail = 24 * 1024;
+            const std::streamoff size = f.tellg();
+            f.seekg(std::max<std::streamoff>(0, size - kTail));
+            std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            if (size > kTail) text.erase(0, text.find('\n') == std::string::npos ? 0 : text.find('\n') + 1); // (a whole first line)
+            size_t keep = text.size(), lines = 0; // the last 60 lines
+            while (keep > 0 && lines <= 60)
+                if (text[--keep] == '\n') ++lines;
+            if (lines > 60) text.erase(0, keep + 1);
+            SDL_SetClipboardText(text.c_str());
+            status_ = "Copied the end of the log: paste it into your report.";
+        },
+        ICON_LC_COPY, nullptr, nullptr, nullptr,
+        "Copies the last 60 lines of sculptforge.log, so you can paste them into a problem report where a file can't be "
+        "attached or found.");
+    add("help.perf_trace", "Record a performance trace", "Help", nullptr, [this] { togglePerfTrace(); }, ICON_LC_ACTIVITY,
+        nullptr, [] { return perftrace::on(); }, nullptr,
+        "While on, sculptforge-trace.log in the log folder records what makes SculptForge slow: every frame over 33 ms "
+        "with where its time went, strokes, uploads to the GPU, remeshes and other background jobs, the mesh size and "
+        "levels, and the GPU and driver. Turn it on, do what is slow, turn it off and attach the file to your report. "
+        "A small file on this computer only; off by default and costs nothing when off.");
     add("help.feedback", "Fixes & suggestions", "Help", nullptr,
-        [] { SDL_OpenURL("https://github.com/islandmed/SculptForge/issues/new/choose"); }, ICON_LC_MESSAGE_SQUARE_PLUS,
+        [] { sf::dialogs::openUrl("https://github.com/islandmed/SculptForge/issues/new/choose"); }, ICON_LC_MESSAGE_SQUARE_PLUS,
         nullptr, nullptr, nullptr,
         "Submit a request for a fix or a suggestion: opens the bug report and feature request forms in your browser.");
 
@@ -579,7 +921,7 @@ void App::initActions() {
         "The script console: every command you run appears as a script line, and you can type commands yourself.");
     add("script.run_file", "Run script file...", "Script", nullptr,
         [this] {
-            SDL_ShowOpenFileDialog(onUiFileChosen, &g_requests[kRunScript], window_, kScriptFilters, 2, nullptr, false);
+            sf::dialogs::openFile(onUiFileChosen, &g_requests[kRunScript], window_, kScriptFilters, 2, nullptr, false);
         },
         ICON_LC_FILE_CODE, nullptr, nullptr, nullptr, "Run a text file of script statements, one per line (# starts a comment).");
     add("script.copy_session", "Copy session as script", "Script", nullptr,
@@ -593,22 +935,34 @@ void App::initActions() {
     add("script.clear_console", "Clear console", "Script", nullptr, [this] { console_.clear(); }, ICON_LC_TRASH_2, nullptr, nullptr,
         nullptr, "Empty the console log (the session script is kept).");
 
-    // --- Config (ZBrush: Preferences > Config) ---
-    add("config.store", "Store Config", "Preferences > Config", "Ctrl+Shift+I", [this] { storeConfig(); }, ICON_LC_SAVE, nullptr,
+    // --- Config (Preferences > Saving & Layouts) ---
+    // Preferences and the layout save themselves (#117, layoutSavedKey_); Save Layout marks the layout Revert returns to. config.store (Ctrl+Shift+I before
+    // 0.11.1) stays as an id, so keymaps and macros that name it still load: it saves the preferences at once.
+    add("config.save_layout", "Save Layout", "Preferences > Saving & Layouts", nullptr, [this] { saveLayout(); }, ICON_LC_SAVE, nullptr,
         nullptr, nullptr,
-        "Keep the current layout, shortcuts and interface preferences for future sessions. Like ZBrush, SculptForge never "
-        "saves them on its own.");
-    add("config.restore_standard", "Restore Standard UI", "Preferences > Config", nullptr, [this] { restoreStandardUi(); },
+        "Make the current layout (shelves, trays, open palettes) the one Revert to Saved Layout returns to. The layout, "
+        "preferences and shortcuts also save themselves.");
+    add("config.store", "Save Preferences Now", "Preferences > Saving & Layouts", nullptr, [this] { savePrefsNow(); }, ICON_LC_SAVE,
+        nullptr, nullptr, nullptr,
+        "Write the preferences and shortcuts to disk now. Not needed: they save themselves a moment after every change.");
+    add("config.restore_standard", "Reset Layout and Shortcuts", "Preferences > Saving & Layouts", nullptr, [this] { queueLayoutOp(3); },
         ICON_LC_ROTATE_CCW, nullptr, nullptr, nullptr,
-        "Go back to the built-in layout and default shortcuts. Store Config afterwards to make it stick.");
-    add("config.restore_custom", "Restore Custom UI", "Preferences > Config", nullptr, [this] { restoreCustomUi(); },
-        ICON_LC_ARCHIVE_RESTORE, nullptr, nullptr, [this] { return fileExists(uiConfigPath()); },
-        "Go back to the layout and shortcuts saved by the last Store Config.");
-    add("config.load", "Load UI...", "Preferences > Config", "Ctrl+L", [this] { loadUiDialog(); }, ICON_LC_FOLDER_INPUT, nullptr,
-        nullptr, nullptr, "Load a layout file someone shared (or you saved with Save UI).");
-    add("config.save", "Save UI...", "Preferences > Config", nullptr, [this] { saveUiDialog(); }, ICON_LC_FOLDER_OUTPUT, nullptr,
-        nullptr, nullptr, "Save the layout, shortcuts and interface preferences to a file you can share.");
-    add("config.customize", "Enable Customize", "Preferences > Config", nullptr,
+        "Go back to the built-in layout, shortcuts and radial menus. They save themselves; Revert to Saved Layout still "
+        "returns to the layout Save Layout kept.");
+    add("config.reset_layout", "Reset Layout", "Preferences > Saving & Layouts", nullptr, [this] { queueLayoutOp(2); },
+        ICON_LC_LAYOUT_TEMPLATE, nullptr, nullptr, nullptr,
+        "Back to the built-in shelves, trays and panels, with every panel in the main window. Shortcuts and preferences stay. "
+        "Always works, whatever state the layout is in (a layout that can't be used: start with --reset-layout).");
+    add("config.restore_custom", "Revert to Saved Layout", "Preferences > Saving & Layouts", nullptr, [this] { queueLayoutOp(1); },
+        ICON_LC_ARCHIVE_RESTORE, nullptr, nullptr, [this] { return storedLayout_.isObject(); },
+        "Go back to the layout the last Save Layout kept (the layout in use saves itself, so this is the way back to it).");
+    add("config.load", "Import Interface...", "Preferences > Saving & Layouts", "Ctrl+L", [this] { loadUiDialog(); },
+        ICON_LC_FOLDER_INPUT, nullptr, nullptr, nullptr,
+        "Load a layout and shortcuts file someone shared (or you saved with Export Interface).");
+    add("config.save", "Export Interface...", "Preferences > Saving & Layouts", nullptr, [this] { saveUiDialog(); },
+        ICON_LC_FOLDER_OUTPUT, nullptr, nullptr, nullptr,
+        "Save the layout, shortcuts and interface preferences to a file you can share.");
+    add("config.customize", "Customize Shelves", "Preferences > Saving & Layouts", nullptr,
         [this] {
             layout_.customize = !layout_.customize;
             status_ = layout_.customize ? "Customize: Ctrl+Alt+drag to move or remove items" : "Customize off";
@@ -619,22 +973,32 @@ void App::initActions() {
     // The shell's actions (Shell.cpp: brushes, shelves, palettes, trays): they replace any of the above with
     // the same id and own P (Paint), the symmetry toggles and Tab.
     registerShellActions();
-    registerTextureUiActions(); // Tool > Texture Map, the Vertex / Texture paint target (PanelTexture.cpp)
+    registerTextureUiActions(); // Tool > Texture Image, the Vertex / Texture paint target (PanelTexture.cpp)
+    registerLineGradientActions(); // Color > Line Gradient (LineGradient.cpp)
+    registerStencilActions();   // Alpha > Stencil (StencilOverlay.cpp)
+    registerReferenceActions(); // View > Reference images (ReferenceImages.cpp)
     registerPbrUiActions();     // material channels, solo view, map export (PanelPbr.cpp)
-    registerGizmoActions();     // Q W E R: Draw, and the Gizmo 3D's Move, Scale, Rotate (Gizmo.cpp)
+    registerGizmoActions();     // Q W E R: Draw, and the Transform gizmo's Move, Scale, Rotate; Shift+W All (Gizmo.cpp)
     registerBakeUiActions();    // Tool > Bake (PanelBake.cpp)
     registerUvEditorActions();  // UV Editor (PanelUvEditor.cpp)
-    registerRetopoUiActions(); // Geometry > QRemesh, SubTool > ProjectAll (PanelRetopo.cpp)
-    registerZSphereUiActions(); // Tool > ZSpheres (PanelZSpheres.cpp)
+    registerGarmentActions();   // Tool > Garments, the Pattern window (PanelGarments.cpp)
+    registerRetopoUiActions(); // Geometry > QRemesh, Part > ProjectAll (PanelRetopo.cpp)
+    registerEdgeUiActions();   // Geometry > Edges (PanelEdges.cpp)
+    registerForgeSphereUiActions(); // Tool > Forge Spheres (PanelForge Spheres.cpp)
+    registerTubeUiActions();        // Tool > Tube (PanelTube.cpp)
     registerSplatTrainUi();    // Splats > Train from capture (PanelSplatTrain.cpp)
     registerSculptableUiActions(); // Splats > Make sculptable (PanelSculptable.cpp)
     registerVdmActions();      // Brush > Vector Displacement (PanelVdm.cpp)
     registerKelvinletActions(); // Brush > Kelvinlet & Capture: Capture from view (PanelKelvinlet.cpp)
     registerFaceUiActions();   // Tool > Facial Shapes, face_take_play / face_take_stop (PanelFace.cpp)
     registerPerformanceUiActions(); // Preferences > Performance (PanelPerformance.cpp)
-    registerInputActions();     // ZBrush keys: U I O, Space, L, V, Ctrl+A / I / H / W..., the input style (Input.cpp)
+    registerInputActions();     // the Classic sculpting keys: U I O, Space, L, V, Ctrl+A / I / H / W..., the input style (Input.cpp)
     registerTimelineUiActions(); // Sculpt Timeline, timelapse, Help > Benchmark (PanelTimeline.cpp)
+    registerPanelActions();      // panels in windows of their own, Reset panel windows (PanelWindows.cpp)
+    registerMyPanelActions();    // My Panel's key (PanelMyPanel.cpp)
 
+    registerModifierBrushCommands(); // the Shift and Ctrl brushes (ModifierBrush.cpp)
+    registerBrushSets(); // brush set commands and actions; the active set's shelf back (PanelBrushSets.cpp)
     // Every command, so the command palette finds anything scriptable.
     actions_.registerCommands(
         commands_, [this](const std::string& name) { runCommand(name); },
@@ -651,6 +1015,7 @@ void App::initActions() {
         actions_.setRecent(std::move(recent));
     }
     layoutBaseline_ = layoutKey();
+    actionsReady_ = true;
 }
 
 void App::saveRecentActions() {
@@ -666,11 +1031,7 @@ void App::saveRecentActions() {
 
 namespace {
 std::string windowStatePath() {
-    std::string dir;
-    if (char* pref = appPrefPath()) {
-        dir = pref;
-        SDL_free(pref);
-    }
+    const std::string dir = userDataDir();
     return dir.empty() ? std::string() : dir + "window.json";
 }
 } // namespace
@@ -683,6 +1044,8 @@ App::WindowState App::loadWindowState() {
     Json j;
     std::string err;
     if (!Json::parse(std::string(std::istreambuf_iterator<char>(f), {}), j, err)) return st;
+    st.stored = true;
+    st.scale = std::clamp(float(j["scale"].asNumber(0.0)), 0.0f, 4.0f);
     st.w = std::clamp(int(j["w"].asNumber(st.w)), 640, 16384);
     st.h = std::clamp(int(j["h"].asNumber(st.h)), 400, 16384);
     st.maximized = j["maximized"].asBool(false);
@@ -718,21 +1081,51 @@ void App::saveWindowState() const {
         SDL_GetWindowSize(window_, &st.w, &st.h);
         SDL_GetWindowPosition(window_, &st.x, &st.y);
         st.placed = true;
+        st.scale = automaticUiScale(SDL_GetWindowDisplayScale(window_), SDL_GetWindowPixelDensity(window_));
     }
     Json j;
     j.set("w", double(st.w));
     j.set("h", double(st.h));
+    if (st.scale > 0.0f) j.set("scale", double(st.scale));
     if (st.placed) {
         j.set("x", double(st.x));
         j.set("y", double(st.y));
     }
     j.set("maximized", maximized);
     j.set("fullscreen", fullscreen);
-    std::ofstream out(path);
-    out << j.dump(true);
+    std::string err; // (temp file, then rename: a quit that ends mid-write leaves the last one whole)
+    if (!writeJsonAtomic(path, j, err)) SDL_Log("%s", err.c_str());
 }
 
 std::string App::uiConfigPath() const { return configDir_.empty() ? std::string() : configDir_ + "ui.json"; }
+
+namespace {
+// The layouts a ui.json holds (both of them), "" for a file that is missing or doesn't read.
+std::string layoutsOf(const std::string& path) {
+    std::ifstream f(fsPath(path), std::ios::binary);
+    Json j;
+    std::string err;
+    if (!f || !Json::parse(std::string(std::istreambuf_iterator<char>(f), {}), j, err) || !j.isObject()) return {};
+    return j["layout"].dump() + j["layoutSaved"].dump();
+}
+} // namespace
+
+// The first write of a session keeps what ui.json held (a file that didn't read, --reset-layout's dropped layout) as
+// ui.prev.json, the copy before that as ui.prev2.json: the layout autosaves, so one backup per session would be the
+// session's own last layout by the next start. A file with the same layouts as ui.prev.json changes neither.
+void App::backUpUiConfigOnce() {
+    std::error_code ec;
+    const std::string path = uiConfigPath();
+    if (uiConfigBackedUp_ || path.empty() || !std::filesystem::is_regular_file(fsPath(path), ec)) return;
+    uiConfigBackedUp_ = true;
+    const std::string prev = configDir_ + "ui.prev.json";
+    if (std::filesystem::is_regular_file(fsPath(prev), ec)) {
+        if (!layoutsOf(path).empty() && layoutsOf(path) == layoutsOf(prev)) return;
+        std::filesystem::copy_file(fsPath(prev), fsPath(configDir_ + "ui.prev2.json"),
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+    }
+    std::filesystem::copy_file(fsPath(path), fsPath(prev), std::filesystem::copy_options::overwrite_existing, ec);
+}
 
 bool App::writeUiConfig(const std::string& path, std::string& err) {
     Json j = Json::object();
@@ -741,16 +1134,130 @@ bool App::writeUiConfig(const std::string& path, std::string& err) {
     j.set("shortcuts", actions_.overridesToJson());
     j.set("prefs", toJson(uiPrefs_));
     j.set("radialMenus", toJson(radialMenus_));
-    std::ofstream f(fsPath(path), std::ios::binary | std::ios::trunc);
-    f << j.dump(true) << "\n";
-    if (!f) {
-        err = "Could not write " + path;
+    return writeJsonAtomic(path, j, err);
+}
+
+// Preferences save themselves (#117), and so does the layout: ui.json gets the shortcuts, the preferences, the radial
+// menus and the layout in use a moment after they change, with the layout Save Layout last kept beside it (storedLayout_).
+bool App::writeJsonAtomic(const std::string& path, const Json& j, std::string& err) {
+    std::error_code ec;
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream f(fsPath(tmp), std::ios::binary | std::ios::trunc);
+        f << j.dump(true) << "\n";
+        if (!f) {
+            err = "Could not write " + path;
+            return false;
+        }
+    }
+    std::filesystem::rename(fsPath(tmp), fsPath(path), ec);
+    if (ec) {
+        err = "Could not write " + path + ": " + ec.message();
         return false;
     }
     return true;
 }
 
-bool App::readUiConfig(const std::string& path, std::string& err) {
+std::string App::prefsKey() const {
+    Json j = Json::object();
+    j.set("shortcuts", actions_.overridesToJson());
+    j.set("prefs", toJson(uiPrefs_));
+    j.set("radialMenus", toJson(radialMenus_));
+    return j.dump();
+}
+
+bool App::saveUiPrefs(std::string& err) {
+    backUpUiConfigOnce();
+    Json j = Json::object();
+    j.set("version", 1.0);
+    layoutsToUiJson(j, toAutosaveJson(layout_), storedLayout_);
+    j.set("shortcuts", actions_.overridesToJson());
+    j.set("prefs", toJson(uiPrefs_));
+    j.set("radialMenus", toJson(radialMenus_));
+    if (!writeJsonAtomic(uiConfigPath(), j, err)) return false;
+    prefsSavedKey_ = prefsKey();
+    layoutSavedKey_ = layoutKey();
+    prefsSaveAt_ = 0.0;
+    return true;
+}
+
+void App::autosavePrefs(bool flush) {
+    // Renders and recordings use the standard layout and the user's own settings folder: they never write it. UI
+    // tests do (their folder is a fresh one).
+    if (uiConfigPath().empty() || !actionsReady_ || (uiConfigDeterministic_ && options_.uiTest.empty())) return;
+    const double now = double(SDL_GetTicksNS()) * 1e-9;
+    if (!flush && now - prefsCheckedAt_ < 0.25) return; // a few looks a second while the app draws
+    prefsCheckedAt_ = now;
+    std::string key = prefsKey(), lkey = layoutKey();
+    if (!prefsKeyKnown_) { // the first look: what the start read (or the defaults) is already on disk
+        prefsKeyKnown_ = true;
+        prefsSavedKey_ = languageUnsaved_ ? std::string() : std::move(key); // (the first start's language still has to be written)
+        layoutSavedKey_ = options_.resetLayout ? std::string() : std::move(lkey); // (--reset-layout: the reset one is written)
+        languageUnsaved_ = false;
+        return;
+    }
+    const bool prefsChanged = key != prefsSavedKey_;
+    if (!prefsChanged && lkey == layoutSavedKey_) {
+        prefsSaveAt_ = 0.0;
+        return;
+    }
+    // Debounced: a slider being dragged is written once it settles (or every half second); a layout edit two seconds
+    // after (a panel being dragged, a run of shelf edits: one write).
+    const double wait = prefsChanged ? 0.5 : options_.uiTest.empty() ? 2.0 : 0.3; // (a UI test's frames run faster than the clock)
+    if (prefsSaveAt_ == 0.0 || (prefsChanged && prefsSaveAt_ > now + wait)) {
+        prefsSaveAt_ = now + wait;
+        redrawIn(wait); // (a frame then, even if the app is idle by then)
+    }
+    if (!flush && now < prefsSaveAt_) return;
+    std::string err;
+    if (!saveUiPrefs(err)) {
+        SDL_Log("%s", err.c_str());
+        prefsSavedKey_ = std::move(key); // (no retry every frame; the next change tries again)
+        layoutSavedKey_ = std::move(lkey);
+        prefsSaveAt_ = 0.0;
+    }
+}
+
+void App::restartPrefsForTest(const std::string& uiJson) {
+    autosavePrefs(true);
+    uiConfigBackedUp_ = false; // (a start of its own)
+    if (!uiJson.empty() && !uiConfigPath().empty()) {
+        std::error_code ec;
+        std::filesystem::copy_file(fsPath(uiJson), fsPath(uiConfigPath()), std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) status_ = "restart: " + ec.message();
+    }
+    UiPrefs defaults;
+    defaults.mayaFolder = uiPrefs_.mayaFolder; // (maya.json, not ui.json)
+    defaults.mayaAutoReceive = uiPrefs_.mayaAutoReceive;
+    defaults.mayaLive = uiPrefs_.mayaLive;
+    uiPrefs_ = defaults;
+    actions_.clearOverrides();
+    resetRadialMenus();
+    const bool customize = layout_.customize;
+    layout_ = standardLayout(uiPrefs_.shellLayout);
+    layout_.customize = customize;
+    storedLayout_ = Json();
+    std::string err;
+    if (fileExists(uiConfigPath()) && !readUiConfig(uiConfigPath(), err, true)) status_ = err;
+    applyInputStyle();
+    registerLibraryActions(); // as at a start: registered after the style is applied (#147)
+    restoreBrushSet();
+    layoutBaseline_ = layoutKey();
+    prefsSavedKey_ = prefsKey();
+    layoutSavedKey_ = layoutKey();
+    prefsSaveAt_ = 0.0;
+    ImGui::ClearActiveID(); // a new start has no text field in use (the console's would take the next keys)
+    ImGui::SetWindowFocus(nullptr);
+}
+
+void App::savePrefsNow() {
+    std::string err;
+    if (uiConfigPath().empty()) status_ = "Can't save the preferences: no settings folder";
+    else if (!saveUiPrefs(err)) status_ = err;
+    else status_ = "Preferences saved (they also save themselves)";
+}
+
+bool App::readUiConfig(const std::string& path, std::string& err, bool own) {
     std::ifstream f(fsPath(path), std::ios::binary);
     if (!f) {
         err = "Could not read " + path;
@@ -761,44 +1268,66 @@ bool App::readUiConfig(const std::string& path, std::string& err) {
         err = path + ": " + err;
         return false;
     }
-    if (!j.isObject() || !j["layout"].isObject()) {
+    j = legacy::modernizeKeys(j); // keys an older version wrote
+    // Our own ui.json may have no layout yet (a first start that changed only a preference).
+    const UiLayoutPair layouts = layoutsFromUiJson(j);
+    const bool hasLayout = layouts.current.isObject();
+    if (!j.isObject() || (!hasLayout && !(own && j["prefs"].isObject()))) {
         err = path + " is not a SculptForge UI configuration";
         return false;
     }
     // The prefs first: they name the shell layout, whose standard shelves fill in what the file didn't store.
     UiPrefs prefs = uiPrefs_;
+    // Orbit around the pointer is on for new installs; our own settings saved before it existed keep orbiting the
+    // target, as those users know it.
+    if (own && !j["prefs"]["orbitAtPointer"].isBool()) prefs.orbitAtPointer = false;
     fromJson(j["prefs"], prefs);
-    UiLayout layout;
-    if (!fromJson(j["layout"], layout, err, prefs.shellLayout)) return false;
+    UiLayout layout = standardLayout(prefs.shellLayout);
+    if (hasLayout && !fromJson(layouts.current, layout, err, prefs.shellLayout)) return false;
+    if (own) storedLayout_ = layouts.saved; // (Revert to Saved Layout returns to this; the layout in use is the one above)
     uiPrefs_ = std::move(prefs);
     lookDirty_ = true;
+    requestUiScale(); // its UI scale
     const bool customize = layout_.customize;
     layout_ = std::move(layout);
     layout_.customize = customize;
     actions_.overridesFromJson(j["shortcuts"]);
     if (j.has("radialMenus")) applyRadialMenusJson(j["radialMenus"]); // (an older file keeps the menus there are)
-    setLanguage(languageFromCode(uiPrefs_.language));
+    setLanguage(languageFromCode(uiPrefs_.language)); // (the requestUiScale above adds the Chinese glyphs if needed)
     applyPerformancePrefs();
     applyInputStyle();
     doc_.sculptor.dyntopo.constantDetail = uiPrefs_.dyntopoConstantDetail;
     doc_.sculptor.dyntopo.smoothRemesh = uiPrefs_.dyntopoSmoothRemesh;
     renderSettings_.flatShading = uiPrefs_.flatShading;
     renderSettings_.backfaceCulling = uiPrefs_.backfaceCulling;
+    renderSettings_.floorGrid = uiPrefs_.floorGrid;
+    uvPackColumns_ = uiPrefs_.uvPackColumns, uvPackRows_ = uiPrefs_.uvPackRows;
+    renderSettings_.maskDarkness = uiPrefs_.maskDarkness;
+    setMaskColor(uiPrefs_.maskColorCustom, uiPrefs_.maskColor);
     renderSettings_.gradientBackground = uiPrefs_.gradientBackground;
     renderSettings_.backgroundColor = uiPrefs_.backgroundColor;
     return true;
 }
 
-void App::storeConfig() {
+void App::saveLayout() {
     std::string err;
     if (uiConfigPath().empty()) {
-        status_ = "Can't store the UI configuration: no settings folder";
-    } else if (!writeUiConfig(uiConfigPath(), err)) {
-        status_ = err;
+        status_ = "Can't save the layout: no settings folder";
     } else {
-        status_ = "UI configuration stored";
-        layoutBaseline_ = layoutKey();
+        const Json before = storedLayout_;
+        noteLayoutStored();
+        if (saveUiPrefs(err)) {
+            status_ = "Layout saved";
+        } else {
+            storedLayout_ = before;
+            status_ = err;
+        }
     }
+}
+
+void App::noteLayoutStored() {
+    storedLayout_ = toJson(layout_);
+    layoutBaseline_ = layoutKey();
 }
 
 void App::restoreStandardUi() {
@@ -807,47 +1336,113 @@ void App::restoreStandardUi() {
     layout_.customize = customize;
     actions_.clearOverrides();
     resetRadialMenus();
+    resetPanels(); // every panel back in the main window (PanelWindows.cpp)
     layoutBaseline_ = layoutKey();
-    status_ = "Standard UI restored - Store Config (Ctrl+Shift+I) to keep it";
+    status_ = "Standard layout and shortcuts restored";
+}
+
+void App::applyPendingLayoutOp() {
+    const int op = std::exchange(pendingLayoutOp_, 0);
+    if (op == 0) return;
+    autosaveNow(); // unsaved work first: whatever happens next, it is on disk
+    std::string err;
+    if (op == 1) restoreCustomUi();
+    else if (op == 2) resetLayoutOnly();
+    else if (op == 3) restoreStandardUi();
+    else if (op == 4) status_ = readUiConfig(std::exchange(pendingImportPath_, std::string()), err)
+                                    ? std::string("Interface loaded") : err;
+}
+
+void App::resetLayoutOnly() {
+    const bool customize = layout_.customize;
+    layout_ = standardLayout(uiPrefs_.shellLayout);
+    layout_.customize = customize;
+    resetPanels();
+    dropdown_.clear();
+    layoutBaseline_ = layoutKey();
+    status_ = "Standard layout restored";
+}
+
+std::vector<std::string> App::missingShelfWidgets() const {
+    std::vector<std::string> missing;
+    const UiLayout standard = standardLayout(uiPrefs_.shellLayout);
+    for (const auto* list : {&standard.topShelf, &standard.leftShelf, &standard.rightShelf, &standard.bottomShelf})
+        for (const std::string& id : *list) {
+            if (id.rfind("widget.", 0) != 0 || std::find(missing.begin(), missing.end(), id) != missing.end()) continue;
+            bool held = false;
+            for (const auto* now : {&layout_.topShelf, &layout_.leftShelf, &layout_.rightShelf, &layout_.bottomShelf})
+                held = held || std::find(now->begin(), now->end(), id) != now->end();
+            if (!held) missing.push_back(id);
+        }
+    return missing;
+}
+
+// Where the standard layout has it: on that shelf, after the nearest item before it that the shelf still holds.
+void App::addShelfWidget(const std::string& id) {
+    UiLayout standard = standardLayout(uiPrefs_.shellLayout);
+    auto shelves = [](UiLayout& l) { return std::array<std::vector<std::string>*, 4>{&l.topShelf, &l.leftShelf, &l.rightShelf, &l.bottomShelf}; };
+    auto from = shelves(standard);
+    auto to = shelves(layout_);
+    for (size_t s = 0; s < 4; ++s) {
+        const auto at = std::find(from[s]->begin(), from[s]->end(), id);
+        if (at == from[s]->end()) continue;
+        size_t insert = 0;
+        for (auto it = at; it != from[s]->begin();) {
+            --it;
+            const auto held = std::find(to[s]->begin(), to[s]->end(), *it);
+            if (*it != "sep" && *it != "row" && held != to[s]->end()) {
+                insert = size_t(held - to[s]->begin()) + 1;
+                break;
+            }
+        }
+        to[s]->insert(to[s]->begin() + std::ptrdiff_t(std::min(insert, to[s]->size())), id);
+        noteLayoutChanged();
+        status_ = "Put back on the shelf";
+        return;
+    }
 }
 
 void App::restoreCustomUi() {
     std::string err;
-    if (!fileExists(uiConfigPath())) {
-        status_ = "No stored UI configuration yet - Store Config (Ctrl+Shift+I) first";
-    } else if (!readUiConfig(uiConfigPath(), err)) {
+    UiLayout layout = standardLayout(uiPrefs_.shellLayout);
+    if (!storedLayout_.isObject()) {
+        status_ = "No saved layout yet - Save Layout first";
+    } else if (!fromJson(storedLayout_, layout, err, uiPrefs_.shellLayout)) {
         status_ = err;
     } else {
+        layout.customize = layout_.customize;
+        layout_ = std::move(layout); // (the autosave then writes it as the layout in use)
+        dropdown_.clear();
         layoutBaseline_ = layoutKey();
-        status_ = "Custom UI restored";
+        status_ = "Saved layout restored";
     }
 }
 
 void App::saveUiDialog() {
-    SDL_ShowSaveFileDialog(onUiFileChosen, &g_requests[kSaveUi], window_, kUiFilters, 1, nullptr);
+    sf::dialogs::saveFile(onUiFileChosen, &g_requests[kSaveUi], window_, kUiFilters, 1, nullptr);
 }
 
 void App::importBlenderKeymapDialog() {
-    SDL_ShowOpenFileDialog(onUiFileChosen, &g_requests[kBlenderKeymap], window_, kBlenderKeymapFilters, 2, nullptr, false);
+    sf::dialogs::openFile(onUiFileChosen, &g_requests[kBlenderKeymap], window_, kBlenderKeymapFilters, 2, nullptr, false);
 }
 
 void App::importRadialMenuDialog() {
-    SDL_ShowOpenFileDialog(onUiFileChosen, &g_requests[kRadialImport], window_, kRadialFilters, 1, nullptr, false);
+    sf::dialogs::openFile(onUiFileChosen, &g_requests[kRadialImport], window_, kRadialFilters, 1, nullptr, false);
 }
 
 void App::exportRadialMenuDialog(int menu) {
     radialEdit_.exportMenu = menu;
-    SDL_ShowSaveFileDialog(onUiFileChosen, &g_requests[kRadialExport], window_, kRadialFilters, 1, nullptr);
+    sf::dialogs::saveFile(onUiFileChosen, &g_requests[kRadialExport], window_, kRadialFilters, 1, nullptr);
 }
 
 void App::chooseMayaFolder() { // the only way the Maya bridge gets a folder: the user picks it (PanelMaya.cpp)
     const std::string start = uiPrefs_.mayaFolder;
-    SDL_ShowOpenFolderDialog(onUiFileChosen, &g_requests[kMayaFolder], window_, start.empty() ? nullptr : start.c_str(),
+    sf::dialogs::openFolder(onUiFileChosen, &g_requests[kMayaFolder], window_, start.empty() ? nullptr : start.c_str(),
                              false);
 }
 
 void App::loadUiDialog() {
-    SDL_ShowOpenFileDialog(onUiFileChosen, &g_requests[kLoadUi], window_, kUiFilters, 1, nullptr, false);
+    sf::dialogs::openFile(onUiFileChosen, &g_requests[kLoadUi], window_, kUiFilters, 1, nullptr, false);
 }
 
 void App::queueUiFile(int kind, std::string path) {
@@ -859,17 +1454,89 @@ std::string App::layoutKey() const {
     UiLayout l = layout_; // what a session changes on its own doesn't count as a layout edit
     l.consoleOpen = false;
     l.consoleHeight = 0;
-    l.lightboxOpen = false;
-    l.lightboxTab.clear();
+    l.libraryOpen = false;
+    l.libraryTab.clear();
     l.customize = false;
     return toJson(l).dump();
 }
 
+// ---------------------------------------------------------------------------
+// Viewport hints (U11): every note shown over the 3D view goes through here, with its Don't show again
+// ---------------------------------------------------------------------------
+
+namespace {
+struct HintInfo {
+    const char* id;
+    const char* name; // as Preferences > Hints lists it
+};
+constexpr HintInfo kHints[] = {
+    {"air_strokes", "Strokes start off the model"},
+    {"lod_preview", "Previewing an LOD"},
+    {"face_landmarks", "Face landmark steps"},
+};
+} // namespace
+
+bool App::hintShown(const char* id) const {
+    return uiPrefs_.showHints && !uiPrefs_.hiddenHints.count(id);
+}
+
+void App::drawViewportHint(const char* id, const char* text, ImU32 colour, float top) {
+    if (!hintShown(id)) return;
+    const CanvasRect c = canvasRect();
+    const float s = uiScale_;
+    ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.5f, top), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.72f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f * s, 4.0f * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, theme::rounding(4.0f * s));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+    const std::string window = std::string("##hint.") + id;
+    if (ImGui::Begin(window.c_str(), nullptr, flags)) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(colour));
+        ImGui::TextUnformatted(text);
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.0f, 12.0f * s);
+        const std::string button = std::string(tr("Don't show again")) + "##hint." + id;
+        if (ImGui::SmallButton(button.c_str())) {
+            uiPrefs_.hiddenHints.insert(id);
+            status_ = "Hint hidden (Preferences > Hints shows it again)";
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+}
+
+void App::drawHintsSection() {
+    ui::Checkbox("Show hints in the viewport##hints.show", &uiPrefs_.showHints);
+    ui::HelpText("Show hints in the viewport", nullptr,
+                 "The short notes SculptForge shows over the 3D view (a mode that is on, the next step of a tool). Off "
+                 "hides them all; each also has its own Don't show again.",
+                 "Preferences > Hints");
+    ImGui::BeginDisabled(!uiPrefs_.showHints);
+    for (const HintInfo& h : kHints) {
+        bool on = !uiPrefs_.hiddenHints.count(h.id);
+        const std::string label = std::string(tr(h.name)) + "##hints." + h.id;
+        if (ui::Checkbox(label.c_str(), &on)) {
+            if (on) uiPrefs_.hiddenHints.erase(h.id);
+            else uiPrefs_.hiddenHints.insert(h.id);
+        }
+    }
+    ImGui::EndDisabled();
+    if (ImGui::Button(tr("Show all hints again##hints.reset"), ImVec2(-FLT_MIN, 0))) {
+        uiPrefs_.showHints = true;
+        uiPrefs_.hiddenHints.clear();
+    }
+}
+
 void App::watchLayoutChanges() {
+    syncShelfBrushActions();
+    autosavePrefs();
     if (layoutHintShown_ || uiConfigDeterministic_ || ++layoutCheckFrame_ % 20 != 0) return;
     if (layoutKey() == layoutBaseline_) return;
-    layoutHintShown_ = true; // once per session (ZBrush never saves the layout by itself)
-    status_ = "Layout changed - Ctrl+Shift+I to keep it";
+    layoutHintShown_ = true; // once per session
+    status_ = "Layout changes save themselves - Preferences > Saving & Layouts > Save Layout sets what Revert returns to";
 }
 
 // ---------------------------------------------------------------------------
@@ -906,14 +1573,41 @@ CanvasRect App::consoleRect() const {
 // Shortcut assignment (Ctrl+Alt+click a button, or Preferences > Hotkeys)
 // ---------------------------------------------------------------------------
 
-void App::beginShortcutCapture(const std::string& actionId) {
+void App::beginShortcutCapture(const std::string& actionId, bool sequence) {
     const Action* a = actions_.find(actionId);
     if (!a) return;
     capturingShortcut_ = actionId;
-    status_ = "Press a key for '" + a->label + "' (Esc cancels, Backspace clears)";
+    captureSequence_ = sequence;
+    captureFirst_.clear();
+    conflict_ = {};
+    shortcutAnchor_ = {}; // the button (or tile) clicked just now, so the Replace / Cancel popup can stay clear of it
+    if (ImGui::GetCurrentContext() && ImGui::GetCurrentWindowRead()) {
+        const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+        if (hi.x > lo.x && hi.y > lo.y) shortcutAnchor_ = ImVec4(lo.x, lo.y, hi.x, hi.y);
+    }
+    status_ = sequence ? "Press two different keys in a row for '" + a->label + "' (Esc cancels, Backspace removes them)"
+                       : "Press a key for '" + a->label + "' (Esc cancels, Backspace clears)";
+}
+
+void App::resolveShortcutConflict(bool replace) {
+    const ShortcutConflict c = conflict_;
+    conflict_ = {};
+    const Action* a = actions_.find(c.actionId);
+    const std::string label = a ? a->label : c.actionId;
+    if (!replace) {
+        status_ = "Shortcut unchanged";
+        return;
+    }
+    actions_.assignShortcut(c.actionId, c.chord, c.keepOthers);
+    status_ = label + ": " + c.chord + " (was " + c.holders + ")";
 }
 
 bool App::captureShortcutKey(SDL_Keycode key, SDL_Keymod mod) {
+    if (shortcutConflictOpen()) { // Enter replaces, Esc cancels; the popup's buttons do the same
+        if (key == SDLK_RETURN || key == SDLK_KP_ENTER) resolveShortcutConflict(true);
+        else if (key == SDLK_ESCAPE) resolveShortcutConflict(false);
+        return true;
+    }
     if (capturingShortcut_.empty()) return false;
     if (isModifierKey(key)) return true;
     const Action* a = actions_.find(capturingShortcut_);
@@ -921,13 +1615,45 @@ bool App::captureShortcutKey(SDL_Keycode key, SDL_Keymod mod) {
     if (key == SDLK_ESCAPE) {
         status_ = "Shortcut unchanged";
     } else if (key == SDLK_BACKSPACE || key == SDLK_DELETE) {
-        actions_.setShortcut(capturingShortcut_, "");
-        status_ = label + ": no shortcut - Store Config (Ctrl+Shift+I) to keep it";
+        if (captureSequence_) { // only the two-key shortcuts go; its single keys stay
+            std::string keep;
+            for (const std::string& alt : shortcutAlternatives(actions_.shortcutText(capturingShortcut_)))
+                if (alt.find(kThen) == std::string::npos) keep += (keep.empty() ? "" : " / ") + alt;
+            actions_.setShortcut(capturingShortcut_, keep);
+            status_ = label + ": two-key shortcuts removed";
+        } else {
+            actions_.setShortcut(capturingShortcut_, "");
+            status_ = label + ": no shortcut";
+        }
     } else {
-        const std::string chord = chordText(chordFromEvent(key, mod));
-        const std::string lost = actions_.assignShortcut(capturingShortcut_, chord);
-        status_ = label + ": " + chord + (lost.empty() ? "" : " (was " + lost + ")") + " - Store Config (Ctrl+Shift+I) to keep it";
+        const Chord pressed = chordFromEvent(key, mod);
+        std::string chord = chordText(pressed);
+        if (captureSequence_) {
+            if (captureFirst_.empty()) { // the first key: wait for the second
+                captureFirst_ = chord;
+                status_ = "Now the second key for '" + label + "' (a different one)";
+                return true;
+            }
+            Chord first;
+            parseChord(captureFirst_, first);
+            if (first.key == pressed.key) { // no double tap: keep waiting for a different key
+                status_ = "Two different keys, not the same key twice";
+                return true;
+            }
+            chord = captureFirst_ + std::string(kThen) + chord;
+        }
+        std::string holders;
+        for (const Action* h : actions_.holdersOfShortcut(chord, capturingShortcut_)) holders += (holders.empty() ? "" : ", ") + h->label;
+        if (!holders.empty()) { // taken: ask first (Artizmo on Discord)
+            conflict_ = {capturingShortcut_, chord, holders, captureSequence_};
+            capturingShortcut_.clear();
+            captureFirst_.clear();
+            return true;
+        }
+        actions_.assignShortcut(capturingShortcut_, chord, captureSequence_);
+        status_ = label + ": " + chord + (chord.find(kThen) != std::string::npos ? " (also works pressed together)" : "");
     }
+    captureFirst_.clear();
     capturingShortcut_.clear();
     return true;
 }
@@ -935,6 +1661,85 @@ bool App::captureShortcutKey(SDL_Keycode key, SDL_Keymod mod) {
 // ---------------------------------------------------------------------------
 // Per-frame UI
 // ---------------------------------------------------------------------------
+
+// The key is used already: say by what, Replace or Cancel. Beside the button that was clicked (below it, or above
+// when there is no room), never over it, so the key and the action stay in view. It is an ImGui popup drawn from
+// where the button is (Preferences > Hotkeys, so inside the Preferences menu's popup stack): Esc, a click elsewhere
+// or Cancel close this box and nothing else, and the Preferences menu stays open behind it. Anywhere else (a shelf
+// tile's Ctrl+Alt+click) drawHelpConsoleUi draws it at the end of the frame.
+void App::drawShortcutConflict() {
+    shortcutPopupRect_ = {};
+    const char* const id = "##shortcut_conflict";
+    conflictDrawnFrame_ = ImGui::GetFrameCount();
+    if (shortcutConflictOpen() && !conflictPopupOpened_) {
+        ImGui::OpenPopup(id);
+        conflictPopupOpened_ = true;
+        conflictOpenedFrame_ = ImGui::GetFrameCount();
+    }
+    if (!conflictPopupOpened_) return;
+    const float s = uiScale_;
+    const ImVec2 view = ImGui::GetMainViewport()->Size;
+    const ImVec4 an = shortcutAnchor_;
+    const bool known = an.z > an.x;
+    const float w = 340.0f * s, gap = 6.0f * s;
+    ImVec2 pos(view.x * 0.5f - w * 0.5f, 120.0f * s);
+    ImVec2 pivot(0.0f, 0.0f);
+    if (known) {
+        const ImVec2 hp = ImGui::GetWindowPos(), hz = ImGui::GetWindowSize();
+        const bool hosted = hz.x > 0.0f && an.x >= hp.x && an.z <= hp.x + hz.x; // drawn from inside the window the button is in
+        if (hosted && hp.x + hz.x + gap + w <= view.x) { // beside the window, level with the button: the list stays in view
+            pos = ImVec2(hp.x + hz.x + gap, an.y);
+        } else if (hosted && hp.x - gap - w >= 0.0f) {
+            pos = ImVec2(hp.x - gap - w, an.y);
+        } else {
+            pos.x = std::clamp(an.x, 8.0f * s, std::max(8.0f * s, view.x - w - 8.0f * s));
+            const float below = an.w + gap;
+            if (below + 130.0f * s < view.y) pos.y = below;
+            else pos.y = an.y - gap, pivot.y = 1.0f;
+        }
+    }
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
+    ImGui::SetNextWindowSize(ImVec2(w, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f * s, 12.0f * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f * s);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, col(IM_COL32(0x18, 0x18, 0x1a, 0xff)));
+    ImGui::PushStyleColor(ImGuiCol_Border, col(IM_COL32(0xf0, 0x88, 0x2e, 0xa0)));
+    const bool shown = ImGui::BeginPopup(id, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    if (shown) {
+        if (!shortcutConflictOpen()) { // answered (Enter or Esc went through captureShortcutKey): close just this box
+            ImGui::CloseCurrentPopup();
+        } else {
+            const Action* a = actions_.find(conflict_.actionId);
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w - 28.0f * s);
+            ImGui::Text(tr("%s is already used by %s."), conflict_.chord.c_str(), conflict_.holders.c_str());
+            if (conflict_.chord.find(kThen) != std::string::npos)
+                ImGui::TextColored(col(ui::color::textDim), "%s", tr("It also works with both keys pressed together."));
+            ImGui::TextColored(col(ui::color::textDim), tr("Replace gives it to '%s' and takes it from there."),
+                               a ? trAction(a->id, a->label) : conflict_.actionId.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::Spacing();
+            if (ImGui::Button((std::string(tr("Replace")) + "##shortcut_replace").c_str())) {
+                resolveShortcutConflict(true);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button((std::string(tr("Cancel")) + "##shortcut_cancel").c_str())) {
+                resolveShortcutConflict(false);
+                ImGui::CloseCurrentPopup();
+            }
+            const ImVec2 p = ImGui::GetWindowPos(), z = ImGui::GetWindowSize();
+            shortcutPopupRect_ = ImVec4(p.x, p.y, p.x + z.x, p.y + z.y);
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(3);
+    if (!shown) { // closed by ImGui (a click elsewhere): that is Cancel; the popup gets a frame to open first
+        if (shortcutConflictOpen() && ImGui::GetFrameCount() > conflictOpenedFrame_ + 1) resolveShortcutConflict(false);
+        if (!shortcutConflictOpen() && ImGui::GetFrameCount() > conflictOpenedFrame_ + 1) conflictPopupOpened_ = false;
+    }
+}
 
 void App::drawHelpConsoleUi() {
     {
@@ -947,13 +1752,10 @@ void App::drawHelpConsoleUi() {
             std::string err;
             if (kind == kSaveUi) {
                 if (fsPath(path).extension().empty()) path += ".json";
-                status_ = writeUiConfig(path, err) ? "UI layout saved to " + path : err;
+                status_ = writeUiConfig(path, err) ? "Interface exported to " + path : err;
             } else if (kind == kLoadUi) {
-                if (readUiConfig(path, err)) {
-                    status_ = "UI layout loaded - Store Config (Ctrl+Shift+I) to keep it";
-                } else {
-                    status_ = err;
-                }
+                pendingImportPath_ = path; // applied at the top of the next frame (applyPendingLayoutOp)
+                queueLayoutOp(4);
             } else if (kind == kBlenderKeymap) {
                 importBlenderKeymap(path);
             } else if (kind == kRadialImport) {
@@ -969,20 +1771,21 @@ void App::drawHelpConsoleUi() {
             } else if (kind == kLibraryFolder) {
                 uiPrefs_.libraryFolder = path;
                 std::string libErr;
-                if (ensureUserLibrary(path, libErr)) { // the LightBox's User folder, from now on
+                if (ensureUserLibrary(path, libErr)) { // the Library's User folder, from now on
                     library_.user = path;
                     libraryScanner_.invalidate();
-                    status_ = "Library folder: " + path + " (Store Config keeps it)";
+                    status_ = "Library folder: " + path;
                 } else {
                     status_ = libErr;
                 }
             }
         }
     }
+    console_.update(*this);
     console_.watchStatus(status_);
     if (layout_.consoleOpen) console_.draw(*this, consoleRect());
     palette_.draw(*this, paletteArea());
-    if (showHelp_) drawControlsWindow();
+    if (showHelp_ && !panelDetached("controls")) drawControlsWindow();
     if (!capturingShortcut_.empty()) {
         const Action* a = actions_.find(capturingShortcut_);
         const CanvasRect area = paletteArea();
@@ -991,34 +1794,59 @@ void App::drawHelpConsoleUi() {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f * s, 12.0f * s));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f * s);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, col(IM_COL32(0x18, 0x18, 0x1a, 0xf8)));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, col(IM_COL32(0x18, 0x18, 0x1a, 0xff)));
         ImGui::PushStyleColor(ImGuiCol_Border, col(IM_COL32(0xf0, 0x88, 0x2e, 0xa0)));
         if (ImGui::Begin("##shortcut_capture", nullptr,
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
                              ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs)) {
             ImGui::PushFont(helpTitleFont());
-            ImGui::Text(ICON_LC_KEYBOARD "  Press a key for '%s'", a ? a->label.c_str() : capturingShortcut_.c_str());
+            ImGui::Text(captureSequence_ ? tr(ICON_LC_KEYBOARD "  Press two keys in a row for '%s'")
+                                         : tr(ICON_LC_KEYBOARD "  Press a key for '%s'"),
+                        a ? a->label.c_str() : capturingShortcut_.c_str());
             ImGui::PopFont();
+            if (captureSequence_ && !captureFirst_.empty()) { // the first key is in: now the second
+                ui::Keycaps(captureFirst_);
+                ImGui::SameLine();
+                ImGui::TextColored(col(ui::color::textDim), "%s", tr("then..."));
+            }
             const std::string now = actions_.shortcutText(capturingShortcut_);
-            ImGui::TextColored(col(ui::color::textDim), "Now:");
+            ImGui::TextColored(col(ui::color::textDim), "%s", tr("Now:"));
             ImGui::SameLine();
-            if (now.empty()) ImGui::TextColored(col(ui::color::textDim), "none");
+            if (now.empty())
+                ImGui::TextColored(col(ui::color::textDim), "%s", tr("none"));
             else ui::Keycaps(now);
-            ImGui::TextColored(col(ui::color::textDim), "Esc cancels, Backspace clears. A key that's taken moves here.");
+            ImGui::TextColored(col(ui::color::textDim), "%s",
+                               captureSequence_ ? tr("Two different keys. Esc cancels, Backspace removes the two-key shortcuts.")
+                                                : tr("Esc cancels, Backspace clears. A key that's taken asks first."));
         }
         ImGui::End();
         ImGui::PopStyleColor(2);
         ImGui::PopStyleVar(3);
     }
+    if (conflictDrawnFrame_ != ImGui::GetFrameCount()) drawShortcutConflict(); // (Hotkeys draws it where its button is)
     watchLayoutChanges();
+    ui::DragScrollPanels(); // #100: pen and middle drags scroll panels (after every window)
+    ui::DrawHover(*this); // the hover and keyboard-focus rings, over every window
     ui::DrawHelp(*this); // last: on top of everything
+}
+
+namespace {
+char g_controlsFilter[96] = ""; // the Controls window's filter field
+char g_hotkeysFilter[64] = "";  // Preferences > Hotkeys' filter field
+} // namespace
+
+void resetConfigGlobals() {
+    g_controlsFilter[0] = g_hotkeysFilter[0] = 0;
+    for (auto& r : g_requests) r = {};
 }
 
 void App::drawControlsWindow() {
     const float s = uiScale_;
     ImGui::SetNextWindowSize(ImVec2(560.0f * s, 640.0f * s), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-    if (!ImGui::Begin("Controls", &showHelp_, ImGuiWindowFlags_NoCollapse)) {
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
+    fillPanelHost(flags); // in a window of its own: fills it (PanelWindows.cpp)
+    if (!ImGui::Begin(tr("Controls"), &showHelp_, flags)) {
         ImGui::End();
         return;
     }
@@ -1028,9 +1856,18 @@ void App::drawControlsWindow() {
     drawInputStyleRow(ImGui::GetContentRegionAvail().x * 0.6f);
     ImGui::SameLine();
     ui::ActionButton(*this, "input.import_blender", ImVec2(-FLT_MIN, 0), ui::Look::IconLabel);
-    static char filter[96] = "";
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::InputTextWithHint("##controls_filter", ICON_LC_SEARCH "  Filter shortcuts and gestures", filter, sizeof filter);
+    char (&filter)[96] = g_controlsFilter;
+    const bool canDetach = !panelHost_; // in the main window: a button that moves it to a window of its own
+    const float detachW = ImGui::GetFrameHeight() * 1.2f;
+    ImGui::SetNextItemWidth(canDetach ? -(detachW + ImGui::GetStyle().ItemSpacing.x) : -FLT_MIN);
+    ImGui::InputTextWithHint("##controls_filter", tr(ICON_LC_SEARCH "  Filter shortcuts and gestures"), filter, sizeof filter);
+    if (canDetach) {
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_LC_SQUARE_ARROW_OUT_UP_RIGHT "##controls_detach", ImVec2(detachW, 0))) detachPanel("controls");
+        ui::HelpText("Open in its own window", nullptr,
+                     "Move Controls to a window of its own, to keep on another monitor. It opens there next time too.", "Help");
+        ui::DelayedTooltip("Open in its own window");
+    }
     const std::string f = lower(filter);
     auto matches = [&](const std::string& a, const std::string& b, const std::string& c) {
         return f.empty() || lower(a).find(f) != std::string::npos || lower(b).find(f) != std::string::npos ||
@@ -1040,7 +1877,7 @@ void App::drawControlsWindow() {
     if (ImGui::BeginTabBar("##controls_tabs")) {
         if (ImGui::BeginTabItem(tr("Keyboard"))) {
             ImGui::BeginChild("##controls_keys", ImVec2(0, -ImGui::GetTextLineHeightWithSpacing() * 1.6f));
-            // Grouped by palette, alphabetically (as ZBrush lists its palettes).
+            // Grouped by palette, alphabetically (as classic lists its palettes).
             std::map<std::string, std::vector<const Action*>> groups;
             for (const auto& a : actions_.all()) {
                 const std::string chord = actions_.shortcutText(a.id);
@@ -1048,7 +1885,7 @@ void App::drawControlsWindow() {
                 const std::string top = a.palette.substr(0, a.palette.find(" > "));
                 groups[top.empty() ? "General" : top].push_back(&a);
             }
-            if (groups.empty()) ImGui::TextColored(col(ui::color::textDim), "No shortcut matches \"%s\".", filter);
+            if (groups.empty()) ImGui::TextColored(col(ui::color::textDim), tr("No shortcut matches \"%s\"."), filter);
             for (auto& [group, list] : groups) {
                 std::stable_sort(list.begin(), list.end(), [](const Action* x, const Action* y) { return x->label < y->label; });
                 ImGui::SeparatorText(group.c_str());
@@ -1073,7 +1910,8 @@ void App::drawControlsWindow() {
                 ImGui::Spacing();
             }
             ImGui::EndChild();
-            ImGui::TextColored(col(ui::color::textDim), "Double-click a row, or Ctrl+Alt+click any button, to assign a key.");
+            ImGui::TextColored(col(ui::color::textDim), "%s",
+                               tr("Double-click a row, or Ctrl+Alt+click any button, to assign a key."));
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem(tr("Mouse & pen"))) {
@@ -1109,18 +1947,26 @@ namespace config {
 void drawConfigSection(App& app) {
     const ImVec2 full(-FLT_MIN, 0);
     bool customize = app.layout().customize;
-    if (ImGui::Checkbox(tr("Enable Customize"), &customize)) app.actions().find("config.customize")->run();
+    if (ImGui::Checkbox(tr("Customize Shelves"), &customize)) app.actions().find("config.customize")->run();
     ui::HelpAction(app, "config.customize");
-    ui::ActionButton(app, "config.store", full, ui::Look::IconLabel);
+    ui::ActionButton(app, "config.save_layout", full, ui::Look::IconLabel);
     ui::ActionButton(app, "config.restore_custom", full, ui::Look::IconLabel);
+    ui::ActionButton(app, "config.reset_layout", full, ui::Look::IconLabel);
     ui::ActionButton(app, "config.restore_standard", full, ui::Look::IconLabel);
+    // Widgets (colour picker, brush tiles, sliders) dragged off a shelf can't be dragged back from a palette: put back here.
+    for (const std::string& id : app.missingShelfWidgets()) {
+        const std::string name = id.substr(7);
+        const std::string label = std::string(tr("Put back on the shelf: ")) + name + "##putback." + id;
+        if (ImGui::Button(label.c_str(), full)) app.addShelfWidget(id);
+    }
+    ui::ActionButton(app, "panel.reset", full, ui::Look::IconLabel); // panels in windows of their own (PanelWindows.cpp)
     const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
     ui::ActionButton(app, "config.save", ImVec2(half, 0), ui::Look::IconLabel);
     ImGui::SameLine();
     ui::ActionButton(app, "config.load", ImVec2(half, 0), ui::Look::IconLabel);
     ImGui::PushStyleColor(ImGuiCol_Text, col(ui::color::textDim));
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(tr("Changes to the layout and shortcuts last until you quit. Store Config keeps them."));
+    ImGui::TextUnformatted(tr("Preferences, shortcuts and the layout save themselves. Save Layout sets the layout Revert to Saved Layout returns to."));
     ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();
 }
@@ -1134,44 +1980,91 @@ void drawInterfaceSection(App& app) {
     for (int i = 0; i < kLanguageCount; ++i) {
         const Language lang = Language(i);
         ImGui::SameLine();
+        // The names don't fit a narrow tray in one row: a button that would run past the edge starts the next one.
+        const float width = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x +
+                            ImGui::CalcTextSize(languageName(lang)).x;
+        if (ImGui::GetContentRegionAvail().x < width) ImGui::NewLine();
         const std::string label = std::string(languageName(lang)) + "##language." + languageCode(lang);
         if (ImGui::RadioButton(label.c_str(), languageFromCode(p.language) == lang)) {
-            p.language = languageCode(lang);
-            setLanguage(lang);
+            app.setInterfaceLanguage(lang);
         }
         ui::HelpText("Language", nullptr,
                      "The language of menus, palettes, shelves and messages. Brush and tool names (Quad Remesh, Forge Spheres, "
-                     "Clay Block...) stay as they are. Store Config keeps it for the next start.",
+                     "Clay Block...) stay as they are.",
                      "Preferences > Interface");
     }
-    // Viewport cursor (#73).
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(tr("Viewport cursor"));
-    const char* const kCursors[] = {"Crosshair##viewport_cursor", "Arrow##viewport_cursor"};
-    for (int i = 0; i < 2; ++i) {
-        ImGui::SameLine();
-        if (ImGui::RadioButton(tr(kCursors[i]), p.viewportCursor == i)) p.viewportCursor = i;
-        ui::HelpText("Viewport cursor", nullptr,
-                     "The pointer over the 3D view: a crosshair (the default, as in most sculpting apps) or the arrow. "
-                     "Panels, menus and popups always show the arrow (or their own resize and text cursors). Store "
-                     "Config keeps it.",
+    // Units (#148): sizes show in this unit; OBJ and PLY files are read in the second (core/Units.h).
+    auto unitRow = [&](const char* label, std::string& value, const char* id, const char* help) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(tr(label));
+        for (const LengthUnit& u : lengthUnits()) {
+            ImGui::SameLine();
+            if (ImGui::RadioButton((std::string(u.id) + "##" + id + "." + u.id).c_str(), value == u.id)) value = u.id;
+            ui::HelpText(label, nullptr, help, "Preferences > Interface");
+        }
+    };
+    unitRow("Units", p.lengthUnit, "units",
+            "The unit sizes show in: the brush size, the Part size in Tool and the export size in File. "
+            "SculptForge works in metres; this only changes how sizes read.");
+    unitRow("OBJ/PLY in", p.fileUnit, "file_units",
+            "OBJ and PLY files have no units. Their numbers are read in this unit (mm for most 3D printing files, m for "
+            "Blender and game tools), and exporting OBJ or PLY writes them back in the unit they were opened with, so "
+            "a part keeps its size. STL is always millimetres.");
+    ImGui::Checkbox(tr("Show startup splash"), &p.startupSplash);
+    ui::HelpText("Show startup splash", nullptr,
+                 "Show the SculptForge logo for half a second or more at every start. Turn it off for an instant start. Applies at the next start.",
+                 "Preferences > Interface");
+    {
+        // #173: Don't ask again in the pop-ups turns these off; this brings the asking back (or turns it off in one go).
+        bool ask = p.confirmRemeshLevels || p.confirmSubdivide;
+        if (ImGui::Checkbox(tr("Ask before dropping subdivision levels"), &ask)) p.confirmRemeshLevels = p.confirmSubdivide = ask;
+        ui::HelpText("Ask before dropping subdivision levels", nullptr,
+                     "Subdivide, Voxel and Quad Remesh, Decimate, Delete Masked or Hidden, Split, Mirror, Make Symmetric and "
+                     "Merge by Distance remove the subdivision levels of a Part that has them. On: they ask first (Ctrl+Z "
+                     "brings the levels back). Off: they go straight through.",
                      "Preferences > Interface");
     }
-    ImGui::Checkbox(tr("Popup Info (Ctrl+hover help)"), &p.popupInfo);
-    ui::HelpText("Popup Info", nullptr,
+    ImGui::Checkbox(tr("Ctrl+hover help"), &p.popupInfo);
+    ui::HelpText("Ctrl+hover help", nullptr,
                  "Hold Ctrl and point at any control to see what it does and its shortcut. Ctrl+Alt shows a command's "
                  "scripting parameters.",
                  "Preferences > Interface");
     ImGui::BeginDisabled(!p.popupInfo);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    ui::SliderInside("##help_opacity", &p.helpOpacity, 0.3f, 1.0f, "Popup Info opacity %.2f");
-    ui::HelpText("Popup Info opacity", nullptr, "How solid the Ctrl-help box is (ZBrush: Quick Info Opacity).",
+    ui::SliderInside("##help_opacity", &p.helpOpacity, 0.3f, 1.0f, "Help box opacity %.2f");
+    ui::HelpText("Help box opacity", nullptr, "How solid the Ctrl-help box is.",
                  "Preferences > Interface");
     ImGui::EndDisabled();
     ImGui::SetNextItemWidth(-FLT_MIN);
     ui::SliderInside("##tooltip_delay", &p.tooltipDelay, 0.0f, 2.0f, "Tooltip delay %.1f s");
     ui::HelpText("Tooltip delay", nullptr,
                  "How long to point at an icon-only button (or a clipped label) before its name appears.",
+                 "Preferences > Interface");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ui::SliderInside("##mask_darkness", &p.maskDarkness, 0.0f, 1.0f, "Mask darkness %.2f"))
+        app.setMaskDarkness(p.maskDarkness);
+    ui::HelpText("Mask darkness", nullptr,
+                 "How dark masked areas show: 0 = not at all, 1 = nearly black. The default keeps the form readable "
+                 "under the mask.",
+                 "Preferences > Interface");
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(tr("Mask colour"));
+        ImGui::SameLine();
+        glm::vec3 c = p.maskColor;
+        if (ImGui::ColorEdit3("##mask_colour", &c.x, ImGuiColorEditFlags_NoInputs))
+            app.setMaskColor(true, c);
+        ui::HelpText("Mask colour", nullptr,
+                     "The colour masked areas show. Reset goes back to the default: the model's own colours, darkened.",
+                     "Preferences > Interface");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!p.maskColorCustom);
+        if (ImGui::Button(tr("Reset##mask_colour"))) app.setMaskColor(false, UiPrefs().maskColor);
+        ImGui::EndDisabled();
+    }
+    ImGui::Checkbox(tr("Reduce motion"), &p.reduceMotion);
+    ui::HelpText("Reduce motion", nullptr,
+                 "Hover and focus highlights change colour only: no easing, and tiles don't lift or grow.",
                  "Preferences > Interface");
     ImGui::Checkbox(tr("One sub-palette open"), &p.oneSubpalette);
     ui::HelpText("One sub-palette open", nullptr,
@@ -1183,10 +2076,9 @@ void drawInterfaceSection(App& app) {
     ImGui::Checkbox(tr("Auto collapse right tray"), &p.autoCollapseRight);
     ui::HelpText("Auto collapse right tray", nullptr,
                  "Opening a palette in the right tray collapses the others when they would not fit.", "Preferences > Interface");
-    ImGui::Checkbox(tr("Palettes strictly A-Z (ZBrush order)"), &p.alphabeticalPalettes);
+    ImGui::Checkbox(tr("Palettes strictly A-Z"), &p.alphabeticalPalettes);
     ui::HelpText("Palettes strictly A-Z", nullptr,
-                 "Off: File and Edit come first in the palette bar and Help last, the rest A to Z. On: every palette A to Z, as in "
-                 "ZBrush.",
+                 "Off: File and Edit come first in the palette bar and Help last, the rest A to Z. On: every palette A to Z.",
                  "Preferences > Interface");
     ImGui::Checkbox(tr("Left-handed layout"), &app.layout().leftHanded);
     ui::HelpText("Left-handed layout", nullptr, "Mirror the shelves and trays: tools on the left, navigation on the right.",
@@ -1206,32 +2098,46 @@ void drawInterfaceSection(App& app) {
     // Timeline position (#63): the Sculpt Timeline strip at the top of the viewport (the default) or the bottom.
     ImGui::TextDisabled("%s", tr("Timeline position"));
     ui::Segmented(app, {"view.timeline_top", "view.timeline_bottom"});
-    static const char* kScales[] = {"Automatic", "100%", "125%", "150%", "175%", "200%"};
-    static const float kScaleValues[] = {0.0f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f};
+    if (const Action* a = app.actions().find("view.timeline_compact"); a && a->checked) { // one thin row (@factoberplay)
+        bool compact = a->checked();
+        if (ui::Checkbox("Compact timeline##view.timeline_compact", &compact)) a->run();
+        ui::HelpAction(app, "view.timeline_compact");
+    }
+    // Finer steps near 100 % (125 % was too big a first step) and up to 300 % for a 5K or 5K2K monitor at its native
+    // resolution, no system scaling (fenix 11-08).
+    static const char* kScales[] = {"Automatic", "100%", "110%", "115%", "125%", "135%", "150%",
+                                    "175%",      "200%", "250%", "300%"};
+    static const float kScaleValues[] = {0.0f, 1.0f, 1.1f, 1.15f, 1.25f, 1.35f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f};
+    constexpr int kScaleCount = int(sizeof kScaleValues / sizeof kScaleValues[0]);
     int current = 0;
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < kScaleCount; ++i)
         if (std::abs(kScaleValues[i] - p.uiScale) < 0.01f) current = i;
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##ui_scale", (std::string(tr("UI scale:")) + " " + tr(kScales[current])).c_str())) {
-        for (int i = 0; i < 6; ++i)
-            if (ImGui::Selectable(tr(kScales[i]), i == current)) p.uiScale = kScaleValues[i];
+        for (int i = 0; i < kScaleCount; ++i)
+            if (ImGui::Selectable(tr(kScales[i]), i == current)) {
+                p.uiScale = kScaleValues[i];
+                app.requestUiScale(); // live, from the next frame (#87)
+            }
         ImGui::EndCombo();
     }
     ui::HelpText("UI scale", nullptr,
-                 "Size of text and controls. Automatic follows the display. Takes effect the next time SculptForge starts "
-                 "(Store Config to keep it).",
+                 "Size of text and controls, applied at once. Automatic follows the display the window is on (Windows: "
+                 "Settings > Display > Scale, per monitor).",
                  "Preferences > Interface");
-    static const char* kRotation[] = {"Free (ZBrush)", "Turntable"};
+    static const char* kRotation[] = {"Free", "Turntable", "X axis", "Z axis"}; // UiPrefs::orbitLock
+    p.orbitLock = std::clamp(p.orbitLock, 0, 3);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::BeginCombo("##rotation", (std::string(tr("Rotation:")) + " " + tr(kRotation[p.turntable ? 1 : 0])).c_str())) {
-        for (int i = 0; i < 2; ++i)
-            if (ImGui::Selectable(tr(kRotation[i]), (i == 1) == p.turntable)) p.turntable = i == 1;
+    if (ImGui::BeginCombo("##rotation", (std::string(tr("Rotation:")) + " " + tr(kRotation[p.orbitLock])).c_str())) {
+        for (int i = 0; i < 4; ++i)
+            if (ImGui::Selectable(tr(kRotation[i]), i == p.orbitLock)) p.orbitLock = i;
         ImGui::EndCombo();
     }
     ui::HelpText("Rotation", nullptr,
-                 "Free: dragging turns the model about the screen's axes and can roll it over the top, as in ZBrush; press "
+                 "Free: dragging turns the model about the screen's axes and can roll it over the top; press "
                  "Shift while rotating to snap to the nearest front, side, top or bottom view. Turntable: the model stays "
-                 "upright and turns about its vertical axis, as in Blender or Maya.",
+                 "upright and turns about its vertical axis, as in Blender or Maya. X axis, Z axis: it turns about that "
+                 "world axis only (View > Orbit lock).",
                  "Preferences > Interface");
     static const char* kNotch[] = {"Automatic", "Always reserve", "Off"};
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -1247,7 +2153,7 @@ void drawInterfaceSection(App& app) {
 }
 
 void drawHotkeysSection(App& app) {
-    static char filter[64] = "";
+    char (&filter)[64] = g_hotkeysFilter;
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##hotkeys_filter", tr(ICON_LC_SEARCH "  Filter"), filter, sizeof filter);
     const std::string f = lower(filter);
@@ -1268,7 +2174,7 @@ void drawHotkeysSection(App& app) {
     if (ImGui::BeginTable("##hotkeys", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_PadOuterX,
                           ImVec2(0, std::max(listH, 60.0f * s)))) {
         ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("key", ImGuiTableColumnFlags_WidthFixed, 110.0f * s);
+        ImGui::TableSetupColumn("key", ImGuiTableColumnFlags_WidthFixed, 165.0f * s);
         for (const Action* a : list) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
@@ -1278,51 +2184,93 @@ void drawHotkeysSection(App& app) {
             ImGui::TableNextColumn();
             const std::string chord = reg.shortcutText(a->id);
             const bool capturing = app.capturingShortcut() == a->id;
-            const std::string text = capturing ? tr("press a key...") : chord.empty() ? "-" : chord;
+            const bool sequencing = capturing && app.capturingSequence();
+            const std::string text = sequencing ? (app.captureFirstKey().empty() ? std::string(tr("press 2 keys..."))
+                                                                                 : app.captureFirstKey() + " " + tr("then..."))
+                                     : capturing ? tr("press a key...") : chord.empty() ? "-" : chord;
             if (reg.hasOverride(a->id)) ImGui::PushStyleColor(ImGuiCol_Text, col(ui::color::accent));
-            if (ImGui::Button((text + "##hk." + a->id).c_str(), ImVec2(-FLT_MIN, 0))) app.beginShortcutCapture(a->id);
+            const bool modified = reg.hasOverride(a->id); // the arrow beside it puts the default back
+            const float tile = ImGui::GetFrameHeight() + 2.0f * s; // each small button beside the key (reset, two keys)
+            if (ImGui::Button((text + "##hk." + a->id).c_str(), ImVec2(-(tile * (modified ? 2.0f : 1.0f)), 0)))
+                app.beginShortcutCapture(a->id);
             if (reg.hasOverride(a->id)) ImGui::PopStyleColor();
             ui::HelpText((std::string(tr("Shortcut for")) + " " + trAction(a->id, a->label)).c_str(), chord.c_str(),
-                         "Click, then press the new key. Esc cancels, Backspace clears. Orange: changed from the default.",
+                         chord.find(kThen) != std::string::npos
+                             ? "Click, then press the new key. Esc cancels, Backspace clears. Orange: changed from the default; "
+                               "the arrow beside it puts the default back. A two-key shortcut (C then V) also works with "
+                               "both keys pressed together."
+                             : "Click, then press the new key. Esc cancels, Backspace clears. Orange: changed from the default; "
+                               "the arrow beside it puts the default back.",
                          "Preferences > Hotkeys");
+            ImGui::SameLine(0.0f, 2.0f * s);
+            const bool sequenceClicked = ImGui::SmallButton(("##hkseq." + a->id).c_str());
+            {   // the chevrons drawn over the button, which keeps a plain id (scripts click it by "##hkseq.<action>")
+                const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+                const ImVec2 sz = ImGui::CalcTextSize(ICON_LC_CHEVRONS_RIGHT);
+                ImGui::GetWindowDrawList()->AddText(ImVec2((lo.x + hi.x - sz.x) * 0.5f, (lo.y + hi.y - sz.y) * 0.5f),
+                                                    ImGui::GetColorU32(ImGuiCol_Text), ICON_LC_CHEVRONS_RIGHT);
+            }
+            if (sequenceClicked) app.beginShortcutCapture(a->id, true);
+            ui::HelpText("Two keys in a row", nullptr,
+                         "Adds a second shortcut that takes two different keys one after the other, like A then S (within the Two-key "
+                         "window in Preferences > Input), or both pressed together. Each key still works alone if it is "
+                         "bound; it runs when the window is up and the other key did not come.",
+                         "Preferences > Hotkeys");
+            if (reg.hasOverride(a->id)) {
+                ImGui::SameLine(0.0f, 2.0f * s);
+                const bool resetClicked = ImGui::SmallButton(("##hkreset." + a->id).c_str());
+                {   // the arrow drawn over the button, which keeps a plain id (scripts click it by "##hkreset.<action>")
+                    const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+                    const ImVec2 sz = ImGui::CalcTextSize(ICON_LC_ROTATE_CCW);
+                    ImGui::GetWindowDrawList()->AddText(ImVec2((lo.x + hi.x - sz.x) * 0.5f, (lo.y + hi.y - sz.y) * 0.5f),
+                                                        ImGui::GetColorU32(ImGuiCol_Text), ICON_LC_ROTATE_CCW);
+                }
+                if (resetClicked) {
+                    const std::string lost = reg.resetShortcut(a->id);
+                    app.status_ = std::string(trAction(a->id, a->label)) + ": default " + reg.shortcutText(a->id) +
+                                  (lost.empty() ? "" : " (was " + lost + ")");
+                }
+                ui::HelpText("Reset to default", nullptr, "Puts this action's default shortcut back.", "Preferences > Hotkeys");
+            }
         }
         ImGui::EndTable();
     }
     if (ImGui::Button(tr(ICON_LC_ROTATE_CCW "  Default shortcuts"), ImVec2(-FLT_MIN, 0))) {
         reg.clearOverrides();
-        app.status_ = "Default shortcuts restored - Store Config (Ctrl+Shift+I) to keep them";
+        app.status_ = "Default shortcuts restored";
     }
     ui::HelpText("Default shortcuts", nullptr, "Undo every shortcut change.", "Preferences > Hotkeys");
+    app.drawShortcutConflict(); // inside the Preferences popup stack: Esc closes only the box
 }
 
-void drawLightBoxSection(App& app) {
+void drawLibraryBrowserSection(App& app) {
     UiPrefs& p = app.uiPrefs();
     UiLayout& l = app.layout();
-    ImGui::Checkbox(tr("Show at startup"), &p.lightboxAtStartup);
-    ui::HelpText("Show Library at startup", nullptr, "Open Library on the Project tab when SculptForge starts (as ZBrush does).",
+    ImGui::Checkbox(tr("Show at startup"), &p.libraryAtStartup);
+    ui::HelpText("Show Library at startup", nullptr, "Open Library on the Project tab when SculptForge starts.",
                  "Preferences > Library");
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(tr("Rows"));
     for (int r = 1; r <= 4; ++r) {
         ImGui::SameLine();
-        const bool on = l.lightboxRows == r;
+        const bool on = l.libraryRows == r;
         if (on) ImGui::PushStyleColor(ImGuiCol_Button, col(ui::color::accent));
-        if (ImGui::Button((std::to_string(r) + "##lbrows").c_str(), ImVec2(ImGui::GetFrameHeight() * 1.3f, 0))) l.lightboxRows = r;
+        if (ImGui::Button((std::to_string(r) + "##lbrows").c_str(), ImVec2(ImGui::GetFrameHeight() * 1.3f, 0))) l.libraryRows = r;
         if (on) ImGui::PopStyleColor();
         ui::HelpText("Library rows", nullptr, "How many rows of thumbnails the Library strip shows.", "Preferences > Library");
     }
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(tr("Placement"));
     ImGui::SameLine();
-    if (ImGui::RadioButton(tr("Top"), !l.lightboxBottom)) l.lightboxBottom = false;
+    if (ImGui::RadioButton(tr("Top"), !l.libraryBottom)) l.libraryBottom = false;
     ui::HelpText("Library at the top", nullptr, "Library opens along the top edge of the canvas.", "Preferences > Library");
     ImGui::SameLine();
-    if (ImGui::RadioButton(tr("Bottom"), l.lightboxBottom)) l.lightboxBottom = true;
+    if (ImGui::RadioButton(tr("Bottom"), l.libraryBottom)) l.libraryBottom = true;
     ui::HelpText("Library at the bottom", nullptr, "Library opens above the bottom shelf.", "Preferences > Library");
-    ImGui::TextColored(col(ui::color::textDim), "Library folder");
+    ImGui::TextColored(col(ui::color::textDim), "%s", tr("Library folder"));
     const std::string shown = p.libraryFolder.empty() ? std::string("Documents/SculptForge (default)") : p.libraryFolder;
     if (ImGui::Button((std::string(ICON_LC_FOLDER_OPEN "  ") + shown + "##libfolder").c_str(), ImVec2(-FLT_MIN, 0)))
-        SDL_ShowOpenFolderDialog(onUiFileChosen, &g_requests[kLibraryFolder], app.window_, nullptr, false);
+        sf::dialogs::openFolder(onUiFileChosen, &g_requests[kLibraryFolder], app.window_, nullptr, false);
     ui::HelpText("Library folder", nullptr,
                  "Where your projects, tools, brushes, alphas, images, splats and Snapshots live. Library shows it as User.",
                  "Preferences > Library");
@@ -1331,6 +2279,48 @@ void drawLightBoxSection(App& app) {
 
 } // namespace config
 
+namespace config {
+
+looks::Palette classicPalette() {
+    return {0x121212, 0x1c1c1c, 0x232323, 0x2c2c2c, 0x393939, 0x505050, 0x8d8d8d, 0xb6b6b6, 0xd8d8d8, 0xf2f2f2, 0xf0882e,
+            0xf0882e, 0xe5604a, 0x9ece6a, 0xe0af68, false};
+}
+
+void drawLookMiniature(ImDrawList* dl, ImVec2 a, ImVec2 b, const looks::Palette& pal, const char* name, ImFont* font,
+                       float s, int layout) {
+    auto col = [](unsigned hex) { return theme::u32(theme::rgb(hex)); };
+    dl->AddRectFilled(a, b, col(pal.crust));
+    const float g = 3.0f * s;
+    float top = a.y + g;
+    if (layout == 0) { // the palette bar: a row of short words
+        for (float x = a.x + g + 2.0f * s; x < b.x - g - 14.0f * s; x += 13.0f * s)
+            dl->AddRectFilled(ImVec2(x, top + 2.0f * s), ImVec2(x + 9.0f * s, top + 4.0f * s), col(pal.overlay));
+        top += 7.0f * s;
+    }
+    // The bar (the status bar with its menus, or the top shelf), its accent marking the current tool.
+    const float barH = (layout == 0 ? 14.0f : 8.0f) * s;
+    dl->AddRectFilled(ImVec2(a.x + g, top), ImVec2(b.x - g, top + barH), col(pal.mantle));
+    dl->AddRectFilled(ImVec2(a.x + g + 2.0f * s, top + 2.0f * s), ImVec2(a.x + g + 16.0f * s, top + 6.0f * s), col(pal.accent));
+    if (layout >= 0) // the shelf's tiles: one row, or two in the Classic layout
+        for (int row = 0; row < (layout == 0 ? 2 : 1); ++row)
+            for (float x = a.x + g + 22.0f * s; x < b.x - g - 8.0f * s; x += 9.0f * s)
+                dl->AddRectFilled(ImVec2(x, top + 2.0f * s + float(row) * 6.0f * s), ImVec2(x + 6.0f * s, top + 6.0f * s + float(row) * 6.0f * s),
+                                  col(pal.surface1));
+    top += barH + g;
+    dl->AddRectFilled(ImVec2(a.x + g, top), ImVec2(b.x - g - 30.0f * s, b.y - g), col(pal.base));
+    dl->AddRectFilled(ImVec2(b.x - g - 26.0f * s, top), ImVec2(b.x - g, b.y - g), col(pal.base));
+    dl->AddRectFilled(ImVec2(b.x - g - 22.0f * s, b.y - g - 8.0f * s), ImVec2(b.x - g - 4.0f * s, b.y - g - 4.0f * s), col(pal.accent2));
+    if (layout >= 0) { // a sphere in the view, so the colours read around a model
+        const ImVec2 c((a.x + b.x - 30.0f * s) * 0.5f, (top + b.y) * 0.5f);
+        const float r = std::min(b.x - a.x, b.y - top) * 0.2f;
+        dl->AddCircleFilled(c, r, col(0x8a8a8e));
+        dl->AddCircleFilled(ImVec2(c.x - r * 0.3f, c.y - r * 0.3f), r * 0.55f, col(0xb0b0b4));
+    }
+    if (!font) font = ImGui::GetFont();
+    dl->AddText(font, font->FontSize, ImVec2(a.x + g + 6.0f * s, b.y - g - font->FontSize - 3.0f * s), col(pal.text), name);
+}
+
+} // namespace config
 
 // Preferences > Interface > Look: four looks as swatch cards, the look's own options, and the layout.
 void App::drawLookSection() {
@@ -1352,28 +2342,18 @@ void App::drawLookSection() {
         } else if (id == looks::LookId::Blueprint) {
             pal = looks::blueprintPalette();
         } else {
-            pal = {0x111113, 0x1b1b1d, 0x222225, 0x2b2b2f, 0x37373c, 0x4e4e55, 0x8c8c90, 0xb4b4b9, 0xd8d8d8, 0xf2f2f2, 0xf0882e,
-                   0xf0882e, 0xe5604a, 0x9ece6a, 0xe0af68, false};
+            pal = config::classicPalette();
         }
         const std::string label = std::string(looks::lookName(id)) + "##look." + looks::lookKey(id);
         const bool clicked = ImGui::InvisibleButton(label.c_str(), ImVec2(cardW, cardH));
         const bool hovered = ImGui::IsItemHovered(), current = l.look == i;
         const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        auto col = [](unsigned hex) { return theme::u32(theme::rgb(hex)); };
-        // A miniature of the look: its wallpaper, a bar with its accent, two tiles, its name in its text colour.
-        dl->AddRectFilled(a, b, col(pal.crust));
-        const float g = 3.0f * s;
-        dl->AddRectFilled(ImVec2(a.x + g, a.y + g), ImVec2(b.x - g, a.y + g + 8.0f * s), col(pal.mantle));
-        dl->AddRectFilled(ImVec2(a.x + g + 2.0f * s, a.y + g + 2.0f * s), ImVec2(a.x + g + 16.0f * s, a.y + g + 6.0f * s), col(pal.accent));
-        dl->AddRectFilled(ImVec2(a.x + g, a.y + 2.0f * g + 8.0f * s), ImVec2(b.x - g - 30.0f * s, b.y - g), col(pal.base));
-        dl->AddRectFilled(ImVec2(b.x - g - 26.0f * s, a.y + 2.0f * g + 8.0f * s), ImVec2(b.x - g, b.y - g), col(pal.base));
-        dl->AddRectFilled(ImVec2(b.x - g - 22.0f * s, b.y - g - 8.0f * s), ImVec2(b.x - g - 4.0f * s, b.y - g - 4.0f * s), col(pal.accent2));
-        ImFont* f = i == int(looks::LookId::Classic) ? fontInterSmall_ : fontMonoSmall_;
-        if (!f) f = ImGui::GetFont();
-        dl->AddText(f, f->FontSize, ImVec2(a.x + g + 6.0f * s, b.y - g - f->FontSize - 3.0f * s), col(pal.text), looks::lookName(id));
+        const ui::TileLift lift = ui::BeginTileLift(a, b, 0.0f);
+        config::drawLookMiniature(dl, a, b, pal, looks::lookName(id), i == int(looks::LookId::Classic) ? fontInterSmall_ : fontMonoSmall_, s);
         dl->AddRect(a, b, theme::u32(current ? theme::accent : hovered ? theme::textDim : theme::tileBorder), 0.0f, 0,
                     current ? 2.0f * s : 1.0f * s);
+        ui::EndTileLift(lift, 0.0f);
         ImGui::LogText("%s", looks::lookName(id));
         ui::HelpText(looks::lookName(id), nullptr,
                      i == 0   ? "The original dark grey look with the orange accent."
@@ -1439,6 +2419,53 @@ void App::drawLookSection() {
                      "Faint scanlines and a glow around the focused panel, on the interface only (never on the 3D view). Off by default.",
                      "Preferences > Interface > Look");
     }
+    if (l.look != int(looks::LookId::Classic)) { // the tiled looks' panel borders (Classic has none to speak of)
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(tr("Outlines"));
+        const char* const kOutlines[] = {"Off##look.outlines", "Subtle##look.outlines", "On##look.outlines"};
+        for (int i = 0; i < 3; ++i) {
+            ImGui::SameLine();
+            if (ImGui::RadioButton(tr(kOutlines[i]), l.outlines == i)) {
+                l.outlines = i;
+                lookDirty_ = true;
+            }
+            ui::HelpText("Outlines", nullptr,
+                         "The borders around the panels in Forge Terminal, Phosphor and Blueprint. Subtle (the default): "
+                         "faint, and nothing lights up under the pointer. Off: no borders, the gaps alone separate the "
+                         "panels. On: clear borders, the panel under the pointer a faint step lighter.",
+                         "Preferences > Interface > Look");
+        }
+        ImGui::BeginDisabled(l.outlines == 0);
+        float opacity = l.outlineOpacity * 100.0f;
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ui::SliderInside("##look.outline_opacity", &opacity, 0.0f, 100.0f, "Outline opacity %.0f%%")) {
+            l.outlineOpacity = std::clamp(opacity / 100.0f, 0.0f, 1.0f);
+            lookDirty_ = true;
+        }
+        ImGui::EndDisabled();
+        ui::HelpText("Outline opacity", nullptr,
+                     "How strong the panel borders are (0-100%), on top of Outlines: 100% draws them as Subtle or On "
+                     "does, lower fades them into the panels (#98). Ctrl+click to type.",
+                     "Preferences > Interface > Look");
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(tr("Pop-up colours"));
+    ImGui::SameLine();
+    if (ImGui::RadioButton(tr("By role##look.popup_colors"), l.rolePopups)) {
+        l.rolePopups = true;
+        lookDirty_ = true;
+    }
+    ui::HelpText("Pop-up colours: by role", nullptr,
+                 "Pop-ups show what they are with a strip, an edge and an icon in one colour: tips and help blue, the "
+                 "welcome and the quick tour teal, What's New orange, warnings amber, deletes red. The default.",
+                 "Preferences > Interface > Look");
+    ImGui::SameLine();
+    if (ImGui::RadioButton(tr("Plain##look.popup_colors"), !l.rolePopups)) {
+        l.rolePopups = false;
+        lookDirty_ = true;
+    }
+    ui::HelpText("Pop-up colours: plain", nullptr, "Pop-ups in the panels' own colours, as before 0.12.15.",
+                 "Preferences > Interface > Look");
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(tr("Layout"));
     ImGui::SameLine();
@@ -1451,11 +2478,11 @@ void App::drawLookSection() {
                  "Every palette is a section of one menu, and F3 finds them all.",
                  "Preferences > Interface > Look");
     ImGui::SameLine();
-    if (ImGui::RadioButton(tr("ZBrush-style##layout.zbrush"), uiPrefs_.shellLayout == 0)) {
+    if (ImGui::RadioButton(tr("Classic##layout.classic"), uiPrefs_.shellLayout == 0)) {
         setShellLayout(0);
         lookDirty_ = true;
     }
-    ui::HelpText("ZBrush-style layout", nullptr, "The alphabetical palette bar and the two-row top shelf.",
+    ui::HelpText("Classic layout", nullptr, "The alphabetical palette bar and the two-row top shelf.",
                  "Preferences > Interface > Look");
     tray::GroupLabel(*this, "Interface");
 }

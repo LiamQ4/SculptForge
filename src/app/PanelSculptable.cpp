@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Splats > Make sculptable (core/Sculptable.h): one click from a Gaussian-splat capture to a clean, sculptable
-// SubTool with the capture's colours. The options (Detail, polygon preset, Face loops, colour, crop box) sit in
+// Part with the capture's colours. The options (Detail, polygon preset, Face loops, colour, crop box) sit in
 // the Splats palette; the work runs on a worker thread with a progress bar and Cancel.
 //
 // With Review on, it stops after the scan: the face landmarks show as dots on the model with the guide loops
@@ -64,7 +64,7 @@ struct SculptableUiState {
     int preset = 0; // kPresets
     bool faceLoops = true;
     bool review = false;
-    int color = 0; // 0 polypaint, 1 texture
+    int color = 0; // 0 vertex paint, 1 texture
     bool keepScan = true;
     bool crop = false;
     AABB box;
@@ -87,7 +87,7 @@ struct SculptableUiState {
     };
     std::unique_ptr<Job> job;
 
-    // Review: the scan SubTool, its landmarks and the frame they were found in.
+    // Review: the scan Part, its landmarks and the frame they were found in.
     bool reviewing = false;
     uint32_t scanId = 0;
     FaceLandmarks landmarks;
@@ -203,16 +203,16 @@ void App::startSculptable(int stage) {
     job->result = std::make_shared<SculptableResult>();
     job->error = std::make_shared<std::string>();
     if (stage == 2) {
-        // Remesh the scan SubTool under review (its guides as they are now).
+        // Remesh the scan Part under review (its guides as they are now).
         int index = -1;
-        for (int i = 0; i < doc_.subtoolCount(); ++i)
-            if (doc_.subtools[size_t(i)].id == s.scanId) index = i;
+        for (int i = 0; i < doc_.partCount(); ++i)
+            if (doc_.parts[size_t(i)].id == s.scanId) index = i;
         if (index < 0) {
             status_ = "The scan Part is gone; Make sculptable again";
             s.reviewing = false;
             return;
         }
-        if (index != doc_.activeSubtool) doc_.selectSubtool(index);
+        if (index != doc_.activePart) doc_.selectPart(index);
         job->result->scan = doc_.mesh;
         job->result->guides = doc_.qremeshGuides;
         job->result->landmarks = s.landmarks;
@@ -277,16 +277,16 @@ void App::pollSculptable() {
         s.landmarks = res.landmarks;
         r.message = applySculptableScan(doc_, res);
         s.reviewing = true;
-        s.scanId = doc_.activeSubtoolInfo().id;
+        s.scanId = doc_.activePartInfo().id;
         if (!s.landmarks.valid && s.faceLoops) {
             s.placing = 0;
             r.message += ". Place the landmarks by hand: click " + std::string(kLandmarkPrompts[0]);
         }
     } else {
         int index = -1;
-        for (int i = 0; i < doc_.subtoolCount(); ++i)
-            if (doc_.subtools[size_t(i)].id == job->scanId) index = i;
-        if (index < 0 || doc_.subtoolMesh(index).triangleCount() != job->scanTriangles) {
+        for (int i = 0; i < doc_.partCount(); ++i)
+            if (doc_.parts[size_t(i)].id == job->scanId) index = i;
+        if (index < 0 || doc_.partMesh(index).triangleCount() != job->scanTriangles) {
             status_ = "Make sculptable skipped: the scan Part changed meanwhile";
             return;
         }
@@ -298,7 +298,7 @@ void App::pollSculptable() {
     lastCommandOk_ = true;
     clearLods();
     playingLayer_ = -1;
-    if (!onScreen(doc_.mesh.bounds())) camera_.frame(sceneBounds());
+    if (!onScreen(doc_.partBounds(doc_.activePart))) frameView(sceneBounds());
     updateTitle();
     consoleEcho("splat_to_mesh", job->args, r);
 }
@@ -318,28 +318,28 @@ void App::drawSculptableSection() {
     const float third = (full - 2.0f * style.ItemSpacing.x) / 3.0f;
 
     if (s.job) {
-        ImGui::ProgressBar(s.job->progress->load(), ImVec2(half, 0), s.job->stage == 2 ? "Remeshing..." : "Working...");
+        ImGui::ProgressBar(s.job->progress->load(), ImVec2(half, 0), tr(s.job->stage == 2 ? "Remeshing..." : "Working..."));
         ui::HelpText("Make sculptable", nullptr, "Working in the background; the new Part appears when it's done.", kPath);
         ImGui::SameLine();
-        if (ImGui::Button("Cancel##sculptable", ImVec2(-1, 0))) s.job->cancel->store(true);
+        if (ImGui::Button(tr("Cancel##sculptable"), ImVec2(-1, 0))) s.job->cancel->store(true);
         ui::HelpText("Cancel", nullptr, "Stop Make sculptable; nothing changes.", kPath);
     } else if (s.reviewing) {
         ui::ActionButton(*this, "splats.sculptable_finish", ImVec2(half, 0));
         ImGui::SameLine();
-        if (ImGui::Button("Back##sculptable", ImVec2(-1, 0))) {
+        if (ImGui::Button(tr("Back##sculptable"), ImVec2(-1, 0))) {
             s.reviewing = false;
             s.placing = -1;
             status_ = "Review closed; the scan Part stays";
         }
         ui::HelpText("Back", nullptr, "Leave the review without remeshing (the scan Part stays as it is).", kPath);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        if (s.placing >= 0) ImGui::TextWrapped("Click %s.", kLandmarkPrompts[s.placing]);
-        else if (s.landmarks.valid) ImGui::TextWrapped("Drag the dots to move the landmarks (the other side follows). The lines are the loops Quad Remesh will follow.");
-        else ImGui::TextWrapped("No face found: Place by hand, or Finish without face loops.");
+        if (s.placing >= 0) ImGui::TextWrapped(tr("Click %s."), kLandmarkPrompts[s.placing]);
+        else if (s.landmarks.valid) ImGui::TextWrapped("%s", tr("Drag the dots to move the landmarks (the other side follows). The lines are the loops Quad Remesh will follow."));
+        else ImGui::TextWrapped("%s", tr("No face found: Place by hand, or Finish without face loops."));
         ImGui::PopStyleColor();
         ui::ActionButton(*this, "splats.sculptable_place", ImVec2(half, 0));
         ImGui::SameLine();
-        if (ImGui::Button("Find again##sculptable", ImVec2(-1, 0))) {
+        if (ImGui::Button(tr("Find again##sculptable"), ImVec2(-1, 0))) {
             Args a{{"target", double(sculptablePresetQuads(kPresets[s.preset]))}};
             const Args view = sculptableArgs(0);
             for (const char* k : {"front", "up"})
@@ -373,7 +373,7 @@ void App::drawSculptableSection() {
             "ready to sculpt with levels."};
         ui::HelpText(kPresetLabels[i], nullptr, help[i], kPath);
     }
-    ImGui::Checkbox("Face loops", &s.faceLoops);
+    ImGui::Checkbox(tr("Face loops"), &s.faceLoops);
     ui::HelpText("Face loops", nullptr,
                  "When the capture is a head, find the eyes, nose, mouth and chin as seen from the current view and "
                  "give Quad Remesh edge loops round the eyes and mouth and along the nasolabial folds, mirrored across "
@@ -382,43 +382,43 @@ void App::drawSculptableSection() {
     ImGui::SameLine();
     ImGui::SetCursorPosX(x0 + half + style.ItemSpacing.x); // the right column, inside the section indent
     ImGui::BeginDisabled(!s.faceLoops);
-    ImGui::Checkbox("Review##sculptable", &s.review);
+    ImGui::Checkbox(tr("Review##sculptable"), &s.review);
     ImGui::EndDisabled();
     ui::HelpText("Review", nullptr,
                  "Stop after the scan to check the face landmarks and the loops: drag a dot to move it, or place them "
                  "by hand, then Finish.",
                  kPath);
-    ImGui::RadioButton("Vertex Paint##sculptcolor", &s.color, 0);
+    ImGui::RadioButton(tr("Vertex Paint##sculptcolor"), &s.color, 0);
     ui::HelpText("Vertex Paint", nullptr, "The capture's colours go into the vertices (vertex paint): more polygons, more colour detail.", kPath);
     ImGui::SameLine();
     ImGui::SetCursorPosX(x0 + half + style.ItemSpacing.x); // the right column, inside the section indent
-    ImGui::RadioButton("Texture##sculptcolor", &s.color, 1);
+    ImGui::RadioButton(tr("Texture##sculptcolor"), &s.color, 1);
     ui::HelpText("Texture", nullptr,
                  "Auto UV the result and bake the capture's colours into a 2K texture (sharp colour on a light mesh, "
                  "for games and exports).",
                  kPath);
-    ImGui::Checkbox("Keep scan", &s.keepScan);
+    ImGui::Checkbox(tr("Keep scan"), &s.keepScan);
     ui::HelpText("Keep scan", nullptr,
-                 "Keep the dense voxel surface as a hidden \"<name> Scan\" Part, to Project All more detail from later.",
+                 "Keep the dense voxel surface as a hidden \"<name> Scan\" Part, to Project Detail more detail from later.",
                  kPath);
     ImGui::SameLine();
     ImGui::SetCursorPosX(x0 + half + style.ItemSpacing.x); // the right column, inside the section indent
     ui::ActionButton(*this, "splats.sculptable_crop", ImVec2(-1, 0));
-    if (ImGui::TreeNode("More##sculptable")) {
+    if (ImGui::TreeNode(tr("More##sculptable"))) {
         ImGui::SetNextItemWidth(-1);
         ui::SliderInside("##sculptopacity", &s.minOpacity, 0.0f, 0.9f, "Min Opacity %.2f");
         ui::HelpText("Min Opacity", nullptr, "Splats fainter than this are ignored (haze and floaters are usually faint).", kPath);
         ImGui::SetNextItemWidth(-1);
         tray::SliderInt("##sculptclose", &s.close, 0, 8, "Close Gaps %d");
         ui::HelpText("Close Gaps", nullptr, "Seal gaps up to this many voxels between splats.", kPath);
-        ImGui::Checkbox("Fill holes", &s.fillHoles);
+        ImGui::Checkbox(tr("Fill holes"), &s.fillHoles);
         ui::HelpText("Fill holes", nullptr,
                      "Fill big holes such as the open bottom of a subject standing on a table (space boxed in on five "
                      "sides counts as inside). Turn off for open cavities like a cup.",
                      kPath);
         ImGui::SameLine();
         ImGui::SetCursorPosX(x0 + half + style.ItemSpacing.x); // the right column, inside the section indent
-        ImGui::Checkbox("All pieces", &s.keepParts);
+        ImGui::Checkbox(tr("All pieces"), &s.keepParts);
         ui::HelpText("All pieces", nullptr, "Keep every solid piece instead of only the largest (floaters come back too).", kPath);
         ImGui::TreePop();
     }
@@ -464,7 +464,7 @@ bool App::sculptableLandmarkScreen(int i, ImVec2& out) const {
 }
 
 bool App::sculptableReviewActive() const {
-    return sculptable_ && sculptable_->reviewing && doc_.activeSubtoolInfo().id == sculptable_->scanId;
+    return sculptable_ && sculptable_->reviewing && doc_.activePartInfo().id == sculptable_->scanId;
 }
 
 bool App::sculptableHot() const {

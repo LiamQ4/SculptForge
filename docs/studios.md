@@ -5,8 +5,9 @@ Linux-first, scriptable, standards-based, with no licence server and nothing to 
 
 ## VFX Reference Platform
 
-SculptForge tracks the [VFX Reference Platform](https://vfxplatform.com). CI builds and tests every commit
-in the platform's reference environments:
+SculptForge tracks the [VFX Reference Platform](https://vfxplatform.com). CI builds and tests every code change
+to `main` in the platform's reference environments (the merge queue runs them before a change reaches `main`; changes to the
+website or release paperwork only skip the build):
 
 | | CY2026 (current) | CY2027 | SculptForge |
 |---|---|---|---|
@@ -130,6 +131,16 @@ SculptForge is GPL-3.0-or-later. In practice:
   across your own facilities and farm, isn't distribution. (This is the common reading of the GPL, not
   legal advice; check with your counsel.)
 - Contributions back upstream are welcome, but never required for internal use.
+
+## Studio builds and offline deployment
+
+A Studio membership (a flat $300 a month for the whole studio, any number of artists; Founding Studio a flat
+$150 for the first 5 studios) includes a custom build with your own assets and defaults baked in, a private release channel,
+studio mode (no outside connections), a pinned version with security backports to the current release and one LTS
+line, and an offline signed installer. The build is GPL-3.0 like every SculptForge build; your assets, settings
+and network stay private. See the user guide's
+[Your studio build](guide/studios.md#your-studio-build) and [Offline deployment](guide/studios.md#offline-deployment),
+and docs/releasing.md for how studio builds are made.
 
 ## Roadmap items for pipelines
 

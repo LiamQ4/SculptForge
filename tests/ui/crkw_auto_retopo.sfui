@@ -1,22 +1,22 @@
-run ui_look look=classic layout=zbrush
-input_style zbrush
+run ui_look look=classic layout=classic
+input_style classic
 run new_sphere subdivisions=4
 snapshot
 click "Clay##brush.clay"
 stroke 0.35 0.4 0.65 0.5
 remember vertices source_points
-remember subtools original_count
+remember parts original_count
 click "Script##palette.script"
 expect "Auto Retopo + Project##crkw.auto_retopo"
 click "Auto Retopo + Project##crkw.auto_retopo"
 expect_status Auto Retopo: source/history kept
-expect_value subtools == 2
-expect_value active_subtool == 1
+expect_value parts == 2
+expect_value active_part == 1
 expect_value sdiv_levels > 1
 shot auto-retopo-result
 key shift+d
-expect_value sdiv > 0
-run subtool_select index=0
+expect_value subdiv_level > 0
+run part_select index=0
 expect_value vertices == $source_points
 expect_value can_undo == 1
 shot preserved-source-history

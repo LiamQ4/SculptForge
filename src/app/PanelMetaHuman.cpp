@@ -38,10 +38,10 @@ void App::drawCrkwMetaHuman() {
                 camera_.frame(doc_.mesh.bounds()); saveCkwWindow();
             }
         }
-        ImGui::TextDisabled("Adds native SubTools; existing scene objects are kept.");
-        const bool selected = doc_.activeSubtoolInfo().crkwMetaHuman.isObject();
+        ImGui::TextDisabled("Adds native Parts; existing scene objects are kept.");
+        const bool selected = doc_.activePartInfo().crkwMetaHuman.isObject();
         if (selected) {
-            const auto mode = doc_.activeSubtoolInfo().crkwMetaHuman["preview"].asString();
+            const auto mode = doc_.activePartInfo().crkwMetaHuman["preview"].asString();
             crkwMhTextures_ = !mode.empty() && mode != "OFF";
             if (mode != "OFF") crkwMhMap_ = mode == "BASE" ? 0 : mode == "ANNOTATED" ? 2 : 1;
         }
@@ -56,7 +56,7 @@ void App::drawCrkwMetaHuman() {
             if (lastCommandOk_) crkwMhTextures_ = false;
         }
         ImGui::EndDisabled();
-        if (!selected) ImGui::TextWrapped("Select a MetaHuman SubTool to fix UVs or export its character.");
+        if (!selected) ImGui::TextWrapped("Select a MetaHuman Part to fix UVs or export its character.");
         ImGui::Separator();
         bool previewChanged = ImGui::Checkbox("Show UV Textures##crkw.mh_textures", &crkwMhTextures_);
         ImGui::SetNextItemWidth(-1);
@@ -64,7 +64,7 @@ void App::drawCrkwMetaHuman() {
         if (previewChanged) {
             static const char* maps[] = {"BASE", "GUIDES", "ANNOTATED"};
             runCommand("crkw_mh_preview", {{"mode", std::string(crkwMhTextures_ ? maps[crkwMhMap_] : "OFF")}});
-            if (lastCommandOk_ && crkwMhTextures_) { renderSettings_.showPolypaint = true; renderSettings_.showTexture = true; }
+            if (lastCommandOk_ && crkwMhTextures_) { renderSettings_.showVertexPaint = true; renderSettings_.showTexture = true; }
             if (!lastCommandOk_) crkwMhTextures_ = false;
         }
         ImGui::TextWrapped("Guide preview leaves original UVs and painted textures unchanged. UV repair and export validate template topology.");

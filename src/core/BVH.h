@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <limits>
+
 #include "core/IndexBits.h"
 #include "core/Mesh.h"
 
@@ -29,9 +31,15 @@ public:
     // Ignores visibility; brushes use sf::brushVertices, which filters hidden ones.
     void queryVertices(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const;
     // queryVertices for an infinite cylinder: every vertex within `radius` of the line through `point` along
-    // `axis` (a brush whose falloff is measured on screen reaches through the model along the view).
+    // `axis` (a brush whose falloff is measured on screen reaches through the model along the view), or only
+    // those within `halfLength` of `point` along it.
     void queryVerticesCylinder(const Mesh& mesh, const glm::vec3& point, const glm::vec3& axis, float radius,
-                               std::vector<uint32_t>& out) const;
+                               std::vector<uint32_t>& out,
+                               float halfLength = std::numeric_limits<float>::infinity()) const;
+    // queryVertices for a capsule: every vertex within `radius` of the segment a..b (a fused batch of dabs along
+    // a stroke, core/SculptBatch.cpp).
+    void queryVerticesCapsule(const Mesh& mesh, const glm::vec3& a, const glm::vec3& b, float radius,
+                              std::vector<uint32_t>& out) const;
     // Appends every triangle whose bounds touch the sphere (cleared first; hidden ones included).
     void queryTriangles(const Mesh& mesh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) const;
     // Calls fn(triangles of the leaf) for every leaf whose box touches the sphere (hidden triangles included);
@@ -55,7 +63,7 @@ public:
         return n.count > 0 ? std::span<const uint32_t>(triIndices_.data() + n.first, n.count) : std::span<const uint32_t>();
     }
     void refitLeaves(const Mesh& mesh, std::span<const uint32_t> leaves);
-    // Recomputes every box (same tree) after most of the mesh moved, e.g. a whole SubTool transformed.
+    // Recomputes every box (same tree) after most of the mesh moved, e.g. a whole Part transformed.
     void refitAll(const Mesh& mesh);
 
     // Dynamic topology (core/Dyntopo.h): a few triangles at a time added, removed or renumbered without a
@@ -72,9 +80,35 @@ public:
     void touchTriangle(uint32_t t);
     void refitChanged(const Mesh& mesh);
     bool degraded() const;
+    // Brings the tree up to date after the mesh's triangles changed in the listed slots and/or the vertices
+    // `movedVerts` moved (an undo of a dynamic-topology stroke: the mesh now has its adjacency for this state, no
+    // dead slots). Slots at or past the mesh's triangle count leave the tree, new ones join the leaf of a neighbour,
+    // changed ones are refitted in place; every other triangle keeps its leaf. Falls back to build() when the tree
+    // doesn't match (empty) or has degraded.
+    void syncTopologyChange(const Mesh& mesh, std::span<const uint32_t> changedSlots, std::span<const uint32_t> movedVerts);
+    size_t triangleCount() const { return triLeaf_.size(); }
 
     size_t nodeCount() const { return nodes_.size(); }
+
+    // Per-node padding (micro levels: the largest displacement under each node, core/Micro.cpp MicroReach). The
+    // padded queries grow every node's box, and each leaf triangle's, by pad[node] (one value per node) plus
+    // `extra`; the caller then tests each triangle exactly. Leaves and parents for keeping pads up to date:
+    // structureSerial() changes whenever nodes or the triangle-to-leaf map do (build, dynamic edits).
+    uint64_t structureSerial() const { return structure_; }
+    uint32_t leafOf(uint32_t tri) const { return tri < triLeaf_.size() ? triLeaf_[tri] : kNoLeaf; }
+    uint32_t parentOf(uint32_t node) const { return nodes_[node].parent; }
+    // Child nodes have larger indices than their parent (a reverse sweep sees children first).
+    bool isInner(uint32_t node) const { return nodes_[node].count == 0 && nodes_[node].first != kNoLeaf; }
+    uint32_t leftChild(uint32_t node) const { return nodes_[node].first; }
+    void queryTrianglesPadded(const Mesh& mesh, const glm::vec3& center, float radius, std::span<const float> pad, float extra,
+                              std::vector<uint32_t>& out) const;
+    // The triangles of every leaf whose padded box the ray (from origin along dir, t >= 0) crosses.
+    void rayTrianglesPadded(const Mesh& mesh, const glm::vec3& origin, const glm::vec3& dir, std::span<const float> pad, float extra,
+                            std::vector<uint32_t>& out) const;
     size_t memoryBytes() const;
+    // Exchanges the trees (whole-mesh undo steps keep the other mesh's tree, so undo doesn't rebuild one). Both then
+    // report a new structureSerial(), so caches keyed on it (Micro) never take a swapped tree for the old one.
+    void swapTree(BVH& other);
 
 private:
     struct Node {
@@ -88,6 +122,7 @@ private:
     void recomputeLeaf(const Mesh& mesh, Node& n); // its box, and triLeaf_ for its triangles
 
     std::vector<Node> nodes_;
+    uint64_t structure_ = 0;
     std::vector<uint32_t> triIndices_;
     std::vector<uint32_t> triLeaf_;
 

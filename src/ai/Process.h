@@ -33,6 +33,8 @@ public:
     // Waits for it to end; returns the exit code.
     int wait();
     bool started() const { return started_; }
+    // Lets it run on after this object (and this app) is gone: the updater's relaunch.
+    void detach();
 
 private:
     bool started_ = false;
@@ -44,6 +46,13 @@ private:
     int pid_ = -1;
 #endif
 };
+
+#if !defined(_WIN32)
+// Sends `sig` to the process group of child `pid` when the child leads it. Never signals pid <= 1, ourselves or our
+// own group (kill(0) and kill(-1) end the user's session); a child outside a group of its own gets the signal alone.
+// False when nothing was sent.
+bool signalChildGroup(int pid, int sig);
+#endif
 
 // The full path of `name` on PATH (with .exe on Windows), or "" when it isn't there.
 std::string findOnPath(const std::string& name);

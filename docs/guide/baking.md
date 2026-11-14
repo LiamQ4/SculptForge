@@ -1,5 +1,13 @@
 # Baking normal and displacement maps
 
+![Baking maps from a sculpted head](images/quick-tour/09-bake.jpg)
+
+> **In short:**
+> - Baking turns high-poly detail into normal, displacement, AO, cavity and colour maps.
+> - **Tool > Bake** makes every map in one go, in the background.
+> - The normal map shows on the low-poly right away, to compare with the sculpt.
+> - A Part with levels can bake its own top level onto itself.
+
 Game engines and renderers want light meshes. Baking captures the detail of your high-poly sculpt as images
 laid over the UVs of a low-poly version: a **normal map** makes the low-poly shade as if it had every crease and
 pore, a **displacement map** stores how far the surface moves, and **ambient occlusion**, **cavity** and
@@ -13,7 +21,7 @@ normal map on the low-poly right away so you can compare it with the sculpt.
 - **A high-poly source**: one or more Parts with the detail. They stay as they are.
 - **A low-poly Part with UVs**, in the same place as the high-poly. It can come from another app (import it
   with **Tool > Parts > Append**; models with UVs keep them), or you make it in SculptForge: **Duplicate** the
-  sculpt, **Tool > Geometry > Decimate** it, then **Tool > Texture Map > Auto UV**.
+  sculpt, **Tool > Geometry > Decimate** it, then **Tool > Texture Image > Auto UV**.
 
 The maps go onto the **active** Part, so select the low-poly before baking.
 
@@ -66,22 +74,23 @@ The same maps, baked on the texture's own UVs, feed [Fill layers](fill-layers.md
 
 ### Tangent-space normal maps that look right everywhere
 
-SculptForge computes tangents with **MikkTSpace**, the same method Blender, Unreal Engine, Unity, Godot,
-Substance and xNormal use. A map baked here shows correctly in all of them, as long as the low-poly is exported
+SculptForge computes tangents with **MikkTSpace**, the same method Blender, Unreal Engine, Unity and
+Godot use. A map baked here shows correctly in all of them, as long as the low-poly is exported
 with its normals and UVs (every SculptForge export keeps them). Choose the green channel convention under the
 map settings:
 
-- **OpenGL (Y+)**: Blender, Unity, Godot, Substance, three.js. The default.
+- **OpenGL (Y+)**: Blender, Unity, Godot, three.js. The default.
 - **DirectX (Y-)**: Unreal Engine's native convention. **Send to Unreal** flips an OpenGL map on import (see
   below), so you only need DirectX when you import into Unreal by hand.
 
 ### Displacement: mid-grey is zero
 
 The 16-bit PNG stores zero displacement as mid-grey, the high-poly outside the low-poly as lighter and inside as
-darker. White means **+scale** and black **-scale** in world units; the scale is the largest distance found,
-shown under the Bake button ("Displacement: mid-grey = 0, white = +0.0143") and in the status line. Use it as the
-displacement strength in your renderer (with a midlevel of 0.5). With **EXR displacement** ticked, a 32-bit
-float OpenEXR holds the real distances in world units, with no scale to set.
+darker. White means **+scale** and black **-scale** in world units; the scale is the largest distance found, shown
+under the Bake button ("Displacement: mid-grey = 0, white = +0.0143") and in the status line.
+
+Use it as the displacement strength in your renderer (with a midlevel of 0.5). With **EXR displacement** ticked, a
+32-bit float OpenEXR holds the real distances in world units, with no scale to set.
 
 ## Settings
 
@@ -91,7 +100,7 @@ float OpenEXR holds the real distances in world units, with no scale to set.
 | **Size** | 1K, 2K (default), 4K or 8K square |
 | **AA** | Anti-aliasing: 1 to 4 means 1, 4, 9 or 16 rays per texel, averaged. 2 (the default) gives clean edges |
 | **Auto distance** | Measure how far the high-poly lies in front of and behind the low-poly, and cast rays just that far. After a bake, **Front** and **Rear** show what it measured |
-| **Front** / **Rear** | With Auto off: how far in front of the low-poly rays start, and how far behind it they look, as a percentage of the model's size (its bounding-box diagonal). ZBrush and Substance call these the max frontal and rear distances |
+| **Front** / **Rear** | With Auto off: how far in front of the low-poly rays start, and how far behind it they look, as a percentage of the model's size (its bounding-box diagonal). Other bakers call these the max frontal and rear distances |
 | **Padding** | Texels around each UV island filled with the island's edge colours, so seams don't show once an engine mipmaps the map. 8 suits 2K; use 16 for 4K and 8K |
 | **OpenGL / DirectX** | The normal map's green channel convention (see above) |
 | **AO rays**, **AO reach** | Ambient occlusion quality, and how far away geometry still darkens a point (a percentage of the model's size) |
@@ -123,18 +132,18 @@ When the last bake made a normal map, its low-poly Part is shown and still fits 
 (**Tool > Export**) imports the map too, as `T_<Name>_N` next to the mesh, set up as a normal map (linear, normal
 map compression), with Unreal's **Flip Green Channel** set for an OpenGL map. This works with an Unreal Editor
 on the same computer; for one on another computer, import the PNG by hand. See
-[Exporting, Unreal and ZBrush](exporting.md#send-to-unreal).
+[Exporting, Unreal and Bridge](exporting.md#send-to-unreal).
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `bake` | Bake onto the active Part and write the maps. Options: `source=all`, a Part name, `subdivision` or `micro`, `maps=normal,object_normal,displacement,ao,cavity,color,curvature,thickness,position,id` (or `all`), `udim=true`, `thickness_rays=24`, `thickness_distance=0.1`, `curvature_radius=0.02`, `id=polygroups` or `parts`, `size=2048` (512 to 8192, or `1k`...`8k`), `out=folder`, `name=prefix`, `front=0.02` and `rear=0.02` (fractions of the model's size, or `auto`), `samples=2`, `padding=8`, `ao_rays=48`, `ao_distance=0.05`, `green=opengl` or `directx`, `displacement_scale=` (world units at white), `exr=true` |
+| `bake` | Bake onto the active Part and write the maps. Options: `source=all`, a Part name, `subdivision` or `micro`, `maps=normal,object_normal,displacement,ao,cavity,color,curvature,thickness,position,id` (or `all`), `udim=true`, `thickness_rays=24`, `thickness_distance=0.1`, `curvature_radius=0.02`, `id=facegroups` or `parts`, `size=2048` (512 to 8192, or `1k`...`8k`), `out=folder`, `name=prefix`, `front=0.02` and `rear=0.02` (fractions of the model's size, or `auto`), `samples=2`, `padding=8`, `ao_rays=48`, `ao_distance=0.05`, `green=opengl` or `directx`, `displacement_scale=` (world units at white), `exr=true` |
 
 For example, from the console or `sculptforge-cli`:
 
 ```
-subtool_select name=Body_low; bake source=Body maps=normal,ao,displacement size=4096 out=maps
+part_select name=Body_low; bake source=Body maps=normal,ao,displacement size=4096 out=maps
 ```
 
 The command runs in the foreground (scripts wait for it); the **Bake** button runs the same bake in the

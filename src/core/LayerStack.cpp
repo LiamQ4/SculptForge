@@ -6,7 +6,7 @@
 #include "core/Document.h"
 #include "core/Json.h"
 #include "core/MeshMaps.h"
-#include "core/Polypaint.h"
+#include "core/VertexPaint.h"
 #include "core/Texture.h"
 #include "core/ThreadPool.h"
 #include "core/Undo.h"
@@ -721,7 +721,7 @@ void notifyMeshMapsChanged(Document&, Mesh& mesh, const std::vector<uint32_t>* t
 
 namespace {
 
-constexpr const char* kNoTextureFill = "The Part has no texture: Tool > Texture Map > New Texture";
+constexpr const char* kNoTextureFill = "The Part has no texture: Tool > Texture Image > New Texture";
 
 // The layer a command names (layer=<name> / index=<i>), else the active one; -2 with `error` when none fits.
 int fillLayerArg(const PaintTexture& t, const Args& a, std::string& error) {

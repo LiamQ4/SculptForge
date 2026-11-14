@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Native project files (.sfproj): an uncompressed ZIP holding a JSON manifest
-// ("manifest.json") and little-endian binary blobs for every SubTool (mesh,
+// ("manifest.json") and little-endian binary blobs for every Part (mesh,
 // optional attributes, sculpt layers) and any loaded Gaussian splats.
 //
 // The manifest names every blob with its element type and count, so readers
@@ -20,18 +20,21 @@
 
 namespace sf {
 
-// 1: one mesh. 2: a list of SubTools (version 1 files still load, as one SubTool). 3: SubTools may carry a
-// painted texture with layers ("texture"; older files still load). 4: SubTools may carry subdivision levels
+// 1: one mesh. 2: a list of Parts (version 1 files still load, as one Part). 3: Parts may carry a
+// painted texture with layers ("texture"; older files still load). 4: Parts may carry subdivision levels
 // ("subdiv"; older files still load). 5: sculpt-layer details of subdivision levels are in the levels' local
 // frames, not world space (format 4 files are converted when they load). 6: levels made by Divide keep no
-// triangles, child maps or (where their positions say it) details; older files still load. 7: a SubTool texture
-// may carry material channels (the texture's "pbr" key, core/LayerStackIO.h), and a SubTool a micro-displacement
-// level ("micro", core/Micro.h); both keys are optional in 7.
+// triangles, child maps or (where their positions say it) details; older files still load. 7: a Part texture
+// may carry material channels (the texture's "pbr" key, core/LayerStackIO.h), and a Part a micro-displacement
+// level ("micro", core/Micro.h); both keys are optional in 7. 8: Linked Duplicates (#94): a Part may share an
+// earlier Part's mesh ("link": that Part's index, no mesh of its own) and have a "transform" (16 numbers,
+// column-major) placing its mesh in the scene. 9: a streamed micro level (Focus Detail, core/FocusDetail.h): the
+// Part's "micro" names its .sfdetail beside the project ("detail") instead of holding the displacement.
 //
 // kProjectVersion is the newest format this build reads. Saving writes the lowest version the content needs
 // (ProjectVersionNeed): a project that uses nothing newer than format 6 is still written as 6, so older
 // SculptForge versions keep opening it. A feature that needs a newer format calls need(N) while saving.
-constexpr int kProjectVersion = 7;
+constexpr int kProjectVersion = 9;
 constexpr int kProjectBaseWriteVersion = 6;
 struct ProjectVersionNeed {
     int version = kProjectBaseWriteVersion;
@@ -42,16 +45,25 @@ constexpr const char* kProjectExtension = ".sfproj";
 // True for paths ending in .sfproj (any case).
 bool isProjectPath(const std::string& path);
 
-// Writes `doc` (every SubTool with its name, visibility, mesh, attributes,
-// layers, active layer and GoZ name; the active SubTool; splats, brush library
-// and doc.projectSettings) to `path`. Does not change the document.
-bool saveProject(const std::string& path, const Document& doc, std::string& error);
+// Writes `doc` (every Part with its name, visibility, mesh, attributes,
+// layers, active layer and Bridge name; the active Part; splats, brush library
+// and doc.projectSettings) to `path`. Does not change the document, except that a streamed micro level (Focus
+// Detail, core/FocusDetail.h) saves its detail file first: `<stem>.sfdetail` beside the project (`<stem>-2.sfdetail`
+// and so on for more Parts), written in place when it's already there, else as a compact copy that the Part then
+// streams from. `autosave`: the detail files are only named, as last saved (edits since then aren't in them).
+// `visibleOnly`: only the visible Parts (Save Visible Parts As; a Part with a streamed level can't go this way).
+bool saveProject(const std::string& path, const Document& doc, std::string& error, bool autosave = false,
+                 bool visibleOnly = false);
+// A streamed level's detail file is a plain file name resolved beside the project (`<name>.sfdetail`: no folders,
+// so a shared project can't point at other files); only the app's own autosave (`autosave.sfproj` in this folder,
+// set at startup) may name one by its full path (an unsaved level's file in the swap folder, or a saved one).
+void setProjectAutosaveFolder(const std::string& folder);
 // Replaces the scene with the project at `path`. On failure `doc` is untouched.
-// Restores the active SubTool, sets doc.path, gives every SubTool an empty
+// Restores the active Part, sets doc.path, gives every Part an empty
 // edit history and marks the document clean.
 bool loadProject(const std::string& path, Document& doc, std::string& error);
 // --- Thumbnails: a small PNG preview ("thumbnail.png") stored right after the manifest, so the
-// LightBox can show a project without loading it. Optional: older projects have none.
+// Library can show a project without loading it. Optional: older projects have none.
 
 constexpr int kProjectThumbnailSize = 256;
 // Called by saveProject on the saving thread to render the preview (the app renders the current

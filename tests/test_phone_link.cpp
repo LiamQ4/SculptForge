@@ -523,6 +523,7 @@ TEST(face_link_over_webrtc) {
         CHECK(err.find("without WebRTC") != std::string::npos);
         return;
     }
+    if (sf::test::networkTestsOff()) return;
     // base64url and AES-GCM as the face page uses them.
     CHECK(base64UrlEncode("\xff\xfe") == "__4");
     std::string bytes;
@@ -560,11 +561,12 @@ TEST(face_link_over_webrtc) {
     std::string relayed;
     CHECK(aesGcmEncrypt(faceKey, msg.dump(), relayed, err));
     CHECK(link.acceptRelayMessage(relayed, err));
-    // Frames flow over the data channel.
+    // Frames flow over the data channel. The channel takes about 3 s to open on a Windows CI runner and longer while
+    // heavy tests run beside this shard (5 s was too short there): up to 20 s, stopping at the first frame.
     FaceFrame f;
     uint64_t serial = 0;
     bool got = false;
-    for (int i = 0; i < 100 && !got; ++i) {
+    for (int i = 0; i < 400 && !got; ++i) {
         phone.sendFromTestPeer(faceJson(0.75f));
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         got = link.latestFace(f, serial);
@@ -580,7 +582,7 @@ TEST(face_link_over_webrtc) {
 // Android AR: Scene Viewer can't load a model from the desktop's plain-HTTP address, so the website's AR page gets
 // it over the WebRTC link (reliable channel): the page asks, the app exports, the GLB arrives in chunks, intact.
 TEST(ar_link_sends_the_model_over_webrtc) {
-    if (!webrtcAvailable()) return;
+    if (!webrtcAvailable() || sf::test::networkTestsOff()) return;
     const fs::path inbox = freshDir("sf_phone_ar_rtc");
     PhoneLink link;
     std::string err;
@@ -608,7 +610,7 @@ TEST(ar_link_sends_the_model_over_webrtc) {
     CHECK(link.acceptFaceAnswer(answer, err));
     // The page asks for the model (as soon as its channel is open).
     bool asked = false;
-    for (int i = 0; i < 100 && !asked; ++i) {
+    for (int i = 0; i < 400 && !asked; ++i) { // up to 20 s (a loaded Windows CI runner: see face_link_over_webrtc)
         phone.sendFromTestPeer("{\"type\":\"ar\",\"scope\":\"scene\",\"size\":35}");
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         for (const PhoneEvent& e : link.takeEvents())
@@ -657,7 +659,7 @@ TEST(ar_link_sends_the_model_over_webrtc) {
 // Android Chrome may not reach the computer at all: the AR link also carries a relay URL, and each model goes
 // there encrypted with the link's key (only the page can read it).
 TEST(ar_link_uploads_the_model_encrypted_to_the_relay) {
-    if (!webrtcAvailable()) return;
+    if (!webrtcAvailable() || sf::test::networkTestsOff()) return;
     std::mutex m;
     std::vector<std::pair<std::string, std::string>> posted; // query, body
     HttpServer relay;
@@ -680,7 +682,7 @@ TEST(ar_link_uploads_the_model_encrypted_to_the_relay) {
     PhoneLink link;
     CHECK(link.start(o, err));
     std::string url;
-    CHECK(link.createFaceLink(url, err, true, "subtool", 20.0f));
+    CHECK(link.createFaceLink(url, err, true, "part", 20.0f));
     const std::string fragment = url.substr(url.find('#') + 1);
     const std::string blobUrl = percentDecode(queryParameter(fragment, "b"));
     CHECK(blobUrl.rfind("http://127.0.0.1:" + std::to_string(relay.port()) + "/blob/sculptforge-", 0) == 0);
@@ -709,7 +711,7 @@ TEST(ar_link_uploads_the_model_encrypted_to_the_relay) {
 // The phone's answer through the relays (services/link-worker's protocol, which ntfy.sh also speaks): the first
 // relay is down, the second, a fake one here, carries the message; the desktop polls both and connects.
 TEST(face_link_answer_through_the_relays) {
-    if (!webrtcAvailable()) return;
+    if (!webrtcAvailable() || sf::test::networkTestsOff()) return;
     std::mutex relayMutex;
     std::vector<std::pair<std::string, std::string>> posted; // topic, message
     HttpServer relay;
@@ -774,7 +776,7 @@ TEST(face_link_answer_through_the_relays) {
         posted.emplace_back(topic, packed);
     }
     bool connected = false;
-    for (int i = 0; i < 200 && !connected; ++i) {
+    for (int i = 0; i < 400 && !connected; ++i) { // up to 20 s (see face_link_over_webrtc)
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         connected = link.status().faceConnected;
         if (!connected) phone.sendFromTestPeer(faceJson(0.5f));
@@ -806,7 +808,7 @@ TEST(qr_code_encodes_the_pairing_url) {
 
 TEST(ar_export_writes_valid_glb_and_usdz) {
     Mesh sphere = makeIcosphere(5); // 20,480 triangles
-    // Polypaint: red top, blue bottom.
+    // Vertex paint: red top, blue bottom.
     sphere.ensureColors();
     for (size_t v = 0; v < sphere.vertexCount(); ++v)
         sphere.colors[v] = sphere.positions[v].y > 0 ? glm::vec3(0.9f, 0.05f, 0.05f) : glm::vec3(0.05f, 0.05f, 0.9f);

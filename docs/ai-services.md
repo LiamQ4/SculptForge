@@ -4,6 +4,18 @@ Every AI feature in SculptForge is **optional and off until you use it**. Sculpt
 telemetry, no account and no servers of its own. When you use an AI feature, SculptForge talks
 **directly** to the service you picked; nothing goes anywhere else.
 
+**Your art is never uploaded or used for training. AI features run only when you use them and can be turned off.** Your sculpts stay on your computer; only what you hand an AI feature (a brush description,
+or the picture or text you give Generate 3D) goes to the service you picked.
+
+## Turning AI off
+
+**Preferences > AI > Enable AI features** (also asked in the first-run welcome). Off: Brush Lab and
+Generate 3D are hidden, their commands (`brush_ai`, `image_to_3d`, `text_to_3d`, `comfyui_check`)
+are not registered in the app, `sculptforge-cli`, Python or the MCP tool list, and no AI request is
+made. The setting is `"enabled"` in `ai.json`. `SF_AI=off` in the environment (or `--no-ai`) turns
+it off and locks it, for studios; `SF_AI=on` turns it on whatever was saved. A studio's policy file locks it either
+way (see [IT deployment](guide/studios.md#it-deployment)).
+
 ## What is sent where
 
 | Feature | Service (your choice) | What is sent | Key |
@@ -13,8 +25,22 @@ telemetry, no account and no servers of its own. When you use an AI feature, Scu
 | Generate 3D (text) | Hugging Face Spaces (free), fal.ai, Meshy, your own ComfyUI | Your text description | As above |
 | Send to Unreal | Your own Unreal Editor (local network) | The exported FBX | None |
 
-Keys are stored in your local settings file (`ai.json`, owner-only permissions) or read from
-environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `HF_TOKEN`, `FAL_KEY`, `MESHY_API_KEY`).
+Before the first request to a service on someone else's computer (Pollinations, each Hugging Face Space family,
+fal.ai, Meshy, Hyper3D, a remote OpenAI-compatible server or ComfyUI), the panel shows what is sent, to which host and
+who pays; nothing is sent until **Allow**, which is remembered per service (`sendAllowed` in `ai.json`) and can be
+revoked in **Preferences > AI > Online AI services**. Scripts, `sculptforge-cli` and AI tools get the same refusal
+until it is allowed in the app. Servers on this computer never ask. A studio policy's `ai.providers` / `ai.endpoints`
+pre-allow what they list and forbid the rest.
+
+Keys are stored in your operating system's keychain (macOS Keychain, Windows Credential Manager, or the Secret
+Service on Linux), never in a settings file, or read from environment variables (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `HF_TOKEN`, `FAL_KEY`, `MESHY_API_KEY`). Keys saved by older versions in
+`ai.json` move into the keychain at the first start.
+
+**Preferences > AI > Provider** has presets for Anthropic, OpenAI, Ollama, LM Studio, vLLM, llama.cpp server,
+a LiteLLM proxy (a studio's own gateway, which can front Amazon Bedrock, Google Vertex AI and Azure OpenAI) and
+OpenRouter. Studios can limit which providers and addresses artists may use, require their single sign-on, and keep
+an audit log of every AI action: see [IT deployment](guide/studios.md#it-deployment).
 
 ## The free Brush Lab model
 
@@ -56,5 +82,25 @@ See [Generate 3D with your own ComfyUI](comfyui.md).
 
 ## Paid services
 
-fal.ai and Meshy are paid services with their own terms of service and pricing; generations are
+fal.ai, Meshy and Hyper3D are paid services with their own terms of service and pricing; generations are
 billed to your account with them. Model availability and names can change on their side.
+
+Hyper3D Rodin 2.5 can run two ways:
+
+- **fal.ai > Rodin 2.5**: with your fal.ai key. The image or description goes to fal.ai, which runs Rodin.
+- **Hyper3D Rodin (direct)**: with your own Hyper3D key, from the API dashboard at hyper3d.ai (a Creator
+  plan or higher; Basic API access covers the Extreme Low and Low tiers, the others need Full access). The
+  image or description goes to Hyper3D (`api.hyper3d.com`) and nowhere else; each generation is billed to
+  your Hyper3D account, and Hyper3D keeps results as its data retention policy says.
+
+  What SculptForge does to keep this narrow:
+  - It is off until you enter your own key. The key is kept in the system keychain, never in `ai.json`,
+    never in a log, and there is no environment variable, shared or trial key.
+  - The API address is fixed in the app: https only, certificates checked, no redirects followed. The
+    key is sent only there. The model file is accepted only over https from Hyper3D's own domains
+    (`hyper3d.com`, `hyper3d.ai`, `deemos.com`), up to 200 MB, and only when it is a well-formed GLB; it is
+    saved in a private temporary folder, read by the usual glTF importer and deleted after import.
+  - It waits politely: the first status check after 5 s, then slower, up to every 30 s, for 20 minutes at most.
+  - With **Enable AI features** off nothing is sent. Studios: the provider id is `hyper3d` in
+    `ai.providers` (and `https://api.hyper3d.com/` in `ai.endpoints` when that list is used); each
+    generation writes one audit log line (tier, image or text, prompt length; never the key or the image).

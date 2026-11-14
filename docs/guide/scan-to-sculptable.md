@@ -1,5 +1,12 @@
 # From scan to sculptable mesh
 
+![A sculptable head with its face landmarks](images/face-landmarks.jpg)
+
+> **In short:**
+> - **Make sculptable** turns a splat capture into a clean, watertight Part.
+> - Quad topology at your budget, with loops round the eyes and mouth for heads.
+> - The capture's colours come across as vertex paint or a texture.
+
 A Gaussian-splat capture looks great but you can't sculpt, rig or animate it. **Make sculptable** turns it into
 a clean Part you can: a watertight surface with the floaters and background gone, quad topology at the
 polygon budget you choose, edge loops round the eyes and mouth when the capture is a head, and the capture's
@@ -13,21 +20,21 @@ colours as vertex paint or a texture. One click, in the background, with the spl
    `.usdz` onto the window. Place it with **Flip**, **Turn 90** and **Fit** if it arrives upside down.
 2. For a head, turn the view so you look at the face, roughly from the front (within about 40 degrees is
    enough). The face is looked for from the current view.
-3. In the **Splats** palette, under **From scan**, click **Make sculptable**.
+3. In **Render > Gaussian Splats**, under **From scan**, click **Make sculptable**.
 
 A progress bar and **Cancel** show while it works. When it's done:
 
 - a new Part named after the capture holds the sculptable mesh, and is active;
 - a hidden **"<name> Scan"** Part keeps the dense voxel surface it was made from (turn off **Keep scan** if you
   don't want it);
-- the splats are hidden, not deleted (**Show** in the Splats palette brings them back);
+- the splats are hidden, not deleted (**Show** in **Render > Gaussian Splats** brings them back);
 - an untouched starting sphere is hidden too.
 
-No capture at hand? **Try a test head** in the Splats palette (shown while no splats are loaded) loads a built-in
+No capture at hand? **Try a test head** in **Render > Gaussian Splats** (shown while no splats are loaded) loads a built-in
 one: a stylised head as 200,000 coloured splats with a few floaters and the hidden inside splats real captures
 have. `splat_test_capture kind=object` loads a mug with a thin handle instead.
 
-![The From scan section of the Splats palette](images/make-sculptable-panel.jpg)
+![The From scan section of Render > Gaussian Splats](images/make-sculptable-panel.jpg)
 
 ## The options
 
@@ -38,7 +45,7 @@ have. `splat_test_capture kind=object` loads a mug with a thin handle instead.
 | **Face loops** | When the capture is a head: find the eyes, nose, mouth and chin and give Quad Remesh edge loops round the eyes and mouth and along the nasolabial folds, mirrored across the face (see below) |
 | **Review** | Stop after the scan to check the face landmarks and the loops before remeshing |
 | **Vertex Paint / Texture** | Where the capture's colours go: the vertices (vertex paint), or a 2K texture on automatic UVs (sharp colour on a light mesh, for games and exports) |
-| **Keep scan** | Keep the dense voxel surface as a hidden "<name> Scan" Part, to Project All more detail from later |
+| **Keep scan** | Keep the dense voxel surface as a hidden "<name> Scan" Part, to Project Detail more detail from later |
 | **Crop Box** | Only the splats inside the box count (see below) |
 | **More > Min Opacity** | Splats fainter than this are ignored (haze and floaters are usually faint). Default 0.2 |
 | **More > Close Gaps** | Seal gaps up to this many voxels between splats. Default 2 |
@@ -84,11 +91,12 @@ blue dots and the guide loops as orange lines.
 
 ## The crop box
 
-Captures usually include the ground, a table or the room. **Make sculptable** keeps only the largest solid
-piece, which drops floaters, but a table the subject stands on is joined to it. Click **Crop Box**: a yellow box
-appears round the capture with a handle on each face. Drag a handle to move that face (drag the bottom one up to
-cut the table away), then **Make sculptable**: only the splats inside the box count. The box shows while the
-splats are shown; click **Crop Box** again to turn it off.
+Captures usually include the ground, a table or the room. **Make sculptable** keeps only the largest solid piece,
+which drops floaters, but a table the subject stands on is joined to it. Click **Crop Box**: a yellow box appears
+round the capture with a handle on each face.
+
+Drag a handle to move that face (drag the bottom one up to cut the table away), then **Make sculptable**: only the
+splats inside the box count. The box shows while the splats are shown; click **Crop Box** again to turn it off.
 
 ## What happens inside
 
@@ -101,7 +109,7 @@ splats are shown; click **Crop Box** again to turn it off.
    distance. Splats behind the surface, inside the subject, are faded out: trained captures fill the inside with
    splats of any colour.
 3. **Topology.** Quad Remesh rebuilds the scan as quads at the budget's polygon count, along the face guides, with
-   symmetry. **Sculpt** then divides it twice and projects the scan onto the top level (as Project All does).
+   symmetry. **Sculpt** then divides it twice and projects the scan onto the top level (as Project Detail does).
 
 ## Speed
 
@@ -171,6 +179,6 @@ them), so you can copy it into a batch script.
 ## See also
 
 - [Gaussian splats](splats.md): loading, placing and saving captures
-- [Quad retopology and detail projection](retopology.md): Quad Remesh, Quad Remesh Guides and Project All
+- [Quad retopology and detail projection](retopology.md): Quad Remesh, Quad Remesh Guides and Project Detail
 - [Subdivision levels](subdivision-levels.md): sculpting the **Sculpt** preset's levels
 - [Texture painting](texture-painting.md): painting on the **Texture** result

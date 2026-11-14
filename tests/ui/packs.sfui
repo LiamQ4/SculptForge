@@ -13,7 +13,7 @@ expect_value pack_review_open == 1
 expect_value pack_review_ok == 1
 expect_value pack_review_brush == 1
 expect_value pack_review_alpha == 1
-expect_value pack_review_matcap == 1
+expect_value pack_review_litsphere == 1
 expect_value pack_review_material == 1
 expect_value pack_review_keymap == 1
 expect_value pack_review_piemenu == 1
@@ -33,12 +33,12 @@ expect_value packs_enabled == 1
 expect_status Installed Demo Pack 1.0
 expect_value pack_brushes == 1
 expect_value pack_alphas == 1
-expect_value pack_matcaps == 1
+expect_value pack_litspheres == 1
 expect_value pack_materials == 1
 expect_value pack_keymaps == 1
 expect_value macros == 1
 expect_value macro_actions == 1
-expect_value lightbox_open == 1
+expect_value library_open == 1
 wait_idle 30
 expect_text Demo Pack 1.0
 shot packs_tab
@@ -57,15 +57,15 @@ click "Library/Apply keymap Demo Keys##km.demo-pack.Demo Keys"
 expect_shortcut mask.invert Ctrl+Shift+K
 expect_status Keymap Demo Keys: 1 keys
 click "Library/Add pie menu Demo Pie##pie.demo-pack.Demo Pie"
-expect_value radial_menus == 3
-expect_value radial_slots_3 == 2
+expect_value radial_menus == 4
+expect_value radial_slots_4 == 2
 
 # Off: its items leave the lists; on again: back.
 click "Library/##ondemo-pack"
 expect_value packs_enabled == 0
 expect_value pack_brushes == 0
 expect_value pack_alphas == 0
-expect_value pack_matcaps == 0
+expect_value pack_litspheres == 0
 expect_value macro_actions == 0
 click "Library/##ondemo-pack"
 expect_value packs_enabled == 1

@@ -1,6 +1,7 @@
 // CRKW shelf camera and canvas controls.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "app/App.h"
+#include "app/NativeDialog.h"
 #include <IconsLucide.h>
 #include <algorithm>
 #include <cmath>
@@ -120,7 +121,7 @@ void App::drawCameraController() {
         ImGui::TextDisabled("%dx%d pixels - %s", crkwCanvasWidth_, crkwCanvasHeight_, crkwCanvasFixed_ ? "fit preview" : "export size");
         if (ImGui::Button("Export canvas PNG...##camera.export", ImVec2(-1, 0))) {
             static const SDL_DialogFileFilter png[] = {{"PNG image", "png"}};
-            SDL_ShowSaveFileDialog(cameraExportChosen, nullptr, window_, png, 1, nullptr);
+            sf::dialogs::saveFile(cameraExportChosen, nullptr, window_, png, 1, nullptr);
         }
         if (ImGui::Button("Reset camera settings##camera.reset", ImVec2(-1, 0)))
             runCommand("crkw_camera", {{"perspective", true}, {"fov", 35.0}, {"fixed", false}, {"width", 1920.0}, {"height", 1080.0}});

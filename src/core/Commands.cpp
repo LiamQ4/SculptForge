@@ -4,6 +4,9 @@
 #include "core/CkwPolish.h"
 #include "core/CrkwMetaHuman.h"
 #include "core/CrkwMaskManager.h"
+
+#include "core/AgentTools.h"
+#include "core/DetailPass.h"
 #include "core/ViewCapture.h"
 
 #include "core/Bake.h"
@@ -14,6 +17,7 @@
 #include "core/KeepMasked.h"
 #include "core/Macro.h"
 #include "core/Pack.h"
+#include "core/Plugin.h"
 #include "core/Dyntopo.h"
 #include "core/EnginePresets.h"
 #include "core/ExtractMirror.h"
@@ -21,29 +25,43 @@
 #include "core/HardwareProfile.h"
 #include "core/ImageTo3D.h"
 #include "core/Masking.h"
+#include "core/Backdrop.h"
+#include "core/CloseHoles.h"
+#include "core/Cut.h"
 #include "core/Multires.h"
 #include "core/Micro.h"
+#include "core/FigurePose.h"
 #include "core/MeshTransform.h"
+#include "core/MeshCheck.h"
 #include "core/PathStroke.h"
-#include "core/Polygroups.h"
+#include "core/FaceGroups.h"
 #include "core/SelectionSets.h"
-#include "core/SubTools.h"
-#include "core/Polypaint.h"
+#include "core/PartBoolean.h"
+#include "core/Parts.h"
+#include "core/Units.h"
+#include "core/VertexPaint.h"
 #include "core/Primitives.h"
 #include "core/Project.h"
 #include "core/QRemesh.h"
-#include "core/ZSpheres.h"
+#include "core/ForgeSpheres.h"
+#include "core/Tube.h"
+#include "core/Garment.h"
+#include "core/GarmentDrape.h"
 #include "core/Deform.h"
+#include "core/Drape.h"
 #include "core/Sculptable.h"
 #include "core/Splats.h"
+#include "core/StarterMeshes.h"
 #include "core/TextureTransfer.h"
 #include "core/Timeline.h"
 #include "core/Voxel.h"
+#include "core/LegacyNames.h"
+#include "io/BridgeProtocol.h"
 #include "io/FbxIO.h"
 #include "io/GltfIO.h"
 #include "io/BlenderCommands.h"
-#include "io/GozCommands.h"
-#include "io/GozIO.h"
+#include "io/BridgeCommands.h"
+#include "io/BridgeIO.h"
 #include "io/MayaCommands.h"
 #include "io/ObjIO.h"
 #include "io/PlyIO.h"
@@ -51,6 +69,7 @@
 #include "io/UsdIO.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <sstream>
@@ -95,7 +114,7 @@ std::string fileStem(const std::string& path) {
     return std::string(stem.begin(), stem.end());
 }
 
-// " (3 SubTools)" for a multi-object export, else nothing.
+// " (3 Parts)" for a multi-object export, else nothing.
 std::string objectCountText(const std::vector<MeshObjectRef>& objects) {
     return objects.size() > 1 ? " (" + std::to_string(objects.size()) + " Parts)" : std::string();
 }
@@ -112,6 +131,28 @@ std::string jsonEscape(const std::string& s) {
     }
     return out;
 }
+
+// The `unit` argument of open / open_obj (core/Units.h): numbers per metre in an STL, OBJ or PLY. Empty: the
+// format's convention (STL millimetres, OBJ and PLY metres). Null with `err` set for an unknown unit.
+const LengthUnit* fileUnitArg(const Args& a, const std::string& ext, std::string& err) {
+    const std::string id = argString(a, "unit");
+    if (id.empty()) return ext == ".stl" ? &millimetres() : &metres();
+    const LengthUnit* u = findLengthUnit(id);
+    if (!u) err = "Unknown unit '" + id + "' (mm, cm, m or in)";
+    return u;
+}
+
+// File numbers to metres, rounded once from double (so writing them back at `perMetre` gives the numbers again).
+void fileUnitsToMetres(Mesh& m, double perMetre) {
+    if (perMetre == 1.0) return;
+    for (glm::vec3& p : m.positions) p = glm::vec3(glm::dvec3(p) / perMetre);
+    for (auto& layer : m.layers)
+        for (glm::vec3& d : layer.delta) d = glm::vec3(glm::dvec3(d) / perMetre);
+}
+
+constexpr const char* kUnitArgHelp = "Unit of the numbers in a unit-less file (STL, OBJ, PLY): mm, cm, m or in. Default "
+                                     "mm for STL, m for OBJ and PLY. Exports to the same kind of file write that unit "
+                                     "back, so the part keeps its size.";
 
 } // namespace
 
@@ -157,25 +198,30 @@ CommandRegistry::CommandRegistry() {
 
     add({"open_obj",
          "Load a Wavefront OBJ file, replacing the current scene.",
-         {{"path", T::String, "File path (UTF-8).", true}},
+         {{"path", T::String, "File path (UTF-8).", true}, {"unit", T::String, kUnitArgHelp, false}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path");
              std::vector<MeshObject> objects;
              std::string err;
+             const LengthUnit* unit = fileUnitArg(a, ".obj", err);
+             if (!unit) return {false, err};
              if (!loadObj(path, objects, err)) return {false, err};
+             for (auto& o : objects) fileUnitsToMetres(o.mesh, unit->perMetre);
              const size_t count = objects.size();
              setSceneObjects(doc, std::move(objects), fileStem(path));
              doc.path = path;
+             doc.unitlessScale = unit->perMetre;
+             doc.unitlessFormat = "obj";
              return {true, "Loaded " + path + (count > 1 ? " (" + std::to_string(count) + " Parts)" : "")};
          }});
 
     add({"open",
-         "Open a file: models (.obj, .fbx, .glb, .gltf, .ply, .stl, .usda, .usdz, ZBrush .GoZ) replace the scene; Gaussian splats "
+         "Open a file: models replace the scene; Gaussian splats "
          "(.ply/.splat captures, KHR_gaussian_splatting .glb, USD ParticleField) load as a reference next to the sculpt. "
          "glTF morph targets and FBX/USD blend shapes become sculpt layers. Files with several objects (OBJ `o`, "
          "glTF nodes, FBX models, USD meshes) open as one Part each. SculptForge projects (.sfproj) "
          "restore the whole scene.",
-         {{"path", T::String, "File path (UTF-8).", true}},
+         {{"path", T::String, "File path (UTF-8).", true}, {"unit", T::String, kUnitArgHelp, false}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path");
              if (isProjectPath(path)) return openProjectCommand(doc, path);
@@ -184,25 +230,28 @@ CommandRegistry::CommandRegistry() {
              Mesh m;
              SplatCloud splats;
              std::string err;
-             GozInfo goz;
+             BridgeInfo bridge;
+             const LengthUnit* unit = fileUnitArg(a, ext, err);
+             if (!unit) return {false, err};
+             const bool unitless = ext == ".stl" || ext == ".ply" || ext == ".obj";
              bool ok;
-             std::string ztoolNote;
+             std::string warnings; // malformed parts the importer skipped (USD creases)
              if (ext == ".glb" || ext == ".gltf") ok = loadGltf(path, objects, err, &splats);
-             else if (ext == ".usda" || ext == ".usd" || ext == ".usdz") ok = loadUsd(path, objects, splats, err);
+             else if (ext == ".usda" || ext == ".usd" || ext == ".usdz") ok = loadUsd(path, objects, splats, err, &warnings);
              else if (ext == ".splat") ok = loadDotSplat(path, splats, err);
              else if (ext == ".fbx") ok = loadFbx(path, objects, err);
-             else if (ext == ".goz") ok = loadGoz(path, m, err, &goz);
-             else if (ext == ".stl") ok = loadStl(path, m, err);
-             else if (ext == ".ztl" || ext == ".sculptforge") {
-                 // A ZTool converted in ZBrush by the SculptForge ZTL Export plug-in (GoZ files beside it).
-                 if (convertedZToolFiles(path).empty()) return {false, zbrushProprietaryMessage(".ztl")};
-                 ok = loadConvertedZTool(path, objects, err, &ztoolNote);
-             } else if (ext == ".zpr" || ext == ".zbr") return {false, zbrushProprietaryMessage(ext)};
+             else if (ext == bridgefile::kExtLower) ok = loadBridge(path, m, err, &bridge);
+             else if (ext == ".stl") ok = loadStl(path, m, err, unit->perMetre);
+             else if (ext == ".sculptforge") ok = loadBridgeFolder(path, objects, err); // numbered Bridge files
              else if (ext == ".ply") {
                  PlyContent content;
                  ok = loadPly(path, m, splats, content, err);
              } else ok = loadObj(path, objects, err);
              if (!ok) return {false, err};
+             if (ext == ".obj" || ext == ".ply") {
+                 fileUnitsToMetres(m, unit->perMetre);
+                 for (auto& o : objects) fileUnitsToMetres(o.mesh, unit->perMetre);
+             }
              if (m.triangleCount() > 0) objects.push_back({"", std::move(m)});
              std::erase_if(objects, [](const MeshObject& o) { return o.mesh.triangleCount() == 0; });
              std::string msg = "Opened " + std::filesystem::path(path).filename().string();  // file name only: status shows in screen recordings
@@ -215,12 +264,15 @@ CommandRegistry::CommandRegistry() {
                      layers = std::max(layers, o.mesh.layers.size());
                  }
                  const size_t count = objects.size();
-                 setSceneObjects(doc, std::move(objects), ext == ".goz" && !goz.name.empty() ? goz.name : fileStem(path));
+                 setSceneObjects(doc, std::move(objects), ext == bridgefile::kExtLower && !bridge.name.empty() ? bridge.name : fileStem(path));
                  doc.path = ext == ".obj" ? path : std::string(); // other formats are exported explicitly
-                 if (ext == ".goz") doc.gozName = goz.name;
+                 if (ext == bridgefile::kExtLower) doc.bridgeName = bridge.name;
+                 if (unitless) { // exports write this unit back (Document::unitlessScale)
+                     doc.unitlessScale = unit->perMetre;
+                     doc.unitlessFormat = ext.substr(1);
+                 }
                  msg += " (" + (count > 1 ? std::to_string(count) + " Parts, " : std::string()) + std::to_string(tris) +
                         " triangles" + (quads == 0 ? "" : ", " + std::to_string(quads) + " quads") + (layers == 0 ? "" : ", " + std::to_string(layers) + " layers") + ")";
-                 if (!ztoolNote.empty()) msg += "; " + ztoolNote;
              }
              if (!splats.empty()) {
                  doc.splats = std::move(splats);
@@ -229,6 +281,7 @@ CommandRegistry::CommandRegistry() {
                         std::to_string(doc.splats.shDegree) + ")";
                  if (hasMesh) doc.markClean(); // a model with its own splats is one freshly opened scene
              }
+             if (!warnings.empty()) msg += ". " + warnings;
              return {true, msg};
          }});
 
@@ -236,7 +289,9 @@ CommandRegistry::CommandRegistry() {
          "Voxel remesh (like Voxel Remesh): rebuild the sculpt as an even, watertight surface, merging overlapping "
          "parts and fixing broken scans or generated models. Sculpt layers are baked in. A painted texture is "
          "kept (new Auto UVs, colour projected from the old surface) unless keep_texture=false.",
-         {{"resolution", T::Number, "Voxels across the longest side (32-512). Default 200; higher keeps more detail.", false},
+         {{"resolution", T::Number, "Voxels across the longest side (32-4096). Default 200; higher keeps more detail. "
+                                  "Above 512 it can make tens of millions of triangles; it stops with a message when "
+                                  "it would not fit in the free memory.", false},
           {"keep_texture", T::Bool, "Keep a painted texture: Auto UV the result and project the texture onto it. "
                                     "Default true.", false},
           {"keep_masked", T::Bool, "Keep masked: masked areas keep their triangles exactly; the rest is remeshed and "
@@ -247,7 +302,7 @@ CommandRegistry::CommandRegistry() {
              const bool keeping = std::find(keep.begin(), keep.end(), 1) != keep.end();
              if (keeping && std::find(keep.begin(), keep.end(), 0) == keep.end())
                  return {false, "Remesh: everything is masked, so nothing would change"};
-             Mesh m = voxelRemesh(doc.mesh, std::clamp(int(argNumber(a, "resolution", 200)), 32, 512), &err);
+             Mesh m = voxelRemesh(doc.mesh, std::clamp(int(argNumber(a, "resolution", 200)), kVoxelResolutionMin, kVoxelResolutionMax), &err);
              if (m.triangleCount() == 0) return {false, err};
              std::string keepNote;
              if (keeping) {
@@ -256,7 +311,7 @@ CommandRegistry::CommandRegistry() {
                  m = std::move(stitched);
              }
              const std::string texture = carryTextureNote(doc.mesh, m, argBool(a, "keep_texture", true));
-             doc.replaceMeshUndoable(std::move(m), "Remesh");
+             doc.replaceMeshUndoable(std::move(m), "Remesh", true);
              return {true, "Remeshed to " + std::to_string(doc.mesh.triangleCount()) + " triangles" + texture +
                            (keepNote.empty() ? "" : "; Keep masked: " + keepNote)};
          }});
@@ -336,16 +391,17 @@ CommandRegistry::CommandRegistry() {
          "Export the visible Parts as a Wavefront OBJ file (one `o` object each, face groups as `g` groups). OBJ "
          "cannot hold the mask, visibility, sculpt layers or splats, so this is an export: the document keeps its "
          "path and unsaved-changes state. UVs are kept; a textured Part also writes <name>.mtl and its PNG beside "
-         "the file.",
+         "the file. Positions are in metres, or in the units of the STL/OBJ/PLY the scene was opened from (an STL's "
+         "millimetres stay millimetres).",
          {{"path", T::String, "File path (UTF-8). Defaults to the current document path unless that is a project.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path", isProjectPath(doc.path) ? std::string() : doc.path);
              if (path.empty()) return {false, "No path given"};
              if (isProjectPath(path)) return {false, "Use save_project for .sfproj files"};
              std::string err;
-             const auto objects = visibleSubtoolObjects(doc);
+             const auto objects = visiblePartObjects(doc);
              if (objects.empty()) return {false, "Nothing visible to export"};
-             if (!saveObj(path, objects, err)) return {false, err};
+             if (!saveObj(path, objects, err, doc.unitlessExportScale("obj"))) return {false, err};
              return {true, "Saved " + path + objectCountText(objects)};
          }});
 
@@ -423,19 +479,20 @@ CommandRegistry::CommandRegistry() {
                                  ? size_t(std::max(4.0, argNumber(a, "triangles", 4)))
                                  : size_t(double(doc.mesh.triangleCount()) *
                                           std::clamp(argNumber(a, "ratio", 0.5), 0.01, 1.0));
-             doc.replaceMeshUndoable(decimate(doc.mesh, target, argBool(a, "keep_masked", false)), "Decimate");
+             doc.replaceMeshUndoable(decimate(doc.mesh, target, argBool(a, "keep_masked", false)), "Decimate", true);
              return {true, "Decimated to " + std::to_string(doc.mesh.triangleCount()) + " triangles"};
          }});
 
     add({"export_glb",
-         "Export a game-ready binary glTF (.glb), one node and mesh per visible Part. Sculpt layers become "
+         "Export a game-ready binary glTF (.glb), one node and mesh per visible Part (linked copies: one mesh, a node "
+         "each). Sculpt layers become "
          "morph targets (blend shapes). UVs are kept and Part textures are embedded. A baked face take "
          "(face_take_bake) becomes an animation of the morph target weights.",
          {{"path", T::String, "Output .glb path (UTF-8).", true}},
          [](Document& doc, const Args& a) -> CommandResult {
              std::string path = argString(a, "path");
              std::string err;
-             const auto objects = visibleSubtoolObjects(doc);
+             const auto objects = visiblePartObjects(doc, true); // (linked copies, #94: one mesh, placed each)
              if (objects.empty()) return {false, "Nothing visible to export"};
              MorphAnimation take;
              const bool animated = bakedFaceAnimation(doc, take);
@@ -445,7 +502,7 @@ CommandRegistry::CommandRegistry() {
 
     add({"export_usd",
          "Export OpenUSD (.usda text, or .usdz package for AR Quick Look / Vision Pro), one Mesh prim per visible "
-         "Part. Sculpt layers become "
+         "Part (linked copies: instanceable prims referencing the first). Sculpt layers become "
          "UsdSkel blend shapes with their current weights; loaded Gaussian splats are included as a "
          "ParticleField3DGaussianSplat prim. UVs are kept; a Part's texture becomes a UsdPreviewSurface texture "
          "(packed into .usdz, else a PNG beside the file). A baked face take (face_take_bake) becomes time samples "
@@ -456,7 +513,7 @@ CommandRegistry::CommandRegistry() {
              std::string path = argString(a, "path");
              std::string err;
              const SplatCloud* splats = argBool(a, "splats", true) && !doc.splats.empty() ? &doc.splats : nullptr;
-             const auto objects = visibleSubtoolObjects(doc);
+             const auto objects = visiblePartObjects(doc, true); // (linked copies, #94: one mesh, placed each)
              MorphAnimation take;
              const bool animated = bakedFaceAnimation(doc, take);
              if (!saveUsd(path, objects, splats, doc.assetName(), err, animated ? &take : nullptr)) return {false, err};
@@ -475,9 +532,9 @@ CommandRegistry::CommandRegistry() {
           {"scale", T::Number, "Multiply positions (FBX units are centimetres). Default 100 (1 unit = 1 m).", false}},
          [](Document& doc, const Args& a) -> CommandResult {
              const int levels = std::clamp(int(argNumber(a, "lods", 1)), 1, 8);
-             const auto objects = visibleSubtoolObjects(doc);
+             const auto objects = visiblePartObjects(doc);
              if (objects.empty()) return {false, "Nothing visible to export"};
-             // One model per visible SubTool; with lods > 1 each gets its own LOD group (see FbxIO.h).
+             // One model per visible Part; with lods > 1 each gets its own LOD group (see FbxIO.h).
              std::vector<std::vector<Mesh>> lods(objects.size());
              std::vector<FbxObject> fbxObjects;
              for (size_t i = 0; i < objects.size(); ++i) {
@@ -517,7 +574,7 @@ CommandRegistry::CommandRegistry() {
              std::string err;
              if (!exportForUnreal(doc, o, r, err)) return {false, err};
              size_t morphs = 0;
-             for (const auto& obj : visibleSubtoolObjects(doc)) morphs += obj.mesh->layers.size();
+             for (const auto& obj : visiblePartObjects(doc)) morphs += obj.mesh->layers.size();
              return {true, "Exported " + r.path + " (" + (r.skeletal ? "skeletal mesh, " + std::to_string(morphs) + " morph targets"
                                                                      : "static mesh, " + std::to_string(r.lodCount) + " LODs") + ")"};
          }});
@@ -533,13 +590,13 @@ CommandRegistry::CommandRegistry() {
              std::filesystem::path base(std::u8string(pathArg.begin(), pathArg.end()));
              int levels = std::clamp(int(argNumber(a, "levels", 4)), 1, 8);
              float ratio = float(std::clamp(argNumber(a, "ratio", 0.5), 0.1, 0.9));
-             const auto objects = visibleSubtoolObjects(doc);
+             const auto objects = visiblePartObjects(doc);
              if (objects.empty()) return {false, "Nothing visible to export"};
-             // Every visible SubTool is decimated on its own; LOD n of each goes into <name>_LOD<n>.glb.
+             // Every visible Part is decimated on its own; LOD n of each goes into <name>_LOD<n>.glb.
              std::vector<std::vector<Mesh>> lods;
              for (const auto& o : objects) {
                  lods.push_back(generateLods(*o.mesh, levels, ratio));
-                 // Decimation keeps the UVs, so every level can carry the SubTool's texture.
+                 // Decimation keeps the UVs, so every level can carry the Part's texture.
                  for (auto& l : lods.back()) l.texture = o.mesh->texture;
              }
              auto stemU8 = base.stem().u8string();
@@ -581,6 +638,14 @@ CommandRegistry::CommandRegistry() {
         params.push_back({"viewFalloff", T::Bool,
                           "Measure the falloff on screen: a cylinder through the model along the view. Default false.",
                           false});
+        params.push_back({"planeLock", T::Bool,
+                          "Take the plane at the stroke's start and keep it for the whole stroke (false: the plane "
+                          "follows the surface). Default false.",
+                          false});
+        params.push_back({"crispEdge", T::Bool,
+                          "A hard tip edge with a thin anti-aliased band, and the plane pulled all the way: clean, "
+                          "sharp boundaries for hard-surface planes and bevels. Default false.",
+                          false});
         add({"brush_create",
              "Create (or update, by name) a custom sculpting brush from a recipe and make it the active brush. "
              "Omitted parameters use neutral defaults.",
@@ -601,8 +666,26 @@ CommandRegistry::CommandRegistry() {
              std::string out;
              for (size_t i = 0; i < doc.brushes.size(); ++i)
                  out += (i ? "\n" : "") + std::to_string(i) + ": " + doc.brushes[i].name + " [" +
-                        brushSourceName(doc.brushes[i].origin.source) + "] - " + doc.brushes[i].description;
+                        brushSourceName(doc.brushes[i].origin.source) +
+                        (doc.brushes[i].origin.pack.empty() ? "" : ", " + doc.brushes[i].origin.pack) + "] - " +
+                        doc.brushes[i].description;
              return {true, out};
+         }});
+
+    add({"brush_use", "Make a custom brush (a built-in pack brush, one from the library or a pack) the active brush.",
+         {{"name", T::String, "Brush name, as brush_list shows it (case doesn't matter).", true}},
+         [](Document& doc, const Args& a) -> CommandResult {
+             auto low = [](std::string t) {
+                 for (char& c : t) c = char(std::tolower(static_cast<unsigned char>(c)));
+                 return t;
+             };
+             const std::string want = low(argString(a, "name"));
+             for (size_t i = 0; i < doc.brushes.size(); ++i)
+                 if (low(doc.brushes[i].name) == want) {
+                     doc.activeBrush = int(i);
+                     return {true, "Brush: " + doc.brushes[i].name};
+                 }
+             return {false, "No such brush: " + argString(a, "name") + " (brush_list shows them)"};
          }});
 
     add({"brush_save", "Save a custom brush as a shareable .sfbrush file.",
@@ -631,12 +714,18 @@ CommandRegistry::CommandRegistry() {
          }});
     registerBrushLibraryCommands(*this); // brush_install, brush_code, brush_delete, ... (BrushLibrary.cpp)
     registerBrushCommands(*this); // brush_set_alpha (BrushAlpha.cpp)
+    registerStencilCommands(*this); // stencil_load, stencil_set, stencil_clear (Stencil.cpp)
+    registerReferenceCommands(*this); // reference_add, reference_set, reference_remove, reference_pair (Reference.cpp)
     registerVdmCommands(*this);   // vdm_set, vdm_capture, vdm_stamp, ... (Vdm.cpp)
     registerKelvinletCommands(*this); // kelvinlet_settings (Kelvinlet.cpp)
     registerCaptureCommands(*this); // capture_alpha, capture_vdm: alpha / VDM from the viewport (ViewCapture.cpp)
     registerRetopoCommands(*this); // qremesh, project_all (RetopoCommands.cpp)
     registerQRemeshGuideCommands(*this); // qremesh_guide, ... (QRemeshGuides.cpp)
-    registerZSphereCommands(*this);      // zsphere_new, ... (ZSpheres.cpp)
+    registerForgeSphereCommands(*this);      // Forge Sphere_new, ... (Forge Spheres.cpp)
+    registerTubeCommands(*this);             // tube_new, ... (Tube.cpp)
+    registerAgentTools(*this);               // blockout, measure, scene_overview (core/AgentTools.cpp)
+    registerDetailCommands(*this);           // detail_pass (core/DetailPass.cpp)
+    registerDrapeCommands(*this);        // cloth_drape (Drape.cpp)
     registerDeformCommands(*this);       // deform_polish, deform_relax, deform_smooth, deform_balloon (Deform.cpp)
 
     add({"stroke",
@@ -646,12 +735,16 @@ CommandRegistry::CommandRegistry() {
          {{"points", T::String,
            "World-space path: \"x,y,z x,y,z ...\" (or separated by '|'). One point stamps a single dab.", true},
           {"brush", T::String,
-           "Custom brush (library name) or built-in brush (Standard, Clay, Crease, Inflate, ...). Default: the "
-           "active brush.",
+           "Custom brush (library name), built-in brush (Standard, Clay, Crease, Inflate, ...) or a detail preset "
+           "(Detail Crease, Detail Wrinkle, Detail Pores, Detail Skin, Detail Scales, Detail Scar: its own brush, "
+           "radius and strength, for fine detail on a dense mesh). Default: the active brush.",
            false},
           {"view", T::String, "Direction the path is projected along, \"x,y,z\" (default 0,0,-1: front view).", false},
-          {"radius", T::Number, "Brush radius in world units (default 4% of the mesh size).", false},
-          {"strength", T::Number, "Strength 0-1 (default 0.5).", false},
+          {"radius", T::Number,
+           "Brush radius in world units (default 4% of the mesh size: big forms; a detail preset's own, 0.3-2.5%). "
+           "Secondary forms want 1.5-4%, fine detail 0.3-1% on a mesh whose edges are under radius / 2.5.",
+           false},
+          {"strength", T::Number, "Strength 0-1 (default 0.5; a detail preset's own).", false},
           {"pressure", T::Number, "Constant pen pressure 0-1 (default 1).", false},
           {"invert", T::Bool, "Invert the brush (carve instead of build, like holding Alt).", false},
           {"curve", T::Bool, "Smooth curve through the points (default true); false = straight segments.", false},
@@ -664,14 +757,25 @@ CommandRegistry::CommandRegistry() {
              if (!parsePathPoints(argString(a, "points"), st.points, err)) return {false, err};
              const std::string view = argString(a, "view");
              if (!view.empty() && !parseVec3(view, st.view)) return {false, "Bad view '" + view + "' (expected x,y,z)"};
-             st.radius = float(argNumber(a, "radius", 0.0));
-             st.strength = float(argNumber(a, "strength", 0.5));
+             // A detail preset (core/DetailPass.h) brings its brush, size and strength; the arguments still win.
+             const DetailPreset* detail = findDetailPreset(argString(a, "brush"));
+             const float diag = glm::length(doc.mesh.bounds().extent());
+             st.radius = float(argNumber(a, "radius", detail ? detail->size * diag : 0.0));
+             st.strength = float(argNumber(a, "strength", detail ? detail->strength : 0.5));
              st.pressure = float(argNumber(a, "pressure", 1.0));
-             st.invert = argBool(a, "invert", false);
+             st.invert = argBool(a, "invert", false) != (detail && detail->invert);
              st.curve = argBool(a, "curve", true);
-             st.spacing = float(argNumber(a, "spacing", -1.0));
+             st.spacing = float(argNumber(a, "spacing", detail ? detail->spacing : -1.0));
              st.seed = uint32_t(std::max(argNumber(a, "seed", 1.0), 0.0));
              if (!symmetryArg(a, doc.mesh, st.symmetry, err)) return {false, err};
+             if (const Part& part = doc.activePartInfo(); part.moved()) { // a moved linked copy (#94): into its space
+                 const glm::mat4 inv = glm::inverse(part.transform);
+                 const float scale = glm::length(glm::vec3(part.transform[0]));
+                 for (auto& p : st.points) p = glm::vec3(inv * glm::vec4(p, 1.0f));
+                 const glm::vec3 view = glm::mat3(inv) * st.view;
+                 if (glm::length(view) > 0.0f) st.view = glm::normalize(view);
+                 if (scale > 0.0f) st.radius /= scale;
+             }
 
              // Resolve the brush: a library recipe (exact name, then any case), then a built-in type.
              const std::string name = argString(a, "brush");
@@ -681,6 +785,18 @@ CommandRegistry::CommandRegistry() {
              };
              const BrushRecipe* recipe = nullptr;
              BrushType type = BrushType::Standard;
+             if (detail) {
+                 // Its alpha for this stroke only: the user's own comes back after.
+                 BrushAlpha alpha;
+                 if (*detail->alpha) BrushAlpha::builtin(detail->alpha, alpha);
+                 std::swap(doc.brushAlpha, alpha);
+                 const int dabs = strokePath(doc, nullptr, detail->type, st, err);
+                 std::swap(doc.brushAlpha, alpha);
+                 if (dabs < 0) return {false, err};
+                 if (dabs == 0) return {false, "The path never crosses the surface (check the points and view)"};
+                 return {true, "Stroked " + std::to_string(dabs) + " dabs with " + detail->name + " (radius " +
+                                   std::to_string(st.radius) + ")"};
+             }
              if (name.empty()) {
                  if (doc.activeBrush >= 0 && doc.activeBrush < int(doc.brushes.size())) recipe = &doc.brushes[doc.activeBrush];
              } else {
@@ -764,8 +880,8 @@ CommandRegistry::CommandRegistry() {
          {{"count", T::Number, "Number of splats (1000-5000000). Default 250000.", false},
           {"shading", T::Bool, "Bake soft lighting and cavity darkening into the colour. Default true.", false}},
          [](Document& doc, const Args& a) -> CommandResult {
-             Mesh merged; // no copy for a single SubTool
-             const Mesh& visible = doc.subtoolCount() == 1 ? doc.mesh : (merged = mergedVisibleMesh(doc));
+             Mesh merged; // no copy for a single Part
+             const Mesh& visible = doc.partCount() == 1 ? doc.mesh : (merged = mergedVisibleMesh(doc));
              if (visible.triangleCount() == 0) return {false, "The mesh is empty"};
              MeshToSplatsOptions o;
              o.count = size_t(std::clamp(argNumber(a, "count", 250000), 1000.0, 5000000.0));
@@ -785,16 +901,20 @@ CommandRegistry::CommandRegistry() {
 
     add({"undo", "Undo the last action.", {},
          [](Document& doc, const Args&) -> CommandResult {
+             doc.syncBvh(); // (a pending rebuild first: a whole-mesh step keeps the tree it swaps out)
              if (!doc.undo.undo(doc.mesh, doc.bvh)) return {false, "Nothing to undo"};
-             if (UndoRecord* r = doc.undo.lastRedo(); r && r->subtool) doc.applySubtoolStep(*r->subtool);
+             if (UndoRecord* r = doc.undo.lastRedo(); r && r->part) doc.applyPartStep(*r->part);
+             if (UndoRecord* r = doc.undo.lastRedo(); r && r->group) undoGroupOnOtherParts(doc, r->group, true);
              doc.modified = true;
              return {true, "Undone"};
          }});
 
     add({"redo", "Redo the last undone action.", {},
          [](Document& doc, const Args&) -> CommandResult {
+             doc.syncBvh();
              if (!doc.undo.redo(doc.mesh, doc.bvh)) return {false, "Nothing to redo"};
-             if (UndoRecord* r = doc.undo.lastUndo(); r && r->subtool) doc.applySubtoolStep(*r->subtool);
+             if (UndoRecord* r = doc.undo.lastUndo(); r && r->part) doc.applyPartStep(*r->part);
+             if (UndoRecord* r = doc.undo.lastUndo(); r && r->group) undoGroupOnOtherParts(doc, r->group, false);
              doc.modified = true;
              return {true, "Redone"};
          }});
@@ -811,33 +931,48 @@ CommandRegistry::CommandRegistry() {
          }});
 
     registerMaskingCommands(*this);
-    registerPolygroupCommands(*this);
+    registerCutCommands(*this); // cut (core/Cut.h)
+    registerCloseHolesCommands(*this); // close_holes (core/CloseHoles.h)
+    registerBackdropCommands(*this);   // remove_flat_background (core/Backdrop.h)
+    registerFaceGroupCommands(*this);
     registerSelectionSetCommands(*this); // selection_set_* (core/SelectionSets.h)
-    registerSubToolCommands(*this);
+    registerPartCommands(*this);
+    registerBooleanCommands(*this); // part_boolean, boolean_parts, make_boolean_mesh (core/PartBoolean.h)
     registerSubdivCommands(*this); // subdiv_* (core/MultiresCommands.cpp)
     registerMicroCommands(*this);  // micro_* (core/MicroCommands.cpp)
     registerDyntopoCommands(*this); // dyntopo (core/DyntopoCommands.cpp)
     registerSculptableCommands(*this); // splat_to_mesh, face_guides (core/Sculptable.h)
     registerTransformCommands(*this); // transform (core/MeshTransform.h)
+    registerFigurePoseCommands(*this); // figure_pose_* (core/FigurePose.h)
     registerExtractMirrorCommands(*this); // extract, mirror_and_weld, mirror (core/ExtractMirror.h)
+    registerMeshCheckCommands(*this);     // weld_points, mesh_check, mesh_fix (core/MeshCheck.h)
     registerPerformanceCommands(*this); // perf_info, set_multithreading (core/Benchmark.cpp)
     registerHardwareProfileCommands(*this); // performance_profile, calibrate, set_performance_override (core/HardwareProfile.cpp)
     registerTimelineCommands(*this); // timeline_info / seek / select / retune / save / load (core/Timeline.h)
-    registerPaintCommands(*this); // core/Polypaint.cpp
-    registerGozCommands(*this); // goz_import/export/send/receive, export_stl (io/GozCommands.cpp)
+    registerPaintCommands(*this); // core/Vertex paint.cpp
+    registerBridgeCommands(*this); // bridge_import/export/send/receive, export_stl (io/BridgeCommands.cpp)
     registerBlenderCommands(*this); // blender_send/receive (io/BlenderCommands.cpp)
     registerMayaCommands(*this); // maya_send/receive (io/MayaCommands.cpp)
     registerBakeCommands(*this); // bake (core/Bake.cpp)
+    registerGarmentCommands(*this); // garment_* (core/GarmentCommands.cpp)
+    registerGarmentDrapeCommands(*this); // garment_place, garment_drape (core/GarmentDrape.cpp)
     registerFaceCommands(*this); // face_shapes_generate, face_weights, ... (core/FaceCommands.cpp)
+    registerStarterMeshCommands(*this); // new_starter_mesh (core/StarterMeshes.h)
     registerPackCommands(*this);    // pack_install, pack_list, pack_remove, ... (core/Pack.h)
+    registerPluginCommands(*this);  // plugin_list, plugin_run, plugin_enable (core/Plugin.h)
     registerMacroCommands(*this);   // macro_run, macro_list, macro_check (core/Macro.h)
     registerProjectCommands(*this); // keep last (core/Project.cpp)
+}
+
+void CommandRegistry::remove(const std::string& name) {
+    commands_.erase(std::remove_if(commands_.begin(), commands_.end(), [&](const Command& c) { return c.name == name; }),
+                    commands_.end());
 }
 
 void CommandRegistry::add(Command cmd) {
     // The commands that follow the brushes' symmetry take radial and local symmetry too (#63).
     static const char* const kSymmetric[] = {"stroke", "vdm_stamp", "mask_rect", "mask_lasso", "hide_rect",
-                                             "hide_lasso", "insert_primitive", "insert_mesh"};
+                                             "hide_lasso", "insert_primitive", "insert_mesh", "cut"};
     for (const char* name : kSymmetric)
         if (cmd.name == name)
             for (ParamSpec& p : radialSymmetryParams()) cmd.params.push_back(std::move(p));
@@ -847,20 +982,51 @@ void CommandRegistry::add(Command cmd) {
 const Command* CommandRegistry::find(const std::string& name) const {
     for (const auto& c : commands_)
         if (c.name == name) return &c;
+    if (legacy::isOld(name)) return find(legacy::modernize(name)); // a script or macro from an older version
     return nullptr;
 }
 
-CommandResult CommandRegistry::execute(Document& doc, const std::string& name, const Args& args) const {
+namespace {
+// A value an older version's script may have used as a name (layout=..., mode=..., id=...): letters, digits, '_'
+// and '-' only, so paths and a user's own text are never rewritten.
+bool oldNameValue(const ArgValue& v) {
+    const std::string* s = std::get_if<std::string>(&v);
+    if (!s || s->empty() || s->size() > 64) return false;
+    for (unsigned char c : *s)
+        if (!std::isalnum(c) && c != '_' && c != '-') return false;
+    return legacy::isOld(*s);
+}
+// Args from an older version's script: parameter names, and (values) old name values.
+Args modernizedArgs(const Args& args, bool values) {
+    Args out;
+    for (const auto& [k, v] : args)
+        out[legacy::modernize(k)] = values && oldNameValue(v) ? ArgValue(legacy::modernize(std::get<std::string>(v))) : v;
+    return out;
+}
+bool anyOldValue(const Args& args) {
+    for (const auto& [k, v] : args)
+        if (oldNameValue(v)) return true;
+    return false;
+}
+} // namespace
+
+CommandResult CommandRegistry::execute(Document& doc, const std::string& name, const Args& givenArgs) const {
     const Command* cmd = find(name);
     if (!cmd) return {false, "Unknown command: " + name};
+    bool oldKeys = false;
+    for (const auto& [k, v] : givenArgs) oldKeys = oldKeys || legacy::isOld(k);
+    const Args renamedKeys = oldKeys ? modernizedArgs(givenArgs, false) : Args{};
+    const Args& args = oldKeys ? renamedKeys : givenArgs;
     for (const auto& p : cmd->params)
         if (p.required && !args.contains(p.name)) return {false, "Missing required argument: " + p.name};
     doc.notice.clear();
-    // Extract's preview lasts until Accept or until anything else changes the scene (as in ZBrush); saving or
+    // Extract's preview lasts until Accept or until anything else changes the scene; saving or
     // exporting never writes it.
     if (doc.extractPreview.id && name.rfind("extract", 0) != 0)
         doc.dropExtractPreview(!(name.rfind("save", 0) == 0 || name.rfind("export", 0) == 0));
     CommandResult r = cmd->run(doc, args);
+    if (!r.ok && anyOldValue(args)) // a name value an older version used: try today's; keep the first answer if it fails too
+        if (CommandResult again = cmd->run(doc, modernizedArgs(args, true)); again.ok) r = std::move(again);
     if (const std::string notice = doc.takeNotice(); !notice.empty() && r.ok) r.message += ". " + notice;
     return r;
 }

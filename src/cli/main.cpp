@@ -4,16 +4,24 @@
 // sculptforge-cli: run SculptForge commands headless, for build farms, asset
 // pipelines and AI agents.
 #include "ai/AiCommands.h"
+#include "ai/AiPolicy.h"
+#include "ai/Oidc.h"
+#include "ai/Secrets.h"
 #include "ai/SplatTrainer.h"
+#include "cli/McpAttach.h"
 #include "cli/McpServer.h"
 #include "core/Benchmark.h"
+#include "core/AuditLog.h"
 #include "core/BrushLibrary.h"
 #include "core/Commands.h"
+#include "core/ManagedPolicy.h"
 #include "core/Pack.h"
 #include "core/Script.h"
+#include "core/StudioProfile.h"
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -32,8 +40,16 @@ void usage() {
         "  -l, --list                 List available commands\n"
         "      --schema               Print commands as LLM tool definitions (JSON)\n"
         "      --mcp                  Run as an MCP server on stdio (Claude Code, Claude Desktop, any MCP client)\n"
+        "      --mcp --attach         ... that drives the open SculptForge window instead (live mode: Preferences > AI)\n"
         "  -q, --quiet                Only print errors\n"
+        "      --no-ai                Leave the AI commands out (as SF_AI=off; Preferences > AI turns them off for good)\n"
         "      --no-packs             Safe mode: leave every installed pack out (pack_install still works)\n"
+        "      --studio FILE          Studio mode with this studio profile (studio.json; docs/studios.md)\n"
+        "      --offline              Studio mode without a profile: no outside connection at all\n"
+        "      --policy               Show what your studio's policy file manages (docs/studios.md \"IT deployment\")\n"
+        "      --sign-in              Sign in with your studio account (the policy's identity provider; device code)\n"
+        "      --sign-out             Sign out of your studio account\n"
+        "      --audit-log            Print where the AI audit log is written\n"
         "      --bench                Run the performance benchmark (CPU side; the app's --bench adds the GPU)\n"
         "      --bench-sizes 4,16,32  Benchmark sizes in millions of triangles\n"
         "      --bench-dabs N         Dabs per benchmark stroke (default 40)\n"
@@ -56,7 +72,30 @@ void usage() {
 
 int main(int argc, char** argv) {
     sf::CommandRegistry registry;
-    // AI commands use the same settings file as the app (keys can also come from the environment).
+    // AI commands use the same settings file as the app (keys can also come from the environment), and only
+    // while AI is on there (Preferences > AI), SF_AI allows it and --no-ai isn't given (ai/AiPolicy.h).
+    std::string studioProfile;
+    bool offline = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--no-ai") sf::ai::setAiForcedOff(true);
+        else if (a == "--studio" && i + 1 < argc) studioProfile = argv[i + 1];
+        else if (a == "--offline") offline = true;
+    }
+    { // studio mode (core/StudioProfile.h) before anything can reach the network
+        std::error_code ec;
+        const std::string exeDir = std::filesystem::absolute(argv[0], ec).parent_path().generic_string();
+        const sf::StudioStart& studio = sf::startStudioMode(exeDir, studioProfile, offline);
+        sf::ai::setStudioAiAllowed(studio.profile.ai);
+        for (const std::string& m : studio.messages) std::fprintf(stderr, "%s\n", m.c_str());
+    }
+    sf::audit::setClient("cli"); // (the MCP server sets the agent's name: core/AuditLog.h)
+    { // AI keys from an older ai.json into the keychain (ai/Secrets.h)
+        std::string message;
+        sf::ai::secrets::migrateLegacyKeys(sf::ai::defaultAiSettingsPath(), message);
+        if (!message.empty()) std::fprintf(stderr, "%s\n", message.c_str());
+    }
+    sf::ai::setAiEnabled(sf::ai::aiFeaturesAllowed(sf::ai::AiSettings::load(sf::ai::defaultAiSettingsPath()).enabled));
     sf::ai::registerAiCommands(registry, [] { return sf::ai::AiSettings::load(sf::ai::defaultAiSettingsPath()); });
     // splat_train: trains in the foreground with the app's tool settings (ai/SplatTrainer.h).
     sf::ai::registerSplatTrainCommands(registry, [] { return sf::ai::SplatTrainSettings::load(sf::ai::defaultSplatTrainSettingsPath()); });
@@ -104,15 +143,51 @@ int main(int argc, char** argv) {
                     std::printf("    %s%s  %s\n", p.name.c_str(), p.required ? " (required)" : "", p.description.c_str());
             }
             return 0;
+        } else if (a == "--policy") {
+            const sf::policy::Policy& p = sf::policy::current();
+            std::printf("%s\n", p.present ? ("Policy " + p.source + "\n" + sf::policy::describe(p)).c_str()
+                                          : ("No policy (" + sf::policy::systemPolicyPath() + " or SF_POLICY): nothing is managed").c_str());
+            return p.broken ? 2 : 0;
+        } else if (a == "--audit-log") {
+            std::printf("%s\n", sf::audit::logPath().c_str());
+            return 0;
+        } else if (a == "--sign-in") {
+            std::string err;
+            const bool ok = sf::ai::oidc::signIn(
+                [](const sf::ai::oidc::DeviceCode& c) {
+                    std::fprintf(stderr, "To sign in, open %s and enter the code %s\n",
+                                 c.verificationUri.c_str(), c.userCode.c_str());
+                    if (!c.verificationUriComplete.empty()) std::fprintf(stderr, "(or open %s)\n", c.verificationUriComplete.c_str());
+                    return true;
+                },
+                {}, err);
+            if (!ok) {
+                std::fprintf(stderr, "error: %s\n", err.c_str());
+                return 1;
+            }
+            std::printf("Signed in as %s\n", sf::ai::oidc::signedInAs().c_str());
+            return 0;
+        } else if (a == "--sign-out") {
+            sf::ai::oidc::signOut();
+            std::puts("Signed out");
+            return 0;
         } else if (a == "--mcp") {
+            // --attach: drive the open app (live mode, cli/McpAttach.h) instead of a scene of our own.
+            for (int j = i + 1; j < argc; ++j)
+                if (std::string(argv[j]) == "--attach") return sf::runMcpAttach(std::cin, std::cout);
             return sf::runMcpServer(registry, std::cin, std::cout);
         } else if (a == "--schema") {
             std::puts(registry.toolSchemaJson().c_str());
             return 0;
         } else if (sf::parseBenchArg(argc, argv, i, bench)) {
             // handled after the loop
+        } else if (a == "--no-ai") {
+            // read before the commands were registered
         } else if (a == "--no-packs") {
             sf::setPacksSafeMode(true);
+        } else if (a == "--studio") {
+            ++i; // read before the commands were registered
+        } else if (a == "--offline") {
         } else if (a == "-q" || a == "--quiet") {
             quiet = true;
         } else if (a == "-h" || a == "--help") {

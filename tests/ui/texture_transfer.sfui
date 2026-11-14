@@ -18,17 +18,17 @@ remember texture_painted painted
 shot painted
 
 # Auto UV again: the islands are packed for the 1K texture now (a new layout); the paint stays put.
-click "Texture Map##tool.texture"
-click "Texture Map/Auto UV"
+click "Texture Image##tool.texture"
+click "Texture Image/Auto UV"
 wait_idle 120
 expect_status "moved to the new UVs"
 expect_status "1 layer"
 expect_value texture_layers == 1
 expect_value texture_size == 1024
 shot after-auto-uv
-click "Texture Map/Show UVs"
+click "Texture Image/Show UVs"
 shot after-auto-uv-layout
-click "Texture Map/Show UVs"
+click "Texture Image/Show UVs"
 
 # One undo step brings back the old UVs and the old texture exactly.
 key ctrl+z
@@ -36,13 +36,17 @@ expect_value texture_painted == $painted
 key ctrl+shift+z
 expect_value texture_layers == 1
 
-# Voxel Remesh with Keep Texture (shown because the SubTool has a texture), in the background.
+# Voxel Remesh with Keep Texture (shown because the Part has a texture), in the background.
 click "Remesh##tool.remesh"
 expect "Keep Texture##remesh"
 hold ctrl
 hover "Keep Texture##remesh"
 expect_help "projected"
 hold none
+# The Voxel Remesh resolution slider at its least, 32 (default 200: 376k triangles, whose Auto UV and projection took
+# 27 s of this script on the PC): the same background remesh, Auto UV of the new surface and texture projection, on a
+# few thousand triangles. (The source sphere is 5k triangles already; the remesh's output is what costs.)
+drag_item "##voxres" -400 0
 remember triangles before_remesh
 click "Voxel Remesh##geometry.remesh"
 wait_idle 300
@@ -63,9 +67,9 @@ wait_idle 300
 expect_status "texture kept"
 expect_value quad_percent == 100
 expect_value texture_size == 1024
-click "Wire##view.polyf"
+click "Wire##view.wire"
 shot qremeshed
-click "Wire##view.polyf"
+click "Wire##view.wire"
 key ctrl+z
 expect_value triangles == $before_remesh
 click "QRemesh/Keep Texture##qremesh"

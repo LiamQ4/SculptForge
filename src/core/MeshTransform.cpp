@@ -1,8 +1,10 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/MeshTransform.h"
+#include "core/Parallel.h"
 
 #include "core/Document.h"
+#include "core/FigurePose.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,7 +19,7 @@ namespace {
 // Runs fn(begin, end) over [0, n) on several threads when there is enough work.
 template <class Fn>
 void parallelRange(size_t n, Fn fn) {
-    const size_t threads = n < 100000 ? 1 : std::clamp<size_t>(std::thread::hardware_concurrency(), 1, 16);
+    const size_t threads = n < 100000 ? 1 : size_t(parallelThreads());
     if (threads <= 1) {
         fn(size_t(0), n);
         return;
@@ -64,6 +66,33 @@ glm::vec3 MeshTransform::apply(const glm::vec3& p) const {
     glm::vec3 o;
     at(1.0f, l, o);
     return l * p + o;
+}
+
+glm::mat4 MeshTransform::matrix() const {
+    glm::mat3 l;
+    glm::vec3 o;
+    at(1.0f, l, o);
+    glm::mat4 m(l);
+    m[3] = glm::vec4(o, 1.0f);
+    return m;
+}
+
+MeshTransform MeshTransform::inSpaceOf(const glm::mat4& place) const {
+    const float s = glm::length(glm::vec3(place[0]));
+    if (!(s > 0.0f)) return *this;
+    const glm::mat3 r = glm::mat3(place) / s, rt = glm::transpose(r);
+    MeshTransform out = *this;
+    out.pivot = glm::vec3(glm::inverse(place) * glm::vec4(pivot, 1.0f));
+    out.frame = rt * frame;
+    out.translate = rt * translate / s;
+    out.rotate = glm::normalize(glm::quat_cast(rt) * rotate * glm::quat_cast(r));
+    return out;
+}
+
+MeshTransform MeshTransform::evenScale() const {
+    MeshTransform out = *this;
+    out.scale = glm::vec3((scale.x + scale.y + scale.z) / 3.0f);
+    return out;
 }
 
 glm::quat eulerRotation(const glm::vec3& degrees, const glm::mat3& axes) {
@@ -154,8 +183,21 @@ glm::vec3 transformCenter(const Mesh& mesh, const std::vector<float>& weights) {
     return box.valid() ? box.center() : glm::vec3(0.0f);
 }
 
-bool TransformSession::begin(const Mesh& mesh, std::vector<float> weights, Symmetry mirror, const glm::vec3& pivot) {
+std::vector<float> TransformOp::weights(size_t vertexCount) const {
+    std::vector<float> w(vertexCount, 0.0f);
+    for (size_t i = 0; i < verts.size(); ++i)
+        if (verts[i] < vertexCount) w[verts[i]] = float(levels[i]) / float(TransformSession::kLevels);
+    return w;
+}
+
+bool TransformSession::layerWeightZero(const Mesh& mesh, int layer) {
+    return layer >= 0 && layer < int(mesh.layers.size()) && std::abs(mesh.layers[size_t(layer)].weight) < 1e-6f;
+}
+
+bool TransformSession::begin(const Mesh& mesh, std::vector<float> weights, Symmetry mirror, const glm::vec3& pivot,
+                             int layer) {
     *this = TransformSession();
+    if (layerWeightZero(mesh, layer)) return false;
     const size_t nv = mesh.vertexCount();
     const bool weighted = weights.size() == nv;
     std::vector<uint16_t> full(weighted ? nv : 0, 0); // every vertex's level (0 = still)
@@ -167,6 +209,7 @@ bool TransformSession::begin(const Mesh& mesh, std::vector<float> weights, Symme
         if (weighted) full[v] = uint16_t(l);
     }
     if (verts_.empty()) return false;
+    mirror_ = mirror;
 
     // Symmetry only makes sense for a part of the mesh, on a side of the plane.
     Symmetry sym{false, false, false};
@@ -208,17 +251,21 @@ bool TransformSession::begin(const Mesh& mesh, std::vector<float> weights, Symme
     usedLevels_.assign(kLevels + 1, 0);
     for (uint16_t l : level_) usedLevels_[l] = 1;
     layered_ = !mesh.layers.empty();
-    const auto& src = mesh.basePositions();
+    layer_ = layer >= 0 && layer < int(mesh.layers.size()) ? layer : -1;
+    if (layer_ >= 0) invWeight_ = 1.0f / mesh.layers[size_t(layer_)].weight;
+    // Recording into a layer starts from the shape as shown; otherwise from the base.
+    const auto& src = layer_ >= 0 ? mesh.positions : mesh.basePositions();
     base_.resize(verts_.size());
     normals_.resize(verts_.size());
     for (size_t i = 0; i < verts_.size(); ++i) {
         base_[i] = src[verts_[i]];
         normals_[i] = mesh.normals[verts_[i]];
     }
-    deltas_.resize(mesh.layers.size());
-    for (size_t l = 0; l < mesh.layers.size(); ++l) {
+    deltas_.resize(layer_ >= 0 ? 1 : mesh.layers.size());
+    for (size_t l = 0; l < deltas_.size(); ++l) {
+        const std::vector<glm::vec3>& d = mesh.layers[layer_ >= 0 ? size_t(layer_) : l].delta;
         deltas_[l].resize(verts_.size());
-        for (size_t i = 0; i < verts_.size(); ++i) deltas_[l][i] = mesh.layers[l].delta[verts_[i]];
+        for (size_t i = 0; i < verts_.size(); ++i) deltas_[l][i] = d[verts_[i]];
     }
     active_ = true;
     return true;
@@ -246,10 +293,23 @@ void TransformSession::apply(Mesh& mesh, const MeshTransform& t) {
         }
     }
     std::vector<glm::vec3>& target = layered_ ? mesh.base : mesh.positions;
+    std::vector<glm::vec3>* layerDelta = layer_ >= 0 ? &mesh.layers[size_t(layer_)].delta : nullptr;
     parallelRange(verts_.size(), [&](size_t b, size_t e) {
         for (size_t i = b; i < e; ++i) {
             const Level& L = table_[side_[i] * stride + level_[i]];
             const uint32_t v = verts_[i];
+            if (layerDelta) { // the move goes into the layer's offsets, scaled up by its weight
+                const glm::vec3 p = L.translateOnly ? base_[i] + L.offset : L.linear * base_[i] + L.offset;
+                (*layerDelta)[v] = deltas_[0][i] + (p - base_[i]) * invWeight_;
+                if (L.translateOnly) {
+                    mesh.normals[v] = normals_[i];
+                } else {
+                    const glm::vec3 n = L.normal * normals_[i];
+                    const float len = glm::length(n);
+                    mesh.normals[v] = len > 1e-20f ? n / len : normals_[i];
+                }
+                continue;
+            }
             if (L.translateOnly) {
                 target[v] = base_[i] + L.offset;
                 for (size_t k = 0; k < deltas_.size(); ++k) mesh.layers[k].delta[v] = deltas_[k][i];
@@ -263,6 +323,7 @@ void TransformSession::apply(Mesh& mesh, const MeshTransform& t) {
             mesh.normals[v] = len > 1e-20f ? n / len : normals_[i];
         }
     });
+    last_ = t;
     if (layered_) mesh.evaluate(verts_);
     // Rigidly moved normals just turn (above); recompute them only where neighbours move differently.
     if (!boundary_.empty()) mesh.updateNormals(boundary_);
@@ -271,6 +332,13 @@ void TransformSession::apply(Mesh& mesh, const MeshTransform& t) {
 }
 
 void TransformSession::writeBack(Mesh& mesh) {
+    if (layer_ >= 0) {
+        std::vector<glm::vec3>& d = mesh.layers[size_t(layer_)].delta;
+        for (size_t i = 0; i < verts_.size(); ++i) d[verts_[i]] = deltas_[0][i];
+        mesh.evaluate(verts_);
+        mesh.updateNormals(verts_);
+        return;
+    }
     std::vector<glm::vec3>& target = layered_ ? mesh.base : mesh.positions;
     for (size_t i = 0; i < verts_.size(); ++i) {
         target[verts_[i]] = base_[i];
@@ -299,8 +367,22 @@ UndoRecord TransformSession::finish(Mesh& mesh, BVH& bvh, std::string label) {
     if (verts_.size() * 4 > mesh.vertexCount()) bvh.refitAll(mesh);
     else bvh.refit(mesh, verts_);
     r.label = std::move(label);
-    r.layer = -1;
     r.positions.indices = verts_;
+    if (keepOp_) {
+        auto op = std::make_shared<TransformOp>();
+        op->transform = last_;
+        op->mirror = mirror_;
+        op->verts = verts_;
+        op->levels = level_;
+        r.transformOp = std::move(op);
+    }
+    if (layer_ >= 0) { // like a stroke into the layer: its old offsets
+        r.layer = layer_;
+        r.positions.values = std::move(deltas_[0]);
+        *this = TransformSession();
+        return r;
+    }
+    r.layer = -1;
     r.positions.values = std::move(base_);
     for (auto& d : deltas_) {
         UndoChannel<glm::vec3> ch;
@@ -320,23 +402,38 @@ void TransformSession::cancel(Mesh& mesh, BVH& bvh) {
     *this = TransformSession();
 }
 
-size_t transformSubtool(Document& doc, int index, const MeshTransform& t, bool useMask, float falloff, Symmetry mirror,
+std::string vertexCountText(size_t n) {
+    std::string digits = std::to_string(n);
+    for (int i = int(digits.size()) - 3; i > 0; i -= 3) digits.insert(size_t(i), 1, ',');
+    return digits + (n == 1 ? " vertex" : " vertices");
+}
+
+bool partMovesWhole(const Document& doc, int index, bool useMask) {
+    const bool instance = doc.linkCount(index) > 1 || doc.parts[size_t(index)].moved();
+    return instance && !(useMask && doc.partMesh(index).hasMask());
+}
+
+size_t transformPart(Document& doc, int index, const MeshTransform& t, bool useMask, float falloff, Symmetry mirror,
                         const std::string& label) {
-    if (index < 0 || index >= doc.subtoolCount()) return 0;
-    const bool active = index == doc.activeSubtool;
-    SubTool& info = doc.subtools[size_t(index)];
-    Mesh& mesh = active ? doc.mesh : info.mesh;
-    BVH& bvh = active ? doc.bvh : info.bvh;
-    UndoStack& undo = active ? doc.undo : info.undo;
-    if (active) doc.syncBvh();
-    else if (info.bvhDirty) {
-        info.bvh.build(info.mesh);
-        info.bvhDirty = false;
+    if (index < 0 || index >= doc.partCount()) return 0;
+    Mesh& mesh = doc.partMesh(index);
+    const Part& part = doc.parts[size_t(index)];
+    // A linked copy (or one moved as a whole before) moves as a whole: its transform, one undo step in its
+    // group's history. With a mask, what moves is the shared mesh, in the Part's own space.
+    if (partMovesWhole(doc, index, useMask)) {
+        if (!part.visible || mesh.vertexCount() == 0) return 0;
+        doc.setPartTransform(index, t.evenScale().matrix() * part.transform, label);
+        return mesh.vertexCount();
     }
+    const MeshTransform local = part.moved() ? t.inSpaceOf(part.transform) : t;
+    BVH& bvh = doc.partBvh(index);
+    UndoStack& undo = doc.partUndo(index);
     TransformSession s;
-    if (!s.begin(mesh, transformWeights(mesh, useMask, falloff), mirror, t.pivot)) return 0;
+    const int layer = part.data == doc.activePartInfo().data ? doc.activeLayer : -1; // (the checked-out mesh)
+    if (!s.begin(mesh, transformWeights(mesh, useMask, falloff), mirror, local.pivot, layer)) return 0;
+    if (index == doc.activePart && figurePoseEditing(doc)) s.keepOp(); // a Pose Mesh move (core/FigurePose.h)
     const size_t n = s.movingVertices();
-    s.apply(mesh, t);
+    s.apply(mesh, local);
     UndoRecord r = s.finish(mesh, bvh, label);
     if (r.empty()) return 0;
     undo.push(std::move(r));

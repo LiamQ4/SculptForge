@@ -3,9 +3,14 @@
 #include "app/Ui.h"
 
 #include "app/App.h"
+#include "app/Demo.h"
+#include "app/UiServe.h"
 #include "app/I18n.h"
 #include "app/Shell.h"
 #include "app/Theme.h"
+#include "core/ManagedPolicy.h"
+
+#include <IconsLucide.h>
 
 #include <imgui_internal.h>
 
@@ -14,6 +19,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace sf::ui {
 
@@ -44,6 +52,34 @@ float uiScale() { return ImGui::GetFontSize() / 15.0f; }
 
 // A colour of the Classic look, or the current look's token.
 ImU32 lookColor(ImU32 classic, const ImVec4& token) { return theme::look.id == 0 ? classic : theme::u32(token); }
+
+// Hover and focus feedback (Ui.h). Items report where they are through the ImGui item hooks; DrawHover rings the
+// hovered and the keyboard-focused one at the end of the frame, in that item's window, on top of what it drew.
+constexpr float kHoverSeconds = 0.10f; // the ease-in (80-120 ms)
+struct Anim {
+    float t = 0.0f; // linear 0-1
+    int frame = 0;
+};
+std::unordered_map<ImGuiID, Anim> g_anims;
+bool g_reduceMotion = false, g_animating = false, g_animatingLast = false;
+struct Seen {
+    ImGuiID id = 0;
+    ImRect bb, clip;
+    ImGuiWindow* window = nullptr;
+    bool labelled = false;
+};
+std::vector<Seen> g_seen;   // this frame: the items that are or were hovered or focused
+std::vector<ImGuiID> g_rings; // the ids with a ring showing or fading
+std::vector<ImGuiID> g_noRing;
+int g_seenFrame = -1;
+int g_ringsShown = 0, g_liftsShown = 0, g_liftsCounting = 0;
+
+float easeOut(float t) { return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t); }
+
+bool focusedByKeyboard(ImGuiID id) {
+    const ImGuiContext& g = *GImGui;
+    return id && g.NavCursorVisible && g.NavId == id && g.NavWindow;
+}
 
 bool itemHoveredForHelp() {
     return ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -76,7 +112,7 @@ bool dragSource(App& app, const char* itemId, const char* label, int shelf, int 
     p.fromIndex = index;
     ImGui::SetDragDropPayload(kUiItemPayload, &p, sizeof p);
     ImGui::TextUnformatted(label);
-    ImGui::TextColored(rgba(color::textDim), shelf >= 0 ? "Drop on a shelf to move, elsewhere to remove" : "Drop on a shelf to add");
+    ImGui::TextColored(rgba(color::textDim), "%s", tr(shelf >= 0 ? "Drop on a shelf to move, elsewhere to remove" : "Drop on a shelf to add"));
     ImGui::EndDragDropSource();
     return true;
 }
@@ -90,6 +126,37 @@ bool CtrlHeld() {
 
 bool AltHeld() { return ImGui::GetIO().KeyAlt || (SDL_GetModState() & SDL_KMOD_ALT) != 0; }
 
+bool MyPanelDragSource(const char* id, bool section, const char* label, bool fromPanel) {
+    if (!AltHeld() || CtrlHeld()) return false;
+    if (!ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) return false;
+    MyPanelPayload p;
+    std::snprintf(p.entry, sizeof p.entry, "%s%s", section ? "section:" : "action:", id);
+    p.fromPanel = fromPanel;
+    ImGui::SetDragDropPayload(kMyPanelPayload, &p, sizeof p);
+    ImGui::TextUnformatted(label);
+    ImGui::TextColored(rgba(color::textDim), "%s", tr(fromPanel ? "Drop on My Panel to move, elsewhere to remove" : "Drop on My Panel to add"));
+    ImGui::EndDragDropSource();
+    return true;
+}
+
+bool MyPanelDragged() {
+    if (!AltHeld() || CtrlHeld()) return false;
+    const ImGuiIO& io = ImGui::GetIO();
+    return std::abs(io.MousePos.x - io.MouseClickedPos[0].x) + std::abs(io.MousePos.y - io.MouseClickedPos[0].y) >= 4.0f;
+}
+
+const char* FloatingWindowAt(ImVec2 p) {
+    const ImGuiContext* g = ImGui::GetCurrentContext();
+    if (!g) return nullptr;
+    for (int i = g->Windows.Size - 1; i >= 0; --i) { // front to back
+        const ImGuiWindow* w = g->Windows[i];
+        if (!w->Active || w->Hidden || (w->Flags & (ImGuiWindowFlags_NoMouseInputs | ImGuiWindowFlags_ChildWindow))) continue;
+        if (w->Flags & ImGuiWindowFlags_NoBringToFrontOnFocus) continue; // the shell (Shell.cpp): the view's frame
+        if (w->Rect().Contains(p)) return w->Name;
+    }
+    return nullptr;
+}
+
 void SetNextItemOrigin(int shelf, int index) {
     g_nextShelf = shelf;
     g_nextIndex = index;
@@ -99,6 +166,11 @@ bool UiItemDragSource(App& app, const char* itemId, const char* label) {
     int shelf, index;
     takeOrigin(shelf, index);
     return dragSource(app, itemId, label, shelf, index);
+}
+
+void SameLineAt(float cursorPosX) {
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(cursorPosX);
 }
 
 void HelpText(const char* title, const char* shortcut, const char* description, const char* path) {
@@ -112,22 +184,65 @@ void HelpText(const char* title, const char* shortcut, const char* description, 
     g_help.disabled = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0;
 }
 
+std::string ManagedByText() {
+    const std::string& org = policy::current().organization;
+    return org.empty() ? std::string(tr(policy::kManagedLabel)) : std::string(tr("Managed by")) + " " + org;
+}
+
+void ManagedBadge() {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextUnformatted((std::string(ICON_LC_LOCK " ") + tr("Managed by your studio")).c_str());
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+        const policy::Policy& p = policy::current();
+        ImGui::SetTooltip("%s\n%s", ManagedByText().c_str(), p.source.c_str());
+    }
+}
+
 bool IsModeAction(std::string_view id) {
     auto starts = [&](std::string_view p) { return id.substr(0, p.size()) == p; };
-    if (id == "tool.draw" || id == "tool.move" || id == "tool.scale" || id == "tool.rotate") return true;
+    if (id == "tool.draw" || id == "tool.move" || id == "tool.scale" || id == "tool.rotate" || id == "tool.gizmo_all")
+        return true;
     if (id == "draw.sculpt" || id == "draw.paint") return true;
+    if (starts("brush.pen_")) return false; // a brush's pen pressure switches (#122): choices, not brush picks
     return starts("brush.") || starts("mask.") || starts("select.");
 }
 
 bool IsChoiceAction(std::string_view id) {
-    return id == "draw.zadd" || id == "draw.zsub" || id == "material.smooth" || id == "material.flat" ||
+    return id == "draw.raise" || id == "draw.lower" || id == "material.smooth" || id == "material.flat" ||
            id == "view.background_gradient" || id == "view.background_flat" || id == "view.shading_lit_sphere" ||
            id == "view.shading_pbr" ||
-           id.substr(0, 16) == "subtool.shading_" || id.substr(0, 8) == "uv.mode_";
+           id.rfind("part.shading_", 0) == 0 || id.rfind("brush.pen_", 0) == 0 || id.substr(0, 8) == "uv.mode_";
+}
+
+void CentredGlyph(ImDrawList* dl, ImFont* font, ImVec2 a, ImVec2 b, ImU32 col, const char* glyph) {
+    if (!font) font = ImGui::GetFont();
+    const float size = ImGui::GetFontSize() > 0.0f && font == ImGui::GetFont() ? ImGui::GetFontSize() : font->FontSize;
+    unsigned int c = 0;
+    const int n = ImTextCharFromUtf8(&c, glyph, nullptr);
+    const ImFontGlyph* g = n > 0 && glyph[n] == '\0' ? font->FindGlyphNoFallback(ImWchar(c)) : nullptr;
+    if (!g || g->X1 <= g->X0 || g->Y1 <= g->Y0) {
+        const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, glyph);
+        dl->AddText(font, size, ImVec2(std::floor((a.x + b.x - ts.x) * 0.5f), std::floor((a.y + b.y - ts.y) * 0.5f)), col, glyph);
+        return;
+    }
+    // The ink box (X0..X1, Y0..Y1, offsets included) relative to where AddText puts the pen, at this size.
+    const float k = size / font->FontSize;
+    const float x = (a.x + b.x) * 0.5f - (g->X0 + g->X1) * 0.5f * k, y = (a.y + b.y) * 0.5f - (g->Y0 + g->Y1) * 0.5f * k;
+    dl->AddText(font, size, ImVec2(std::round(x), std::round(y)), col, glyph);
+}
+
+bool GlyphButton(const char* id, const char* glyph, ImVec2 size) {
+    const bool clicked = ImGui::Button(id, size);
+    CentredGlyph(ImGui::GetWindowDrawList(), nullptr, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                 ImGui::GetColorU32(ImGuiCol_Text), glyph);
+    return clicked;
 }
 
 bool Checkbox(const char* label, bool* v) {
     const bool changed = ImGui::Checkbox(tr(label), v);
+    if (ImGui::GetItemRectMax().x > ImGui::GetCurrentWindow()->WorkRect.Max.x + 0.5f) // its words run past the panel
+        Demo::noteClippedLabel(tr(label));
     if (!*v) {
         const ImVec2 a = ImGui::GetItemRectMin();
         const float sz = ImGui::GetFrameHeight();
@@ -145,15 +260,49 @@ void DrawOnMark(ImDrawList* dl, ImVec2 a, ImVec2 b, bool side) {
 }
 
 void Segmented(App& app, std::initializer_list<const char*> actionIds, float width) {
+    // Equal segments when every label fits its share; else each as wide as its label (in the interface language),
+    // the slack shared out, and onto a second row when one row can't hold them all, so no label is cut off.
     const float total = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
-    const float w = (total - float(actionIds.size() - 1)) / float(actionIds.size());
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(1.0f, ImGui::GetStyle().ItemSpacing.y));
-    bool first = true;
-    for (const char* id : actionIds) {
-        if (!first) ImGui::SameLine();
-        first = false;
-        ActionButton(app, id, ImVec2(w, 0));
-        HelpAction(app, id);
+    const float gap = 1.0f, pad = 2.0f * ImGui::GetStyle().FramePadding.x;
+    std::vector<const char*> ids(actionIds);
+    std::vector<float> need;
+    for (const char* id : ids) {
+        const Action* a = app.actions().find(id);
+        const std::string label = a ? std::string(trAction(a->id, a->label)) : std::string();
+        need.push_back(ImGui::CalcTextSize(label.c_str(), nullptr, true).x + pad);
+    }
+    const float equal = (total - gap * float(ids.size() - 1)) / float(ids.size());
+    std::vector<std::pair<size_t, size_t>> rows; // [begin, end) of each row
+    if (*std::max_element(need.begin(), need.end()) <= equal) {
+        rows.push_back({0, ids.size()});
+    } else {
+        size_t begin = 0;
+        float used = 0.0f;
+        for (size_t i = 0; i < ids.size(); ++i) {
+            const float add = need[i] + (i > begin ? gap : 0.0f);
+            if (i > begin && used + add > total) {
+                rows.push_back({begin, i});
+                begin = i;
+                used = need[i];
+            } else {
+                used += add;
+            }
+        }
+        rows.push_back({begin, ids.size()});
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, ImGui::GetStyle().ItemSpacing.y));
+    for (const auto& [begin, end] : rows) {
+        const size_t n = end - begin;
+        float sum = 0.0f;
+        for (size_t i = begin; i < end; ++i) sum += need[i];
+        const bool same = rows.size() == 1 && need[begin] <= equal &&
+                          *std::max_element(need.begin() + long(begin), need.begin() + long(end)) <= equal;
+        const float slack = std::max(0.0f, total - gap * float(n - 1) - sum) / float(n);
+        for (size_t i = begin; i < end; ++i) {
+            if (i > begin) ImGui::SameLine();
+            ActionButton(app, ids[i], ImVec2(same ? equal : need[i] + slack, 0));
+            HelpAction(app, ids[i]);
+        }
     }
     ImGui::PopStyleVar();
 }
@@ -172,6 +321,9 @@ void HelpAction(App& app, const char* actionId) {
     g_help.command = a->command;
     g_help.disabled = a->enabled && !a->enabled();
     g_help.description = tr(a->description);
+    if (brushTypeOfAction(a->id) >= 0) // (ModifierBrush.cpp)
+        g_help.description += std::string(" ") + tr("Shift+click: hold Shift to use it instead of Smooth. Ctrl+click: hold "
+                                                     "Ctrl to use it instead of the mask.");
     if (const Command* c = a->command.empty() ? nullptr : app.commands().find(a->command)) {
         if (g_help.description.empty()) g_help.description = tr(c->description);
         g_help.params = c->params;
@@ -189,10 +341,14 @@ float KeycapsWidth(const std::string& chord) {
         const std::string part = chord.substr(start, at == std::string::npos ? std::string::npos : at - start);
         if (!firstChord) w += ImGui::CalcTextSize("/").x + 2 * gap;
         firstChord = false;
-        const auto keys = chordKeys(part);
-        for (size_t i = 0; i < keys.size(); ++i) {
-            if (i) w += ImGui::CalcTextSize("+").x + 2 * gap;
-            w += ImGui::CalcTextSize(keys[i].c_str()).x + 2 * pad;
+        const auto steps = shortcutSteps(part); // "A then S": two chords with a dim "then" between
+        for (size_t step = 0; step < steps.size(); ++step) {
+            if (step) w += ImGui::CalcTextSize("then").x + 2 * gap;
+            const auto keys = chordKeys(steps[step]);
+            for (size_t i = 0; i < keys.size(); ++i) {
+                if (i) w += ImGui::CalcTextSize("+").x + 2 * gap;
+                w += ImGui::CalcTextSize(keys[i].c_str()).x + 2 * pad;
+            }
         }
         if (at == std::string::npos) break;
         start = at + 3;
@@ -216,15 +372,19 @@ float KeycapsAt(ImDrawList* dl, ImVec2 p, const std::string& chord) {
         const std::string part = chord.substr(start, at == std::string::npos ? std::string::npos : at - start);
         if (!firstChord) dimText("/");
         firstChord = false;
-        const auto keys = chordKeys(part);
-        for (size_t i = 0; i < keys.size(); ++i) {
-            if (i) dimText("+");
-            const ImVec2 ts = ImGui::CalcTextSize(keys[i].c_str());
-            const ImVec2 a = p, b(p.x + ts.x + 2 * pad, p.y + h);
-            dl->AddRectFilled(a, b, lookColor(IM_COL32(0x2c, 0x2c, 0x30, 0xff), theme::frame), theme::rounding(3.0f * s));
-            dl->AddRect(a, b, lookColor(IM_COL32(0x4a, 0x4a, 0x50, 0xff), theme::tileBorder), theme::rounding(3.0f * s));
-            dl->AddText(ImVec2(a.x + pad, a.y + 1.0f * s), color::accent, keys[i].c_str());
-            p.x = b.x;
+        const auto steps = shortcutSteps(part);
+        for (size_t step = 0; step < steps.size(); ++step) {
+            if (step) dimText("then");
+            const auto keys = chordKeys(steps[step]);
+            for (size_t i = 0; i < keys.size(); ++i) {
+                if (i) dimText("+");
+                const ImVec2 ts = ImGui::CalcTextSize(keys[i].c_str());
+                const ImVec2 a = p, b(p.x + ts.x + 2 * pad, p.y + h);
+                dl->AddRectFilled(a, b, lookColor(IM_COL32(0x2c, 0x2c, 0x30, 0xff), theme::frame), theme::rounding(3.0f * s));
+                dl->AddRect(a, b, lookColor(IM_COL32(0x4a, 0x4a, 0x50, 0xff), theme::tileBorder), theme::rounding(3.0f * s));
+                dl->AddText(ImVec2(a.x + pad, a.y + 1.0f * s), color::accent, keys[i].c_str());
+                p.x = b.x;
+            }
         }
         if (at == std::string::npos) break;
         start = at + 3;
@@ -237,6 +397,202 @@ void Keycaps(const std::string& chord) {
     const float w = KeycapsAt(ImGui::GetWindowDrawList(), ImGui::GetCursorScreenPos(), chord);
     ImGui::Dummy(ImVec2(w, ImGui::GetTextLineHeight() + 2.0f * uiScale()));
     if (ImGui::GetCurrentContext()->LogEnabled) ImGui::LogText(" %s", chord.c_str());
+}
+
+float HoverAmount(ImGuiID id, bool on) {
+    auto it = g_anims.find(id);
+    if (it == g_anims.end()) {
+        if (!on) return 0.0f;
+        it = g_anims.emplace(id, Anim{}).first;
+    }
+    Anim& a = it->second;
+    const int frame = ImGui::GetFrameCount();
+    if (a.frame != frame) {
+        a.frame = frame;
+        const float step = g_reduceMotion ? 1.0f : std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f) / kHoverSeconds;
+        a.t = on ? std::min(1.0f, a.t + step) : std::max(0.0f, a.t - step);
+    }
+    if (a.t > 0.0f && a.t < 1.0f) g_animating = true;
+    const float t = easeOut(a.t);
+    if (!on && a.t <= 0.0f) g_anims.erase(it);
+    return t;
+}
+
+bool HoveredOrFocused(ImGuiID id) { return id && (ImGui::GetHoveredID() == id || focusedByKeyboard(id)); }
+
+void NoHoverRing(ImGuiID id) {
+    if (id) g_noRing.push_back(id);
+}
+
+bool HoverAnimating() { return g_animating || g_animatingLast; }
+bool ReduceMotion() { return g_reduceMotion; }
+int HoverRingsShown() { return g_ringsShown; }
+int HoverLiftsShown() { return g_liftsShown; }
+
+void NoteItem(ImGuiContext* ctx, ImGuiID id, const ImVec2& min, const ImVec2& max) {
+    if (!id || !ctx || !ctx->CurrentWindow) return;
+    if (g_seenFrame != ctx->FrameCount) {
+        g_seenFrame = ctx->FrameCount;
+        g_seen.clear();
+        g_noRing.clear();
+    }
+    bool want = id == ctx->HoveredIdPreviousFrame || id == ctx->HoveredId || id == ctx->NavId || id == ctx->ActiveId;
+    for (size_t i = 0; !want && i < g_rings.size(); ++i) want = g_rings[i] == id;
+    if (!want) return;
+    g_seen.push_back({id, ImRect(min, max), ctx->CurrentWindow->ClipRect, ctx->CurrentWindow, false});
+}
+
+void NoteItemLabel(ImGuiID id) {
+    for (auto it = g_seen.rbegin(); it != g_seen.rend(); ++it)
+        if (it->id == id) {
+            it->labelled = true;
+            return;
+        }
+}
+
+namespace {
+
+// The look's hover ring round `r` at strength t (0-1): a tinted fill and a crisp border in every look, plus its flavour.
+void drawRing(ImDrawList* dl, ImRect r, float t, float rounding, bool fill) {
+    const float s = uiScale(), px = std::max(1.0f, std::floor(s + 0.25f));
+    const ImVec4& ac = theme::accent;
+    auto rect = [&](float grow, const ImVec4& c, float alpha, float w) {
+        dl->AddRect(ImVec2(r.Min.x - grow, r.Min.y - grow), ImVec2(r.Max.x + grow, r.Max.y + grow), theme::u32(c, alpha * t),
+                    rounding > 0.0f ? rounding + grow : 0.0f, 0, w);
+    };
+    const int look = theme::look.id;
+    // Outlines (Preferences > Interface > Look) sets how loud the ring is: Off none (the fill and label only), Subtle
+    // (the default) one faint line, On the look's full flavour; Outline opacity scales the lines.
+    const int outlines = theme::look.outlines;
+    const float op = theme::look.outlineOpacity;
+    if (fill) dl->AddRectFilled(r.Min, r.Max, theme::u32(ac, (look == 2 ? 0.16f : look == 0 ? 0.07f : 0.10f) * t), rounding);
+    // (Strokes sit half a stroke inside the rect, so the border is crisp and inside the item.)
+    r.Min.x += 0.5f * px, r.Min.y += 0.5f * px, r.Max.x -= 0.5f * px, r.Max.y -= 0.5f * px;
+    if (outlines == 0 || op <= 0.0f) return;
+    t *= op;
+    if (outlines == 1) {
+        rect(0.0f, look == 0 ? theme::accentHover : ac, 0.40f, px);
+        return;
+    }
+    switch (look) {
+    case 0: // Classic: a subtle warm highlight
+        rect(0.0f, theme::accentHover, 0.60f, px);
+        break;
+    case 2: // Phosphor: the inverse-video glow, light bleeding out of the item
+        rect(1.0f * px, ac, 0.34f, px);
+        rect(2.0f * px, ac, 0.16f, px);
+        rect(3.0f * px, ac, 0.07f, px);
+        rect(0.0f, ac, 1.0f, px);
+        break;
+    case 3: // Blueprint: a cyan line with a soft outer line, like a highlighted drawing stroke
+        rect(1.5f * px, ac, 0.28f, 2.0f * px);
+        rect(0.0f, ac, 1.0f, px);
+        break;
+    default: // Forge Terminal: the crisp accent border
+        rect(0.0f, ac, 1.0f, std::max(px, std::floor(1.5f * s)));
+        break;
+    }
+}
+
+} // namespace
+
+TileLift BeginTileLift(ImVec2 min, ImVec2 max, float rounding) {
+    TileLift l;
+    const ImGuiID id = ImGui::GetItemID();
+    const bool disabled = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0;
+    NoHoverRing(id);
+    l.dl = ImGui::GetWindowDrawList();
+    l.min = min, l.max = max;
+    l.t = disabled ? 0.0f : HoverAmount(id, ImGui::IsItemHovered() || focusedByKeyboard(id));
+    if (l.t > 0.0f && !g_reduceMotion) {
+        // A soft shadow under the lifted tile (drawn at its lifted size), then let the tile's own drawing out of the
+        // clip by the lift.
+        const float s = uiScale(), k = 0.025f * l.t;
+        const ImVec2 c((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f), h((max.x - min.x) * (0.5f + k), (max.y - min.y) * (0.5f + k));
+        for (int i = 3; i >= 1; --i) {
+            const float g = float(i) * 1.5f * s, dy = 2.5f * s * l.t;
+            l.dl->AddRectFilled(ImVec2(c.x - h.x - g, c.y - h.y - g + dy), ImVec2(c.x + h.x + g, c.y + h.y + g + dy),
+                                IM_COL32(0, 0, 0, int(30.0f * l.t)), theme::rounding(rounding * s) + g);
+        }
+        const ImVec4 cr = l.dl->_CmdHeader.ClipRect;
+        const float m = std::max(h.x, h.y) * 0.06f + 1.0f;
+        l.dl->PushClipRect(ImVec2(std::max(cr.x - m, min.x - m), std::max(cr.y - m, min.y - m)),
+                           ImVec2(std::min(cr.z + m, max.x + m), std::min(cr.w + m, max.y + m)), false);
+        l.clip = true;
+    }
+    l.vtx = l.dl->VtxBuffer.Size;
+    return l;
+}
+
+void EndTileLift(const TileLift& l, float rounding) {
+    if (!l.dl || l.t <= 0.0f) return;
+    ++g_liftsCounting;
+    const ImVec2 c((l.min.x + l.max.x) * 0.5f, (l.min.y + l.max.y) * 0.5f);
+    const float scale = g_reduceMotion ? 1.0f : 1.0f + 0.05f * l.t;
+    if (scale != 1.0f)
+        for (int i = l.vtx; i < l.dl->VtxBuffer.Size; ++i) {
+            ImVec2& p = l.dl->VtxBuffer[i].pos;
+            p = ImVec2(c.x + (p.x - c.x) * scale, c.y + (p.y - c.y) * scale);
+        }
+    const ImVec2 h((l.max.x - l.min.x) * 0.5f * scale, (l.max.y - l.min.y) * 0.5f * scale);
+    const float s = uiScale(), px = std::max(1.0f, std::floor(s + 0.25f));
+    // The glow ring just outside the tile (the active tile's orange outline stays inside it).
+    const ImRect r(ImVec2(c.x - h.x - px, c.y - h.y - px), ImVec2(c.x + h.x + px, c.y + h.y + px));
+    drawRing(l.dl, r, l.t, theme::rounding(rounding * s), false);
+    if (theme::look.id != 2 && theme::look.outlines == 2) // a soft second line: the glow (Phosphor's ring brings its own)
+        l.dl->AddRect(ImVec2(r.Min.x - 1.5f * px, r.Min.y - 1.5f * px), ImVec2(r.Max.x + 1.5f * px, r.Max.y + 1.5f * px),
+                      theme::u32(theme::accent, 0.22f * l.t * theme::look.outlineOpacity), theme::rounding(rounding * s) + 1.5f * px, 0, 2.0f * px);
+    if (l.clip) l.dl->PopClipRect();
+}
+
+void DrawHover(App& app) {
+    g_reduceMotion = app.uiPrefs().reduceMotion;
+    g_animatingLast = g_animating;
+    g_animating = false;
+    g_liftsShown = g_liftsCounting;
+    g_liftsCounting = 0;
+    g_ringsShown = 0;
+    const ImGuiContext& g = *GImGui;
+    if (g_seenFrame != g.FrameCount) g_seen.clear(), g_noRing.clear(); // no items this frame
+    const ImGuiID hovered = g.HoveredId, focused = g.NavCursorVisible && g.NavWindow ? g.NavId : 0;
+    const float fh = ImGui::GetFrameHeight();
+    auto find = [&](ImGuiID id) -> const Seen* {
+        if (!id || std::find(g_noRing.begin(), g_noRing.end(), id) != g_noRing.end()) return nullptr;
+        for (auto it = g_seen.rbegin(); it != g_seen.rend(); ++it)
+            if (it->id == id) {
+                // Only labelled widgets, and nothing as big as a view (the UV editor, the timeline's track).
+                if (!it->labelled || (it->bb.GetWidth() > 16.0f * fh && it->bb.GetHeight() > 4.0f * fh)) return nullptr;
+                return &*it;
+            }
+        return nullptr;
+    };
+    for (ImGuiID id : {hovered, focused})
+        if (find(id) && std::find(g_rings.begin(), g_rings.end(), id) == g_rings.end()) g_rings.push_back(id);
+    for (size_t i = 0; i < g_rings.size();) {
+        const ImGuiID id = g_rings[i];
+        const Seen* at = find(id);
+        const bool on = at && (id == hovered || id == focused);
+        const float t = HoverAmount(id, on);
+        if (!at || t <= 0.0f) { // gone (its window closed, or it draws its own hover now), or faded out
+            g_anims.erase(id);
+            g_rings.erase(g_rings.begin() + std::ptrdiff_t(i));
+            continue;
+        }
+        ImDrawList* dl = at->window->DrawList;
+        const float m = 4.0f * uiScale();
+        ImRect clip(at->clip.Min.x - m, at->clip.Min.y - m, at->clip.Max.x + m, at->clip.Max.y + m);
+        clip.ClipWith(at->window->OuterRectClipped);
+        clip.ClipWith(ImRect(ImVec2(0, 0), g.IO.DisplaySize));
+        dl->PushClipRect(clip.Min, clip.Max, false);
+        drawRing(dl, at->bb, t, ImGui::GetStyle().FrameRounding, id != g.ActiveId);
+        dl->PopClipRect();
+        ++g_ringsShown;
+        ++i;
+    }
+    // Forget items that stopped animating long ago (a window closed under the pointer).
+    const int frame = ImGui::GetFrameCount();
+    for (auto it = g_anims.begin(); it != g_anims.end();)
+        it = frame - it->second.frame > 120 ? g_anims.erase(it) : std::next(it);
 }
 
 void DelayedTooltip(const char* text) {
@@ -263,29 +619,53 @@ bool ActionButton(App& app, const char* actionId, ImVec2 size, Look look) {
     const float s = uiScale();
     if (look == Look::Icon && !icon) look = Look::Label;
     if (look == Look::IconLabel && !icon) look = Look::Label;
+    // Too narrow for its words (the left shelf's Fill when the column shrinks to fit, Shell.cpp): the icon alone.
+    if (look == Look::IconLabel && size.x > 0.0f &&
+        ImGui::CalcTextSize((std::string(icon) + "  " + label).c_str()).x + 2.0f * ImGui::GetStyle().FramePadding.x > size.x)
+        look = Look::Icon;
     if (look == Look::Icon && size.x <= 0.0f) size = ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight());
     if (look == Look::Tile && size.x <= 0.0f) size = ImVec2(44.0f * s, 40.0f * s);
 
-    // On: the accent fill for the current mode, a raised grey for the chosen side of a choice (Zadd | Zsub), a
+    // On: the accent fill for the current mode, a raised grey for the chosen side of a choice (Raise | Lower), a
     // raised grey with an accent underline for an option.
     const bool mode = IsModeAction(id), choice = IsChoiceAction(id);
+    const std::string itemLabel = label + "##" + id;
     int colors = 0;
     if (checked) {
         ImGui::PushStyleColor(ImGuiCol_Button, mode ? theme::accent : theme::toggleOn);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, mode ? theme::accentHover : theme::toggleOnHover);
         ImGui::PushStyleColor(ImGuiCol_Text, mode ? theme::textOnAccent : theme::textBright);
         colors = 3;
+    } else if (look != Look::Tile && enabled) {
+        // Hover eases the fill towards the accent-tinted hover and brightens the label (Phosphor: inverse video, the
+        // accent fill with a dark label); pressed is darker. (Hovered as of the last frame: the item isn't drawn yet.)
+        const float h = HoverAmount(ImGui::GetID(itemLabel.c_str()), HoveredOrFocused(ImGui::GetID(itemLabel.c_str())));
+        if (h > 0.0f) {
+            auto mix = [h](const ImVec4& a, const ImVec4& b) {
+                return ImVec4(a.x + (b.x - a.x) * h, a.y + (b.y - a.y) * h, a.z + (b.z - a.z) * h, a.w + (b.w - a.w) * h);
+            };
+            const bool inverse = theme::look.id == 2 && theme::look.outlines == 2; // (loud: Outlines On only)
+            const ImVec4 fill = mix(ImGui::GetStyleColorVec4(ImGuiCol_Button), inverse ? theme::accent : theme::buttonHover);
+            const ImVec4 ink = mix(ImGui::GetStyleColorVec4(ImGuiCol_Text), inverse ? theme::textOnAccent : theme::textHover);
+            ImGui::PushStyleColor(ImGuiCol_Button, fill);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, fill);
+            ImGui::PushStyleColor(ImGuiCol_Text, ink);
+            colors = 3;
+        }
     }
-    ImGui::BeginDisabled(!enabled);
+    // Customize Shelves: a button that doesn't apply now (Backface-style options, Vertex / Texture paint without a texture) must
+    // still take the Ctrl+Alt press, or it can't be moved (#bug 45).
+    const bool grabbable = app.layout().customize && CtrlHeld() && AltHeld();
+    ImGui::BeginDisabled(!enabled && !grabbable);
     bool clicked = false;
-    const std::string itemLabel = label + "##" + id;
     bool clipped = false;
     if (look == Look::Label) {
         clicked = ImGui::Button(itemLabel.c_str(), size);
         const float textW = ImGui::CalcTextSize(itemLabel.c_str(), nullptr, true).x + 2.0f * ImGui::GetStyle().FramePadding.x;
-        clipped = size.x > 0.0f && textW > size.x + 0.5f;
+        clipped = textW > ImGui::GetItemRectSize().x + 0.5f; // (a -1 width can cut it off too)
+        if (clipped) Demo::noteClippedLabel(label);
     } else if (look == Look::IconLabel) {
-        // Drawn by hand so the item keeps the plain label as its name ("Store Config", not glyph + label).
+        // Drawn by hand so the item keeps the plain label as its name ("Save Layout", not glyph + label).
         const std::string text = std::string(icon) + "  " + label;
         const ImGuiStyle& st = ImGui::GetStyle();
         const ImVec2 ts = ImGui::CalcTextSize(text.c_str());
@@ -298,6 +678,7 @@ bool ActionButton(App& app, const char* actionId, ImVec2 size, Look look) {
                                  ImVec2(r.Max.x - st.FramePadding.x, r.Max.y - st.FramePadding.y), text.c_str(), nullptr, &ts,
                                  st.ButtonTextAlign, &r);
         clipped = ts.x + st.FramePadding.x * 2.0f > full.x + 0.5f;
+        if (clipped) Demo::noteClippedLabel(label);
     } else if (look == Look::Tile) {
         // Shelf tiles (Shell.cpp): brush thumbnails on the bottom shelf, a large icon over a caption on the
         // right shelf. The item keeps the plain label as its name.
@@ -341,19 +722,46 @@ bool ActionButton(App& app, const char* actionId, ImVec2 size, Look look) {
 
     const bool customize = app.layout().customize;
     dragSource(app, id.c_str(), label.c_str(), shelf, index);
+    MyPanelDragSource(id.c_str(), false, label.c_str());
     HelpAction(app, id.c_str());
     if (clipped) {
         const std::string chord = app.actions().shortcutText(id);
         DelayedTooltip((chord.empty() ? label : label + "   " + chord).c_str());
     }
     if (!clicked) return false;
+    if (MyPanelDragged()) return false; // the end of an Alt-drag into My Panel, not a click
     if (CtrlHeld() && AltHeld()) {
-        // Ctrl+Alt+click: customize mode drags instead; otherwise it assigns a shortcut (ZBrush).
-        if (!customize) app.beginShortcutCapture(id);
+        // Ctrl+Alt+click: customize mode drags instead; otherwise it assigns a shortcut.
+        // A click that moved was the start of a customize drag (Fenix, Discord: it rebound F silently).
+        const ImVec2 io = ImGui::GetIO().MousePos, down = ImGui::GetIO().MouseClickedPos[0];
+        const float moved = std::abs(io.x - down.x) + std::abs(io.y - down.y);
+        if (!customize && moved < 4.0f) app.beginShortcutCapture(id);
         return false;
     }
+    // Shift+click / Ctrl+click a brush: it becomes the Shift / Ctrl brush, the main one stays (ModifierBrush.cpp).
+    if (const int type = brushTypeOfAction(id); type >= 0 && app.modifierBrushClick(type)) return true;
     if (run) run();
     return true;
+}
+
+float ButtonWidth(const char* label) {
+    return ImGui::CalcTextSize(tr(label), nullptr, true).x + 2.0f * ImGui::GetStyle().FramePadding.x;
+}
+
+float SliderWidth(const char* format, double value) {
+    std::string fmt = format;
+    if (const size_t at = fmt.find("%d"); at != std::string::npos) fmt.replace(at, 2, "%.0f");
+    char shown[128];
+    ImFormatString(shown, sizeof(shown), tr(fmt.c_str()), value);
+    ImFont* numbers = theme::numberFont(); // as SliderInside draws it
+    if (numbers) ImGui::PushFont(numbers);
+    const float w = ImGui::CalcTextSize(shown).x;
+    if (numbers) ImGui::PopFont();
+    return w + 2.0f * ImGui::GetStyle().FramePadding.x;
+}
+
+float CheckboxWidth(const char* label) {
+    return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(tr(label), nullptr, true).x;
 }
 
 bool SliderInside(const char* id, float* v, float lo, float hi, const char* format, ImGuiSliderFlags flags) {
@@ -374,11 +782,18 @@ bool SliderInside(const char* id, float* v, float lo, float hi, const char* form
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(1, 1, 1, 0.04f));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(1, 1, 1, 0.06f));
-    // No grab over the label: the position shows as the fill and a thin accent bar along the bottom (ZBrush).
+    // No grab over the label: the position shows as the fill and a thin accent bar along the bottom.
     ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0, 0, 0, 0));
     const bool changed = ImGui::SliderFloat(id, v, lo, hi, format ? tr(format) : format, flags);
+    if (format) { // the label inside, as drawn: wider than the slider is cut off
+        char shown[128];
+        ImFormatString(shown, sizeof(shown), tr(format), double(*v));
+        if (ImGui::CalcTextSize(shown).x + 2.0f * ImGui::GetStyle().FramePadding.x > w + 0.5f) Demo::noteClippedLabel(shown);
+    }
     const bool active = ImGui::IsItemActive();
+    const bool disabled = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0;
+    const float hover = disabled ? 0.0f : HoverAmount(ImGui::GetItemID(), ImGui::IsItemHovered() || active || focusedByKeyboard(ImGui::GetItemID()));
     ImGui::PopStyleColor(5);
     if (numbers) {
         ImGui::PopStyleVar();
@@ -401,15 +816,111 @@ bool SliderInside(const char* id, float* v, float lo, float hi, const char* form
     const float fillW = std::floor(w * t);
     if (fillW >= 1.0f) {
         const bool full = fillW >= w - 0.5f;
-        dl->AddRectFilled(p, ImVec2(p.x + fillW, p.y + h), theme::u32(theme::sliderFill, active ? 1.5f : 1.0f), rounding,
+        dl->AddRectFilled(p, ImVec2(p.x + fillW, p.y + h), theme::u32(theme::sliderFill, active ? 1.5f : 1.0f + 0.35f * hover), rounding,
                           full ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersLeft);
+        // Hover brightens the bar towards the accent and grows a knob at its end (Reduce motion: no growing).
         const float bar = std::max(1.0f, std::floor(2.0f * uiScale()));
-        dl->AddRectFilled(ImVec2(p.x, p.y + h - bar), ImVec2(p.x + fillW, p.y + h), active ? color::accent : theme::u32(theme::sliderBar),
-                          std::min(rounding, bar), full ? ImDrawFlags_RoundCornersBottom : ImDrawFlags_RoundCornersBottomLeft);
+        const ImVec4& b0 = theme::sliderBar;
+        const ImVec4& b1 = theme::accent;
+        const float k = active ? 1.0f : 0.6f * hover;
+        const ImU32 barCol = theme::u32(ImVec4(b0.x + (b1.x - b0.x) * k, b0.y + (b1.y - b0.y) * k, b0.z + (b1.z - b0.z) * k, 1.0f));
+        dl->AddRectFilled(ImVec2(p.x, p.y + h - bar), ImVec2(p.x + fillW, p.y + h), barCol, std::min(rounding, bar),
+                          full ? ImDrawFlags_RoundCornersBottom : ImDrawFlags_RoundCornersBottomLeft);
+        if (hover > 0.0f) {
+            const float kw = bar * (ReduceMotion() ? 1.5f : 1.0f + 0.6f * hover), kh = bar * (ReduceMotion() ? 3.0f : 1.5f + 2.0f * hover);
+            const float x = std::clamp(p.x + fillW, p.x + kw, p.x + w - kw);
+            dl->AddRectFilled(ImVec2(x - kw, p.y + h - kh), ImVec2(x + kw, p.y + h), theme::u32(active ? theme::accent : theme::textBright, hover),
+                              std::min(rounding, kw));
+        }
     }
     dl->ChannelsMerge();
+    // The value, exactly, while pointing at it or dragging (the label inside may round it or be clipped).
+    if (hover > 0.0f && (ImGui::IsItemHovered() || active) && !CtrlHeld() && format) {
+        const char* f = tr(format);
+        const char* spec = ImParseFormatFindStart(f);
+        if (*spec) {
+            char buf[32] = "";
+            const char* one = ImParseFormatTrimDecorations(spec, buf, sizeof(buf));
+            if (active || ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_NoSharedDelay)) ImGui::SetTooltip(one, double(*v));
+        }
+    }
     return changed;
 }
+
+namespace {
+ImGuiID g_dragScrollWindow = 0; // the panel a drag is scrolling (0: none)
+ImGuiMouseButton g_dragScrollButton = ImGuiMouseButton_Left;
+bool g_dragScrollMoved = false;
+int g_dragScrolls = 0;
+float g_dragScrollY = 0.0f;
+} // namespace
+
+void resetUiGlobals() {
+    g_help = {};
+    g_shown.clear();
+    g_popupInfo = true;
+    g_nextShelf = ShelfNone, g_nextIndex = -1;
+    g_anims.clear();
+    g_reduceMotion = g_animating = g_animatingLast = false;
+    g_seen.clear();
+    g_rings.clear();
+    g_noRing.clear();
+    g_seenFrame = -1;
+    g_ringsShown = g_liftsShown = g_liftsCounting = 0;
+    g_dragScrollWindow = 0;
+    g_dragScrollButton = ImGuiMouseButton_Left;
+    g_dragScrollMoved = false;
+    g_dragScrolls = 0;
+    g_dragScrollY = 0.0f;
+}
+
+void DragScrollPanels() {
+    ImGuiContext& g = *GImGui;
+    const ImGuiIO& io = g.IO;
+    if (g_dragScrollWindow) {
+        ImGuiWindow* w = ImGui::FindWindowByID(g_dragScrollWindow);
+        const ImGuiID id = w ? w->GetID("##dragscroll") : 0;
+        if (!w || !io.MouseDown[g_dragScrollButton] || (g.ActiveId != 0 && g.ActiveId != id)) {
+            if (w && g.ActiveId == id) ImGui::ClearActiveID();
+            if (g_dragScrollMoved) ++g_dragScrolls;
+            g_dragScrollWindow = 0;
+            return;
+        }
+        ImGui::KeepAliveID(id); // holds the press: nothing under the pointer reacts, the window doesn't move
+        if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) {
+            if (w->ScrollMax.y > 0.0f) ImGui::SetScrollY(w, std::clamp(w->Scroll.y - io.MouseDelta.y, 0.0f, w->ScrollMax.y));
+            if (w->ScrollMax.x > 0.0f) ImGui::SetScrollX(w, std::clamp(w->Scroll.x - io.MouseDelta.x, 0.0f, w->ScrollMax.x));
+            g_dragScrollMoved = true;
+            g_dragScrollY = w->ScrollTarget.y < FLT_MAX ? w->ScrollTarget.y : w->Scroll.y;
+        }
+        return;
+    }
+    // A press this frame: left only on empty space (nothing hovered or pressed) of a fixed panel, middle anywhere. The
+    // nearest window that scrolls, from the one under the pointer out through its parents (a tray's sections are
+    // child windows).
+    for (const ImGuiMouseButton b : {ImGuiMouseButton_Left, ImGuiMouseButton_Middle}) {
+        if (!ImGui::IsMouseClicked(b) || !g.HoveredWindow) continue;
+        if (b == ImGuiMouseButton_Left && (g.HoveredId != 0 || g.ActiveId != 0)) continue;
+        if (b == ImGuiMouseButton_Middle && g.ActiveId != 0) continue;
+        ImGuiWindow* w = g.HoveredWindow;
+        while (w && !(w->ScrollMax.y > 0.0f || w->ScrollMax.x > 0.0f) && (w->Flags & ImGuiWindowFlags_ChildWindow)) w = w->ParentWindow;
+        if (!w || !(w->ScrollMax.y > 0.0f || w->ScrollMax.x > 0.0f)) continue;
+        if (w->ScrollbarY && io.MousePos.x >= w->InnerRect.Max.x) continue; // on its scroll bar: ImGui's own
+        // A left-drag on a floating window (or its title bar) moves the window, as ever: only the fixed panels
+        // (trays, palettes, shelves) scroll with it. The middle button never moves windows, so it scrolls any.
+        if (b == ImGuiMouseButton_Left && (!(w->RootWindow->Flags & ImGuiWindowFlags_NoMove) ||
+                                           w->RootWindow->TitleBarRect().Contains(io.MousePos)))
+            continue;
+        g_dragScrollWindow = w->ID;
+        g_dragScrollButton = b;
+        g_dragScrollMoved = false;
+        ImGui::SetActiveID(w->GetID("##dragscroll"), w);
+        return;
+    }
+}
+
+int DragScrolls() { return g_dragScrolls; }
+float DragScrollY() { return g_dragScrollY; }
 
 void DrawHelp(App& app) {
     const UiPrefs& prefs = app.uiPrefs();
@@ -440,11 +951,13 @@ void DrawHelp(App& app) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f * s, 4.0f * s));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, rgba(lookColor(IM_COL32(0x18, 0x18, 0x1a, 0xff), theme::shellBg), std::clamp(prefs.helpOpacity, 0.3f, 1.0f)));
-    ImGui::PushStyleColor(ImGuiCol_Border, rgba(color::accent, 0.6f));
+    // Help is the info role (Theme.h): its blue edge and strip, or the accent edge with Pop-up colours off.
+    ImGui::PushStyleColor(ImGuiCol_Border, theme::rolePopups ? theme::edge(theme::Role::Info) : rgba(color::accent, 0.6f));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
                                    ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
     if (ImGui::Begin("##sf_help", nullptr, flags)) {
+        RoleStrip(theme::Role::Info);
         ImDrawList* dl = ImGui::GetWindowDrawList();
         // Title row: icon + title (SemiBold), keycaps on the right.
         const float keysW = r.shortcut.empty() ? 0.0f : KeycapsWidth(r.shortcut);
@@ -472,7 +985,7 @@ void DrawHelp(App& app) {
             ImGui::PopStyleColor();
             if (r.hasCommand && !r.params.empty()) {
                 ImGui::PushStyleColor(ImGuiCol_Text, rgba(color::textDim));
-                ImGui::TextUnformatted("Hold Alt for the scripting parameters.");
+                ImGui::TextUnformatted(tr("Hold Alt for the scripting parameters."));
                 ImGui::PopStyleColor();
             }
         } else {
@@ -482,7 +995,7 @@ void DrawHelp(App& app) {
                 usage += p.required ? " " + p.name + "=<" + typeName(p.type) + ">" : " [" + p.name + "=...]";
             ImGui::TextColored(rgba(color::accent), "%s", usage.c_str());
             ImGui::PopFont();
-            if (r.params.empty()) ImGui::TextColored(rgba(color::textDim), "No parameters.");
+            if (r.params.empty()) ImGui::TextColored(rgba(color::textDim), "%s", tr("No parameters."));
             for (const auto& p : r.params) {
                 ImGui::PushFont(app.consoleFont());
                 ImGui::TextColored(rgba(color::text), "%s", p.name.c_str());
@@ -535,5 +1048,67 @@ void DrawHelp(App& app) {
 }
 
 const std::string& HelpShown() { return g_shown; }
+
+namespace {
+int g_roleColors = 0; // what the last PushRole pushed
+} // namespace
+
+void PushRole(theme::Role role) {
+    g_roleColors = 0;
+    if (!theme::rolePopups) return;
+    const ImVec4 e = theme::edge(role), lift = theme::panelBg;
+    auto mix = [](const ImVec4& a, const ImVec4& b, float t) {
+        return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 1.0f);
+    };
+    // One step lighter than the panels, so it sits on the UI, with a wash of the role; its buttons and fields lift
+    // with it, so they keep their step above it.
+    const ImVec4 white(1, 1, 1, 1);
+    const float step = theme::popupLift;
+    const ImVec4 surface = mix(mix(lift, white, step), e, 0.05f);
+    const ImVec4 title = ImGui::GetStyleColorVec4(ImGuiCol_TitleBg), border = ImGui::GetStyleColorVec4(ImGuiCol_Border);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, surface);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, surface);
+    ImGui::PushStyleColor(ImGuiCol_Border, mix(border, e, 0.85f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, mix(title, e, 0.20f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, mix(title, e, 0.26f));
+    const ImGuiCol lifted[] = {ImGuiCol_Button, ImGuiCol_ButtonHovered, ImGuiCol_ButtonActive, ImGuiCol_FrameBg,
+                               ImGuiCol_FrameBgHovered};
+    for (ImGuiCol c : lifted) ImGui::PushStyleColor(c, mix(ImGui::GetStyleColorVec4(c), white, step));
+    g_roleColors = 5 + int(std::size(lifted));
+}
+
+void PopRole() {
+    if (g_roleColors) ImGui::PopStyleColor(g_roleColors);
+    g_roleColors = 0;
+}
+
+void RoleStrip(theme::Role role) {
+    if (!theme::rolePopups) return;
+    ImGuiWindow* w = ImGui::GetCurrentWindow();
+    if (!w || w->SkipItems) return;
+    ImDrawList* dl = w->DrawList;
+    const float s = std::max(1.0f, ImGui::GetStyle().FramePadding.y / 3.0f); // the UI scale (FramePadding is 3 at 100 %)
+    const ImRect r = w->Rect();
+    const ImU32 edge = theme::u32(theme::edge(role));
+    dl->PushClipRect(r.Min, r.Max, false);
+    const float strip = std::max(3.0f, std::round(4.0f * s));
+    dl->PushClipRect(r.Min, ImVec2(r.Max.x, r.Min.y + strip), true); // the top of the window's own rounded shape
+    dl->AddRectFilled(r.Min, r.Max, edge, w->WindowRounding);
+    dl->PopClipRect();
+    if (!(w->Flags & ImGuiWindowFlags_NoTitleBar)) {
+        // The role's icon just after the title, while it clears the close button.
+        const ImRect bar = w->TitleBarRect();
+        const ImGuiStyle& st = ImGui::GetStyle();
+        const char* end = ImGui::FindRenderedTextEnd(w->Name);
+        const float titleW = ImGui::CalcTextSize(w->Name, end).x;
+        const char* icon = theme::roleIcon(role);
+        const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+        const float x = std::floor(bar.Min.x + st.FramePadding.x + titleW + st.ItemInnerSpacing.x * 2.0f);
+        const float closeW = w->HasCloseButton ? ImGui::GetFrameHeight() : 0.0f;
+        if (x + iconSize.x < bar.Max.x - st.FramePadding.x - closeW)
+            dl->AddText(ImVec2(x, std::floor(bar.GetCenter().y - iconSize.y * 0.5f)), theme::u32(theme::ink(role)), icon);
+    }
+    dl->PopClipRect();
+}
 
 } // namespace sf::ui

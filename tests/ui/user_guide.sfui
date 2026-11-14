@@ -1,6 +1,6 @@
 # Help > User Guide: the embedded docs/guide reader. Open it from the Help palette, move between chapters,
 # search, follow a link, go back, and open a chapter from the Ctrl-hover help with F1.
-run ui_look look=classic layout=zbrush        # written for the Classic look and the ZBrush-style palette bar and shelves
+run ui_look look=classic layout=classic        # written for the Classic look and the classic palette bar and shelves
 run new_sphere subdivisions=3
 click "Help##palette.help"
 click "User Guide##help.guide"
@@ -18,9 +18,10 @@ expect_guide face-groups.md
 shot chapter
 
 # Search finds a term across chapters; a result opens its chapter.
-type "User Guide/##guide_search" "voxel remesh"
+# A phrase only geometry.md has (feature names also land in whats-new.md, which then ranks first).
+type "User Guide/##guide_search" "collapses edges"
 expect_value guide_hits > 0
-expect_text Voxel remesh
+expect_text Quads and triangles
 shot search
 click "User Guide/##guide.hit.0"
 expect_guide geometry.md
@@ -31,6 +32,8 @@ expect_value guide_hits == 0
 # Links between chapters jump; Alt+Left / Alt+Right (back / forward) retrace them.
 click "User Guide/Contents##guide.toc.index"
 expect_guide index.md
+# Keyboard and mouse is near the end of the contents: below the page's bottom edge at 1080 (more chapters each release)
+wheel_item "User Guide/Welcome to SculptForge" 0 -20
 click "User Guide/Keyboard and mouse"
 expect_guide shortcuts.md
 key alt+left
@@ -49,7 +52,7 @@ key shift+f1
 # Ctrl-hover help names the chapter; F1 (Ctrl still held) opens it.
 click "Tool/Geometry"
 hold ctrl
-hover "Subdivide"
+hover "Subdivide (removes levels)"
 expect_help Learn more: Subdivide, remesh, decimate and LODs
 key f1
 hold none

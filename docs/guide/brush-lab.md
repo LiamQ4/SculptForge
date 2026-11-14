@@ -1,11 +1,16 @@
 # Brush Lab and sharing brushes
 
+![Brush Lab with a brush designed from a description](images/brush-lab.jpg)
+
+> **In short:**
+> - Describe a brush in words ("dry cracked mud") and an AI model builds it.
+> - Refine it in words, or tune every recipe value with sliders.
+> - Share brushes as `.sfbrush` files, one-line brush codes, studio folders or the gallery.
+
 Brush Lab designs sculpting brushes from a description: type "dry cracked mud" and an AI model builds the
 brush, then you refine it in words or with sliders. This chapter covers Brush Lab, the AI providers it can use,
 the recipe settings, your brush library, and the ways to share brushes: `.sfbrush` files, one-line brush
 codes, studio folders and the community gallery.
-
-![Brush Lab with a brush designed from a description](images/brush-lab.jpg)
 
 ## What a custom brush is
 
@@ -18,9 +23,12 @@ with <kbd>Alt</kbd>, <kbd>Shift</kbd>, masks, symmetry, strokes and alphas.
 
 ## Open Brush Lab
 
-Click **AI Brush** on the top shelf, or **AI Brush** at the top of the **Brush** palette. Brush Lab is a
-floating window; it opens at the top-left corner of the canvas the first time, and you can drag it anywhere.
-Click the button again, or the window's close box, to hide it.
+Click **AI Brush** on the top shelf, or **AI Brush** at the top of **Sculpt > Brush**. Brush Lab is a floating window;
+it opens at the top-left corner of the canvas the first time, and you can drag it anywhere. Click the button again, or
+the window's close box, to hide it.
+
+Not there? AI features are off: turn them on in **Edit > Preferences > AI** (see [Turning AI
+off](interface.md#turning-ai-off)).
 
 ## Design a brush
 
@@ -44,7 +52,7 @@ your conversation so far. **Clear chat** starts a new conversation.
 ### Tune a brush with sliders
 
 Open the **Recipe** section of Brush Lab to see every value of the active custom brush. The same editor
-appears in the **Brush** palette as **Edit recipe: NAME** when a custom brush is active. Hover a slider for a
+appears in **Sculpt > Brush** as **Edit recipe: NAME** when a custom brush is active. Hover a slider for a
 description.
 
 | Setting | Range | What it does |
@@ -65,9 +73,19 @@ description.
 | **Jitter** | 0 to 1 | Random scatter of dabs around the stroke. |
 | **Pressure curve** | 0.3 to 3 | Tablet response: above 1 needs a firmer press, below 1 responds to a light touch. |
 | **Front faces only** | on / off | Only affects surfaces facing the camera, protecting thin parts. |
+| **Connected only** | on / off | Only reaches the surface joined to the point under the cursor. |
+| **View falloff** | on / off | Measures the falloff on screen, as a cylinder through the model along the view. |
+| **Lock plane** | on / off | The plane is taken where the stroke starts and kept for the whole stroke, so one stroke cuts one flat face. Off, the plane follows the surface under each dab. |
+| **Crisp edge** | on / off | Full strength out to a hard edge with a thin smoothed band (about two or three polygons wide, so the edge doesn't stair-step), the plane pulled all the way at the default Intensity, and, on a Flatten plane, only cutting (nothing below the plane is raised; a Fill plane still fills shallow dips). Hardness and Tip sharpness don't apply. |
 | **Cavity mask** | -1 to 1 | Positive: only cavities. Negative: only ridges and peaks (as Edge Wear does). |
 
 The name field at the top of the editor renames the brush when you press <kbd>Enter</kbd>.
+
+Under the recipe sliders are the brush's pressure curve and **Pen pressure: Size** and **Strength**, each
+**Use global**, **On** or **Off**. **Use global** (the default) follows **Pressure > Size** and **Pressure >
+Strength** on the top shelf and in **Edit > Preferences > Tablet**; **On** and **Off** override them for this brush
+only. The choice is saved in the brush's `.sfbrush` file, so a shared brush keeps it (see
+[Pen pressure and tablets](sculpting.md#pen-pressure-and-tablets)).
 
 > **Tip:** to adapt a built-in recipe such as Dragon Scales, select it and move the sliders. Your version is
 > saved to your library and replaces the built-in one; delete it to get the original back.
@@ -75,18 +93,29 @@ The name field at the top of the editor renames the brush when you press <kbd>En
 ## Choose an AI provider
 
 Brush Lab works out of the box with no account or key. Open the **AI provider** section of Brush Lab (also in
-**Generate > AI brush provider**) to choose another service.
+**Mesh > Generate 3D > AI brush provider** and **Edit > Preferences > AI > Provider**) to choose another service.
+Each choice fills in the address and a model:
 
 | Provider | What you need | Notes |
 |---|---|---|
 | **Free - no account or key** (default) | Nothing | An open model (GPT-OSS 20B) hosted by Pollinations.ai. Only your description and settings are sent. Rate limited to about one request every few seconds. If it can't be reached, a running local Ollama is used instead. |
-| **Anthropic (Claude) - your key** | An Anthropic API key | Uses `claude-opus-5-5` by default. **Effort** (low, medium, high) trades speed for more considered brushes. |
-| **OpenAI-compatible (OpenAI, Ollama, LM Studio...)** | An endpoint, a model name and, for hosted services, a key | Any server that speaks the OpenAI chat completions API, including local models. |
+| **Anthropic (Claude)** | An Anthropic API key | Uses `claude-opus-5-5` by default. **Effort** (low, medium, high) trades speed for more considered brushes. |
+| **OpenAI** | An OpenAI API key | Click **Find models** to pick one. |
+| **Ollama (this computer)**, **LM Studio (this computer)** | The app running on your computer | Private and offline, no key. See below. |
+| **vLLM server**, **llama.cpp server** | A server on your computer or at your studio | Change the address to your server's. |
+| **LiteLLM proxy (studio gateway)** | Your studio's gateway address | One address for every model your studio allows; a key from your studio, or your studio sign-in. See [IT deployment](studios.md#ai-providers). |
+| **OpenRouter** | An OpenRouter key | Many models through one key. |
+| **Other OpenAI-compatible server** | An endpoint, a model name and, for hosted services, a key | Any server that speaks the OpenAI chat completions API. |
 
-For Anthropic and OpenAI-compatible providers you can edit the **Endpoint**, **Model** and **API key** fields.
-Leave the key empty to use the `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` environment variable. Click
-**Save settings** to keep your choice; settings and keys are stored only on your computer, in `ai.json` in the
-SculptForge settings folder (readable only by you). Requests go only to the endpoint you set.
+You can edit the **Endpoint**, **Model** and **API key** fields. Leave the key empty to use the `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY` or `OPENROUTER_API_KEY` environment variable. Click **Save settings** to keep your choice.
+
+Keys are kept in your system's keychain (macOS Keychain, Windows Credential Manager, or the Secret Service on Linux),
+never in a settings file. Requests go only to the endpoint you set. If your studio manages SculptForge, some providers
+may be greyed out with **Managed by your studio**.
+
+The first time a provider on someone else's computer would receive a request (Free included), Brush Lab says what is
+sent, where, and who pays, and waits for **Allow**. See [What leaves your computer](interface.md#what-leaves-your-computer).
 
 ### Run a model on your own computer
 
@@ -94,11 +123,10 @@ For private, offline use with no rate limits, run a local model with Ollama or L
 
 1. Install [Ollama](https://ollama.com/download) and download the recommended model:
    `ollama pull qwen3:4b-instruct` (2.5 GB, works without a graphics card).
-2. In **AI provider**, choose **OpenAI-compatible (OpenAI, Ollama, LM Studio...)**.
-3. Click **Ollama** (or **LM Studio**) to fill in the local endpoint.
-4. Click **Find models**. SculptForge checks the connection, shows "Connected" with the number of installed
+2. In **AI provider**, choose **Ollama (this computer)** (or **LM Studio (this computer)**).
+3. Click **Find models**. SculptForge checks the connection, shows "Connected" with the number of installed
    models, and lets you pick one from the **Model** list.
-5. Click **Save settings**.
+4. Click **Save settings**.
 
 The **Run a model on this computer** section in the panel shows the install steps for your operating system.
 The model needs about 4 GB of free memory; expect 10-20 seconds per brush on a laptop CPU and a few seconds
@@ -119,11 +147,11 @@ The library is a folder of `.sfbrush` files in the SculptForge settings folder:
 | macOS | `~/Library/Application Support/SculptForge/SculptForge/brushes` |
 | Windows | `%APPDATA%\SculptForge\SculptForge\brushes` |
 
-![The Custom brushes list in the Brush palette, with its right-click menu](images/brush-library.jpg)
+![The Custom brushes list in Sculpt > Brush, with its right-click menu](images/brush-library.jpg)
 
 ### The Custom brushes list
 
-The **Brush** palette lists every custom brush under **Custom brushes**. A small tag after a name says where
+**Sculpt > Brush** lists every custom brush under **Custom brushes**. A small tag after a name says where
 the brush comes from when it isn't simply yours or built in:
 
 | Tag | Meaning |
@@ -156,7 +184,7 @@ brushes.
 A brush code is the whole recipe in one line of text, starting with `sfbrush1:`. Paste it into a chat, an
 email, an issue or a forum post.
 
-- **Copy**: right-click a custom brush (in **Brush > Custom brushes** or the brush picker) and choose
+- **Copy**: right-click a custom brush (in **Sculpt > Brush > Custom brushes** or the brush picker) and choose
   **Copy brush code**.
 - **Paste**: copy a code, then press <kbd>Ctrl</kbd>+<kbd>V</kbd> over the viewport, click **Paste brush** in
   Brush Lab, or choose **Edit > Paste brush**. The brush is installed in your library and becomes active.
@@ -181,11 +209,13 @@ The file format and every key are documented in
 
 ### Studio brush folders
 
-A studio can share brushes read-only from network folders. Set the environment variable
-`SCULPTFORGE_BRUSH_PATH` to one or more folders (separated by `:` on Linux and macOS, `;` on Windows). Every
-`.sfbrush` file in them loads at start-up, tagged `studio`. Artists can't change or delete studio brushes; if
-they edit one, their own version is saved in their library under the same name. The Rez package adds the
-folder in `SCULPTFORGE_STUDIO_BRUSHES` to this path. See [For studios](studios.md).
+A studio can share brushes read-only from network folders. Set the environment variable `SCULPTFORGE_BRUSH_PATH` to
+one or more folders (separated by `:` on Linux and macOS, `;` on Windows). Every `.sfbrush` file in them loads at
+start-up, tagged `studio`.
+
+Artists can't change or delete studio brushes; if they edit one, their own version is saved in their library under the
+same name. The Rez package adds the folder in `SCULPTFORGE_STUDIO_BRUSHES` to this path. See [For
+studios](studios.md).
 
 Projects (`.sfproj`) also store the brushes they use, so a scene opens with its brushes on any machine.
 
@@ -193,7 +223,7 @@ Projects (`.sfproj`) also store the brushes they use, so a scene opens with its 
 
 The community gallery is a public collection of free (CC0) brushes shared by other sculptors.
 
-1. Click **Community brushes** at the top of the **Brush** palette.
+1. Click **Community brushes** at the top of **Sculpt > Brush**.
 2. Search by name or description (scales, skin, stone...), or pick a tag from the **All tags** list.
 3. Click **Install** under a brush. It is downloaded, checked against its SHA-256 checksum, installed in your
    library and made active. Installed brushes show **Installed**.

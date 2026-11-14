@@ -51,7 +51,7 @@ TEST(crkw_metahuman_reference_preview_export_and_project) {
     sf::CommandRegistry commands;
     CHECK(commands.execute(doc, "crkw_mh_create", {{"assets", fixture.root.string()}, {"layout", std::string("HEAD")}}).ok);
     CHECK(doc.mesh.vertexCount() == 9);
-    CHECK(doc.activeSubtoolInfo().crkwMetaHuman["role"].asString() == "head");
+    CHECK(doc.activePartInfo().crkwMetaHuman["role"].asString() == "head");
     const auto originalUvs = doc.mesh.uvs;
     const auto originalPositions = doc.mesh.positions;
     doc.mesh.texture = sf::makeTexture(4, 4);
@@ -68,7 +68,7 @@ TEST(crkw_metahuman_reference_preview_export_and_project) {
     CHECK(loaded.mesh.previewTexture != nullptr);
     CHECK(loaded.mesh.texture != nullptr);
     CHECK(loaded.mesh.texture->pixels == originalTexture->pixels);
-    CHECK(loaded.activeSubtoolInfo().crkwMetaHuman["role"].asString() == "head");
+    CHECK(loaded.activePartInfo().crkwMetaHuman["role"].asString() == "head");
     loaded.mesh.uvs[0] = {9, 9};
     CHECK(commands.execute(loaded, "crkw_mh_fix_uvs").ok);
     CHECK(loaded.mesh.uvs == originalUvs);
@@ -99,9 +99,9 @@ TEST(crkw_metahuman_separate_base_export_and_missing_assets) {
     sf::Document doc;
     sf::CommandRegistry commands;
     CHECK(!commands.execute(doc, "crkw_mh_create", {{"assets", (fixture.root / "missing").string()}}).ok);
-    CHECK(doc.subtoolCount() == 1);
+    CHECK(doc.partCount() == 1);
     CHECK(commands.execute(doc, "crkw_mh_create", {{"assets", fixture.root.string()}, {"layout", std::string("SEPARATE")}}).ok);
-    CHECK(doc.subtoolCount() == 6);
+    CHECK(doc.partCount() == 6);
     CHECK(commands.execute(doc, "subdiv_divide").ok);
     CHECK(commands.execute(doc, "crkw_mh_export", {{"folder", (fixture.root / "base-export").string()}}).ok);
     std::vector<sf::MeshObject> objects; std::string error;

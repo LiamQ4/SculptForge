@@ -1,9 +1,17 @@
 # Scan an object into a splat
 
+![A Gaussian splat of a lion bust](images/splats.jpg)
+
+> **In short:**
+> - Walk around an object with your phone and get a Gaussian splat in the viewport.
+> - Watch it sharpen while it trains; start with **Fast preview**, then **Quality**.
+> - Nothing is uploaded: everything runs on your computer.
+
 Walk around a clay maquette, a prop or a toy with your phone, and SculptForge turns the video or photos into a
 Gaussian splat in the viewport. You watch it sharpen while it trains, and you can orbit around it the whole time.
-From there you can sculpt against it, [make it sculptable](scan-to-sculptable.md), or save
-it for a splat viewer or a game engine. Nothing is uploaded: everything runs on your own computer.
+
+From there you can sculpt against it, [make it sculptable](scan-to-sculptable.md), or save it for a splat viewer or a
+game engine. Nothing is uploaded: everything runs on your own computer.
 
 ## What you need
 
@@ -41,7 +49,7 @@ The capture decides the quality far more than the settings do.
 
 ## Train a splat
 
-1. Open the **Splats** palette (the **Splats** menu, or press <kbd>F3</kbd> and type "train").
+1. Open **Render > Gaussian Splats** (or press <kbd>F3</kbd> and type "train").
 2. Under **Train from capture**, pick a preset: **Fast preview** or **Quality**.
 3. Click **Video...** and pick the video, or **Photos Folder...** and pick the folder of photos. You can also drop a
    video file onto the window. Captures sent from the phone link start by themselves.
@@ -65,7 +73,7 @@ The panel over the viewport shows the step, the quality so far, how long it has 
 - **Cancel** ends training and saves nothing.
 
 You can orbit, pan and zoom while it trains. While the splat trains, the sculpt is hidden so the splat isn't
-inside it; tick **Show mesh** in the Splats palette to bring it back.
+inside it; tick **Show mesh** in **Render > Gaussian Splats** to bring it back.
 
 ## Presets
 
@@ -87,7 +95,7 @@ A copy goes into the **Splats** tab of the Library, so you can open it again lat
 the result holds the frames, the camera positions and the logs (`brush.log`, `colmap.log`); you can delete it.
 
 The splat comes in centred and upright: SculptForge uses the camera positions to put the object at the middle of
-the scene with the cameras' "up" pointing up. Use **Flip**, **Turn 90** and **Fit** in the Splats palette if it
+the scene with the cameras' "up" pointing up. Use **Flip**, **Turn 90** and **Fit** in **Render > Gaussian Splats** if it
 still needs a turn. Then:
 
 - [Make it sculptable](scan-to-sculptable.md).

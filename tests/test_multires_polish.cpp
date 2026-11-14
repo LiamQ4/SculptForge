@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Subdivision levels, polish: tools that rebuild the mesh say they drop the levels and undo brings them back,
-// sculpt-layer detail turns with the low level, and inactive SubTools don't keep cached levels.
+// sculpt-layer detail turns with the low level, and inactive Parts don't keep cached levels.
 #include "TestHarness.h"
 
 #include "core/Commands.h"
@@ -52,7 +52,7 @@ bool bitEqual(const std::vector<glm::vec3>& a, const std::vector<glm::vec3>& b) 
 
 bool contains(const std::string& s, const std::string& part) { return s.find(part) != std::string::npos; }
 
-// A cube divided twice, detail at the top, then a pending (not yet folded in) stroke at SDiv 2 of 3.
+// A cube divided twice, detail at the top, then a pending (not yet folded in) stroke at Level 2 of 3.
 Document levelledCube() {
     Document d = makeDoc(makeCube(4));
     run(d, "subdiv_divide");
@@ -69,25 +69,25 @@ double msSince(std::chrono::steady_clock::time_point t0) {
 
 } // namespace
 
-// Timing of selecting SubTools and stepping levels on a 1.77M-triangle top level (SF_LEVELS_BENCH=1).
+// Timing of selecting Parts and stepping levels on a 1.77M-triangle top level (SF_LEVELS_BENCH=1).
 TEST(multires_bench_select_and_step) {
     if (!std::getenv("SF_LEVELS_BENCH")) return;
     Document d = makeDoc(makeCube(3));
     for (int i = 0; i < 7; ++i) run(d, "subdiv_divide");
-    d.addSubtool(makeIcosphere(3), "Eye", false);
+    d.addPart(makeIcosphere(3), "Eye", false);
     std::printf("  top level: %zu triangles\n", d.mesh.triangleCount());
     // Fill the level cache: down and back up.
     run(d, "subdiv_lower");
-    std::printf("  level cache at SDiv 7: %.0f MB (the top level), ", double(subdivCacheBytes(d.mesh)) / 1e6);
+    std::printf("  level cache at Level 7: %.0f MB (the top level), ", double(subdivCacheBytes(d.mesh)) / 1e6);
     run(d, "subdiv_higher");
-    std::printf("at SDiv 8: %.0f MB; the levels themselves %.0f MB\n", double(subdivCacheBytes(d.mesh)) / 1e6,
+    std::printf("at Level 8: %.0f MB; the levels themselves %.0f MB\n", double(subdivCacheBytes(d.mesh)) / 1e6,
                 double(subdivBytes(d.mesh)) / 1e6);
     for (int round = 0; round < 3; ++round) {
         auto t0 = std::chrono::steady_clock::now();
-        d.selectSubtool(1);
+        d.selectPart(1);
         const double away = msSince(t0);
         t0 = std::chrono::steady_clock::now();
-        d.selectSubtool(0);
+        d.selectPart(0);
         const double back = msSince(t0);
         t0 = std::chrono::steady_clock::now();
         run(d, "subdiv_lower");
@@ -141,8 +141,8 @@ TEST(multires_rebuilding_tools_drop_levels_and_undo_restores_them) {
         Document d = levelledCube();
         if (std::string(c.command) == "delete_hidden")
             for (uint32_t t = 0; t < 40; ++t) d.mesh.ensureHidden()[t] = 1; // hidden at this level, pending
-        CHECK(subdivLevelText(d.mesh) == "SDiv 2/3");
-        CHECK(!subdivInSync(d.mesh)); // the stroke at SDiv 2 is still pending
+        CHECK(subdivLevelText(d.mesh) == "Level 2/3");
+        CHECK(!subdivInSync(d.mesh)); // the stroke at Level 2 is still pending
         const std::vector<glm::vec3> working = d.mesh.positions;
         const size_t tris = d.mesh.triangleCount();
         std::vector<std::vector<glm::vec3>> levels;
@@ -151,7 +151,7 @@ TEST(multires_rebuilding_tools_drop_levels_and_undo_restores_them) {
 
         const CommandResult r = run(d, c.command, c.args);
         CHECK(r.ok);
-        CHECK(contains(r.message, "Subdivision levels removed: SDiv 2 of 3 kept as the new base"));
+        CHECK(contains(r.message, "Subdivision levels removed: Level 2 of 3 kept as the new base"));
         CHECK(contains(r.message, "undo restores them"));
         CHECK(subdivLevelCount(d.mesh) == 0);
         CHECK(d.notice.empty());
@@ -166,23 +166,23 @@ TEST(multires_rebuilding_tools_drop_levels_and_undo_restores_them) {
         const AABB after = d.mesh.bounds();
         CHECK(glm::length(after.min - box.min) < 0.1f && glm::length(after.max - box.max) < 0.1f);
 
-        // Undo: the whole stack, at SDiv 2 with the pending stroke, and every level as it was.
+        // Undo: the whole stack, at Level 2 with the pending stroke, and every level as it was.
         CHECK(run(d, "undo").ok);
-        CHECK(subdivLevelText(d.mesh) == "SDiv 2/3");
+        CHECK(subdivLevelText(d.mesh) == "Level 2/3");
         CHECK(bitEqual(d.mesh.positions, working));
         for (int i : {2, 0, 1}) {
             CHECK(run(d, "subdiv_level", {{"level", double(i + 1)}}).ok);
             CHECK(maxDistance(d.mesh.positions, levels[size_t(i)]) < 1e-5f);
         }
-        // Again from SDiv 2: redo drops the levels again, undo once more brings them back.
+        // Again from Level 2: redo drops the levels again, undo once more brings them back.
         CHECK(run(d, c.command, c.args).ok);
         CHECK(subdivLevelCount(d.mesh) == 0);
         CHECK(run(d, "undo").ok);
-        CHECK(subdivLevelText(d.mesh) == "SDiv 2/3");
+        CHECK(subdivLevelText(d.mesh) == "Level 2/3");
         CHECK(run(d, "redo").ok);
         CHECK(subdivLevelCount(d.mesh) == 0);
         CHECK(run(d, "undo").ok);
-        CHECK(subdivLevelText(d.mesh) == "SDiv 2/3");
+        CHECK(subdivLevelText(d.mesh) == "Level 2/3");
         CHECK(maxDistance(d.mesh.positions, levels[1]) < 1e-5f);
     }
     // Without levels there's no note.
@@ -190,32 +190,32 @@ TEST(multires_rebuilding_tools_drop_levels_and_undo_restores_them) {
     CHECK(!contains(run(p, "decimate", {{"ratio", 0.5}}).message, "Subdivision"));
 }
 
-// Merging and splitting SubTools (not undoable) use each SubTool's current level and say so.
+// Merging and splitting Parts (not undoable) use each Part's current level and say so.
 TEST(multires_merge_and_split_say_levels_are_removed) {
     Document d = levelledCube();
-    d.subtools[0].name = "Body";
+    d.parts[0].name = "Body";
     const size_t current = d.mesh.triangleCount();
-    d.addSubtool(makeIcosphere(1), "Eye", false);
-    CommandResult r = run(d, "subtool_merge_down");
+    d.addPart(makeIcosphere(1), "Eye", false);
+    CommandResult r = run(d, "part_merge_down");
     CHECK(r.ok);
-    CHECK(contains(r.message, "Subdivision levels removed: Body SDiv 2 of 3 kept as the new base"));
+    CHECK(contains(r.message, "Subdivision levels removed: Body Level 2 of 3 kept as the new base"));
     CHECK(d.mesh.triangleCount() == current + makeIcosphere(1).triangleCount());
     CHECK(subdivLevelCount(d.mesh) == 0);
     // Split: pieces of the current level.
     Document t = levelledCube();
-    for (uint32_t i = 0; i < t.mesh.triangleCount(); ++i) t.mesh.ensurePolygroups()[i] = i < 100 ? 1 : 2;
-    r = run(t, "subtool_split_groups");
+    for (uint32_t i = 0; i < t.mesh.triangleCount(); ++i) t.mesh.ensureFaceGroups()[i] = i < 100 ? 1 : 2;
+    r = run(t, "part_split_groups");
     CHECK(r.ok);
-    CHECK(contains(r.message, "Subdivision levels removed: Sculpt SDiv 2 of 3 kept as the new base"));
-    CHECK(t.mesh.triangleCount() == 100 || t.subtoolMesh(0).triangleCount() == 100);
-    // Merge visible: both SubTools with levels are named.
+    CHECK(contains(r.message, "Subdivision levels removed: Sculpt Level 2 of 3 kept as the new base"));
+    CHECK(t.mesh.triangleCount() == 100 || t.partMesh(0).triangleCount() == 100);
+    // Merge visible: both Parts with levels are named.
     Document m = levelledCube();
-    m.addSubtool(makeCube(2), "Box", true);
+    m.addPart(makeCube(2), "Box", true);
     run(m, "subdiv_divide");
-    r = run(m, "subtool_merge_visible");
+    r = run(m, "part_merge_visible");
     CHECK(r.ok);
-    CHECK(contains(r.message, "Sculpt SDiv 2 of 3"));
-    CHECK(contains(r.message, "Box SDiv 2 of 2"));
+    CHECK(contains(r.message, "Sculpt Level 2 of 3"));
+    CHECK(contains(r.message, "Box Level 2 of 2"));
 }
 
 namespace {
@@ -254,6 +254,7 @@ TEST(multires_layer_detail_turns_with_a_rotated_low_level) {
     CHECK(maxLength(before) > 0.02f);
 
     CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    d.activeLayer = -1; // posing the whole Part: Base mesh active (with a layer active the turn goes into it, #133)
     CHECK(run(d, "transform", {{"rotate", "0,90,0"}, {"pivot", "origin"}}).ok);
     CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
     const glm::mat3 R = glm::mat3_cast(eulerRotation(glm::vec3(0, 90, 0)));
@@ -282,14 +283,14 @@ TEST(multires_layer_detail_turns_with_a_rotated_low_level) {
 }
 
 // Format 4 projects kept sculpt-layer details in world space: they load converted, so the levels evaluate as
-// they did (tests/data/levels_layers_v4*.sfproj were saved by 0.4.2 + levels: a layer sculpted at SDiv 3, then a
-// stroke on the base at SDiv 1, saved there with SDiv 2 and 3 waiting to be re-evaluated; and the same at SDiv 3).
+// they did (tests/data/levels_layers_v4*.sfproj were saved by 0.4.2 + levels: a layer sculpted at Level 3, then a
+// stroke on the base at Level 1, saved there with Level 2 and 3 waiting to be re-evaluated; and the same at Level 3).
 TEST(multires_format4_layer_detail_is_converted) {
     Document ref, d;
     std::string err;
     CHECK(loadProject(SF_TEST_DATA_DIR "/levels_layers_v4_top.sfproj", ref, err));
     CHECK(loadProject(SF_TEST_DATA_DIR "/levels_layers_v4.sfproj", d, err));
-    CHECK(subdivLevelText(ref.mesh) == "SDiv 3/3" && subdivLevelText(d.mesh) == "SDiv 1/3");
+    CHECK(subdivLevelText(ref.mesh) == "Level 3/3" && subdivLevelText(d.mesh) == "Level 1/3");
     CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
     CHECK(d.mesh.layers.size() == 1 && ref.mesh.layers.size() == 1);
     if (d.mesh.layers.size() != 1 || ref.mesh.layers.size() != 1) return;
@@ -318,9 +319,9 @@ TEST(multires_format4_layer_detail_is_converted) {
     std::filesystem::remove(path);
 }
 
-// Only the active SubTool keeps cached levels: leaving a SubTool frees its cache, and stepping levels after
+// Only the active Part keeps cached levels: leaving a Part frees its cache, and stepping levels after
 // coming back still works (the level is rebuilt once).
-TEST(multires_inactive_subtools_free_their_level_cache) {
+TEST(multires_inactive_parts_free_their_level_cache) {
     Document d = makeDoc(makeCube(4));
     for (int i = 0; i < 3; ++i) run(d, "subdiv_divide");
     stroke(d, "0,0,2");
@@ -331,11 +332,11 @@ TEST(multires_inactive_subtools_free_their_level_cache) {
     std::printf("  cache %zu bytes, stack %zu bytes\n", cached, stackBytes);
     CHECK(cached > d.mesh.triangleCount() * 12); // at least the level left
     const std::vector<glm::vec3> top = d.mesh.positions;
-    d.addSubtool(makeIcosphere(1), "Eye", true); // selects the new SubTool
-    CHECK(subdivCacheBytes(d.subtoolMesh(0)) == 0);
-    CHECK(subdivBytes(d.subtoolMesh(0)) == stackBytes); // the levels themselves are kept
-    d.selectSubtool(0);
-    CHECK(subdivLevelText(d.mesh) == "SDiv 4/4");
+    d.addPart(makeIcosphere(1), "Eye", true); // selects the new Part
+    CHECK(subdivCacheBytes(d.partMesh(0)) == 0);
+    CHECK(subdivBytes(d.partMesh(0)) == stackBytes); // the levels themselves are kept
+    d.selectPart(0);
+    CHECK(subdivLevelText(d.mesh) == "Level 4/4");
     CHECK(bitEqual(d.mesh.positions, top));
     CHECK(run(d, "subdiv_lower").ok);
     CHECK(run(d, "subdiv_higher").ok);

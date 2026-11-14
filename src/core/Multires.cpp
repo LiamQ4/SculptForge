@@ -1,6 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Multires.h"
+#include "core/Parallel.h"
 #include "core/Micro.h"
 
 #include "core/BVH.h"
@@ -11,6 +12,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <thread>
@@ -37,7 +39,7 @@ constexpr uint32_t kNone = SubdivTopology::kNone;
 // Runs fn(begin, end) over [0, n) on several threads for big meshes.
 template <class Fn>
 void parallelRange(size_t n, Fn fn) {
-    const size_t threads = n < 100000 ? 1 : std::clamp<size_t>(std::thread::hardware_concurrency(), 1, 16);
+    const size_t threads = n < 100000 ? 1 : size_t(parallelThreads());
     if (threads <= 1) {
         if (n) fn(size_t(0), n);
         return;
@@ -63,9 +65,10 @@ void assignLevelArrays(Mesh& out, const Mesh& m) {
     out.positions = m.positions;
     out.mask = m.mask;
     out.colors = m.colors;
-    out.polygroups = m.polygroups;
+    out.facegroups = m.facegroups;
     out.hidden = m.hidden;
     out.uvs = m.uvs;
+    out.creases = m.creases; // (only a base level has any: the levels above are made with them)
     out.quadPartners = m.quadPartners;
     out.base = m.base;
     out.layers = m.layers;
@@ -536,11 +539,18 @@ bool buildFineMetadata(SubdivTopology& tp, const std::vector<glm::uvec3>& fine, 
 // --- Stencils ---
 
 // The subdivided field: the coarse values `P` through the level's stencils (Catmull-Clark / Loop when
-// `smooth`, else linear: edge midpoints and polygon centres).
+// `smooth`, else linear: edge midpoints and polygon centres). `sharp`: the level's creased edges (EdgeSharpness;
+// null = none, which takes exactly the plain stencils).
 template <class T>
-std::vector<T> subdivideField(const SubdivTopology& tp, bool smooth, const std::vector<T>& P) {
+std::vector<T> subdivideField(const SubdivTopology& tp, bool smooth, const std::vector<T>& P, const EdgeSharpness* sharp = nullptr) {
     std::vector<T> out(tp.fineVertices);
     const size_t np = tp.polygonCount(), ne = tp.edges.size();
+    if (sharp && (sharp->edges.empty() || !smooth)) sharp = nullptr;
+    std::vector<uint8_t> hot; // vertices on a creased edge: only their stencils change
+    if (sharp) {
+        hot.assign(tp.coarseVertices, 0);
+        for (uint32_t e : sharp->edges) hot[tp.edges[e].x] = hot[tp.edges[e].y] = 1;
+    }
     std::vector<T> fp;
     if (tp.catmullClark) {
         fp.resize(np);
@@ -568,6 +578,12 @@ std::vector<T> subdivideField(const SubdivTopology& tp, bool smooth, const std::
             if (!smooth || f.y == kNone) v = (P[va] + P[vb]) * 0.5f;
             else if (tp.catmullClark) v = (P[va] + P[vb] + fp[f.x] + fp[f.y]) * 0.25f;
             else v = (P[va] + P[vb]) * 0.375f + (P[opposite(f.x, va, vb)] + P[opposite(f.y, va, vb)]) * 0.125f;
+            if (sharp && f.y != kNone && hot[va] && hot[vb]) {
+                const float s = sharp->at(uint32_t(i));
+                const T mid = (P[va] + P[vb]) * 0.5f;
+                if (s >= 1.0f) v = mid;
+                else if (s > 0.0f) v = v + (mid - v) * s;
+            }
             out[tp.edgeChildOf(uint32_t(i))] = v;
         }
     });
@@ -607,10 +623,109 @@ std::vector<T> subdivideField(const SubdivTopology& tp, bool smooth, const std::
                 const float beta = (0.625f - c * c) / fn;
                 o = pv * (1.0f - fn * beta) + ring * beta;
             }
+            if (!sharp || !hot[v]) continue;
+            // Creased edges here (open edges count as fully sharp): on two, the crease rule; on more, a corner;
+            // on one (a dart), smooth. A mean sharpness under 1 blends with the smooth result.
+            uint32_t nSharp = 0, creased = 0;
+            float sum = 0.0f;
+            T ssum = T(0);
+            for (uint32_t k = e0; k < e1; ++k) {
+                const uint32_t ei = tp.vertEdges[k];
+                const bool open = tp.edgeFaces[ei].y == kNone;
+                const float s = open ? 10.0f : sharp->at(ei);
+                if (s <= 0.0f) continue;
+                ++nSharp;
+                creased += !open;
+                sum += std::min(s, 10.0f);
+                ssum += P[tp.edges[ei].x == v ? tp.edges[ei].y : tp.edges[ei].x];
+            }
+            if (creased == 0 || nSharp < 2) continue;
+            const T rule = nSharp == 2 ? pv * 0.75f + ssum * 0.125f : pv;
+            const float vs = boundary ? 1.0f : sum / float(nSharp);
+            o = vs >= 1.0f ? rule : o + (rule - o) * vs;
         }
     });
     return out;
 }
+
+// The edge of `tp` between coarse vertices x and y, or kNone.
+uint32_t topoEdge(const SubdivTopology& tp, uint32_t x, uint32_t y) {
+    if (x >= tp.coarseVertices || y >= tp.coarseVertices) return kNone;
+    for (uint32_t k = tp.vertEdgeOffsets[x]; k < tp.vertEdgeOffsets[x + 1]; ++k) {
+        const glm::uvec2 ab = tp.edges[tp.vertEdges[k]];
+        if ((ab.x == x && ab.y == y) || (ab.x == y && ab.y == x)) return tp.vertEdges[k];
+    }
+    return kNone;
+}
+
+// The sharpness of `tp`'s edges (the edges of the level it is made from, whose triangles and creases are given):
+// that level's own creases, and the creases further down that are left (`below`, the level the coarse one was
+// made with: each of its sharp edges' halves gets s - 1). Null when nothing is sharp.
+std::shared_ptr<const EdgeSharpness> levelSharpness(const SubdivLevel* below, const std::vector<glm::uvec3>& tris,
+                                                    const std::vector<float>& creases, const SubdivTopology& tp) {
+    std::vector<std::pair<uint32_t, float>> list;
+    if (!creases.empty() && creases.size() == tris.size() * 3)
+        for (size_t t = 0; t < tris.size(); ++t)
+            for (int k = 0; k < 3; ++k) {
+                const float c = creases[t * 3 + size_t(k)];
+                if (!(c > 0.0f)) continue;
+                const uint32_t e = topoEdge(tp, tris[t][k], tris[t][(k + 1) % 3]);
+                if (e != kNone) list.emplace_back(e, creaseSharpness(std::min(c, 1.0f)));
+            }
+    if (below && below->sharp && below->topo) {
+        const SubdivTopology& bt = *below->topo;
+        for (size_t j = 0; j < below->sharp->edges.size(); ++j) {
+            const float s = below->sharp->sharpness[j] - 1.0f;
+            if (s <= 0.0f) continue;
+            const uint32_t e = below->sharp->edges[j], mid = bt.edgeChildOf(e);
+            for (uint32_t end : {bt.edges[e].x, bt.edges[e].y}) {
+                const uint32_t f = topoEdge(tp, bt.vertexChildOf(end), mid);
+                if (f != kNone) list.emplace_back(f, s);
+            }
+        }
+    }
+    if (list.empty()) return nullptr;
+    std::sort(list.begin(), list.end());
+    auto out = std::make_shared<EdgeSharpness>();
+    for (const auto& [e, s] : list) {
+        if (!out->edges.empty() && out->edges.back() == e) out->sharpness.back() = std::max(out->sharpness.back(), s);
+        else out->edges.push_back(e), out->sharpness.push_back(s);
+    }
+    return out;
+}
+
+bool sameSharpness(const EdgeSharpness* a, const EdgeSharpness* b) {
+    if (!a || !b) return !a && !b;
+    return a->edges == b->edges && a->sharpness == b->sharpness;
+}
+
+// Works out every level's sharpness again, bottom up (`working`: the current level's working mesh, whose creases
+// may be newer than its data). True when any level's changed.
+bool updateSharpness(MultiresStack& s, const Mesh* working) {
+    bool changed = false;
+    std::vector<glm::uvec3> scratch;
+    const std::vector<glm::uvec3> none;
+    for (size_t k = 1; k < s.levels.size(); ++k) {
+        const SubdivLevel& below = s.levels[k - 1];
+        if (!s.levels[k].topo) return changed;
+        const bool cur = working && int(k) - 1 == s.current;
+        const std::vector<float>& cr = cur ? working->creases : below.data->creases;
+        const std::vector<glm::uvec3>& tris = cur ? working->triangles : cr.empty() ? none : levelTriangles(below, scratch);
+        std::shared_ptr<const EdgeSharpness> sh = levelSharpness(k >= 2 ? &below : nullptr, tris, cr, *s.levels[k].topo);
+        if (!sameSharpness(sh.get(), s.levels[k].sharp.get())) changed = true;
+        s.levels[k].sharp = std::move(sh);
+    }
+    return changed;
+}
+
+} // namespace
+
+float EdgeSharpness::at(uint32_t e) const {
+    const auto it = std::lower_bound(edges.begin(), edges.end(), e);
+    return it != edges.end() && *it == e ? sharpness[size_t(it - edges.begin())] : 0.0f;
+}
+
+namespace {
 
 // Vertex normals of `Q` on the fine triangles (area weighted).
 std::vector<glm::vec3> fineNormals(const std::vector<glm::uvec3>& tris, const std::vector<glm::vec3>& Q) {
@@ -811,27 +926,206 @@ void prolongFaces(const SubdivTopology& tp, const std::vector<T>& coarse, std::v
 }
 
 // UVs per triangle corner; `flags` are per triangle. `coarseTris`: the coarse level's triangles.
+// Each coarse corner takes the UV of its fine vertex, which needs every UV seam on the coarse edges. A fine level
+// unwrapped on its own (#145, @RodTDai's diagnosis: a high-poly imported with its UDIM layout) also has seams through
+// coarse polygons, whose fine faces then lie in several islands; one UV per corner can't hold that, and copying each
+// corner from its own fine face stretched faces across the layout. Such a polygon keeps one island: the one most
+// of its fine faces are in (ties: the larger island, then the lower id, so a seam along a row of polygons moves to
+// one side of it), and a corner of another island takes that island's UV at the same vertex where a fine face of
+// the island touches it, else a least-squares affine fit of the island's UVs over the polygon, averaged over every
+// polygon that needs the same vertex in the same island (so neighbours meet without cracks). Islands are fine faces
+// joined across edges whose two ends have the same UVs on both sides: overlapping islands stay apart.
 void restrictUvs(const SubdivTopology& tp, const std::vector<glm::uvec3>& coarseTris, const std::vector<glm::vec2>& fine,
                  std::vector<glm::vec2>& coarse, const std::vector<uint8_t>* flags, std::vector<uint8_t>& outFlags) {
     const size_t nt = coarseTris.size();
     if (coarse.size() != nt * 3) coarse.assign(nt * 3, glm::vec2(0.0f));
     outFlags.assign(nt, 0);
+    auto put = [&](uint32_t p, uint32_t i, glm::vec2 uv) {
+        const uint32_t cv = tp.polyVerts[tp.polyOffsets[p] + i];
+        for (uint32_t t : {tp.polyTris[p].x, tp.polyTris[p].y}) {
+            if (t == kNone) continue;
+            for (uint32_t s = 0; s < 3; ++s)
+                if (coarseTris[t][s] == cv) {
+                    coarse[t * 3 + s] = uv;
+                    outFlags[t] = 1;
+                }
+        }
+    };
+    const size_t np = tp.polygonCount(), nf = tp.fineTriangles;
+    // Fine faces by polygon (CSR) with their corner codes.
+    std::vector<uint32_t> parent(nf, kNone), offsets(np + 1, 0), faces(nf);
+    std::vector<uint8_t> codes(nf * 3), touched(np, 0);
     forEachFineFace(tp, [&](size_t f, uint32_t p, uint32_t, const uint8_t* code) {
-        if (flags && !(*flags)[f]) return;
-        const uint32_t o = tp.polyOffsets[p];
-        for (int c = 0; c < 3; ++c) {
-            if (code[c] >= 4) continue;
-            const uint32_t cv = tp.polyVerts[o + code[c]];
-            for (uint32_t t : {tp.polyTris[p].x, tp.polyTris[p].y}) {
-                if (t == kNone) continue;
-                for (uint32_t s = 0; s < 3; ++s)
-                    if (coarseTris[t][s] == cv) {
-                        coarse[t * 3 + s] = fine[f * 3 + size_t(c)];
-                        outFlags[t] = 1;
-                    }
+        parent[f] = p;
+        for (int c = 0; c < 3; ++c) codes[f * 3 + size_t(c)] = code[c];
+        if (!flags || (*flags)[f]) touched[p] = 1;
+        ++offsets[p + 1];
+    });
+    for (size_t p = 0; p < np; ++p) offsets[p + 1] += offsets[p];
+    {
+        std::vector<uint32_t> cursor(offsets.begin(), offsets.end() - 1);
+        for (uint32_t f = 0; f < nf; ++f)
+            if (parent[f] != kNone) faces[cursor[parent[f]]++] = f;
+    }
+    auto same = [](glm::vec2 a, glm::vec2 b) { return glm::all(glm::lessThanEqual(glm::abs(a - b), glm::vec2(1e-6f))); };
+    auto uvAt = [&](uint32_t f, int c) { return fine[size_t(f) * 3 + size_t(c)]; };
+    // A polygon whose fine vertices each have one UV (no seam inside): its corners as before.
+    std::vector<uint32_t> split;
+    for (uint32_t p = 0; p < np; ++p) {
+        if (!touched[p]) continue;
+        glm::vec2 first[9];
+        bool seen[9] = {}, clean = true;
+        for (uint32_t k = offsets[p]; k < offsets[p + 1] && clean; ++k)
+            for (int c = 0; c < 3 && clean; ++c) {
+                const uint8_t code = codes[size_t(faces[k]) * 3 + size_t(c)];
+                if (!seen[code]) seen[code] = true, first[code] = uvAt(faces[k], c);
+                else clean = same(first[code], uvAt(faces[k], c));
+            }
+        if (!clean) {
+            split.push_back(p);
+            continue;
+        }
+        for (uint32_t i = 0; i < 4; ++i)
+            if (seen[i]) put(p, i, first[i]);
+    }
+    if (split.empty()) return;
+
+    // UV islands of the fine faces (union-find; a root is its island's lowest face).
+    std::vector<uint32_t> root(nf);
+    for (uint32_t f = 0; f < nf; ++f) root[f] = f;
+    auto find = [&](uint32_t f) {
+        while (root[f] != f) f = root[f] = root[root[f]];
+        return f;
+    };
+    auto join = [&](uint32_t a, uint32_t b) {
+        a = find(a), b = find(b);
+        if (a != b) root[std::max(a, b)] = std::min(a, b);
+    };
+    // Joined when the shared edge's two ends have the same UVs in both faces. Inside a polygon: the codes they share;
+    // across polygons: the halves of coarse edges (corner to edge point), each kept by the first face that has it.
+    const size_t ne = tp.edges.size();
+    std::vector<uint32_t> halfFace(ne * 2, kNone);
+    std::vector<glm::vec2> halfUv(ne * 4);
+    for (uint32_t p = 0; p < np; ++p) {
+        const uint32_t o = tp.polyOffsets[p], n = polySize(tp, p);
+        for (uint32_t k = offsets[p]; k < offsets[p + 1]; ++k) {
+            const uint32_t f = faces[k];
+            const uint8_t* cf = &codes[size_t(f) * 3];
+            for (uint32_t l = k + 1; l < offsets[p + 1]; ++l) {
+                const uint32_t g = faces[l];
+                const uint8_t* cg = &codes[size_t(g) * 3];
+                int shared = 0, match = 0;
+                for (int a = 0; a < 3; ++a)
+                    for (int b = 0; b < 3; ++b)
+                        if (cf[a] == cg[b]) ++shared, match += same(uvAt(f, a), uvAt(g, b));
+                if (shared == 2 && match == 2) join(f, g);
+            }
+            for (int a = 0; a < 3; ++a) {
+                const int b = (a + 1) % 3;
+                int corner = cf[a] < 4 ? a : cf[b] < 4 ? b : -1, mid = corner == a ? b : a;
+                if (corner < 0 || cf[mid] < 4 || cf[mid] > 7) continue;
+                const uint32_t i = cf[corner], side = cf[mid] - 4u;
+                if (side != i && side != (i + n - 1) % n) continue;
+                const uint32_t e = tp.polyEdges[o + side], h = e * 2 + (tp.edges[e].x == tp.polyVerts[o + i] ? 0u : 1u);
+                if (halfFace[h] == kNone) {
+                    halfFace[h] = f;
+                    halfUv[h * 2] = uvAt(f, corner), halfUv[h * 2 + 1] = uvAt(f, mid);
+                } else if (same(halfUv[h * 2], uvAt(f, corner)) && same(halfUv[h * 2 + 1], uvAt(f, mid))) {
+                    join(halfFace[h], f);
+                }
             }
         }
-    });
+    }
+    std::vector<uint32_t> islandSize(nf, 0);
+    for (uint32_t f = 0; f < nf; ++f) ++islandSize[find(f)];
+
+    // Where each fine corner sits in a polygon's parameter layout (for the affine fits).
+    auto layout = [&](uint32_t n, uint8_t code) -> glm::vec2 {
+        auto corner = [&](uint32_t i) {
+            if (!tp.catmullClark) return i == 0 ? glm::vec2(0.0f) : i == 1 ? glm::vec2(1.0f, 0.0f) : glm::vec2(0.0f, 1.0f);
+            const float a = 6.2831853f * float(i) / float(n);
+            return glm::vec2(std::cos(a), std::sin(a));
+        };
+        if (code < 4) return corner(code);
+        if (code < 8) return (corner(code - 4u) + corner((code - 3u) % n)) * 0.5f;
+        return glm::vec2(0.0f);
+    };
+    // Per (coarse vertex, island): a UV of the island at that vertex (exact), or the sum and count of the fits.
+    struct Shared {
+        glm::vec2 uv{0.0f};
+        int fits = 0;
+        bool exact = false;
+    };
+    std::unordered_map<uint64_t, Shared> shared;
+    struct Pending {
+        uint32_t p, i;
+        uint64_t key;
+    };
+    std::vector<Pending> pending;
+    for (uint32_t p : split) {
+        const uint32_t o = tp.polyOffsets[p], n = polySize(tp, p);
+        // The island: most fine faces here, then the larger island, then the lower id.
+        uint32_t island = kNone, most = 0;
+        for (uint32_t k = offsets[p]; k < offsets[p + 1]; ++k) {
+            const uint32_t r = find(faces[k]);
+            uint32_t count = 0;
+            for (uint32_t l = offsets[p]; l < offsets[p + 1]; ++l) count += find(faces[l]) == r;
+            if (island == kNone || count > most || (count == most && (islandSize[r] > islandSize[island] ||
+                                                                     (islandSize[r] == islandSize[island] && r < island))))
+                island = r, most = count;
+        }
+        for (uint32_t i = 0; i < n; ++i) {
+            bool done = false;
+            for (uint32_t k = offsets[p]; k < offsets[p + 1] && !done; ++k)
+                for (int c = 0; c < 3 && !done; ++c)
+                    if (codes[size_t(faces[k]) * 3 + size_t(c)] == i && find(faces[k]) == island)
+                        put(p, i, uvAt(faces[k], c)), done = true;
+            if (done) continue;
+            const uint32_t cv = tp.polyVerts[o + i];
+            const uint64_t key = uint64_t(cv) << 32 | island;
+            auto [it, fresh] = shared.try_emplace(key);
+            Shared& sv = it->second;
+            if (fresh) { // a fine face of the island at this vertex, in any polygon around it
+                for (uint32_t x = tp.vertEdgeOffsets[cv]; x < tp.vertEdgeOffsets[cv + 1] && !sv.exact; ++x)
+                    for (uint32_t q : {tp.edgeFaces[tp.vertEdges[x]].x, tp.edgeFaces[tp.vertEdges[x]].y}) {
+                        if (q == kNone || sv.exact) continue;
+                        for (uint32_t k = offsets[q]; k < offsets[q + 1] && !sv.exact; ++k)
+                            for (int c = 0; c < 3 && !sv.exact; ++c) {
+                                const uint8_t code = codes[size_t(faces[k]) * 3 + size_t(c)];
+                                if (code < 4 && tp.polyVerts[tp.polyOffsets[q] + code] == cv && find(faces[k]) == island)
+                                    sv.uv = uvAt(faces[k], c), sv.exact = true;
+                            }
+                    }
+            }
+            if (!sv.exact) { // uv = A (s, t, 1) by least squares over the island's fine corners in this polygon
+                glm::mat3 m(0.0f);
+                glm::mat3x2 r(0.0f); // columns: s, t, 1 -> the uv sums
+                for (uint32_t k = offsets[p]; k < offsets[p + 1]; ++k) {
+                    if (find(faces[k]) != island) continue;
+                    for (int c = 0; c < 3; ++c) {
+                        const glm::vec2 st = layout(n, codes[size_t(faces[k]) * 3 + size_t(c)]);
+                        const glm::vec3 x(st, 1.0f);
+                        m += glm::outerProduct(x, x);
+                        r += glm::outerProduct(uvAt(faces[k], c), x);
+                    }
+                }
+                if (std::abs(glm::determinant(m)) > 1e-6f) {
+                    sv.uv += r * glm::inverse(m) * glm::vec3(layout(n, uint8_t(i)), 1.0f);
+                    ++sv.fits;
+                }
+            }
+            pending.push_back({p, i, key});
+        }
+    }
+    for (const Pending& x : pending) {
+        const Shared& sv = shared[x.key];
+        if (sv.exact) put(x.p, x.i, sv.uv);
+        else if (sv.fits) put(x.p, x.i, sv.uv / float(sv.fits));
+        else // no fit: the corner's own UV
+            for (uint32_t k = offsets[x.p]; k < offsets[x.p + 1]; ++k)
+                for (int c = 0; c < 3; ++c)
+                    if (codes[size_t(faces[k]) * 3 + size_t(c)] == x.i) put(x.p, x.i, uvAt(faces[k], c));
+    }
 }
 
 void prolongUvs(const SubdivTopology& tp, const std::vector<glm::vec2>& coarse, std::vector<glm::vec2>& fine,
@@ -878,7 +1172,7 @@ void evaluateLevel(MultiresStack& s, int k) {
     const Mesh& coarse = *s.levels[size_t(k) - 1].data;
     const SubdivTopology& tp = *L.topo;
     Mesh& fine = mutableData(L);
-    const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, baseChannel(coarse));
+    const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, baseChannel(coarse), L.sharp.get());
     std::vector<glm::vec3>& target = baseChannel(fine);
     std::vector<glm::vec3> n; // normals of Q, for the frames of the details
     std::vector<uint32_t> refs;
@@ -889,7 +1183,7 @@ void evaluateLevel(MultiresStack& s, int k) {
         target = Q;
     }
     for (size_t i = 0; i < fine.layers.size() && i < coarse.layers.size(); ++i) {
-        std::vector<glm::vec3> d = subdivideField(tp, tp.smooth, coarse.layers[i].delta);
+        std::vector<glm::vec3> d = subdivideField(tp, tp.smooth, coarse.layers[i].delta, L.sharp.get());
         if (i < L.layerDetail.size() && L.layerDetail[i]) {
             if (n.empty()) levelFrames(L, Q, n, refs);
             addLayerDetail(refs, n, Q, *L.layerDetail[i], d);
@@ -905,7 +1199,7 @@ void evaluateLevel(MultiresStack& s, int k) {
 // is `coarseBase`: done before that level changes, so this one can follow it.
 void fitLevelDetail(SubdivLevel& L, const std::vector<glm::vec3>& coarseBase) {
     const SubdivTopology& tp = *L.topo;
-    const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, coarseBase);
+    const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, coarseBase, L.sharp.get());
     std::vector<glm::vec3> n;
     std::vector<uint32_t> refs;
     levelFrames(L, Q, n, refs);
@@ -936,7 +1230,7 @@ void enterLevel(Mesh& mesh, int level, BVH* bvh, const SubdivLevel* leavingLevel
     std::shared_ptr<Mesh> leaving = leavingLevel ? leavingLevel->data : nullptr;
     std::shared_ptr<const SubdivTopology> leavingTopo = leavingLevel && generatedLevel(*leavingLevel) ? leavingLevel->topo : nullptr;
     std::shared_ptr<MultiresStack> stack = mesh.multires;
-    if (leaving && leaving == stack->levels[size_t(level)].data) return; // already that level (e.g. Del Lower)
+    if (leaving && leaving == stack->levels[size_t(level)].data) return; // already that level (e.g. Remove Below)
     if (!stack->cache) stack->cache = std::make_shared<SubdivLevelCache>();
     SubdivLevelCache& cache = *stack->cache;
     std::shared_ptr<PaintTexture> texture = mesh.texture;
@@ -1093,6 +1387,31 @@ void remapPaint(Mesh& m, const Mesh& w) {
     m.activePaintLayer = w.activePaintLayer;
 }
 
+// Copies a change of one per-vertex array from the current level `c` down to the parent vertices of every lower
+// level (`changed` = the vertices of `w` that changed).
+template <class T, class Get>
+void spreadVertexDown(MultiresStack& s, int c, const std::vector<T>& w, const std::vector<uint8_t>& changed, T fill, Get get) {
+    std::vector<uint8_t> flags = changed, next;
+    const std::vector<T>* fine = &w;
+    for (int j = c; j >= 1; --j) {
+        std::vector<T>& coarse = get(mutableData(s.levels[size_t(j) - 1]));
+        const bool fresh = coarse.empty();
+        restrictVertices(*s.levels[size_t(j)].topo, *fine, coarse, fill, fresh ? nullptr : &flags, next);
+        flags.swap(next);
+        fine = &coarse;
+    }
+}
+
+// Which vertices of `w` differ from the old current level's `r` (everything but `fill` when `r` doesn't fit).
+template <class T>
+bool changedVertices(const std::vector<T>& w, const std::vector<T>& r, T fill, std::vector<uint8_t>& changed) {
+    changed.assign(w.size(), 0);
+    bool any = false;
+    for (size_t v = 0; v < w.size(); ++v)
+        if (r.size() != w.size() ? !(w[v] == fill) : !(w[v] == r[v])) changed[v] = 1, any = true;
+    return any || r.size() != w.size();
+}
+
 // Spreads a change of one per-vertex array from the current level `c` to every other level: copied down to
 // the parent vertices, interpolated up where it changed. `get` picks the array from a level.
 template <class T, class Get>
@@ -1104,26 +1423,155 @@ void spreadVertexArray(MultiresStack& s, int c, const std::vector<T>& w, const s
             if (j != c) std::vector<T>().swap(get(mutableData(s.levels[size_t(j)])));
         return;
     }
-    std::vector<uint8_t> changed(w.size(), 0);
-    bool any = false;
-    for (size_t v = 0; v < w.size(); ++v)
-        if (r.size() != w.size() ? !(w[v] == fill) : !(w[v] == r[v])) changed[v] = 1, any = true;
-    if (!any && r.size() == w.size()) return;
+    std::vector<uint8_t> changed;
+    if (!changedVertices(w, r, fill, changed)) return;
+    spreadVertexDown(s, c, w, changed, fill, get);
     std::vector<uint8_t> flags = changed, next;
-    const std::vector<T>* fine = &w;
-    for (int j = c; j >= 1; --j) {
-        std::vector<T>& coarse = get(mutableData(s.levels[size_t(j) - 1]));
-        const bool fresh = coarse.empty();
-        restrictVertices(*s.levels[size_t(j)].topo, *fine, coarse, fill, fresh ? nullptr : &flags, next);
-        flags.swap(next);
-        fine = &coarse;
-    }
-    flags = changed;
     const std::vector<T>* coarse = &w;
     for (int j = c + 1; j < n; ++j) {
         std::vector<T>& f = get(mutableData(s.levels[size_t(j)]));
         prolongVertices(*s.levels[size_t(j)].topo, *coarse, f, fill, &flags, next);
         flags.swap(next);
+        coarse = &f;
+    }
+}
+
+// Colours (vertex paint, the paint base) go up from the current level `c` without touching what the levels above
+// hold beyond the stroke's reach. A stroke laid ONE colour (`target`, from paintVertex): at each changed vertex the
+// amount it took is recovered (t = the change projected on target - old) and interpolated up, and every vertex above
+// becomes lerp(its own colour, target, t): detail the stroke did not reach is bit for bit what it was, and no
+// channel lands outside [its old value, the target's]. (The old rule added the low level's difference, new - old, to
+// the colour above: on detail that was not the low level's colour the difference darkened it to black and left a pale
+// halo around it.) Several colours (a gradient, a mixed batch): the difference is added instead. A level with no
+// colours of its own gets the interpolated colour.
+void spreadColorDelta(MultiresStack& s, int c, const std::vector<glm::vec3>& w, const std::vector<glm::vec3>& r,
+                      std::vector<glm::vec3>& (*get)(Mesh&), const Mesh::PaintTarget& target) {
+    const int n = int(s.levels.size());
+    const glm::vec3 white(1.0f);
+    if (w.empty() && r.empty()) return;
+    if (w.empty() || r.size() != w.size()) {
+        spreadVertexArray(s, c, w, r, white, get);
+        return;
+    }
+    std::vector<uint8_t> changed;
+    if (!changedVertices(w, r, white, changed)) return;
+    spreadVertexDown(s, c, w, changed, white, get);
+    // The lerp rule holds only when the hint explains the whole change (a tool that wrote colours itself did not go
+    // through paintVertex): every changed vertex lies on its old -> target line, going toward it (a stroke) or away
+    // from it (the undo of one: old = lerp(new, target, t), taken back from the detail above exactly).
+    enum Mode { Add, Toward, Away } mode = Add;
+    std::vector<float> amount;
+    if (target.state == 1) {
+        for (Mode m : {Toward, Away}) {
+            amount.assign(w.size(), 0.0f);
+            bool ok = true;
+            for (size_t v = 0; v < w.size() && ok; ++v) {
+                if (!changed[v]) continue;
+                const glm::vec3 from = m == Toward ? r[v] : w[v], to = m == Toward ? w[v] : r[v];
+                const glm::vec3 toTarget = target.color - from, d = to - from;
+                const float len2 = glm::dot(toTarget, toTarget);
+                const float t = len2 > 1e-8f ? glm::dot(d, toTarget) / len2 : -1.0f;
+                const float tMax = m == Toward ? 1.0f + 1e-4f : 1.0f - 1e-3f; // Away divides by 1 - t
+                ok = t >= 0.0f && t <= tMax && glm::length(d - t * toTarget) <= 1e-4f;
+                amount[v] = t;
+            }
+            if (ok) {
+                mode = m;
+                break;
+            }
+        }
+    }
+    // The field that travels up: the stroke's amount t (lerp) or the colour difference (add).
+    std::vector<glm::vec3> delta(w.size(), glm::vec3(0.0f)), fineDelta;
+    for (size_t v = 0; v < w.size(); ++v) {
+        if (!changed[v]) continue;
+        if (mode != Add) delta[v].x = glm::min(amount[v], 1.0f);
+        else delta[v] = w[v] - r[v];
+    }
+    std::vector<uint8_t> flags = changed, next, reached;
+    const std::vector<glm::vec3>* coarse = &w; // the level below's colours, as they are now
+    for (int j = c + 1; j < n; ++j) {
+        const SubdivTopology& tp = *s.levels[size_t(j)].topo;
+        std::vector<glm::vec3>& f = get(mutableData(s.levels[size_t(j)]));
+        fineDelta.assign(tp.fineVertices, glm::vec3(0.0f));
+        prolongVertices(tp, delta, fineDelta, glm::vec3(0.0f), &flags, reached);
+        if (f.size() != tp.fineVertices) {
+            // No colours stored here yet: interpolate the level below's.
+            prolongVertices(tp, *coarse, f, white, nullptr, next);
+        } else {
+            for (uint32_t v = 0; v < tp.fineVertices; ++v) {
+                if (!reached[v]) continue;
+                const float t = glm::clamp(fineDelta[v].x, 0.0f, 1.0f);
+                if (mode == Toward) f[v] = glm::mix(f[v], target.color, t);
+                else if (mode == Away) f[v] = t < 0.999f ? glm::clamp((f[v] - t * target.color) / (1.0f - t), 0.0f, 1.0f) : f[v];
+                else f[v] = glm::clamp(f[v] + fineDelta[v], 0.0f, 1.0f);
+            }
+            next = reached;
+        }
+        flags.swap(next);
+        delta.swap(fineDelta);
+        coarse = &f;
+    }
+}
+
+// Paint layers go up as a delta too, on coverage and on colour * coverage (the premultiplied colour, as the
+// layers are interpolated), so a stroke at a low level adds to the coverage and colour painted higher up.
+void spreadLayerDelta(MultiresStack& s, int c, size_t layer, const PaintLayer& w, const PaintLayer& r) {
+    const int n = int(s.levels.size());
+    const size_t nv = w.alpha.size();
+    if (w.color.size() != nv || r.alpha.size() != nv || r.color.size() != nv || nv == 0) {
+        spreadVertexArray(s, c, w.color, r.color, glm::vec3(1.0f),
+                          [layer](Mesh& m) -> std::vector<glm::vec3>& { return m.paintLayers[layer].color; });
+        spreadVertexArray(s, c, w.alpha, r.alpha, 0.0f,
+                          [layer](Mesh& m) -> std::vector<float>& { return m.paintLayers[layer].alpha; });
+        return;
+    }
+    std::vector<uint8_t> changed(nv, 0);
+    bool any = false;
+    for (size_t v = 0; v < nv; ++v)
+        if (!(w.alpha[v] == r.alpha[v]) || !(w.color[v] == r.color[v])) changed[v] = 1, any = true;
+    if (!any) return;
+    auto colorOf = [layer](Mesh& m) -> std::vector<glm::vec3>& { return m.paintLayers[layer].color; };
+    auto alphaOf = [layer](Mesh& m) -> std::vector<float>& { return m.paintLayers[layer].alpha; };
+    spreadVertexDown(s, c, w.color, changed, glm::vec3(1.0f), colorOf);
+    spreadVertexDown(s, c, w.alpha, changed, 0.0f, alphaOf);
+    std::vector<float> dAlpha(nv, 0.0f), fdAlpha;
+    std::vector<glm::vec3> dPre(nv, glm::vec3(0.0f)), fdPre;
+    for (size_t v = 0; v < nv; ++v)
+        if (changed[v]) {
+            dAlpha[v] = w.alpha[v] - r.alpha[v];
+            dPre[v] = w.color[v] * w.alpha[v] - r.color[v] * r.alpha[v];
+        }
+    std::vector<uint8_t> flags = changed, next, reached, reached2;
+    const PaintLayer* coarse = &w;
+    for (int j = c + 1; j < n; ++j) {
+        const SubdivTopology& tp = *s.levels[size_t(j)].topo;
+        PaintLayer& f = mutableData(s.levels[size_t(j)]).paintLayers[layer];
+        fdAlpha.assign(tp.fineVertices, 0.0f);
+        fdPre.assign(tp.fineVertices, glm::vec3(0.0f));
+        prolongVertices(tp, dAlpha, fdAlpha, 0.0f, &flags, reached);
+        prolongVertices(tp, dPre, fdPre, glm::vec3(0.0f), &flags, reached2);
+        if (f.alpha.size() != tp.fineVertices || f.color.size() != tp.fineVertices) {
+            PaintLayer nl;
+            nl.alpha = f.alpha;
+            nl.color = f.color;
+            prolongPaintLayer(tp, *coarse, nl, nullptr);
+            f.alpha = std::move(nl.alpha);
+            f.color = std::move(nl.color);
+            next.assign(tp.fineVertices, 1);
+        } else {
+            for (uint32_t v = 0; v < tp.fineVertices; ++v) {
+                if (!reached[v]) continue;
+                const float a = glm::clamp(f.alpha[v] + fdAlpha[v], 0.0f, 1.0f);
+                const glm::vec3 pre = glm::max(f.color[v] * f.alpha[v] + fdPre[v], glm::vec3(0.0f));
+                f.alpha[v] = a;
+                f.color[v] = a > 0.0f ? glm::min(pre / a, glm::vec3(1.0f)) : glm::vec3(1.0f);
+            }
+            next = reached;
+        }
+        flags.swap(next);
+        dAlpha.swap(fdAlpha);
+        dPre.swap(fdPre);
         coarse = &f;
     }
 }
@@ -1266,11 +1714,11 @@ void spreadShape(MultiresStack& s, int c, const Mesh& w, const Mesh& r) {
             const Mesh& cm = *s.levels[size_t(j) - 1].data;
             const Mesh& fm = j == c ? w : *L.data;
             const std::vector<glm::vec3>& fineVals = fm.layers[ch - 1].delta;
-            std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, cm.layers[ch - 1].delta);
+            std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, cm.layers[ch - 1].delta, L.sharp.get());
             if (L.layerDetail.size() < w.layers.size()) L.layerDetail.resize(w.layers.size());
             std::vector<glm::vec3>& fq = frameQ[size_t(j)];
             if (fq.empty()) {
-                fq = subdivideField(tp, tp.smooth, baseChannel(cm));
+                fq = subdivideField(tp, tp.smooth, baseChannel(cm), L.sharp.get());
                 levelFrames(L, fq, frameN[size_t(j)], frameRef[size_t(j)]);
             }
             std::vector<glm::vec3> world(Q.size());
@@ -1292,8 +1740,8 @@ void spreadShape(MultiresStack& s, int c, const Mesh& w, const Mesh& r) {
 bool levelsDiffer(const Mesh& w, const Mesh& r) {
     if (!sameArray(w.positions, r.positions) || !sameArray(w.base, r.base) || !sameLayerSet(w, r) ||
         !sameLayerWeights(w, r) || !sameArray(w.mask, r.mask) || !sameArray(w.colors, r.colors) ||
-        !sameArray(w.polygroups, r.polygroups) || !sameArray(w.hidden, r.hidden) || !sameArray(w.uvs, r.uvs) ||
-        !samePaintSet(w, r) || !samePaintProperties(w, r) || !sameArray(w.paintBase, r.paintBase))
+        !sameArray(w.facegroups, r.facegroups) || !sameArray(w.hidden, r.hidden) || !sameArray(w.uvs, r.uvs) ||
+        !sameArray(w.creases, r.creases) || !samePaintSet(w, r) || !samePaintProperties(w, r) || !sameArray(w.paintBase, r.paintBase))
         return true;
     for (size_t i = 0; i < w.layers.size(); ++i)
         if (!sameArray(w.layers[i].delta, r.layers[i].delta)) return true;
@@ -1319,20 +1767,21 @@ void dropStackIfSingle(Mesh& mesh) {
 }
 
 // The fine level of a divide (generated: no triangles stored): every attribute from the coarse level.
-std::shared_ptr<Mesh> divideData(const SubdivTopology& tp, const Mesh& coarse) {
+std::shared_ptr<Mesh> divideData(const SubdivTopology& tp, const Mesh& coarse, const EdgeSharpness* sharp) {
     auto fine = std::make_shared<Mesh>();
     std::vector<uint8_t> f;
     if (coarse.layers.empty()) {
-        fine->positions = subdivideField(tp, tp.smooth, coarse.positions);
+        fine->positions = subdivideField(tp, tp.smooth, coarse.positions, sharp);
     } else {
-        fine->base = subdivideField(tp, tp.smooth, coarse.base);
-        for (const SculptLayer& l : coarse.layers) fine->layers.push_back({l.name, subdivideField(tp, tp.smooth, l.delta), l.weight});
+        fine->base = subdivideField(tp, tp.smooth, coarse.base, sharp);
+        for (const SculptLayer& l : coarse.layers)
+            fine->layers.push_back({l.name, subdivideField(tp, tp.smooth, l.delta, sharp), l.weight});
         fine->positions.resize(fine->base.size());
         evaluateLayers(*fine);
     }
     if (coarse.hasMask()) prolongVertices(tp, coarse.mask, fine->mask, 0.0f, nullptr, f);
     if (coarse.hasColors()) prolongVertices(tp, coarse.colors, fine->colors, glm::vec3(1.0f), nullptr, f);
-    if (coarse.hasPolygroups()) prolongFaces(tp, coarse.polygroups, fine->polygroups, 0u, nullptr, f);
+    if (coarse.hasFaceGroups()) prolongFaces(tp, coarse.facegroups, fine->facegroups, 0u, nullptr, f);
     if (coarse.hasHidden()) prolongFaces(tp, coarse.hidden, fine->hidden, uint8_t(0), nullptr, f);
     if (coarse.hasUvs()) prolongUvs(tp, coarse.uvs, fine->uvs, nullptr, f);
     if (!coarse.paintLayers.empty()) {
@@ -1376,7 +1825,7 @@ int subdivCurrentLevel(const Mesh& mesh) { return mesh.multires ? mesh.multires-
 
 std::string subdivLevelText(const Mesh& mesh) {
     if (!mesh.multires) return {};
-    return "SDiv " + std::to_string(mesh.multires->current + 1) + "/" + std::to_string(mesh.multires->levels.size());
+    return "Level " + std::to_string(mesh.multires->current + 1) + "/" + std::to_string(mesh.multires->levels.size());
 }
 
 size_t subdivLevelTriangles(const Mesh& mesh, int level) {
@@ -1400,7 +1849,7 @@ size_t subdivBytes(const Mesh& mesh) {
         const Mesh& m = *l.data;
         total += m.positions.size() * sizeof(glm::vec3) * (1 + (m.base.empty() ? 0 : 1 + m.layers.size())) +
                  m.triangles.size() * sizeof(glm::uvec3) + m.mask.size() * 4 + m.colors.size() * 12 +
-                 m.polygroups.size() * 4 + m.hidden.size() + m.uvs.size() * 8 + m.quadPartners.size() * 4 +
+                 m.facegroups.size() * 4 + m.hidden.size() + m.uvs.size() * 8 + m.quadPartners.size() * 4 +
                  m.paintBase.size() * 12;
         for (const PaintLayer& p : m.paintLayers) total += p.color.size() * 12 + p.alpha.size() * 4;
         if (l.topo) total += l.topo->bytes();
@@ -1418,7 +1867,7 @@ size_t subdivCacheBytes(const Mesh& mesh) {
         const Mesh& m = e.mesh;
         // Positions, normals and the vertex adjacency; triangles, face normals, quads and the BVH (estimated).
         total += m.vertexCount() * 80 + m.triangleCount() * 48 + m.base.size() * 12 + m.mask.size() * 4 +
-                 m.colors.size() * 12 + m.polygroups.size() * 4 + m.hidden.size() + m.uvs.size() * 8 +
+                 m.colors.size() * 12 + m.facegroups.size() * 4 + m.hidden.size() + m.uvs.size() * 8 +
                  m.paintBase.size() * 12;
         for (const SculptLayer& l : m.layers) total += l.delta.size() * 12;
         for (const PaintLayer& p : m.paintLayers) total += p.color.size() * 12 + p.alpha.size() * 4;
@@ -1433,14 +1882,14 @@ void subdivReleaseCache(Mesh& mesh) {
 
 std::string subdivDroppedNote(const Mesh& mesh, const std::string& name) {
     if (!mesh.multires || mesh.multires->levels.size() < 2) return {};
-    return "Subdivision levels removed: " + (name.empty() ? std::string() : name + " ") + "SDiv " +
+    return "Subdivision levels removed: " + (name.empty() ? std::string() : name + " ") + "Level " +
            std::to_string(mesh.multires->current + 1) + " of " + std::to_string(mesh.multires->levels.size()) +
            " kept as the new base";
 }
 
-void noteSubtoolLevelsDropped(Document& doc, int index) {
-    if (index < 0 || index >= doc.subtoolCount()) return;
-    const std::string note = subdivDroppedNote(doc.subtoolMesh(index), doc.subtools[size_t(index)].name);
+void notePartLevelsDropped(Document& doc, int index) {
+    if (index < 0 || index >= doc.partCount()) return;
+    const std::string note = subdivDroppedNote(doc.partMesh(index), doc.parts[size_t(index)].name);
     if (!note.empty()) doc.notice += (doc.notice.empty() ? "" : "; ") + note;
 }
 
@@ -1457,7 +1906,10 @@ bool subdivCommit(Mesh& w) {
         w.multires.reset(); // the topology changed under the stack: the levels no longer apply
         return false;
     }
-    if (!levelsDiffer(w, r0)) return true;
+    if (!levelsDiffer(w, r0)) {
+        w.paintTarget.settled = true;
+        return true;
+    }
     MultiresStack& s = mutableStack(w);
     const int n = int(s.levels.size());
 
@@ -1505,24 +1957,32 @@ bool subdivCommit(Mesh& w) {
     spreadShape(s, c, w, *r);
     spreadVertexArray(s, c, w.mask, r->mask, 0.0f, [](Mesh& m) -> std::vector<float>& { return m.mask; });
     if (w.paintLayers.empty()) {
-        spreadVertexArray(s, c, w.colors, r->colors, glm::vec3(1.0f), [](Mesh& m) -> std::vector<glm::vec3>& { return m.colors; });
+        spreadColorDelta(s, c, w.colors, r->colors, [](Mesh& m) -> std::vector<glm::vec3>& { return m.colors; }, w.paintTarget);
     } else {
-        spreadVertexArray(s, c, w.paintBase, r->paintBase, glm::vec3(1.0f),
-                          [](Mesh& m) -> std::vector<glm::vec3>& { return m.paintBase; });
+        spreadColorDelta(s, c, w.paintBase, r->paintBase, [](Mesh& m) -> std::vector<glm::vec3>& { return m.paintBase; },
+                         w.paintTarget);
         for (size_t i = 0; i < w.paintLayers.size(); ++i) {
-            spreadVertexArray(s, c, w.paintLayers[i].color, r->paintLayers[i].color, glm::vec3(1.0f),
-                              [i](Mesh& m) -> std::vector<glm::vec3>& { return m.paintLayers[i].color; });
-            spreadVertexArray(s, c, w.paintLayers[i].alpha, r->paintLayers[i].alpha, 0.0f,
-                              [i](Mesh& m) -> std::vector<float>& { return m.paintLayers[i].alpha; });
+            spreadLayerDelta(s, c, i, w.paintLayers[i], r->paintLayers[i]);
         }
         for (int j = 0; j < n; ++j)
             if (j != c && hasPaintLayers(*s.levels[size_t(j)].data)) compositePaintAll(mutableData(s.levels[size_t(j)]));
     }
-    spreadFaceArray(s, c, w.polygroups, r->polygroups, 0u, [](Mesh& m) -> std::vector<uint32_t>& { return m.polygroups; });
+    spreadFaceArray(s, c, w.facegroups, r->facegroups, 0u, [](Mesh& m) -> std::vector<uint32_t>& { return m.facegroups; });
     spreadFaceArray(s, c, w.hidden, r->hidden, uint8_t(0), [](Mesh& m) -> std::vector<uint8_t>& { return m.hidden; });
     spreadUvs(s, c, w, *r);
+    if (!sameArray(w.creases, r->creases) && c + 1 < n) {
+        // New creases reshape the levels above: each keeps its detail on the subdivision as it was (fitted now,
+        // with the old sharpness, unless spreadShape did), then is evaluated again with the new one.
+        for (int j = c + 1; j < n; ++j) {
+            SubdivLevel& L = s.levels[size_t(j)];
+            if (!L.stale && !L.detail) fitLevelDetail(L, baseChannel(j == c + 1 ? *r : *s.levels[size_t(j) - 1].data));
+        }
+        if (updateSharpness(s, &w))
+            for (int j = c + 1; j < n; ++j) s.levels[size_t(j)].stale = true;
+    }
 
     s.levels[size_t(c)].data = levelData(w, s.levels[size_t(c)]);
+    w.paintTarget.settled = true;
     return true;
 }
 
@@ -1608,7 +2068,9 @@ bool subdivDivide(Mesh& mesh, bool smooth, std::string& error, BVH* bvh, size_t 
     std::shared_ptr<SubdivTopology> tp = buildCoarse(coarse.triangles, uint32_t(coarse.vertexCount()), std::move(pairing), cc, smooth);
     tp->generated = true;
     SubdivLevel level;
-    level.data = divideData(*tp, coarse);
+    const SubdivLevel& top = s.levels.back();
+    level.sharp = levelSharpness(top.topo ? &top : nullptr, coarse.triangles, coarse.creases, *tp);
+    level.data = divideData(*tp, coarse, level.sharp.get());
     level.topo = tp;
     level.layerDetail.resize(coarse.layers.size());
     s.levels.push_back(std::move(level));
@@ -1627,7 +2089,7 @@ bool subdivDeleteLower(Mesh& mesh, std::string& error) {
         return false;
     }
     if (mesh.multires->current == 0) {
-        error = "There are no lower levels (this is SDiv 1)";
+        error = "There are no lower levels (this is Level 1)";
         return false;
     }
     MultiresStack& s = mutableStack(mesh);
@@ -1636,11 +2098,18 @@ bool subdivDeleteLower(Mesh& mesh, std::string& error) {
         base.triangles = mesh.triangles;
         base.quadPartners = mesh.quadPartners;
     }
+    // The creases left from the levels below become the new base's own, so the levels above keep their shape.
+    if (std::vector<float> creases = subdivCornerCreases(mesh); !creases.empty()) {
+        mesh.creases = creases;
+        mutableData(s.levels[size_t(s.current)]).creases = std::move(creases);
+    }
     s.levels.erase(s.levels.begin(), s.levels.begin() + s.current);
     s.current = 0;
     s.levels[0].topo.reset();
     s.levels[0].detail.reset();
     s.levels[0].layerDetail.clear();
+    s.levels[0].sharp.reset();
+    updateSharpness(s, &mesh);
     dropStackIfSingle(mesh);
     return true;
 }
@@ -1747,6 +2216,7 @@ bool attachSubdivStack(Mesh& mesh, MultiresStack stack, std::string& error) {
         return false;
     }
     mesh.multires = std::make_shared<MultiresStack>(std::move(stack));
+    updateSharpness(*mesh.multires, &mesh); // (not saved: it follows from the levels' creases)
     return true;
 }
 
@@ -1761,7 +2231,7 @@ void convertWorldLayerDetail(MultiresStack& s) {
         // The frames come from the level below, evaluated with its details (converted already).
         if (k >= 2 && s.levels[k - 1].stale) evaluateLevel(s, int(k) - 1);
         const SubdivTopology& tp = *L.topo;
-        const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, baseChannel(*s.levels[k - 1].data));
+        const std::vector<glm::vec3> Q = subdivideField(tp, tp.smooth, baseChannel(*s.levels[k - 1].data), L.sharp.get());
         std::vector<glm::vec3> n;
         std::vector<uint32_t> refs;
         levelFrames(L, Q, n, refs);
@@ -1772,6 +2242,30 @@ void convertWorldLayerDetail(MultiresStack& s) {
             d = std::move(local);
         }
     }
+}
+
+const EdgeSharpness* subdivLevelSharpness(const Mesh& mesh, int level) {
+    if (!mesh.multires || level < 1 || size_t(level) >= mesh.multires->levels.size()) return nullptr;
+    return mesh.multires->levels[size_t(level)].sharp.get();
+}
+
+std::vector<float> subdivCornerCreases(const Mesh& mesh) {
+    const MultiresStack* s = mesh.multires.get();
+    const size_t up = s ? size_t(s->current) + 1 : 0;
+    if (!s || up >= s->levels.size() || !s->levels[up].topo || !subdivMatches(mesh)) return mesh.creases;
+    // The mesh's own creases (maybe newer than the stack's) and what is left of the ones below.
+    const SubdivLevel& L = s->levels[up];
+    const std::shared_ptr<const EdgeSharpness> sharp =
+        levelSharpness(s->current >= 1 ? &s->levels[size_t(s->current)] : nullptr, mesh.triangles, mesh.creases, *L.topo);
+    if (!sharp) return {};
+    std::vector<float> creases(mesh.triangleCount() * 3, 0.0f);
+    for (uint32_t t = 0; t < mesh.triangleCount(); ++t)
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t e = topoEdge(*L.topo, mesh.triangles[t][k], mesh.triangles[t][(k + 1) % 3]);
+            if (e != kNone) creases[t * 3 + size_t(k)] = sharpnessCrease(sharp->at(e)); // (no diagonal is an edge)
+        }
+    if (std::none_of(creases.begin(), creases.end(), [](float c) { return c > 0.0f; })) return {};
+    return creases;
 }
 
 const Mesh& subdivLevelData(const Mesh& mesh, int level) { return *mesh.multires->levels[size_t(level)].data; }
@@ -1792,7 +2286,7 @@ bool subdivInSync(const Mesh& mesh) {
            !levelsDiffer(mesh, r);
 }
 
-// --- Reconstruct Subdiv ---
+// --- Rebuild Lower Levels ---
 
 namespace {
 
@@ -1828,6 +2322,20 @@ bool reconstructCatmullClark(const Mesh& m, Reconstruction& out, std::string& er
     const uint32_t nv = uint32_t(m.vertexCount());
     std::vector<uint8_t> label(nv, kUnset), polyDone(np, 0);
     std::vector<uint32_t> touched, queue;
+    // Vertices on a UV seam (corners with different UVs). A face point is inside one coarse face, so never on a
+    // seam: on a regular closed grid (e.g. a torus) several readings fit, and the wrong ones split faces across UV
+    // islands and UDIM tiles (#145).
+    std::vector<uint8_t> seam(nv, 0);
+    if (m.uvs.size() == m.triangles.size() * 3) {
+        std::vector<glm::vec2> first(nv, glm::vec2(std::numeric_limits<float>::quiet_NaN()));
+        for (size_t t = 0; t < m.triangles.size(); ++t)
+            for (int c = 0; c < 3; ++c) {
+                const uint32_t v = m.triangles[t][c];
+                const glm::vec2 uv = m.uvs[t * 3 + size_t(c)];
+                if (std::isnan(first[v].x)) first[v] = uv;
+                else if (glm::any(glm::greaterThan(glm::abs(uv - first[v]), glm::vec2(1e-6f)))) seam[v] = 1;
+            }
+    }
     auto label4 = [&](uint32_t p, std::vector<uint8_t>& lab) -> int { // labels poly p from one known O/F corner
         const uint32_t o = w->polyOffsets[p];
         for (uint32_t k = 0; k < 4; ++k) {
@@ -1851,7 +2359,7 @@ bool reconstructCatmullClark(const Mesh& m, Reconstruction& out, std::string& er
         if (polyDone[seed]) continue;
         // Four ways to label the seed quad; keep the consistent one whose face points look most like quads.
         int best = -1;
-        long bestScore = -1;
+        long bestScore = -1, bestSeams = 0, bestOdd = 0;
         std::vector<uint8_t> bestLabels;
         std::vector<uint32_t> bestPolys;
         for (int option = 0; option < 4; ++option) {
@@ -1884,12 +2392,34 @@ bool reconstructCatmullClark(const Mesh& m, Reconstruction& out, std::string& er
                 }
             }
             if (!ok) continue;
-            long score = 0; // face points of valence 4 (coarse quads) first
-            for (uint32_t v : touched)
-                if (lab[v] == kF) score += (w->vertEdgeOffsets[v + 1] - w->vertEdgeOffsets[v]) == 4 ? 2 : 1;
-            if (score > bestScore) {
+            // Face points of valence 4 (coarse quads) first, then off UV seams, then more quads. Seams only break
+            // ties: a high-poly unwrapped on its own has seams through coarse faces too, and the reading with the
+            // corners as face points (all of valence 3 or 5) put fewer face points on them (#145).
+            long score = 0, seams = 0, odd = 0;
+            for (uint32_t v : touched) {
+                if (lab[v] == kO) continue;
+                bool border = false;
+                for (uint32_t i = w->vertEdgeOffsets[v]; i < w->vertEdgeOffsets[v + 1]; ++i)
+                    border = border || w->edgeFaces[w->vertEdges[i]].y == kNone;
+                const uint32_t valence = w->vertEdgeOffsets[v + 1] - w->vertEdgeOffsets[v];
+                if (lab[v] == kE) { // an edge point joins its two corners and two face points (one on a border)
+                    ok = ok && valence == (border ? 3u : 4u);
+                    continue;
+                }
+                seams += seam[v];
+                // A face point is never on a border (on an open mesh, e.g. a UDIM plane, the swapped
+                // reading has more face points: #145) and is in a triangle or a quad.
+                ok = ok && !border && (valence == 3 || valence == 4);
+                const bool quad = valence == 4;
+                score += quad ? 2 : 1;
+                odd += !quad;
+            }
+            if (!ok) continue;
+            if (best < 0 || odd < bestOdd || (odd == bestOdd && (seams < bestSeams || (seams == bestSeams && score > bestScore)))) {
                 best = option;
                 bestScore = score;
+                bestSeams = seams;
+                bestOdd = odd;
                 bestLabels = std::move(lab);
                 bestPolys = std::move(polys);
             }
@@ -2107,7 +2637,7 @@ bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh) {
         if (!subdivCommit(mesh)) {
             // dropped: reconstruct from this mesh alone
         } else if (mesh.multires->current != 0) {
-            error = "Reconstruct Subdiv works at the lowest level (step down to SDiv 1 first)";
+            error = "Rebuild Lower Levels works at the lowest level (step down to Level 1 first)";
             return false;
         }
     }
@@ -2151,7 +2681,7 @@ bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh) {
         return false;
     }
 
-    // Coarse shape: the fine level's corner vertices, as ZBrush does (fitting the cage so its subdivision passes
+    // Coarse shape: the fine level's corner vertices (fitting the cage so its subdivision passes
     // through them overshoots badly on sharp shapes, and compounds over several levels); the detail of the fine
     // level keeps it exactly as it was.
     const std::vector<glm::vec3>& fineBase = baseChannel(mesh);
@@ -2160,7 +2690,7 @@ bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh) {
     std::vector<uint8_t> f;
     if (mesh.hasMask()) restrictVertices(*tp, mesh.mask, coarse.mask, 0.0f, nullptr, f);
     if (mesh.hasColors()) restrictVertices(*tp, mesh.colors, coarse.colors, glm::vec3(1.0f), nullptr, f);
-    if (mesh.hasPolygroups()) restrictFaces(*tp, mesh.polygroups, coarse.polygroups, coarse.triangleCount(), 0u, nullptr, f);
+    if (mesh.hasFaceGroups()) restrictFaces(*tp, mesh.facegroups, coarse.facegroups, coarse.triangleCount(), 0u, nullptr, f);
     if (mesh.hasHidden()) restrictFaces(*tp, mesh.hidden, coarse.hidden, coarse.triangleCount(), uint8_t(0), nullptr, f);
     if (mesh.hasUvs()) restrictUvs(*tp, coarse.triangles, mesh.uvs, coarse.uvs, nullptr, f);
     if (!rec.pairing.empty()) coarse.quadPartners = rec.pairing;
@@ -2205,6 +2735,7 @@ bool subdivReconstruct(Mesh& mesh, std::string& error, BVH* bvh) {
     s.levels[0] = std::move(fineLevel);
     s.levels.insert(s.levels.begin(), SubdivLevel{std::make_shared<Mesh>(std::move(coarse)), nullptr, nullptr, {}, false});
     s.current = 0;
+    updateSharpness(s, nullptr); // (the old base keeps its creases: they shape the levels above it as before)
     enterLevel(mesh, 0, bvh, &s.levels[1]);
     return true;
 }
@@ -2251,7 +2782,7 @@ void applySubdivUndo(SubdivUndo& r, Mesh& mesh, BVH& bvh) {
 
 namespace {
 
-// Runs a level operation on the active SubTool as one undo step that swaps the level stack back.
+// Runs a level operation on the active Part as one undo step that swaps the level stack back.
 // `plainLevel`: for operations that can start without levels, the level of the new stack that holds the mesh
 // as it was (it is the undo's `plain` mesh, shared rather than copied).
 template <class Op>
@@ -2283,9 +2814,9 @@ std::string levelSummary(const Mesh& m) {
 } // namespace
 
 bool divideUndoable(Document& doc, bool smooth, std::string& message) {
-    return runUndoable(doc, "Divide", [&](Mesh& m, std::string& msg, BVH* bvh) {
+    return runUndoable(doc, "Add Level", [&](Mesh& m, std::string& msg, BVH* bvh) {
         if (!subdivDivide(m, smooth, msg, bvh)) return false;
-        msg = "Divided: " + levelSummary(m);
+        msg = "Added a level: " + levelSummary(m);
         return true;
     }, message, doc.mesh.multires ? -1 : 0);
 }
@@ -2299,7 +2830,7 @@ bool setSubdivLevelUndoable(Document& doc, int level, std::string& message) {
         message = levelSummary(doc.mesh);
         return true;
     }
-    return runUndoable(doc, "SDiv " + std::to_string(level + 1), [&](Mesh& m, std::string& msg, BVH* bvh) {
+    return runUndoable(doc, "Level " + std::to_string(level + 1), [&](Mesh& m, std::string& msg, BVH* bvh) {
         if (!subdivSetLevel(m, level, msg, bvh)) return false;
         msg = levelSummary(m);
         return true;
@@ -2307,7 +2838,7 @@ bool setSubdivLevelUndoable(Document& doc, int level, std::string& message) {
 }
 
 bool deleteLowerUndoable(Document& doc, std::string& message) {
-    return runUndoable(doc, "Del Lower", [&](Mesh& m, std::string& msg, BVH*) {
+    return runUndoable(doc, "Remove Below", [&](Mesh& m, std::string& msg, BVH*) {
         if (!subdivDeleteLower(m, msg)) return false;
         msg = "Deleted the lower levels: " + levelSummary(m);
         return true;
@@ -2315,15 +2846,33 @@ bool deleteLowerUndoable(Document& doc, std::string& message) {
 }
 
 bool deleteHigherUndoable(Document& doc, std::string& message) {
-    return runUndoable(doc, "Del Higher", [&](Mesh& m, std::string& msg, BVH*) {
+    return runUndoable(doc, "Remove Above", [&](Mesh& m, std::string& msg, BVH*) {
         if (!subdivDeleteHigher(m, msg)) return false;
         msg = "Deleted the higher levels: " + levelSummary(m);
         return true;
     }, message);
 }
 
+bool freezeLevelsUndoable(Document& doc, std::string& message) {
+    if (!doc.mesh.multires) {
+        message = "This Part has no subdivision levels";
+        return false;
+    }
+    const int level = subdivCurrentLevel(doc.mesh) + 1, levels = subdivLevelCount(doc.mesh);
+    return runUndoable(doc, "Freeze Levels", [&](Mesh& m, std::string& msg, BVH*) {
+        if (m.micro) {
+            msg = "This Part has a micro level: Bake it down or delete it (Tool > Geometry > Micro) before changing subdivision levels";
+            return false;
+        }
+        if (m.multires && m.multires->current + 1 < int(m.multires->levels.size()) && !subdivDeleteHigher(m, msg)) return false;
+        if (m.multires && m.multires->current > 0 && !subdivDeleteLower(m, msg)) return false;
+        msg = "Froze Level " + std::to_string(level) + " of " + std::to_string(levels) + ": " + levelSummary(m);
+        return true;
+    }, message);
+}
+
 bool reconstructUndoable(Document& doc, std::string& message) {
-    return runUndoable(doc, "Reconstruct Subdiv", [&](Mesh& m, std::string& msg, BVH* bvh) {
+    return runUndoable(doc, "Rebuild Lower Levels", [&](Mesh& m, std::string& msg, BVH* bvh) {
         if (!subdivReconstruct(m, msg, bvh)) return false;
         msg = "Reconstructed a lower level: " + levelSummary(m);
         return true;
@@ -2357,7 +2906,7 @@ bool mapVertexValues(const Mesh& mesh, int from, int to, std::vector<T>& values,
         const SubdivTopology& tp = *s.levels[size_t(k)].topo;
         if (values.size() != tp.coarseVertices) values.assign(tp.coarseVertices, fill);
         next.clear();
-        if (smooth) next = subdivideField(tp, tp.smooth, values);
+        if (smooth) next = subdivideField(tp, tp.smooth, values, s.levels[size_t(k)].sharp.get());
         else prolongVertices(tp, values, next, fill, nullptr, flags);
         values.swap(next);
     }

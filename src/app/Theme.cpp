@@ -5,7 +5,10 @@
 #include "app/LookSchemes.h"
 #include "app/Ui.h"
 
+#include <IconsLucide.h>
+
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace sf::theme {
@@ -13,7 +16,7 @@ namespace sf::theme {
 void applyStyle() {
     ImGui::StyleColorsDark();
     ImGuiStyle& s = ImGui::GetStyle();
-    s.WindowRounding = 0.0f; // shells; floating windows keep square corners too, like ZBrush
+    s.WindowRounding = 0.0f; // shells; floating windows keep square corners too, 
     s.ChildRounding = 0.0f;
     s.PopupRounding = 6.0f;
     s.FrameRounding = 3.0f;
@@ -38,21 +41,22 @@ void applyStyle() {
     ImVec4* c = s.Colors;
     c[ImGuiCol_Text] = text;
     c[ImGuiCol_TextDisabled] = textDim;
-    c[ImGuiCol_WindowBg] = ImVec4(panelBg.x, panelBg.y, panelBg.z, 0.98f);
+    // Opaque: text behind a window, menu or tooltip showed through at 200% (overlays on the 3D view set their own alpha).
+    c[ImGuiCol_WindowBg] = ImVec4(panelBg.x, panelBg.y, panelBg.z, 1.0f);
     c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_PopupBg] = ImVec4(panelBg.x, panelBg.y, panelBg.z, 0.98f);
-    c[ImGuiCol_Border] = rgb(0x3a3a3f, 0.9f);
+    c[ImGuiCol_PopupBg] = ImVec4(panelBg.x, panelBg.y, panelBg.z, 1.0f);
+    c[ImGuiCol_Border] = rgb(0x3c3c3c, 0.9f);
     c[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_FrameBg] = frame;
     c[ImGuiCol_FrameBgHovered] = frameHover;
-    c[ImGuiCol_FrameBgActive] = rgb(0x3e3e44);
+    c[ImGuiCol_FrameBgActive] = rgb(0x404040);
     c[ImGuiCol_TitleBg] = header;
-    c[ImGuiCol_TitleBgActive] = rgb(0x333338);
+    c[ImGuiCol_TitleBgActive] = rgb(0x353535);
     c[ImGuiCol_TitleBgCollapsed] = header;
     c[ImGuiCol_MenuBarBg] = shellBg;
-    c[ImGuiCol_ScrollbarBg] = rgb(0x1a1a1c, 0.6f);
-    c[ImGuiCol_ScrollbarGrab] = rgb(0x48484e);
-    c[ImGuiCol_ScrollbarGrabHovered] = rgb(0x58585f);
+    c[ImGuiCol_ScrollbarBg] = rgb(0x1b1b1b, 0.6f);
+    c[ImGuiCol_ScrollbarGrab] = rgb(0x4a4a4a);
+    c[ImGuiCol_ScrollbarGrabHovered] = rgb(0x5a5a5a);
     c[ImGuiCol_ScrollbarGrabActive] = accent;
     c[ImGuiCol_CheckMark] = checkMark; // neutral: the accent marks the current mode, not every option that is on
     c[ImGuiCol_SliderGrab] = sliderBar;
@@ -63,28 +67,28 @@ void applyStyle() {
     c[ImGuiCol_Header] = selection; // selected rows: a lighter neutral row (the accent is for the current tool)
     c[ImGuiCol_HeaderHovered] = headerHover;
     c[ImGuiCol_HeaderActive] = selectionActive;
-    c[ImGuiCol_Separator] = rgb(0x3a3a3f);
+    c[ImGuiCol_Separator] = rgb(0x3c3c3c);
     c[ImGuiCol_SeparatorHovered] = accentHover;
     c[ImGuiCol_SeparatorActive] = accent;
-    c[ImGuiCol_ResizeGrip] = rgb(0x48484e, 0.5f);
+    c[ImGuiCol_ResizeGrip] = rgb(0x4a4a4a, 0.5f);
     c[ImGuiCol_ResizeGripHovered] = accentHover;
     c[ImGuiCol_ResizeGripActive] = accent;
     c[ImGuiCol_Tab] = header;
     c[ImGuiCol_TabHovered] = headerHover;
-    c[ImGuiCol_TabSelected] = rgb(0x45454b);
+    c[ImGuiCol_TabSelected] = rgb(0x474747);
     c[ImGuiCol_TabSelectedOverline] = accent;
     c[ImGuiCol_TabDimmed] = header;
-    c[ImGuiCol_TabDimmedSelected] = rgb(0x3a3a3f);
+    c[ImGuiCol_TabDimmedSelected] = rgb(0x3c3c3c);
     c[ImGuiCol_PlotHistogram] = accent;
     c[ImGuiCol_PlotHistogramHovered] = accentHover;
     c[ImGuiCol_TableHeaderBg] = header;
-    c[ImGuiCol_TableBorderStrong] = rgb(0x3a3a3f);
-    c[ImGuiCol_TableBorderLight] = rgb(0x323236);
+    c[ImGuiCol_TableBorderStrong] = rgb(0x3c3c3c);
+    c[ImGuiCol_TableBorderLight] = rgb(0x333333);
     c[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_TableRowBgAlt] = rgb(0xffffff, 0.025f);
     c[ImGuiCol_TextSelectedBg] = rgb(0xf0882e, 0.30f);
     c[ImGuiCol_DragDropTarget] = accentHover;
-    c[ImGuiCol_NavCursor] = accent;
+    c[ImGuiCol_NavCursor] = ImVec4(0, 0, 0, 0); // the keyboard focus gets the hover ring instead (ui::DrawHover)
     c[ImGuiCol_ModalWindowDimBg] = rgb(0x000000, 0.45f);
 }
 
@@ -110,7 +114,38 @@ ImVec4 mixc(const ImVec4& a, const ImVec4& b, float t, float alpha = 1.0f) {
     return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, alpha);
 }
 
-ImVec4 g_gradCentre(0.215f, 0.215f, 0.222f, 1.0f), g_gradEdge(0.106f, 0.106f, 0.114f, 1.0f);
+ImVec4 g_gradCentre(0.217f, 0.217f, 0.217f, 1.0f), g_gradEdge(0.109f, 0.109f, 0.109f, 1.0f);
+
+float linear(float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
+float luminance(const ImVec4& c) { return 0.2126f * linear(c.x) + 0.7152f * linear(c.y) + 0.0722f * linear(c.z); }
+float contrast(const ImVec4& a, const ImVec4& b) {
+    const float la = luminance(a), lb = luminance(b);
+    return (std::max(la, lb) + 0.05f) / (std::min(la, lb) + 0.05f);
+}
+// `c`, moved towards `toward` (the text colour) only as far as it takes to reach `ratio` on `bg`.
+ImVec4 readable(const ImVec4& c, const ImVec4& bg, const ImVec4& toward, float ratio) {
+    for (int i = 0; i <= 20; ++i) {
+        const ImVec4 m = mixc(c, toward, float(i) / 20.0f);
+        if (contrast(m, bg) >= ratio) return m;
+    }
+    return toward;
+}
+
+// The pop-up roles in the current look (Theme.h Role): fixed hues, so a tip reads as a tip in every scheme, with the
+// scheme's own yellow and red for warnings and deletes; Phosphor and Blueprint keep their one-ink screens by mixing
+// the hues halfway into their accent. Then each is nudged until it reads on the lifted surface.
+void setRoles(const ImVec4& yellow, const ImVec4& red, bool mono) {
+    // The surface the roles are measured on: one step lighter than the panels (Ui.cpp PushRole lifts it and its buttons).
+    const bool light = luminance(panelBg) > 0.4f;
+    popupLift = light ? 0.5f : 0.05f;
+    popupBg = mixc(panelBg, ImVec4(1, 1, 1, 1), popupLift);
+    const ImVec4 hues[] = {rgb(0x4d9de0), rgb(0x2fb5a5), brand, yellow, red};
+    for (int r = 0; r < int(Role::Count); ++r) {
+        const ImVec4 hue = mono && r != int(Role::Danger) ? mixc(hues[r], accent, 0.5f) : hues[r];
+        roleEdge[r] = readable(hue, popupBg, textBright, 3.0f);
+        roleInk[r] = readable(mixc(hue, textBright, 0.25f), popupBg, textBright, 4.5f);
+    }
+}
 
 void syncUiColors() {
     ui::color::accent = u32(accent);
@@ -144,8 +179,9 @@ void setTokens(const looks::Palette& p, looks::LookId id) {
     accentHover = mixc(ac, p.light ? rgb(0x000000) : rgb(0xffffff), 0.18f);
     toggleOff = mixc(mantle, s0, 0.6f);
     toggleOffHover = s0;
-    toggleOn = s1;
-    toggleOnHover = s2;
+    // On: a fill tinted with the accent, not just one surface step up (a review couldn't tell on from off).
+    toggleOn = mixc(s1, ac, p.light ? 0.28f : 0.32f);
+    toggleOnHover = mixc(s2, ac, p.light ? 0.34f : 0.38f);
     trough = mixc(mantle, s0, 0.7f);
     selection = mixc(s0, s1, 0.7f);
     selectionActive = s2;
@@ -179,10 +215,15 @@ void applyLook(const LookSettings& settings, std::string* status) {
                                                                                          : looks::LookId::Classic;
     look = LookStyle{};
     look.id = int(id);
+    // (The hover rings follow Outlines in every look: Classic has no panel borders, but a calm hover all the same.)
+    look.outlines = std::clamp(settings.outlines, 0, 2);
+    look.outlineOpacity = std::clamp(settings.outlineOpacity, 0.0f, 1.0f);
+    rolePopups = settings.rolePopups;
     if (id == looks::LookId::Classic) {
         for (size_t i = 0; i < std::size(kTokens); ++i) *kTokens[i] = classic[i];
-        g_gradCentre = ImVec4(0.215f, 0.215f, 0.222f, 1.0f);
-        g_gradEdge = ImVec4(0.106f, 0.106f, 0.114f, 1.0f);
+        g_gradCentre = ImVec4(0.217f, 0.217f, 0.217f, 1.0f);
+        g_gradEdge = ImVec4(0.109f, 0.109f, 0.109f, 1.0f);
+        setRoles(rgb(0xe0a830), danger, false);
         applyStyle();
         syncUiColors();
         return;
@@ -227,6 +268,15 @@ void applyLook(const LookSettings& settings, std::string* status) {
     }
     for (size_t i = 0; i < std::size(kTokens); ++i) *kTokens[i] = classic[i];
     setTokens(palette, id);
+    // Outlines: on keeps the scheme's borders, subtle fades them most of the way into the panels, off hides them.
+    // The panel under the pointer never gets the accent: on lifts its border a faint step, the others not at all.
+    look.outlines = std::clamp(settings.outlines, 0, 2);
+    const ImVec4 strong = tileBorder;
+    // Outline opacity (#98) scales the border's step from the panel colour: 0 hides it, 1 is the setting's own.
+    const float opacity = std::clamp(settings.outlineOpacity, 0.0f, 1.0f);
+    tileBorder = look.outlines == 0 ? panelBg : mixc(panelBg, strong, (look.outlines == 1 ? 0.4f : 1.0f) * opacity);
+    focusBorder = look.outlines == 2 ? mixc(tileBorder, textDim, 0.35f * opacity) : tileBorder;
+    setRoles(rgb(palette.yellow), rgb(palette.red), id == looks::LookId::Phosphor || id == looks::LookId::Blueprint);
     applyStyle();
     ImGuiStyle& s = ImGui::GetStyle();
     s.WindowRounding = s.ChildRounding = s.PopupRounding = s.FrameRounding = s.GrabRounding = s.TabRounding = 0.0f;
@@ -235,9 +285,9 @@ void applyLook(const LookSettings& settings, std::string* status) {
     s.WindowBorderSize = s.PopupBorderSize = 1.0f;
     ImVec4* c = s.Colors;
     const ImVec4 s1 = rgb(palette.surface1), s2 = rgb(palette.surface2);
-    c[ImGuiCol_WindowBg] = ImVec4(panelBg.x, panelBg.y, panelBg.z, 0.99f);
-    c[ImGuiCol_PopupBg] = ImVec4(panelBg.x, panelBg.y, panelBg.z, 0.99f);
-    c[ImGuiCol_Border] = tileBorder;
+    c[ImGuiCol_WindowBg] = ImVec4(panelBg.x, panelBg.y, panelBg.z, 1.0f); // opaque, as in Classic
+    c[ImGuiCol_PopupBg] = ImVec4(panelBg.x, panelBg.y, panelBg.z, 1.0f);
+    c[ImGuiCol_Border] = look.outlines == 0 ? mixc(panelBg, strong, 0.3f) : tileBorder; // (popups keep an edge)
     c[ImGuiCol_FrameBgActive] = s1;
     c[ImGuiCol_TitleBgActive] = s1;
     c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
@@ -252,6 +302,17 @@ void applyLook(const LookSettings& settings, std::string* status) {
     c[ImGuiCol_TableRowBgAlt] = ImVec4(text.x, text.y, text.z, 0.03f);
     c[ImGuiCol_TextSelectedBg] = ImVec4(accent.x, accent.y, accent.z, 0.30f);
     syncUiColors();
+}
+
+const char* roleIcon(Role r) {
+    switch (r) {
+    case Role::Info: return ICON_LC_LIGHTBULB;
+    case Role::Learn: return ICON_LC_GRADUATION_CAP;
+    case Role::New: return ICON_LC_SPARKLES;
+    case Role::Warning: return ICON_LC_TRIANGLE_ALERT;
+    case Role::Danger: return ICON_LC_OCTAGON_ALERT;
+    default: return "";
+    }
 }
 
 void lookViewportGradient(ImVec4& centre, ImVec4& edge) {

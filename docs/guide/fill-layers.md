@@ -1,5 +1,12 @@
 # Fill layers, Mesh Maps and Material Recipes
 
+![A painted lion bust](images/paint-layers.jpg)
+
+> **In short:**
+> - A Fill layer lays a material over a Part through a mask built from effects.
+> - Masks read the Part's Mesh Maps, so wear lands where the form says.
+> - Material Recipes are ready-made stacks of Fill layers for any Part.
+
 A **Fill layer** lays a material over the whole Part, through a **mask** that you build from effects instead of
 painting it by hand: worn paint on the edges, dirt in the crevices, dust on the surfaces that face up. The mask
 reads the Part's **Mesh Maps** (its ambient occlusion, curvature, thickness and more, baked on its UVs), so the
@@ -9,12 +16,12 @@ along it a moment later. **Material Recipes** are ready-made stacks of Fill laye
 ![Painted Edges on a sculpted sphere: the paint has chipped away along the creases](images/fill-painted-edges.jpg)
 
 Fill layers live in **Tool > Paint Layers** next to your paint layers, on a Part with a texture
-([Texture painting](texture-painting.md)). Turn on **Material > Viewport Shading > PBR** to see the metal, the
+([Texture painting](texture-painting.md)). Turn on **Render > Materials > Viewport Shading > PBR** to see the metal, the
 roughness and the bumps as they will look in a game engine ([Material painting](pbr-painting.md#the-pbr-viewport)).
 
 ## Lay a Material Recipe
 
-1. Give the Part UVs and a texture (**Tool > Texture Map > Auto UV**, then **New Texture**).
+1. Give the Part UVs and a texture (**Tool > Texture Image > Auto UV**, then **New Texture**).
 2. In **Tool > Paint Layers**, open **Material Recipe** and pick one:
    - **Worn Metal**: dull steel, polished bright on the edges, grime in the creases.
    - **Painted Edges**: painted metal with the paint chipped off its edges.

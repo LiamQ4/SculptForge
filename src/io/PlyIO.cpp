@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "io/PlyIO.h"
 
+#include "core/Units.h"
+
 #include <algorithm>
 #include <bit>
 #include <cctype>
@@ -337,7 +339,7 @@ bool loadPly(const std::string& path, Mesh& mesh, SplatCloud& splats, PlyContent
     return true;
 }
 
-bool saveSplatPly(const std::string& path, const SplatCloud& input, std::string& error) {
+bool saveSplatPly(const std::string& path, const SplatCloud& input, std::string& error, bool bakePlacement) {
     if (input.empty()) {
         error = "There are no splats to save";
         return false;
@@ -347,7 +349,7 @@ bool saveSplatPly(const std::string& path, const SplatCloud& input, std::string&
         return false;
     }
     SplatCloud cloud = input;
-    cloud.bakeTransform();
+    if (bakePlacement) cloud.bakeTransform();
     const int perChannel = cloud.shCount() - 1;
 
     std::ostringstream h;
@@ -471,7 +473,7 @@ bool saveDotSplat(const std::string& path, const SplatCloud& input, std::string&
     return true;
 }
 
-bool savePlyMesh(const std::string& path, const Mesh& mesh, std::string& error) {
+bool savePlyMesh(const std::string& path, const Mesh& mesh, std::string& error, double scale) {
     if (mesh.triangleCount() == 0) {
         error = "There is no mesh to save";
         return false;
@@ -505,7 +507,7 @@ bool savePlyMesh(const std::string& path, const Mesh& mesh, std::string& error) 
 
     auto putFloat = [&](float v) { put32(std::bit_cast<uint32_t>(v)); };
     for (size_t v = 0; v < mesh.vertexCount(); ++v) {
-        for (int c = 0; c < 3; ++c) putFloat(mesh.positions[v][c]);
+        for (int c = 0; c < 3; ++c) putFloat(toFileUnits(mesh.positions[v][c], scale));
         if (normals)
             for (int c = 0; c < 3; ++c) putFloat(mesh.normals[v][c]);
         if (colors) {

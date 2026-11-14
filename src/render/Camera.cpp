@@ -21,16 +21,21 @@ glm::vec3 Camera::position() const { return target + orientation() * glm::vec3(0
 glm::vec3 Camera::forward() const { return orientation() * glm::vec3(0, 0, -1); }
 
 glm::mat4 Camera::view() const {
-    glm::mat4 world = glm::translate(glm::mat4(1.0f), position()) * glm::mat4_cast(orientation());
-    return glm::inverse(world);
+    // The inverse of translate(position) * rotate(orientation), written out (no general 4x4 inverse and its
+    // rounding: at extreme zoom the view and the brush's rays, screenRay, agree to a fraction of a pixel).
+    const glm::quat q = glm::normalize(orientation());
+    return glm::translate(glm::mat4_cast(glm::conjugate(q)), -position());
 }
 
 glm::mat4 Camera::projection() const {
-    if (!ortho) return glm::perspective(fovY, aspect, nearPlane(), farPlane());
+    // The lens shift moves the image in clip space (scaled by w, so by `shift` after the divide).
+    glm::mat4 lens(1.0f);
+    lens[3] = glm::vec4(shift, 0.0f, 1.0f);
+    if (!ortho) return lens * glm::perspective(fovY, aspect, nearPlane(), farPlane());
     // As tall as the perspective view at the target; the depth range reaches behind the eye, as in Blender, so
     // zooming in never clips the model.
     const float h = distance * std::tan(fovY * 0.5f);
-    return glm::ortho(-h * aspect, h * aspect, -h, h, -farPlane(), farPlane());
+    return lens * glm::ortho(-h * aspect, h * aspect, -h, h, -farPlane(), farPlane());
 }
 
 float Camera::focalLengthMm() const { return 12.0f / std::tan(fovY * .5f); }
@@ -53,9 +58,36 @@ void Camera::orbitFree(float dx, float dy) {
                    glm::angleAxis(-dy * 0.008f, glm::vec3(1, 0, 0)));
 }
 
+void Camera::orbitAbout(const glm::vec3& worldAxis, float dx, float dy, float rollRadians) {
+    // Free orbiting turns the camera by (-dy, -dx, 0) * 0.008 about its own axes: only its part along the locked
+    // axis (in camera space) is kept, and the roll for the part pointing out of the screen.
+    const glm::vec3 axis = glm::normalize(worldAxis);
+    const glm::quat q = glm::normalize(orientation());
+    const glm::vec3 a = glm::conjugate(q) * axis;
+    const float angle = -(dy * a.x + dx * a.y) * 0.008f - rollRadians * a.z;
+    setOrientation(glm::angleAxis(angle, axis) * q);
+}
+
 void Camera::setOrientation(const glm::quat& q) {
     glm::extractEulerAngleYXZ(glm::mat4_cast(glm::normalize(q)), yaw, pitch, roll);
     if (std::abs(roll) < 1e-6f) roll = 0.0f;
+}
+
+void Camera::turnAbout(const glm::quat& q, const glm::vec3& pivot) {
+    const glm::quat before = glm::normalize(orientation());
+    const glm::vec3 eye = position();
+    setOrientation(q);
+    const glm::quat after = glm::normalize(orientation()); // (as stored: through yaw / pitch / roll)
+    target = pivot + after * (glm::conjugate(before) * (eye - pivot)) - after * glm::vec3(0, 0, distance);
+}
+
+void Camera::targetDepthOf(const glm::vec3& point) {
+    if (ortho) return; // (the distance sets an orthographic view's size)
+    const glm::vec3 eye = position(), f = forward();
+    const float depth = glm::dot(point - eye, f);
+    if (!(depth > nearPlane()) || !std::isfinite(depth)) return; // behind or at the eye
+    distance = depth;
+    target = eye + f * depth;
 }
 
 glm::quat Camera::snapped(const glm::quat& q) {
@@ -84,22 +116,49 @@ void Camera::pan(float dx, float dy, float viewportHeight) {
 
 void Camera::zoom(float steps) { distance = std::clamp(distance * std::pow(0.88f, steps), 1e-4f, 1e6f); }
 
-void Camera::frame(const AABB& box) {
+void Camera::frame(const AABB& box, const glm::vec4& area) {
     if (!box.valid()) return;
     target = box.center();
     float radius = std::max(glm::length(box.extent()) * 0.5f, 1e-4f);
-    distance = ortho ? radius * 1.1f / (std::tan(fovY * .5f) * std::min(aspect, 1.0f))
-                            : radius / std::sin(fovY * 0.5f) * 1.1f;
+    // The area's share of the view's height, or of its width if that is the tighter (in heights); the whole view
+    // in a landscape window is 1, as before.
+    const float x0 = std::clamp(area.x, 0.0f, 1.0f), y0 = std::clamp(area.y, 0.0f, 1.0f);
+    const float x1 = std::clamp(area.z, x0, 1.0f), y1 = std::clamp(area.w, y0, 1.0f);
+    float fit = std::min(y1 - y0, (x1 - x0) * std::max(aspect, 1e-3f));
+    if (area == glm::vec4(0.0f, 0.0f, 1.0f, 1.0f)) fit = 1.0f; // the whole view: exactly as before
+    fit = std::max(fit, 0.05f);
+    const float half = std::atan(fit * std::tan(fovY * 0.5f));
+    distance = ortho ? radius * 1.1f / (std::tan(fovY * .5f) * std::min(aspect, fit)) : radius / std::sin(half) * 1.1f;
+    shift = glm::vec2(x0 + x1 - 1.0f, 1.0f - (y0 + y1));
 }
 
 void Camera::screenRay(float x, float y, float width, float height, glm::vec3& origin, glm::vec3& dir) const {
-    float nx = 2.0f * x / width - 1.0f;
-    float ny = 1.0f - 2.0f * y / height;
-    glm::mat4 inv = glm::inverse(projection() * view());
-    glm::vec4 a = inv * glm::vec4(nx, ny, -1.0f, 1.0f);
-    glm::vec4 b = inv * glm::vec4(nx, ny, 1.0f, 1.0f);
-    origin = glm::vec3(a) / a.w;
-    dir = glm::normalize(glm::vec3(b) / b.w - origin);
+    // From the camera's own axes rather than by inverting projection * view: the same ray, without the matrix
+    // inverse's rounding, so the brush lands under the cursor to a fraction of a pixel at any zoom.
+    const float nx = 2.0f * x / std::max(width, 1e-6f) - 1.0f - shift.x;
+    const float ny = 1.0f - 2.0f * y / std::max(height, 1e-6f) - shift.y;
+    const float t = std::tan(fovY * 0.5f);
+    const glm::quat q = orientation();
+    if (!ortho) {
+        origin = position() + q * (glm::vec3(nx * t * aspect, ny * t, -1.0f) * nearPlane()); // on the near plane
+        dir = glm::normalize(q * glm::vec3(nx * t * aspect, ny * t, -1.0f));
+        return;
+    }
+    const float h = distance * t; // projection(): the depth range starts behind the eye
+    origin = position() + q * glm::vec3(nx * h * aspect, ny * h, farPlane());
+    dir = forward();
+}
+
+Camera Camera::inSpaceOf(const glm::mat4& place) const {
+    if (place == glm::mat4(1.0f)) return *this;
+    const float s = glm::length(glm::vec3(place[0]));
+    if (!(s > 0.0f) || !std::isfinite(s)) return *this;
+    const glm::mat3 r = glm::mat3(place) / s;
+    Camera c = *this;
+    c.target = glm::vec3(glm::inverse(place) * glm::vec4(target, 1.0f));
+    c.distance = distance / s;
+    c.setOrientation(glm::quat_cast(glm::transpose(r)) * orientation());
+    return c;
 }
 
 float Camera::worldPerPixel(const glm::vec3& point, float viewportHeight) const {

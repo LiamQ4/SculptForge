@@ -3,8 +3,9 @@
 //
 // Vector displacement brushes (core/Vdm.h) in the app: Brush > Vector Displacement (the maps, loading EXRs,
 // the VDM plane and Create VDM, Export EXR), their F3 actions, the DragDot stroke, and the DragRect stroke the
-// VDM brush brings along while it is the brush (ZBrush's VDM brushes come set to DragRect).
+// VDM brush brings along while it is the brush (VDM brushes come set to DragRect).
 #include "app/App.h"
+#include "app/NativeDialog.h"
 #include "app/Ui.h"
 
 #include <IconsLucide.h>
@@ -63,14 +64,14 @@ void App::registerVdmActions() {
         actions_.add(std::move(a));
     };
     add("vdm.load", "Load VDM...", ICON_LC_FOLDER_OPEN,
-        [this] { SDL_ShowOpenFileDialog(onVdmChosen, this, window_, kVdmFilters, 2, nullptr, false); }, nullptr,
+        [this] { sf::dialogs::openFile(onVdmChosen, this, window_, kVdmFilters, 2, nullptr, false); }, nullptr,
         "Load a vector displacement map for the VDM brush: a 32- or 16-bit OpenEXR from Blender's VDM Brush Baker (or "
         "any EXR whose RGB are X right, Y up, Z out of the surface, in brush radii) or a .sfvdm. It is kept in your "
         "brush library. You can also drop an .exr on the window.",
         "vdm_set");
     add("vdm.new_plane", "New VDM Plane", ICON_LC_GRID_3X3,
         [this] { runCommand("vdm_new_plane", {{"resolution", double(vdmPlaneRes_)}}); }, nullptr,
-        "Add a flat VDM plane to sculpt a new brush on (ZBrush's VDM plane template): seen from the top, its border "
+        "Add a flat VDM plane to sculpt a new brush on: seen from the top, its border "
         "masked so it stays put; the other Parts are hidden. Sculpt anything (overhangs welcome), then Create VDM.",
         "vdm_new_plane");
     add("vdm.create", "Create VDM", ICON_LC_STAMP,
@@ -79,11 +80,10 @@ void App::registerVdmActions() {
         },
         [this] { return doc_.mesh.hasUvs(); },
         "Turn the sculpted VDM plane into a vector displacement brush: how far every point moved from the flat grid "
-        "becomes the map, saved in your brush library and picked as the VDM brush's map (ZBrush: Create brush from "
-        "the VDM plane). Needs the VDM plane (its UVs record where each point started).",
+        "becomes the map, saved in your brush library and picked as the VDM brush's map Needs the VDM plane (its UVs record where each point started).",
         "vdm_capture");
     add("vdm.export", "Export EXR...", ICON_LC_DOWNLOAD,
-        [this] { SDL_ShowSaveFileDialog(onVdmExportChosen, this, window_, kExrFilters, 1, nullptr); },
+        [this] { sf::dialogs::saveFile(onVdmExportChosen, this, window_, kExrFilters, 1, nullptr); },
         [this] { return doc_.brushVdm != nullptr; },
         "Save the VDM brush's map as a 32-bit float OpenEXR, for Blender: add it as the texture of a Draw brush with "
         "Area Plane mapping and Vector Displacement on (Help > User Guide > Sculpting > Vector displacement brushes).",
@@ -123,31 +123,57 @@ void App::afterVdmCommand(const std::string& name, const CommandResult& r) {
         paintMode_ = false;
     } else if (name == "vdm_new_plane") { // sculpt it from the top, like the map sees it
         camera_.setOrientation(glm::angleAxis(-1.5707963f, glm::vec3(1.0f, 0.0f, 0.0f)));
-        camera_.frame(doc_.mesh.bounds());
+        frameView(doc_.mesh.bounds());
     }
 }
 
-// DragDot: one stamp of the Draw Size under the cursor; dragging slides it over the surface, and it stays where
+// DragDot: one stamp at the brush size under the cursor; dragging slides it over the surface, and it stays where
 // the button comes up.
-void App::dragDotTo(float x, float y) {
+// With the rotate key held (Preferences > Input, Shift as the default, pressed after the stroke began: at the press
+// Shift smooths) the stamp stays where it is and its alpha turns toward the cursor; let go, it slides on with the
+// turn kept. The turn is the stroke's own: the brush's saved Angle is not touched (#175).
+bool App::slideRotateHeld() const {
+    const SDL_Keymod keys = inputMods();
+    SDL_Keymod want = 0;
+    switch (uiPrefs_.slideRotateKey) {
+    case 0: want = SDL_KMOD_SHIFT; break;
+    case 1: want = SDL_KMOD_CTRL; break;
+    case 2: want = SDL_KMOD_ALT; break;
+    default: return false;
+    }
+    if (uiPrefs_.slideRotateKey == 0 && precisionHeld()) return false; // (Shift+Alt is the precision drag)
+    return (keys & want) && !(slideKeysAtStart_ & want); // (down at the press: its own meaning, smooth / mask / invert)
+}
+
+void App::dragDotTo(float x, float y, bool commit) {
     doc_.sculptor.restoreStroke(doc_.mesh, doc_.bvh);
+    const bool rotating = slideRotateHeld();
+    const glm::vec2 at = slideTurn_.position(rotating, glm::vec2(x, y)); // (rotating: where the stamp was)
+    if (!commit) slideTurn_.turn(rotating, glm::vec2(x, y)); // (the release's final stamp stays put)
+    x = at.x;
+    y = at.y;
     RayHit hit;
     if (!pick(x, y, hit)) return;
-    const float pressure = strokePressure();
+    const float pressure = stampPressure_.hold(strokePressure()); // (not the lift's falling pressure, #146)
     DabParams p;
     p.center = hit.position;
-    p.viewDir = camera_.forward();
-    p.radius = radiusPx_ * (pressureSize_ ? std::max(pressure, 0.05f) : 1.0f) *
-               camera_.worldPerPixel(hit.position, canvasHeight());
-    p.strength = strokeBrush_ == BrushType::Smooth ? smoothStrength_ : strength_;
-    p.pressure = pressureStrength_ ? pressure : 1.0f;
+    p.viewDir = partCamera().forward();
+    p.radius = radiusPx_ * (pressureSizeOn() ? std::max(pressure, 0.05f) : 1.0f) *
+               partCamera().worldPerPixel(hit.position, canvasHeight());
+    p.strength = strokeIntensity();
+    p.pressure = pressureStrengthOn() ? pressure : 1.0f;
     p.invert = strokeInvert_;
     p.frontFacesOnly = frontFacesOnly_;
     p.connectedOnly = uiPrefs_.connectedOnly;
     p.viewFalloff = uiPrefs_.viewFalloff;
     p.focal = focalShift_;
     p.alpha = &doc_.brushAlpha;
-    p.alphaUp = screenUpVector(0.0f);
+    p.stampFootprint = commit;
+    stampCursor_ = glm::vec2(x, y);
+    stampPlaced_ = true;
+    lastDabAngle_ = alphaStampAngle(alphaOptions_, false, {}, stampJitter_); // Angle and jitter (#136); it slides, not turns
+    if (slideTurn_.turned()) lastDabAngle_ += slideTurn_.angle(); // (turned toward the cursor with the rotate key, #175)
+    p.alphaUp = screenUpVector(lastDabAngle_);
     p.vdm = doc_.brushVdm.get();
     lastDabScreen_ = glm::vec2(x, y);
     if (strokePaint_) paintAt(p); // restoreStroke reverted the previous stamp's colours too
@@ -177,57 +203,59 @@ void App::drawVdmSection() {
     }
     if (!vdmBrushActive()) {
         actionButton(*this, "brush.vdm");
+    } else {
+        drawAlphaOptions(true); // the VDM brush's own Follow / Angle / Angle jitter (#136)
     }
     drawVdmGrid(*this, GridMode::Palette);
 
-    ImGui::SeparatorText("Load");
+    ImGui::SeparatorText(tr("Load"));
     actionButton(*this, "vdm.load");
-    ImGui::Checkbox("Swap Y/Z##vdm", &vdmImport_.swapYZ);
+    ImGui::Checkbox(tr("Swap Y/Z##vdm"), &vdmImport_.swapYZ);
     ui::HelpText("Swap Y/Z", nullptr,
                  "For maps that store the surface normal in G instead of B (Y-up apps). Blender's maps and ours need "
-                 "nothing; ZBrush maps depend on its Vector Displacement Flip options, so try this if a stamp comes "
+                 "nothing; maps from other apps depend on how they were exported, so try this if a stamp comes "
                  "out lying on its side.",
                  "Brush > Vector Displacement");
     ImGui::SameLine();
-    ImGui::Checkbox("Flip X##vdm", &vdmImport_.flipX);
+    ImGui::Checkbox(tr("Flip X##vdm"), &vdmImport_.flipX);
     ui::HelpText("Flip X", nullptr, "Mirror the map's sideways (R) channel when loading: for a stamp that comes out mirrored.",
                  "Brush > Vector Displacement");
     ImGui::SameLine();
-    ImGui::Checkbox("Flip Y##vdm", &vdmImport_.flipY);
+    ImGui::Checkbox(tr("Flip Y##vdm"), &vdmImport_.flipY);
     ui::HelpText("Flip Y", nullptr, "Mirror the map's up (G) channel when loading: for a stamp that leans the wrong way.",
                  "Brush > Vector Displacement");
-    ImGui::Checkbox("Flip Z##vdm", &vdmImport_.flipZ);
+    ImGui::Checkbox(tr("Flip Z##vdm"), &vdmImport_.flipZ);
     ui::HelpText("Flip Z", nullptr, "Negate the map's height (B) when loading: for a map that digs in where it should rise.",
                  "Brush > Vector Displacement");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
-    ImGui::SliderFloat("##vdmscale", &vdmImport_.scale, 0.1f, 10.0f, "Scale %.2f", ImGuiSliderFlags_Logarithmic);
+    ImGui::SliderFloat("##vdmscale", &vdmImport_.scale, 0.1f, 10.0f, tr("Scale %.2f"), ImGuiSliderFlags_Logarithmic);
     ui::HelpText("Scale", nullptr,
                  "Multiply a loaded map's vectors: for maps saved in other units than the brush radius (1 = as stored).",
                  "Brush > Vector Displacement");
 
-    ImGui::SeparatorText("Create");
+    ImGui::SeparatorText(tr("Create"));
     ImGui::SetNextItemWidth(-1);
-    ImGui::SliderInt("##vdmplane", &vdmPlaneRes_, 64, 1024, "Plane Res %d");
+    ImGui::SliderInt("##vdmplane", &vdmPlaneRes_, 64, 1024, tr("Plane Res %d"));
     ui::HelpText("Plane Res", nullptr,
                  "Quads per side of a new VDM plane. 256 is a good start; divide it (Ctrl+D) for finer detail.",
                  "Brush > Vector Displacement");
     actionButton(*this, "vdm.new_plane");
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##vdmname", "Name of the new VDM", vdmName_, sizeof vdmName_);
+    ImGui::InputTextWithHint("##vdmname", tr("Name of the new VDM"), vdmName_, sizeof vdmName_);
     ui::HelpText("VDM name", nullptr, "What Create VDM calls the new map (a map of the same name is replaced).",
                  "Brush > Vector Displacement");
     ImGui::SetNextItemWidth(-1);
-    ImGui::SliderInt("##vdmsize", &vdmCaptureSize_, 64, 1024, "Map Size %d px");
+    ImGui::SliderInt("##vdmsize", &vdmCaptureSize_, 64, 1024, tr("Map Size %d px"));
     ui::HelpText("Map Size", nullptr,
                  "Pixels a side of the map Create VDM makes. 256 holds most shapes; 512 for fine detail (Blender suggests "
                  "512 or less).",
                  "Brush > Vector Displacement");
     actionButton(*this, "vdm.create");
     actionButton(*this, "vdm.export");
-    hint("Stamp with Drag Stamp (drag sets size and turn) or Slide Stamp. Intensity 50 presses the map at its own size; "
+    hint(tr("Stamp with Drag Stamp (drag sets size and turn) or Slide Stamp. Intensity 50 presses the map at its own size; "
          "Alt digs it in. A VDM moves points sideways, so it needs a dense mesh: divide first, and stamp at the "
-         "highest subdivision level.");
+         "highest subdivision level."));
 }
 
 } // namespace sf

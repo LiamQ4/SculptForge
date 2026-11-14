@@ -1,7 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The orbit camera: turntable and free (ZBrush) rotation, snapping to axis views.
+// The orbit camera: turntable and free rotation, snapping to axis views.
 #include "TestHarness.h"
 
 #include "render/Camera.h"
@@ -143,4 +143,161 @@ TEST(camera_orthographic_matches_perspective_at_the_target) {
     c.distance = 0.01f;
     const glm::vec4 p = c.projection() * c.view() * glm::vec4(0.0f, 0.0f, 1.0f, 1.0f); // in front of the target...
     CHECK(std::abs(p.z / p.w) <= 1.0f); // ...and behind the eye, still drawn
+}
+
+TEST(camera_orbit_lock_turns_about_one_world_axis) {
+    // View > Orbit lock X / Z (foirgairwolf on Discord): whatever the drag, the locked axis stays where it is on screen and
+    // nothing turns about the other two.
+    for (int axisIndex : {0, 2}) {
+        glm::vec3 axis(0.0f);
+        axis[axisIndex] = 1.0f;
+        Camera c;
+        c.setOrientation(glm::angleAxis(glm::radians(25.0f), glm::vec3(0, 1, 0)) *
+                         glm::angleAxis(glm::radians(-15.0f), glm::vec3(1, 0, 0)));
+        const glm::quat start = c.orientation();
+        const glm::vec3 axisOnScreen = glm::conjugate(start) * axis;
+        c.orbitAbout(axis, 37.0f, -81.0f, 0.2f);
+        c.orbitAbout(axis, -12.0f, 140.0f, -0.05f);
+        const glm::quat q = c.orientation();
+        CHECK(near(glm::conjugate(q) * axis, axisOnScreen, 1e-4f));
+        // The turn from the start is a rotation about the axis alone.
+        const glm::quat turn = q * glm::conjugate(start);
+        const glm::vec3 v(turn.x, turn.y, turn.z);
+        CHECK(glm::length(v - axis * glm::dot(v, axis)) < 1e-4f);
+        CHECK(glm::length(v) > 0.05f); // and it did turn
+    }
+}
+
+TEST(camera_orbit_lock_follows_the_drag) {
+    // From the front: X lock tips the model with an up / down drag and ignores a sideways one (the same way free
+    // orbiting tips it); Z lock turns it like a wheel with the cursor's sweep, as rolling the view does.
+    Camera x;
+    x.orbitAbout(glm::vec3(1, 0, 0), 200.0f, 0.0f, 0.0f);
+    CHECK(near(x.forward(), glm::vec3(0, 0, -1)));
+    Camera free;
+    free.orbitFree(0.0f, 50.0f);
+    x.orbitAbout(glm::vec3(1, 0, 0), 0.0f, 50.0f, 0.0f);
+    CHECK(near(x.forward(), free.forward(), 1e-4f));
+    Camera z;
+    z.orbitAbout(glm::vec3(0, 0, 1), 0.0f, 0.0f, 0.3f);
+    Camera roll;
+    roll.setOrientation(roll.orientation() * glm::angleAxis(-0.3f, glm::vec3(0, 0, 1)));
+    CHECK(near(z.forward(), glm::vec3(0, 0, -1)));
+    CHECK(near(up(z), up(roll), 1e-4f));
+}
+
+TEST(camera_orbit_lock_does_not_drift) {
+    // 1000 small drags (through straight up and down for X, where yaw / pitch / roll is degenerate) end where one
+    // turn by their sum does, and the locked axis has not moved on screen.
+    for (int axisIndex : {0, 2}) {
+        glm::vec3 axis(0.0f);
+        axis[axisIndex] = 1.0f;
+        Camera c;
+        c.setOrientation(glm::angleAxis(glm::radians(10.0f), glm::vec3(0, 1, 0)));
+        const glm::quat start = c.orientation();
+        const glm::vec3 axisOnScreen = glm::conjugate(start) * axis;
+        for (int i = 0; i < 1000; ++i) c.orbitAbout(axis, 0.7f, 1.3f, 0.004f);
+        const float total = -(1.3f * axisOnScreen.x + 0.7f * axisOnScreen.y) * 0.008f * 1000.0f - 0.004f * axisOnScreen.z * 1000.0f;
+        const glm::quat expected = glm::angleAxis(total, axis) * start;
+        CHECK(std::abs(std::abs(glm::dot(glm::normalize(c.orientation()), expected)) - 1.0f) < 1e-4f);
+        CHECK(near(glm::conjugate(c.orientation()) * axis, axisOnScreen, 1e-3f));
+    }
+}
+
+TEST(camera_frame_fits_the_free_area_and_rays_follow_the_shift) {
+    // The lower 60 % of the view (bands across its top): the box's projection lies inside that area, centred on it,
+    // and a ray cast through a pixel projects back onto it (the lens shift in both), perspective and orthographic.
+    for (bool ortho : {false, true}) {
+        Camera c;
+        c.aspect = 16.0f / 9.0f;
+        c.ortho = ortho;
+        c.yaw = 0.4f;
+        c.pitch = 0.3f;
+        AABB box;
+        box.expand(glm::vec3(-1.0f, -0.5f, -2.0f));
+        box.expand(glm::vec3(1.5f, 2.0f, 0.5f));
+        const glm::vec4 area(0.0f, 0.4f, 1.0f, 1.0f);
+        c.frame(box, area);
+        const glm::mat4 vp = c.projection() * c.view();
+        for (int k = 0; k < 8; ++k) {
+            const glm::vec3 p((k & 1) ? box.max.x : box.min.x, (k & 2) ? box.max.y : box.min.y, (k & 4) ? box.max.z : box.min.z);
+            const glm::vec4 h = vp * glm::vec4(p, 1.0f);
+            const float y = (1.0f - h.y / h.w) * 0.5f; // from the top
+            CHECK(y > area.y && y < area.w);
+            CHECK(std::abs(h.x / h.w) < 1.0f);
+        }
+        const glm::vec4 t = vp * glm::vec4(box.center(), 1.0f);
+        CHECK(std::abs((1.0f - t.y / t.w) * 0.5f - 0.7f) < 1e-4f);
+        glm::vec3 o, d;
+        c.screenRay(300.0f, 700.0f, 1600.0f, 900.0f, o, d);
+        const glm::vec4 q = vp * glm::vec4(o + d * (glm::length(c.position() - c.target)), 1.0f);
+        CHECK(std::abs((q.x / q.w + 1.0f) * 0.5f * 1600.0f - 300.0f) < 0.05f);
+        CHECK(std::abs((1.0f - q.y / q.w) * 0.5f * 900.0f - 700.0f) < 0.05f);
+        // The whole view: centred, no shift, as before.
+        c.frame(box);
+        CHECK(c.shift == glm::vec2(0.0f));
+    }
+}
+
+namespace {
+
+// Where `p` is on a 900 x 600 window, and its depth.
+glm::vec3 onScreen(const Camera& c, const glm::vec3& p) {
+    const glm::vec4 clip = c.projection() * c.view() * glm::vec4(p, 1.0f);
+    return glm::vec3(clip.x / clip.w * 450.0f + 450.0f, 300.0f - clip.y / clip.w * 300.0f, glm::dot(p - c.position(), c.forward()));
+}
+
+} // namespace
+
+TEST(camera_orbit_around_the_pointer_keeps_the_point_put) {
+    // Preferences > Input > Orbit around the pointer (dm4nd on Discord): a rotation drag that starts over the model
+    // turns the view about the surface point under the pointer. Picking it moves the target to its depth without
+    // the view jumping; every turn after that (free, turntable, Shift-snapped) leaves the point where it was on screen.
+    for (bool ortho : {false, true}) {
+        Camera c;
+        c.aspect = 1.5f;
+        c.ortho = ortho;
+        c.shift = glm::vec2(0.0f, -0.4f); // (framed into the free area under the Library)
+        c.target = glm::vec3(0.2f, -0.1f, 0.0f);
+        c.distance = 6.0f;
+        c.setOrientation(glm::angleAxis(glm::radians(30.0f), glm::vec3(0, 1, 0)) *
+                         glm::angleAxis(glm::radians(-20.0f), glm::vec3(1, 0, 0)));
+        const glm::vec3 pivot(1.1f, 0.6f, 0.9f); // off the view axis: a point at the side of the model
+        const glm::vec3 seen = onScreen(c, pivot);
+        const glm::mat4 before = c.view();
+        const glm::vec3 corner = onScreen(c, glm::vec3(-1.0f, 1.0f, -0.5f));
+        c.targetDepthOf(pivot);
+        for (int i = 0; i < 4; ++i) CHECK(near(glm::vec3(before[i]), glm::vec3(c.view()[i]), 1e-4f)); // no jump
+        CHECK(near(onScreen(c, glm::vec3(-1.0f, 1.0f, -0.5f)), corner, 1e-2f)); // (only the clip planes follow the depth)
+        if (!ortho) {
+            CHECK(std::abs(c.distance - seen.z) < 1e-4f); // zooming to the middle now works at the point's depth
+            CHECK(near(c.target, c.position() + c.forward() * seen.z));
+        } else {
+            CHECK(c.distance == 6.0f); // (it sets an orthographic view's size)
+        }
+        Camera raw = c;
+        raw.orbitFree(140.0f, -60.0f);
+        c.turnAbout(raw.orientation(), pivot);
+        CHECK(near(c.orientation() * glm::vec3(0, 0, 1), raw.orientation() * glm::vec3(0, 0, 1), 1e-5f));
+        CHECK(near(onScreen(c, pivot), seen, 2e-2f));
+        raw.orbit(-90.0f, 35.0f); // turntable
+        c.turnAbout(raw.orientation(), pivot);
+        CHECK(near(onScreen(c, pivot), seen, 2e-2f));
+        c.turnAbout(Camera::snapped(raw.orientation()), pivot); // Shift: the nearest axis view
+        CHECK(near(onScreen(c, pivot), seen, 2e-2f));
+        CHECK(std::abs(std::abs(glm::dot(glm::normalize(c.orientation()), Camera::snapped(raw.orientation()))) - 1.0f) < 1e-5f);
+        // A long drag in small steps doesn't drift.
+        for (int i = 0; i < 500; ++i) {
+            raw.orbitFree(1.3f, -0.4f);
+            c.turnAbout(raw.orientation(), pivot);
+        }
+        CHECK(near(onScreen(c, pivot), seen, 5e-2f));
+    }
+}
+
+TEST(camera_orbit_around_the_pointer_ignores_points_behind_the_eye) {
+    Camera c;
+    const Camera keep = c;
+    c.targetDepthOf(c.position() - c.forward()); // behind the eye
+    CHECK(near(c.target, keep.target) && c.distance == keep.distance);
 }

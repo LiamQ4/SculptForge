@@ -3,6 +3,7 @@
 #include "app/ShellGeometry.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace sf {
 
@@ -11,6 +12,52 @@ using namespace shell;
 float trayWidth(float stored, float logicalWindowWidth) {
     if (stored == 300.0f && logicalWindowWidth >= kWideWidth) return 320.0f;
     return std::clamp(stored, kTrayMinW, kTrayMaxW);
+}
+
+CircledPlus circledPlus(float cx, float cy, float r, float scale) {
+    const float s = scale > 0.0f ? scale : 1.0f;
+    CircledPlus p;
+    const float t = std::max(1.0f, std::round(1.5f * s)); // whole-pixel bars: crisp, no half-covered rows
+    // An odd width centres on a pixel's middle, an even one on a pixel edge: then both bars cover whole pixels and
+    // the circle shares their centre exactly.
+    const float half = t * 0.5f;
+    const bool odd = std::fmod(t, 2.0f) != 0.0f;
+    p.cx = odd ? std::floor(cx) + 0.5f : std::round(cx);
+    p.cy = odd ? std::floor(cy) + 0.5f : std::round(cy);
+    p.r = std::round(r);
+    p.stroke = t;
+    // Half the +'s length: whole arms plus half the bar, so its ends land on pixel edges like its sides.
+    const float arm = std::max(2.0f, std::round(r * 0.5f)) + half;
+    p.barX0 = p.cx - arm, p.barX1 = p.cx + arm, p.barY0 = p.cy - half, p.barY1 = p.cy + half;
+    p.colX0 = p.cx - half, p.colX1 = p.cx + half, p.colY0 = p.cy - arm, p.colY1 = p.cy + arm;
+    return p;
+}
+
+WindowFit fitWindow(WindowRect win, bool stored, bool placed, float storedScale, const WindowRect& usable,
+                    const WindowBorders& b, float scale) {
+    WindowFit fit;
+    const float s = scale > 0.0f ? scale : 1.0f, was = storedScale > 0.0f ? storedScale : 1.0f;
+    const int availW = std::max(1, usable.w - b.left - b.right), availH = std::max(1, usable.h - b.top - b.bottom);
+    int wantW = win.w, wantH = win.h;
+    if (!stored) {
+        wantW = int(1600.0f * s + 0.5f);
+        wantH = int(960.0f * s + 0.5f);
+    } else if (std::abs(s - was) >= 0.01f) {
+        wantW = int(float(win.w) * s / was + 0.5f);
+        wantH = int(float(win.h) * s / was + 0.5f);
+    }
+    fit.maximize = wantW > availW || wantH > availH;
+    win.w = std::min(wantW, availW);
+    win.h = std::min(wantH, availH);
+    if (!placed) {
+        win.x = usable.x + b.left + (availW - win.w) / 2;
+        win.y = usable.y + b.top + (availH - win.h) / 2;
+    } else {
+        win.x = std::clamp(win.x, usable.x + b.left, usable.x + usable.w - b.right - win.w);
+        win.y = std::clamp(win.y, usable.y + b.top, usable.y + usable.h - b.bottom - win.h);
+    }
+    fit.rect = win;
+    return fit;
 }
 
 ShellMetrics sculptForgeMetrics(float gap) {
@@ -29,6 +76,7 @@ ShellGeometry computeShell(const UiLayout& l, float W, float H, float s, float t
         ShellMetrics inner = m;
         inner.gap = 0.0f;
         inner.grow = m.gap;
+        inner.windowW = W;
         UiLayout unmirrored = l; // mirrored at the end, dividers included
         unmirrored.leftHanded = false;
         ShellGeometry g = computeShell(unmirrored, W - 2.0f * half, H - 2.0f * half, s, topInset, inner);
@@ -63,7 +111,8 @@ ShellGeometry computeShell(const UiLayout& l, float W, float H, float s, float t
     }
     ShellGeometry g;
     g.scale = s;
-    const float logicalW = s > 0.0f ? W / s : W;
+    const float windowW = m.windowW > 0.0f ? m.windowW : W;
+    const float logicalW = s > 0.0f ? windowW / s : windowW;
     g.narrow = logicalW < kNarrowWidth;
     g.shelves = l.shelvesVisible;
 
@@ -76,8 +125,12 @@ ShellGeometry computeShell(const UiLayout& l, float W, float H, float s, float t
 
     float left = 0.0f, right = W; // the span between the dividers
     if (g.shelves) {
-        const float lw = l.leftTrayOpen ? trayWidth(l.leftTrayWidth, logicalW) * s : 0.0f;
-        const float rw = l.rightTrayOpen && !g.narrow ? trayWidth(l.rightTrayWidth, logicalW) * s : 0.0f;
+        // A narrow window (a tablet at 240-320 dpi is 760-1000 logical px; upright, 450-800) holds one tray at a time, at
+        // most 40 % of its width: the left one if both are open. The right one opens there only once asked for (rightTrayPeek).
+        const float cap = g.narrow ? std::max(kPhoneTrayMinW, logicalW * 0.4f) : kTrayMaxW;
+        const float lw = l.leftTrayOpen ? std::min(trayWidth(l.leftTrayWidth, logicalW), cap) * s : 0.0f;
+        const bool rightWanted = l.rightTrayOpen && (!g.narrow || (l.rightTrayPeek && !l.leftTrayOpen));
+        const float rw = rightWanted ? std::min(trayWidth(l.rightTrayWidth, logicalW), cap) * s : 0.0f;
         const float dw = m.dividerW * s;
         g.leftTray = {0, top, lw, H - top};
         g.leftDivider = {lw, top, dw, H - top};
@@ -93,21 +146,23 @@ ShellGeometry computeShell(const UiLayout& l, float W, float H, float s, float t
     }
     const float span = std::max(0.0f, right - left);
 
-    const float topH = g.shelves ? (m.topShelfH + m.grow) * s : 0.0f;
-    const float bottomH = g.shelves ? (bottomShelfSize(l.shelfTiles).shelfH + m.grow) * s : 0.0f;
+    // An empty shelf takes no room outside Customize Shelves (#139).
+    auto shown = [&](const std::vector<std::string>& items) { return g.shelves && (l.customize || !shelfEmpty(items)); };
+    const float topH = shown(l.topShelf) ? (m.topShelfH + m.grow) * s : 0.0f;
+    const float bottomH = shown(l.bottomShelf) ? (bottomShelfSize(l.shelfTiles).shelfH + m.grow) * s : 0.0f;
     g.topShelf = {left, top, span, topH};
     g.bottomShelf = {left, H - bottomH, span, bottomH};
     const float consoleH = l.consoleOpen ? std::clamp(l.consoleHeight, kConsoleMinH, kConsoleMaxH) * s : 0.0f;
     g.console = {left, g.bottomShelf.y - consoleH, span, consoleH};
 
     const float y0 = top + topH, y1 = std::max(y0, g.console.y);
-    const float leftW = g.shelves ? ((g.narrow ? kLeftShelfNarrowW : kLeftShelfW) + m.grow) * s : 0.0f;
-    const float rightW = g.shelves ? (kRightShelfW + m.grow) * s : 0.0f;
+    const float leftW = shown(l.leftShelf) ? ((g.narrow ? kLeftShelfNarrowW : kLeftShelfW) + m.grow) * s : 0.0f;
+    const float rightW = shown(l.rightShelf) ? (kRightShelfW + m.grow) * s : 0.0f;
     g.leftShelf = {left, y0, leftW, y1 - y0};
     g.rightShelf = {right - rightW, y0, rightW, y1 - y0};
     g.canvas = {left + leftW, y0, std::max(1.0f, span - leftW - rightW), std::max(1.0f, y1 - y0)};
 
-    if (l.leftHanded) { // Nomad's mirrored layout: everything swaps sides
+    if (l.leftHanded) { // the mirrored layout: everything swaps sides
         for (CanvasRect* r : {&g.topShelf, &g.leftShelf, &g.rightShelf, &g.bottomShelf, &g.console, &g.leftDivider,
                               &g.rightDivider, &g.leftTray, &g.rightTray, &g.canvas})
             r->x = W - r->x - r->w;

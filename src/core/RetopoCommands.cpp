@@ -1,7 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// qremesh and project_all: the scriptable side of Geometry > QRemesh and SubTool > Project (core/QRemesh.h,
+// qremesh and project_all: the scriptable side of Geometry > QRemesh and Part > Project (core/QRemesh.h,
 // core/Projection.h). The app runs QRemesh on a worker thread and applies the result with applyQRemesh.
 #include "core/Commands.h"
 #include "core/KeepMasked.h"
@@ -47,11 +47,12 @@ std::string qualitySummary(const QuadQuality& q) {
 std::string applyQRemesh(Document& doc, Mesh result, bool keepOriginal, const QRemeshStats& st) {
     const size_t before = doc.mesh.triangleCount();
     if (keepOriginal) {
-        const SubTool& active = doc.activeSubtoolInfo();
-        const int at = doc.activeSubtool + 1;
-        doc.addSubtool(doc.mesh, active.name + " Original", false, at);
-        doc.subtools[size_t(at)].visible = false;
-        doc.subtools[size_t(at)].qremeshGuides = doc.qremeshGuides; // to remesh it again with them
+        const Part& active = doc.activePartInfo();
+        const int at = doc.activePart + 1;
+        doc.addPart(doc.mesh, active.name + " Original", false, at);
+        doc.parts[size_t(at)].visible = false;
+        doc.parts[size_t(at)].data->qremeshGuides = doc.qremeshGuides; // to remesh it again with them
+        doc.parts[size_t(at)].transform = active.transform;
     }
     doc.replaceMeshUndoable(std::move(result), "Quad Remesh");
     const size_t faces = st.quads + st.triangles;
@@ -86,12 +87,12 @@ std::string applyQRemesh(Document& doc, Mesh result, bool keepOriginal, const QR
 
 void registerRetopoCommands(CommandRegistry& reg) {
     reg.add({"crkw_retopo_project",
-        "Preserve the active SubTool and its undo history, QRemesh a new base, subdivide near the source point count "
-        "and project from the frozen source at each level. Publishes a separate SubTool only on success.",
+        "Preserve the active Part and its undo history, QRemesh a new base, subdivide near the source point count "
+        "and project from the frozen source at each level. Publishes a separate Part only on success.",
         {{"target", T::Number, "Base quad target; 0 = automatic (source points / 16, at most 2500)", false},
          {"distance", T::Number, "Projection search distance / bounding-box diagonal (0.001-1), default .05", false},
          {"max_points", T::Number, "Point limit, default 8000000; stops rather than silently losing detail", false},
-         {"keep_groups", T::Bool, "Preserve polygroup IDs and guide topology along their borders, default true", false},
+         {"keep_groups", T::Bool, "Preserve facegroup IDs and guide topology along their borders, default true", false},
          {"keep_texture", T::Bool, "Transfer the editable texture onto new base UVs, default true", false}},
         [](Document& doc, const Args& args) -> CommandResult {
             const size_t sourcePoints = doc.mesh.vertexCount();
@@ -104,8 +105,8 @@ void registerRetopoCommands(CommandRegistry& reg) {
                 !std::isfinite(distance) || distance < .001 || distance > 1)
                 return {false, "Use target=0 or 16-2000000, max_points=128-32000000, distance=.001-1"};
             if (sourcePoints > size_t(limit)) return {false, "Source exceeds max_points; raise the limit explicitly"};
-            const int sourceIndex = doc.activeSubtool;
-            const std::string sourceName = doc.activeSubtoolInfo().name;
+            const int sourceIndex = doc.activePart;
+            const std::string sourceName = doc.activePartInfo().name;
             // Freeze the displayed sculpt. Its original layers, levels, masks, visibility and history remain in doc.
             Mesh reference = doc.mesh;
             reference.multires.reset(); reference.layers.clear(); reference.base.clear();
@@ -150,9 +151,9 @@ void registerRetopoCommands(CommandRegistry& reg) {
                 ++divisions;
             }
             const size_t finalPoints = result.vertexCount();
-            const int output = doc.addSubtool(std::move(result), sourceName + " Retopo", true);
-            doc.subtools[size_t(sourceIndex)].visible = false;
-            doc.subtools[size_t(output)].visible = true;
+            const int output = doc.addPart(std::move(result), sourceName + " Retopo", true);
+            doc.parts[size_t(sourceIndex)].visible = false;
+            doc.parts[size_t(output)].visible = true;
             doc.sculptor.dyntopo.enabled = false;
             return {true, "Auto Retopo: source/history kept in '" + sourceName + "'; base " + std::to_string(basePoints) +
                 " points, " + std::to_string(divisions + 1) + " levels, " + std::to_string(finalPoints) +
@@ -160,7 +161,7 @@ void registerRetopoCommands(CommandRegistry& reg) {
                 std::to_string(stats.projected) + " hit, " + std::to_string(stats.missed) + " missed"};
         }});
     reg.add({"qremesh",
-             "Quad Remesh (like ZBrush's ZRemesher): automatic quad retopology of the active Part. Builds clean, "
+             "Quad Remesh: automatic quad retopology of the active Part. Builds clean, "
              "all-quad topology with edge loops that follow the form, close to the target polygon count. Sculpt "
              "layers are baked; mask and vertex paint carry over. Undoable. Use project_all afterwards (from a kept "
              "original) to bring fine detail back onto a divided copy.",
@@ -170,12 +171,12 @@ void registerRetopoCommands(CommandRegistry& reg) {
                                     "'legacy': the 0.9 method.", false},
               {"quality", T::Bool, "Measure the result (poles, valences, corner angles, distance to the sculpt) and "
                                    "report it. Default true.", false},
-              {"adaptive", T::Number, "Adaptive Size 0-1: 0 = even quads, 1 = small quads in curved areas, big "
+              {"adaptive", T::Number, "Size Variation 0-1: 0 = even quads, 1 = small quads in curved areas, big "
                                       "ones on flat areas. Default 0.5.", false},
-              {"keep_groups", T::Bool, "Keep Groups: edge loops follow the face group borders and the groups are kept.", false},
-              {"detect_edges", T::Bool, "Detect Edges: hard edges get an edge loop (v2: faces meeting at more than about "
+              {"keep_groups", T::Bool, "Follow Face Groups: edge loops follow the face group borders and the groups are kept.", false},
+              {"detect_edges", T::Bool, "Keep Hard Edges: hard edges get an edge loop (v2: faces meeting at more than about "
                                         "60 degrees along a line a few quads long; legacy: over 50 degrees). Default true.", false},
-              {"use_polypaint", T::Bool, "Use the vertex paint as a density guide: red areas get up to 4x the quads, blue "
+              {"use_vertexpaint", T::Bool, "Use the vertex paint as a density guide: red areas get up to 4x the quads, blue "
                                          "areas down to a quarter.", false},
               {"symmetry", T::String, "Mirror the topology across x, y or z. The mirror plane is found from the model (the "
                                       "world's centre plane, or the model's own middle when it sits off-centre); a model "
@@ -190,7 +191,7 @@ void registerRetopoCommands(CommandRegistry& reg) {
                                         "Default true.", false},
               {"guides", T::Bool, "Follow the Part's Quad Remesh Guides (curves drawn with qremesh_guide): an edge loop "
                                   "runs along each. Default true.", false},
-              {"curves_strength", T::Number, "Curves Strength 0-100: how far around each guide the edge flow follows "
+              {"curves_strength", T::Number, "Guide Strength 0-100: how far around each guide the edge flow follows "
                                              "it (0 = just the loop on the curve, 100 = about six quads to each side). "
                                              "Default 50.", false},
               {"keep_masked", T::Bool, "Keep masked: masked areas keep their triangles exactly as a fixed piece; the "
@@ -212,7 +213,7 @@ void registerRetopoCommands(CommandRegistry& reg) {
                  o.adaptive = float(std::clamp(argNumber(a, "adaptive", 0.5), 0.0, 1.0));
                  o.keepGroups = argBool(a, "keep_groups", false);
                  o.detectEdges = argBool(a, "detect_edges", true);
-                 o.usePolypaint = argBool(a, "use_polypaint", false);
+                 o.useVertexPaint = argBool(a, "use_vertexpaint", false);
                  o.symmetryAxis = symmetryAxisArg(argString(a, "symmetry"));
                  if (a.contains("symmetry_center")) {
                      o.symmetryAuto = false;
@@ -237,15 +238,15 @@ void registerRetopoCommands(CommandRegistry& reg) {
              }});
 
     reg.add({"project_all",
-             "Project All (Part palette): move the active Part's vertices onto the surface of the other visible "
+             "Project Detail (Part palette): move the active Part's vertices onto the surface of the other visible "
              "Parts and take their vertex paint, e.g. after Quad Remesh and a few subdivisions, to get the sculpted detail "
              "back. Respects the mask (masked vertices stay). One undo step.",
              {{"distance", T::Number, "Dist: how far each vertex searches along its normal, as a fraction of the "
                                       "Part's bounding-box diagonal (0.001-1). Default 0.02.", false},
               {"mean", T::Bool, "Mean: with surface on both sides, settle halfway between them. Default false.", false},
-              {"blur", T::Number, "PA Blur: smoothing passes over the projected offsets (0-20). Default 0.", false},
+              {"blur", T::Number, "Blur: smoothing passes over the projected offsets (0-20). Default 0.", false},
               {"geometry", T::Bool, "Project the shape. Default true.", false},
-              {"polypaint", T::Bool, "Project the vertex paint (when a source has any). Default true.", false},
+              {"vertexpaint", T::Bool, "Project the vertex paint (when a source has any). Default true.", false},
               {"source", T::String, "Project only from the Part with this name (default: all visible ones).", false}},
              [](Document& doc, const Args& a) -> CommandResult {
                  ProjectOptions o;
@@ -253,12 +254,12 @@ void registerRetopoCommands(CommandRegistry& reg) {
                  o.mean = argBool(a, "mean", false);
                  o.blur = int(std::clamp(argNumber(a, "blur", 0), 0.0, 20.0));
                  o.geometry = argBool(a, "geometry", true);
-                 o.polypaint = argBool(a, "polypaint", true);
+                 o.vertexpaint = argBool(a, "vertexpaint", true);
                  int source = -1;
                  if (a.contains("source")) {
-                     source = doc.findSubtool(argString(a, "source"));
+                     source = doc.findPart(argString(a, "source"));
                      if (source < 0) return {false, "No Part called '" + argString(a, "source") + "'"};
-                     if (source == doc.activeSubtool) return {false, "Project All can't project a Part onto itself"};
+                     if (source == doc.activePart) return {false, "Project Detail can't project a Part onto itself"};
                  }
                  std::string msg;
                  const bool ok = projectAll(doc, o, msg, source);

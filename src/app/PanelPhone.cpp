@@ -5,6 +5,7 @@
 // the phone is sending, View in AR on the phone, and the live face feed with Record / Stop. The phone link's
 // server runs only while this window is open.
 #include "app/App.h"
+#include "app/NativeDialog.h"
 #include "app/Ui.h"
 
 #include "link/PhoneRtc.h"
@@ -172,6 +173,10 @@ void App::handlePhoneCapture(const link::PhoneEvent& e) {
             status_ = "Photo received (" + where + ") but it can't be read: " + status_;
             return;
         }
+        if (!ai::aiEnabled()) { // Preferences > AI is off: the photo stays the reference image
+            status_ = "Photo received (" + where + "): Relief, Inflate or Stamp it from Mesh > From Image";
+            return;
+        }
         showImageTo3D_ = true;
         textMode_ = false;
         if (phoneAutoGenerate_) {
@@ -191,10 +196,10 @@ void App::handlePhoneCapture(const link::PhoneEvent& e) {
             status_ = "Splat received (" + where + "): .spz isn't supported yet; export .ply from the scanning app";
             return;
         }
-        // Splats load next to the sculpt; a mesh .ply becomes a new SubTool (never replacing the work).
+        // Splats load next to the sculpt; a mesh .ply becomes a new Part (never replacing the work).
         if (ext == ".splat" || plyHasSplats(file)) runCommand("open", {{"path", file}});
-        else runCommand("subtool_append", {{"path", file}});
-        if (lastCommandOk_) camera_.frame(sceneBounds());
+        else runCommand("part_append", {{"path", file}});
+        if (lastCommandOk_) frameView(sceneBounds());
         return;
     }
     case link::CaptureKind::Face: return;
@@ -206,8 +211,8 @@ void App::startPhoneArExport() {
     // Snapshot on this thread (the worker must not see the document change under it).
     std::vector<Mesh> parts;
     if (phoneArScene_) {
-        for (int i = 0; i < doc_.subtoolCount(); ++i)
-            if (doc_.subtools[size_t(i)].visible) parts.push_back(doc_.subtoolMesh(i));
+        for (int i = 0; i < doc_.partCount(); ++i)
+            if (doc_.parts[size_t(i)].visible) parts.push_back(doc_.partMesh(i));
         if (parts.empty()) parts.push_back(doc_.mesh);
     } else {
         parts.push_back(doc_.mesh);
@@ -275,8 +280,8 @@ void App::pollPhone() {
         if (job.ok) phone_->publishArModel(std::move(job.result.glb), std::move(job.result.usdz), job.result.summary);
         else phone_->setArError(job.error);
     }
-    const uint64_t signature = doc_.undo.revision() * 1000003ull + uint64_t(doc_.activeSubtool) * 7919ull +
-                               uint64_t(doc_.subtoolCount()) + (doc_.modified ? 1ull << 62 : 0ull) + 1;
+    const uint64_t signature = doc_.undo.revision() * 1000003ull + uint64_t(doc_.activePart) * 7919ull +
+                               uint64_t(doc_.partCount()) + (doc_.modified ? 1ull << 62 : 0ull) + 1;
     const double viewed = phone_->secondsSinceArViewed();
     if (phoneArRequested_ && phoneLiveAr_ && !phoneBusy() && !doc_.sculptor.strokeActive() && viewed >= 0 &&
         viewed < 600 && ImGui::GetTime() - phoneArStartedAt_ > 2.5) {
@@ -358,15 +363,15 @@ void App::drawPhoneWindow() {
         ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.5f, c.y + 12 * scale), ImGuiCond_Appearing, ImVec2(0.5f, 0.0f));
     }
     ImGui::SetNextWindowBgAlpha(1.0f);
-    if (!ImGui::Begin("Capture from phone", &showPhone_, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+    if (!ImGui::Begin(tr("Capture from phone"), &showPhone_, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                                                            ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
     }
     if (!phoneError_.empty() || !phone_ || !phone_->running()) {
-        ImGui::TextColored(kBad, "The phone link couldn't start.");
+        ImGui::TextColored(kBad, "%s", tr("The phone link couldn't start."));
         ImGui::TextWrapped("%s", phoneError_.empty() ? "Starting..." : phoneError_.c_str());
-        if (ImGui::Button("Try again##phone")) phoneError_.clear();
+        if (ImGui::Button(tr("Try again##phone"))) phoneError_.clear();
         ImGui::End();
         return;
     }
@@ -409,13 +414,13 @@ void App::drawPhoneWindow() {
                  "Point your phone's camera at it and tap the link: the capture page opens, paired with this window. "
                  "A new code is made every time the window opens.",
                  "File > Capture from phone");
-    ImGui::TextUnformatted("Scan with your phone's camera");
-    hint("Phone and computer on the same Wi-Fi. No app to install.");
-    hint("Page won't open? Use Firefox on the phone: some Chrome versions block home-network addresses.");
+    ImGui::TextUnformatted(tr("Scan with your phone's camera"));
+    hint(tr("Phone and computer on the same Wi-Fi. No app to install."));
+    hint(tr("Page won't open? Use Firefox on the phone: some Chrome versions block home-network addresses."));
     ImGui::Spacing();
-    ImGui::TextDisabled("No camera? Open this in the phone's browser:");
-    ImGui::Text("http://%s", st.address.c_str());
-    ImGui::Text("and type the code  %.3s %.3s", st.code.c_str(), st.code.size() > 3 ? st.code.c_str() + 3 : "");
+    ImGui::TextDisabled("%s", tr("No camera? Open this in the phone's browser:"));
+    ImGui::Text(tr("http://%s"), st.address.c_str());
+    ImGui::Text(tr("and type the code  %.3s %.3s"), st.code.c_str(), st.code.size() > 3 ? st.code.c_str() + 3 : "");
     ui::HelpText("Pairing code", nullptr,
                  "For a phone that can't scan: open the address in its browser and type these 6 digits. After 5 wrong "
                  "tries the code changes.",
@@ -424,7 +429,7 @@ void App::drawPhoneWindow() {
     if (addresses.size() > 1) {
         ImGui::SetNextItemWidth(leftW - ImGui::CalcTextSize("Network").x - ImGui::GetStyle().ItemInnerSpacing.x - 4 * scale);
         const std::string current = addresses[size_t(std::clamp(phoneAddress_, 0, int(addresses.size()) - 1))];
-        if (ImGui::BeginCombo("Network##phoneaddr", current.c_str())) {
+        if (ImGui::BeginCombo(tr("Network##phoneaddr"), current.c_str())) {
             for (int i = 0; i < int(addresses.size()); ++i)
                 if (ImGui::Selectable(addresses[size_t(i)].c_str(), i == phoneAddress_)) {
                     phoneAddress_ = i;
@@ -437,34 +442,34 @@ void App::drawPhoneWindow() {
                      "the Wi-Fi the phone uses (often 192.168.x.x).",
                      "File > Capture from phone");
     } else if (addresses.empty()) {
-        ImGui::TextColored(kWarn, "This computer isn't on a local network.");
+        ImGui::TextColored(kWarn, "%s", tr("This computer isn't on a local network."));
     }
     if (st.tokenExpiresIn > 0 && st.tokenExpiresIn < 120 && st.secondsSinceSeen < 0)
-        ImGui::TextColored(kWarn, "This code expires in %.0f s", st.tokenExpiresIn);
+        ImGui::TextColored(kWarn, tr("This code expires in %.0f s"), st.tokenExpiresIn);
     ImGui::PopTextWrapPos();
 
     // --- Right: the phone, what it sent, AR and the face ---
     ImGui::TableSetColumnIndex(1);
     ImGui::Indent(10 * scale);
     if (st.secondsSinceSeen >= 0 && st.secondsSinceSeen < 8) {
-        ImGui::TextColored(kOk, ICON_LC_SMARTPHONE "  %s  connected", st.device.c_str());
+        ImGui::TextColored(kOk, tr(ICON_LC_SMARTPHONE "  %s  connected"), st.device.c_str());
         ImGui::SameLine();
         ImGui::TextDisabled("(%s)", st.deviceAddress.c_str());
     } else if (st.secondsSinceSeen >= 0) {
-        ImGui::TextColored(kWarn, ICON_LC_SMARTPHONE "  %s: not seen for %.0f s", st.device.c_str(), st.secondsSinceSeen);
-        hint("The page may be closed or the phone asleep: open it again to carry on.");
+        ImGui::TextColored(kWarn, tr(ICON_LC_SMARTPHONE "  %s: not seen for %.0f s"), st.device.c_str(), st.secondsSinceSeen);
+        hint(tr("The page may be closed or the phone asleep: open it again to carry on."));
     } else {
-        ImGui::TextDisabled(ICON_LC_SMARTPHONE "  Waiting for your phone...");
-        if (ImGui::TreeNode("The phone can't open the page?")) {
-            ImGui::BulletText("Same Wi-Fi: not a guest network, not mobile data.");
-            ImGui::BulletText("Turn off VPNs on the phone and the computer.");
-            ImGui::BulletText("Windows: allow SculptForge on private networks\nwhen the firewall asks.");
-            ImGui::BulletText("macOS: allow incoming connections for SculptForge\n(System Settings > Network > Firewall).");
-            ImGui::BulletText("Several networks? Pick the Wi-Fi one under Network.");
-            ImGui::BulletText("Android Chrome says \"This site can't be reached\"\n(ERR_TOO_MANY_RETRIES)? Recent Chrome versions can\n"
+        ImGui::TextDisabled("%s", tr(ICON_LC_SMARTPHONE "  Waiting for your phone..."));
+        if (ImGui::TreeNode(tr("The phone can't open the page?"))) {
+            ImGui::BulletText("%s", tr("Same Wi-Fi: not a guest network, not mobile data."));
+            ImGui::BulletText("%s", tr("Turn off VPNs on the phone and the computer."));
+            ImGui::BulletText("%s", tr("Windows: allow SculptForge on private networks\nwhen the firewall asks."));
+            ImGui::BulletText("%s", tr("macOS: allow incoming connections for SculptForge\n(System Settings > Network > Firewall)."));
+            ImGui::BulletText("%s", tr("Several networks? Pick the Wi-Fi one under Network."));
+            ImGui::BulletText("%s", tr("Android Chrome says \"This site can't be reached\"\n(ERR_TOO_MANY_RETRIES)? Recent Chrome versions can\n"
                               "block every home-network address, even your router.\nUse Firefox on the phone instead and allow it to\n"
-                              "reach local devices when it asks.");
-            ImGui::BulletText("Linux: allow port %d (TCP and UDP) through the\nfirewall, e.g. sudo ufw allow from\n<your network>/24 to any port %d",
+                              "reach local devices when it asks."));
+            ImGui::BulletText(tr("Linux: allow port %d (TCP and UDP) through the\nfirewall, e.g. sudo ufw allow from\n<your network>/24 to any port %d"),
                               int(phone_->port()), int(phone_->port()));
             ImGui::TreePop();
         }
@@ -476,62 +481,62 @@ void App::drawPhoneWindow() {
         const float frac = u.size ? float(double(u.received) / double(u.size)) : 0.0f;
         const std::string label = megabytes(double(u.received)) + " of " + megabytes(double(u.size)) +
                                   (u.bytesPerSecond > 0 ? "  " + megabytes(u.bytesPerSecond) + "/s" : std::string());
-        ImGui::Text("Receiving %s (%s)", u.name.c_str(), link::captureKindName(u.kind));
+        ImGui::Text(tr("Receiving %s (%s)"), u.name.c_str(), link::captureKindName(u.kind));
         ImGui::ProgressBar(frac, ImVec2(-1, 0), label.c_str());
     }
     if (!phoneCaptures_.empty()) {
-        ImGui::SeparatorText("Received");
+        ImGui::SeparatorText(tr("Received"));
         const size_t first = phoneCaptures_.size() > 3 ? phoneCaptures_.size() - 3 : 0;
         for (size_t i = phoneCaptures_.size(); i-- > first;) {
             ImGui::PushID(int(i));
-            if (ImGui::SmallButton(ICON_LC_FOLDER_OPEN) && interactive()) SDL_OpenURL(fileUrl(phoneCaptures_[i]).c_str());
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Show the folder");
+            if (ImGui::SmallButton(ICON_LC_FOLDER_OPEN) && interactive()) sf::dialogs::openUrl(fileUrl(phoneCaptures_[i]).c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Show the folder"));
             ImGui::PopID();
             ImGui::SameLine();
-            ImGui::Text("Captures/%s", folderName(phoneCaptures_[i]).c_str());
+            ImGui::Text(tr("Captures/%s"), folderName(phoneCaptures_[i]).c_str());
         }
     }
-    ImGui::Checkbox("Generate from a photo at once##phone", &phoneAutoGenerate_);
+    ImGui::Checkbox(tr("Generate from a photo at once##phone"), &phoneAutoGenerate_);
     ui::HelpText("Generate from a photo at once", nullptr,
                  "A photo sent from the phone starts Image to 3D straight away with the service chosen there "
                  "(free Hugging Face by default). Off: it opens in Image to 3D and waits for Generate.",
                  "File > Capture from phone");
 
     // AR on the desk.
-    ImGui::SeparatorText("View in AR");
-    if (st.arBusy) ImGui::TextColored(kWarn, "Preparing the model for the phone...");
+    ImGui::SeparatorText(tr("View in AR"));
+    if (st.arBusy) ImGui::TextColored(kWarn, "%s", tr("Preparing the model for the phone..."));
     else if (!st.arError.empty()) ImGui::TextColored(kBad, "%s", st.arError.c_str());
-    else if (st.arVersion > 0) ImGui::Text("On the phone: %s", st.arSummary.c_str());
-    else hint("Tap View in AR on the phone: the active Part (or the scene) stands on your desk.");
-    ImGui::Checkbox("Update after each stroke##phone", &phoneLiveAr_);
+    else if (st.arVersion > 0) ImGui::Text(tr("On the phone: %s"), st.arSummary.c_str());
+    else hint(tr("Tap View in AR on the phone: the active Part (or the scene) stands on your desk."));
+    ImGui::Checkbox(tr("Update after each stroke##phone"), &phoneLiveAr_);
     ui::HelpText("Update after each stroke", nullptr,
                  "While the phone shows the model, sculpting re-exports it (at most every few seconds); the phone offers "
                  "the new version.",
                  "File > Capture from phone");
 
     // Live face.
-    ImGui::SeparatorText("Face");
+    ImGui::SeparatorText(tr("Face"));
     drawFacePreview(ImVec2(112 * scale, 112 * scale));
     ImGui::SameLine(0, 12 * scale);
     ImGui::BeginGroup();
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
     if (st.faceConnected && st.secondsSinceFace >= 0 && st.secondsSinceFace < 2.0) {
-        ImGui::TextColored(kOk, "Live over %s, %.0f fps", st.faceTransport.c_str(), st.faceFps);
+        ImGui::TextColored(kOk, tr("Live over %s, %.0f fps"), st.faceTransport.c_str(), st.faceFps);
     } else if (st.faceConnected) {
-        ImGui::TextColored(kWarn, "Connected (%s), no face for %.0f s", st.faceTransport.c_str(), st.secondsSinceFace);
+        ImGui::TextColored(kWarn, tr("Connected (%s), no face for %.0f s"), st.faceTransport.c_str(), st.secondsSinceFace);
     } else if (!link::webrtcAvailable()) {
-        hint("This build has no WebRTC, so the phone's face page can't connect.");
+        hint(tr("This build has no WebRTC, so the phone's face page can't connect."));
     } else {
-        hint("On the phone: Face capture. The front camera tracks 52 expressions on the phone; only the numbers "
-             "come here.");
+        hint(tr("On the phone: Face capture. The front camera tracks 52 expressions on the phone; only the numbers "
+             "come here."));
     }
-    if (phoneFaceCommandMissing_) ImGui::TextColored(kWarn, "face_weights isn't in this build: the model doesn't move yet.");
+    if (phoneFaceCommandMissing_) ImGui::TextColored(kWarn, "%s", tr("face_weights isn't in this build: the model doesn't move yet."));
     ui::ActionButton(*this, "phone.record_face");
     if (st.recording) {
         ImGui::SameLine();
-        ImGui::TextColored(kBad, ICON_LC_CIRCLE_DOT " %d frames, %.1f s", st.takeFrames, st.takeSeconds);
+        ImGui::TextColored(kBad, tr(ICON_LC_CIRCLE_DOT " %d frames, %.1f s"), st.takeFrames, st.takeSeconds);
     }
-    ImGui::Checkbox("Mirror left and right##phone", &phoneMirror_);
+    ImGui::Checkbox(tr("Mirror left and right##phone"), &phoneMirror_);
     ui::HelpText("Mirror left and right", nullptr,
                  "Swap the left and right expressions (and the head's turn), if the character winks with the wrong eye.",
                  "File > Capture from phone");
@@ -541,7 +546,7 @@ void App::drawPhoneWindow() {
     ImGui::EndTable();
 
     ImGui::Separator();
-    ImGui::TextDisabled("Saved in %s/Captures. Only devices on your network can connect, and only while this window is open.",
+    ImGui::TextDisabled(tr("Saved in %s/Captures. Only devices on your network can connect, and only while this window is open."),
                         library_.user.c_str());
     ImGui::End();
 }

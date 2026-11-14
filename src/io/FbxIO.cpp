@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "io/FbxIO.h"
 
+#include "core/Units.h"
+
 #include "io/TextureExport.h"
 
 #include "ufbx.h"
@@ -207,7 +209,10 @@ Node makeGeometry(int64_t id, const std::string& name, const Mesh& mesh, float s
     const auto& base = mesh.basePositions();
     std::vector<double> verts;
     verts.reserve(base.size() * 3);
-    for (const auto& p : base) verts.insert(verts.end(), {double(p.x * scale), double(p.y * scale), double(p.z * scale)});
+    for (const auto& p : base) { // (core/Units.h: a centimetre file read in comes back with its numbers)
+        const glm::vec3 f = toFileUnits(p, scale);
+        verts.insert(verts.end(), {double(f.x), double(f.y), double(f.z)});
+    }
     g.add("Vertices").f64s(verts);
 
     // Polygons: quads where the mesh keeps them (Mesh::quadPartners), else triangles; the last corner is negated.
@@ -655,7 +660,7 @@ bool readFbx(const std::string& path, bool split, std::vector<MeshObject>& out, 
         for (size_t f = 0; f < mesh->faces.count; ++f) {
             const uint32_t n = ufbx_triangulate_face(tri.data(), tri.size(), mesh, mesh->faces.data[f]);
             for (uint32_t t = 0; t < n; ++t) {
-                if (preserve) m.polygroups.push_back(f < mesh->face_material.count ? mesh->face_material.data[f] : 0);
+                if (preserve) m.facegroups.push_back(f < mesh->face_material.count ? mesh->face_material.data[f] : 0);
                 m.triangles.push_back(glm::uvec3(base + mesh->vertex_indices.data[tri[t * 3]], base + mesh->vertex_indices.data[tri[t * 3 + 1]],
                                                  base + mesh->vertex_indices.data[tri[t * 3 + 2]]));
                 for (int c = 0; c < 3; ++c) {

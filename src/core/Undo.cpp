@@ -2,18 +2,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Undo.h"
 
+#include "core/MemoryGuard.h"
+
+#include "core/MeshTransform.h"
 #include "core/SelectionSets.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace sf {
 
 size_t UndoRecord::approxBytes() const {
     size_t bytes = positions.bytes() + mask.bytes() + colors.bytes() + paintAlpha.bytes() + hidden.bytes() +
-                   polygroups.bytes() + (paint ? paint->bytes() : 0) +
+                   facegroups.bytes() + (paint ? paint->bytes() : 0) +
                    (textureTiles ? textureTiles->bytes() : 0) + (texture ? texture->bytes() : 0) +
                    (subdiv ? subdiv->bytes() : 0) + (topology ? topology->bytes() : 0) +
-                   (micro ? micro->bytes() : 0) + uvs.bytes() + (sets ? sets->bytes() : 0) + (uv ? uv->bytes() : 0);
+                   (micro ? micro->bytes() : 0) + uvs.bytes() + (sets ? sets->bytes() : 0) + (uv ? uv->bytes() : 0) +
+                   creases.bytes() + (transformOp ? transformOp->bytes() : 0);
     for (const auto& l : layerOffsets) bytes += l.bytes();
     if (crkwMaskState && *crkwMaskState) bytes += (*crkwMaskState)->dump().size();
     if (mesh)
@@ -21,8 +26,9 @@ size_t UndoRecord::approxBytes() const {
                                         8 * sizeof(uint32_t)) +
                  mesh->triangleCount() * (sizeof(glm::uvec3) + sizeof(glm::vec3) + 4 * sizeof(uint32_t)) +
                  mesh->mask.size() * sizeof(float) + mesh->colors.size() * sizeof(glm::vec3) +
-                 mesh->polygroups.size() * sizeof(uint32_t) + mesh->hidden.size() + mesh->uvs.size() * sizeof(glm::vec2) +
-                 mesh->quadPartners.size() * sizeof(uint32_t);
+                 mesh->facegroups.size() * sizeof(uint32_t) + mesh->hidden.size() + mesh->uvs.size() * sizeof(glm::vec2) +
+                 mesh->quadPartners.size() * sizeof(uint32_t) + mesh->creases.size() * sizeof(float);
+    if (meshBvh) bytes += meshBvh->memoryBytes();
     if (mesh) {
         bytes += mesh->paintBase.size() * sizeof(glm::vec3);
         for (const auto& l : mesh->paintLayers) bytes += l.color.size() * sizeof(glm::vec3) + l.alpha.size() * sizeof(float);
@@ -135,10 +141,10 @@ UndoRecord UndoRecord::captureHidden(const Mesh& mesh, std::string label, std::s
     return r;
 }
 
-UndoRecord UndoRecord::capturePolygroups(const Mesh& mesh, std::string label, std::span<const uint32_t> tris) {
+UndoRecord UndoRecord::captureFaceGroups(const Mesh& mesh, std::string label, std::span<const uint32_t> tris) {
     UndoRecord r;
     r.label = std::move(label);
-    captureChannel(r.polygroups, mesh.triangleCount(), tris, [&](uint32_t t) { return mesh.polygroupAt(t); });
+    captureChannel(r.facegroups, mesh.triangleCount(), tris, [&](uint32_t t) { return mesh.facegroupAt(t); });
     return r;
 }
 
@@ -162,7 +168,9 @@ void UndoStack::apply(UndoRecord& r, Mesh& mesh, BVH& bvh) {
     if (r.mesh) {
         std::swap(*r.mesh, mesh);
         mesh.topologyDirty = true;
-        bvh.build(mesh);
+        // The tree of the mesh that goes comes along: a rebuild is seconds at 10M triangles.
+        if (r.meshBvh && r.meshBvh->nodeCount()) bvh.swapTree(*r.meshBvh);
+        else bvh.build(mesh);
         return;
     }
     if (r.topology) {
@@ -176,7 +184,8 @@ void UndoStack::apply(UndoRecord& r, Mesh& mesh, BVH& bvh) {
         if (!restored.empty() && !mesh.layers.empty()) mesh.evaluate(restored);
         if (!restored.empty() && !mesh.paintLayers.empty()) compositePaint(mesh, restored);
         mesh.recomputeAllNormals();
-        bvh.build(mesh);
+        // The slots it changed leave, join or refit in the tree (a stroke's few thousand, not the whole mesh).
+        bvh.syncTopologyChange(mesh, r.topology->triangleSlots, r.topology->vertexSlots);
     }
     if (!r.positions.empty()) {
         r.positions.swapWithUnique(mesh.layerTarget(r.layer));
@@ -195,6 +204,10 @@ void UndoStack::apply(UndoRecord& r, Mesh& mesh, BVH& bvh) {
     if (r.crkwMaskState) std::swap(*r.crkwMaskState, mesh.crkwMaskState);
     if (r.paint) r.paint->swapWith(mesh);
     if (r.uv) r.uv->swapWith(mesh);
+    if (!r.creases.empty()) {
+        r.creases.swapWith(mesh.ensureCreases());
+        if (std::all_of(mesh.creases.begin(), mesh.creases.end(), [](float c) { return c == 0.0f; })) mesh.clearCreases();
+    }
     if (r.texture) r.texture->swapWith(mesh);
     if (r.textureTiles) r.textureTiles->swapWith(mesh);
     if (!r.colors.empty()) {
@@ -214,8 +227,8 @@ void UndoStack::apply(UndoRecord& r, Mesh& mesh, BVH& bvh) {
         r.hidden.swapWith(mesh.ensureHidden());
         mesh.facesDirty = true;
     }
-    if (!r.polygroups.empty()) {
-        r.polygroups.swapWith(mesh.ensurePolygroups());
+    if (!r.facegroups.empty()) {
+        r.facegroups.swapWith(mesh.ensureFaceGroups());
         mesh.facesDirty = true;
     }
     if (!r.uvs.empty()) {
@@ -309,14 +322,30 @@ size_t UndoStack::undoBytes() const {
     return total;
 }
 
+size_t UndoStack::budget() const { return byteBudget ? byteBudget : undoBudgetBytes(undoBytes()); }
+
+UndoStack::Notice UndoStack::takeNotice() {
+    Notice n{droppedPending_, overPending_};
+    droppedPending_ = 0;
+    overPending_ = false;
+    return n;
+}
+
 void UndoStack::enforceBudget() {
     size_t total = 0;
-    for (const auto& r : undo_) total += r.approxBytes();
-    while (undo_.size() > 1 && total > byteBudget) {
-        total -= undo_.front().approxBytes();
+    for (const auto& r : undo_) total += r.budgetBytes();
+    const size_t limit = byteBudget ? byteBudget : undoBudgetBytes(total);
+    const size_t before = droppedPending_;
+    while (undo_.size() > 1 && total > limit) {
+        total -= undo_.front().budgetBytes();
         undo_.pop_front();
+        ++droppedPending_;
+        ++droppedTotal_;
         if (listener) listener->undoDroppedOldest();
     }
+    const bool over = undo_.size() == 1 && total > limit;
+    if (over && (!lastStepOver_ || droppedPending_ != before)) overPending_ = true;
+    lastStepOver_ = over;
 }
 
 } // namespace sf

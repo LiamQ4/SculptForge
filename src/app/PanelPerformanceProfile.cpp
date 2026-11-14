@@ -13,10 +13,16 @@
 // machine), and keep the fixed 10 million triangle Fast Navigation threshold.
 #include "app/App.h"
 #include "app/Calibration.h"
+#include "app/HwProfileUi.h"
+#include "app/CrashLog.h"
 #include "app/Ui.h"
+#include "app/UserData.h"
 
 #include "core/FrameGovernor.h"
 #include "core/HardwareProfile.h"
+#include "core/Micro.h"
+#include "core/Multires.h"
+#include "core/PerfTrace.h"
 #include "core/ThreadPool.h"
 #include "core/TierConfig.h"
 
@@ -27,34 +33,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <future>
 
 namespace sf {
 
-struct HwProfileUi {
-    HardwareProfile profile;
-    bool active = false;           // a profile is applied: its threshold governs Fast Navigation
-    bool saved = false;            // the profile came from (or went to) the cache
-    std::unique_ptr<Calibrator> calibrator;
-    std::string calibrationReason; // "first launch", "GPU changed", ...
-    bool announce = false;         // say what calibration found in the status bar
-    int calibrationFrames = 0;     // frames shown since calibration started (the first shows the overlay)
-    FrameGovernor governor;
-    GpuFrameTimer timer;
-    uint64_t frame = 0;
-    double frameStartMs = 0.0;
-    struct Pending {
-        uint64_t frame;
-        FrameSample sample;
-    };
-    std::deque<Pending> pending;   // frames waiting for their GPU time
-    uint64_t revision = 0;         // performanceSettingsRevision() when last applied
-    int displayHz = 0;
-    PowerSource power = PowerSource::Unknown;
-    double nextPowerCheck = 0.0;   // seconds (SDL ticks)
-    TierConfig tier;               // what currentTierConfig() holds
-    double lastCpuMs = 0.0, lastGpuMs = -1.0;
-    bool overridesOpen = false;
-};
 
 namespace {
 
@@ -99,6 +81,14 @@ int displayRefreshHz(SDL_Window* window) {
 
 } // namespace
 
+float App::motionResolution() {
+    static const float scale = [] {
+        if (const char* v = std::getenv("SF_MOTION_RESOLUTION"); v && *v) return std::clamp(float(std::atof(v)) / 100.0f, 0.25f, 1.0f);
+        return simulatedFloorTier() ? 0.75f : 1.0f;
+    }();
+    return scale;
+}
+
 bool App::hardwareProfileGoverns() const { return hwProfile_ && hwProfile_->active; }
 
 void App::initHardwareProfile() {
@@ -107,7 +97,7 @@ void App::initHardwareProfile() {
     const char* inTests = std::getenv("SF_HW_PROFILE_IN_TESTS");
     const bool testThis = !options_.uiTest.empty() && inTests && std::string(inTests) == "1";
     if (!testThis && (uiConfigDeterministic_ || !options_.renderPath.empty() || !options_.recordPath.empty() ||
-                      !options_.uiTest.empty() || options_.measureIdle > 0.0f || options_.measureStroke > 0.0f))
+                      !options_.uiTest.empty() || options_.measureIdle > 0.0f || options_.measureStroke > 0.0f || options_.measureKeyNav))
         return;
     hwProfile_ = std::make_shared<HwProfileUi>();
     HwProfileUi& hw = *hwProfile_;
@@ -150,6 +140,10 @@ void App::initHardwareProfile() {
     }
     applyHardwareProfile(start, false);
     if (!hw.calibrator) SDL_Log("Hardware profile: %s", start.reason.c_str());
+    SDL_Log("Hardware tier: %s (%s%s%s)", hwTierName(start.hwTier), start.detected.machine.c_str(),
+            start.detected.limit.empty() ? "" : "; ", start.detected.limit.c_str());
+    // The tier card: after calibration (finishCalibration), or now for a machine it wasn't shown on (SF_NO_CALIBRATION).
+    if (!hw.calibrator) hw.tierCard = !tierCardSeen(start.overrides.tierCardFor, start.hardware);
 }
 
 // Makes `p` the profile in effect: the process-wide settings and the governor's starting point; `announce` (after a
@@ -158,18 +152,42 @@ void App::applyHardwareProfile(const HardwareProfile& p, bool announce) {
     HwProfileUi& hw = *hwProfile_;
     hw.profile = p;
     hw.active = true;
-    // The tier's knobs for this power source and display; its target Hz is the governor's (60 / 120 / 144).
-    hw.tier = tierConfigFor(p, hw.power, hw.displayHz);
+    turbo_ = p.overrides.turbo || turbo_;
+    // The tier's knobs for this power source and display; its target Hz is the governor's (60 / 120 / 144). Turbo
+    // takes the detected tier's budgets when a lower one was set by hand (never past what the machine carries, and
+    // the memory guard's steps still apply).
+    HardwareProfile forTier = p;
+    HwTier simulated;
+    if (turbo_ && !simulatedHwTier(simulated) && p.detected.tier > p.hwTier) forTier.hwTier = p.detected.tier;
+    forTier.overrides.turbo = turbo_;
+    hw.tier = tierConfigFor(forTier, hw.power, hw.displayHz, hw.memoryGuard.stepDown);
     setCurrentTierConfig(hw.tier);
     PerformanceSettings s = p.settings;
     s.targetFps = hw.tier.targetHz;
     s.uploadBudgetMBPerFrame = hw.tier.uploadBudgetMBPerFrame;
+    const bool floor = simulatedFloorTier();
+    if (floor) { // SF_HW_SIMULATE=floor: an integrated GPU's budgets (docs/design/perf-moonshots.md §0)
+        s.renderTriangleBudget = std::min<uint64_t>(s.renderTriangleBudget, 2'000'000);
+        s.motionProxyThreshold = std::min<uint64_t>(s.motionProxyThreshold, 3'000'000);
+        s.vramBudgetMB = std::min<uint64_t>(s.vramBudgetMB, 1536);
+        s.uploadBudgetMBPerFrame = std::min<uint64_t>(s.uploadBudgetMBPerFrame, 16);
+        s.threads = 4;
+        hw.tier.uploadBudgetMBPerFrame = s.uploadBudgetMBPerFrame;
+        hw.tier.residentCacheCapMB = std::min<uint64_t>(hw.tier.residentCacheCapMB, 1024);
+        hw.tier.zeroCopyUMA = false;
+        hw.tier.budgets.threads = 4;
+        setCurrentTierConfig(hw.tier);
+        SDL_Log("Hardware profile: simulating the floor tier (SF_HW_SIMULATE=floor): budget 2M triangles, 4 threads");
+    }
     hw.profile.settings.targetFps = s.targetFps;
     setCurrentPerformanceSettings(s);
+    // (the still frame's cost before any is measured: the calibrated rate; the simulated floor tier keeps its budget's)
+    renderer_.setTriangleRate(floor ? 0.0 : hw.profile.calibration.trianglesPerSecondM);
     GovernorConfig cfg;
     cfg.targetFps = s.targetFps;
     cfg.minBudget = std::max<uint64_t>(250'000, s.renderTriangleBudget / 8);
     cfg.maxBudget = std::min<uint64_t>(2'000'000'000, std::max<uint64_t>(s.renderTriangleBudget * 4, cfg.minBudget));
+    if (floor) cfg.maxBudget = s.renderTriangleBudget; // (the governor may lower the budget, never raise it)
     hw.governor.reset(cfg, s.renderTriangleBudget);
     hw.revision = performanceSettingsRevision();
     if (!announce) return;
@@ -193,6 +211,8 @@ void App::finishCalibration() {
     SDL_Log("Hardware profile: %s (%.0f ms)", p.reason.c_str(), p.calibration.durationMs);
     applyHardwareProfile(p, hw.announce);
     hw.announce = false;
+    // First launch, or another machine: the tier card says what it found (once per machine).
+    hw.tierCard = !tierCardSeen(p.overrides.tierCardFor, p.hardware);
 }
 
 void App::shutdownHardwareProfile() {
@@ -210,7 +230,12 @@ void App::hardwareProfileFrameBegin() {
         activeUntil_ = std::max(activeUntil_, double(SDL_GetTicksNS()) * 1e-9 + 0.3); // keep the frames coming
     }
     hw.frameStartMs = nowMs();
+    hw.drawStartMs = -1.0;
     if (!hw.calibrator) hw.timer.begin();
+}
+
+void App::hardwareProfileDrawStart() {
+    if (hwProfile_) hwProfile_->drawStartMs = nowMs();
 }
 
 void App::hardwareProfileFrameEnd() {
@@ -228,16 +253,19 @@ void App::hardwareProfileFrameEnd() {
     hw.lastCpuMs = sample.cpuMs;
     bool changed = false;
     if (hw.timer.available()) {
-        hw.pending.push_back({frame, sample});
+        hw.pending.push_back({frame, sample, hw.drawStartMs >= 0.0 ? hw.drawStartMs - hw.frameStartMs : sample.cpuMs});
         uint64_t doneFrame = 0;
         double gpuMs = 0.0;
         while (hw.timer.poll(doneFrame, gpuMs)) {
             while (!hw.pending.empty() && hw.pending.front().frame < doneFrame) hw.pending.pop_front(); // lost
             if (!hw.pending.empty() && hw.pending.front().frame == doneFrame) {
                 FrameSample s = hw.pending.front().sample;
+                const double cpuBeforeDrawMs = hw.pending.front().cpuBeforeDrawMs;
                 hw.pending.pop_front();
                 s.gpuMs = gpuMs;
                 hw.lastGpuMs = gpuMs;
+                renderer_.noteGpuFrame(gpuMs, s.drawnTriangles, cpuBeforeDrawMs);
+                if (proof_ && proofGpuMs_.size() < 4096) proofGpuMs_.push_back(gpuMs);
                 changed = hw.governor.addFrame(s) || changed;
             }
         }
@@ -248,7 +276,11 @@ void App::hardwareProfileFrameEnd() {
     } else {
         changed = hw.governor.addFrame(sample);
     }
-    if (changed && hw.profile.overrides.governor && !hw.profile.overrides.motionProxyThreshold)
+    static const bool pinned = [] { // SF_GOVERNOR=0: the budgets stay as the profile set them (benchmark A/Bs)
+        const char* v = std::getenv("SF_GOVERNOR");
+        return v && *v == '0';
+    }();
+    if (changed && !pinned && hw.profile.overrides.governor && !hw.profile.overrides.motionProxyThreshold)
         setGovernedBudgets(hw.governor.budget(), hw.governor.proxyThreshold());
     // The display (the window moved to a 120 Hz screen) or the power source (unplugged) may change: every few
     // seconds, look; a change re-applies the profile with the new tier configuration.
@@ -268,6 +300,7 @@ void App::hardwareProfileFrameEnd() {
                                         std::to_string(hw.tier.targetHz) + " Hz";
         }
     }
+    updateTierMemoryGuard();
     // The set_performance_override or calibrate command changed the profile: take it up.
     if (performanceSettingsRevision() != hw.revision) {
         HardwareProfile cached;
@@ -279,6 +312,9 @@ void App::hardwareProfileFrameEnd() {
 bool App::hardwareCalibrating() const { return hwProfile_ && hwProfile_->calibrator; }
 
 void App::drawHardwareProfileOverlay() {
+    // The first-run card is for people: benchmarks, takes and demos run without it (a take's stroke would land on it).
+    const bool scripted = options_.benchmark || !options_.benchmarkScript.empty() || !options_.demo.empty();
+    if (hwProfile_ && !hwProfile_->calibrator && hwProfile_->tierCard && !scripted) drawTierCard();
     if (!hwProfile_ || !hwProfile_->calibrator) return;
     HwProfileUi& hw = *hwProfile_;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -290,23 +326,24 @@ void App::drawHardwareProfileOverlay() {
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                          ImGuiWindowFlags_AlwaysAutoResize)) {
         if (fontBold_) ImGui::PushFont(fontBold_);
-        ImGui::TextUnformatted("Getting to know this computer");
+        ImGui::TextUnformatted(tr("Getting to know this computer"));
         if (fontBold_) ImGui::PopFont();
-        dim("A two-second check of the GPU, the CPU and memory, so big scenes stay smooth. Once, then again only when "
-            "the graphics card, its driver or SculptForge changes. Nothing leaves this computer.");
+        dim(tr("A two-second check of the GPU, the CPU and memory, so big scenes stay smooth. Once, then again only when "
+            "the graphics card, its driver or SculptForge changes. Nothing leaves this computer."));
         ImGui::ProgressBar(hw.calibrator->progress(), ImVec2(-1.0f, 0.0f), hw.calibrator->stageName());
         const bool esc = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-        if (ImGui::Button("Skip") || esc) {
+        if (ImGui::Button(tr("Skip")) || esc) {
             hw.calibrator->skip();
             finishCalibration();
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("Esc");
+        ImGui::TextDisabled("%s", tr("Esc"));
     }
     ImGui::End();
 }
 
 void App::registerPerformanceProfileUiActions() {
+    registerHardwareTierUiActions(); // the tier, Compute, the graphics card, Turbo (PanelHardwareTier.cpp)
     {
         Action a;
         a.id = "perf.recalibrate";
@@ -350,7 +387,8 @@ void App::registerPerformanceProfileUiActions() {
 }
 
 void App::drawPerformanceProfileSection() {
-    ImGui::TextUnformatted("Hardware profile");
+    drawHardwareTierSection(); // the tier, why, what it turns on; graphics card; Compute (PanelHardwareTier.cpp)
+    ImGui::TextUnformatted(tr("Render profile"));
     ui::HelpText("Hardware profile", nullptr,
                  "SculptForge measures this computer on first launch (and when the graphics card, its driver or the "
                  "version changes) and picks settings to match: how many triangles the view draws per frame, when big "
@@ -358,7 +396,7 @@ void App::drawPerformanceProfileSection() {
                  "limits, threads. Nothing is sent anywhere.",
                  kPath);
     if (!hwProfile_) {
-        dim("Off in this run: tests, renders and recordings use fixed settings.");
+        dim(tr("Off in this run: tests, renders and recordings use fixed settings."));
         ImGui::Spacing();
         return;
     }
@@ -379,7 +417,7 @@ void App::drawPerformanceProfileSection() {
                              : h.vramMB ? formatMegabytes(h.vramMB)
                                         : std::string("memory unknown");
     if (fontBold_) ImGui::PushFont(fontBold_);
-    ImGui::TextWrapped("Detected %s, %s -> %s", h.glRenderer.empty() ? "an unknown GPU" : h.glRenderer.c_str(), vram.c_str(),
+    ImGui::TextWrapped(tr("%s, %s: %s render profile"), h.glRenderer.empty() ? "An unknown GPU" : h.glRenderer.c_str(), vram.c_str(),
                        tierName(p.tier));
     if (fontBold_) ImGui::PopFont();
     // Why (the reason without the "Detected ... -> tier" the line above already says).
@@ -425,7 +463,7 @@ void App::drawPerformanceProfileSection() {
     ImGui::LogText("%s", set.c_str());
 
     bool governor = p.overrides.governor;
-    if (ImGui::Checkbox("Frame Governor", &governor)) actions_.find("perf.governor")->run();
+    if (ImGui::Checkbox(tr("Frame Governor"), &governor)) actions_.find("perf.governor")->run();
     ui::HelpAction(*this, "perf.governor");
     if (governor && hw.governor.decisions() > 0) {
         const char* action = hw.governor.lastAction() == FrameGovernor::Action::Lowered  ? "drawing less"
@@ -434,16 +472,16 @@ void App::drawPerformanceProfileSection() {
         dim("Moving view: " + fmt("%.1f ms", hw.governor.lastCostMs()) + " of " + fmt("%.1f ms", hw.governor.targetMs()) + " per frame (" +
             (hw.lastGpuMs >= 0.0 ? "GPU timer" : "CPU time") + "), " + action);
     } else if (governor) {
-        dim("Learns from frames while the view moves.");
+        dim(tr("Learns from frames while the view moves."));
     }
-    if (ImGui::Button("Re-calibrate")) actions_.find("perf.recalibrate")->run();
+    if (ImGui::Button(tr("Re-calibrate"))) actions_.find("perf.recalibrate")->run();
     ui::HelpAction(*this, "perf.recalibrate");
 
     // --- Manual overrides ---
-    if (ImGui::TreeNode("Manual overrides")) {
+    if (ImGui::TreeNode(tr("Manual overrides"))) {
         ProfileOverrides o = p.overrides;
         bool edited = false;
-        const char* tiers[] = {"Tier: automatic", "Software (safe mode)", "Laptop / Budget", "Workstation"};
+        const char* tiers[] = {tr("Render profile: automatic"), tr("Software (safe mode)"), tr("Laptop / Budget"), tr("Workstation")};
         int tierIndex = 0;
         ProfileTier forced;
         if (!o.tier.empty() && tierFromName(o.tier, forced)) tierIndex = int(forced) + 1;
@@ -466,20 +504,22 @@ void App::drawPerformanceProfileSection() {
             ImGui::TextUnformatted(label);
             ImGui::PopID();
         };
-        number("View budget (M triangles)", o.renderTriangleBudget, p.automatic.renderTriangleBudget, 1e6, "M");
-        number("Motion proxy from (M triangles)", o.motionProxyThreshold, p.automatic.motionProxyThreshold, 1e6, "M");
-        number("GPU memory budget (GB)", o.vramBudgetMB, p.automatic.vramBudgetMB, 1024.0, "GB");
-        number("Uploads per frame (MB)", o.uploadBudgetMBPerFrame, p.automatic.uploadBudgetMBPerFrame, 1.0, "MB");
-        number("Subdivision limit (M triangles)", o.maxSubdivisionTriangles, p.automatic.maxSubdivisionTriangles, 1e6, "M");
+        number(tr("View budget (M triangles)"), o.renderTriangleBudget, p.automatic.renderTriangleBudget, 1e6, "M");
+        number(tr("Motion proxy from (M triangles)"), o.motionProxyThreshold, p.automatic.motionProxyThreshold, 1e6, "M");
+        number(tr("GPU memory budget (GB)"), o.vramBudgetMB, p.automatic.vramBudgetMB, 1024.0, "GB");
+        number(tr("Uploads per frame (MB)"), o.uploadBudgetMBPerFrame, p.automatic.uploadBudgetMBPerFrame, 1.0, "MB");
+        number(tr("Subdivision limit (M triangles)"), o.maxSubdivisionTriangles, p.automatic.maxSubdivisionTriangles, 1e6, "M");
         {
             uint64_t threads = uint64_t(o.threads);
-            number("Threads (next start)", threads, uint64_t(p.automatic.threads), 1.0, "");
+            number(tr("Threads (next start)"), threads, uint64_t(p.automatic.threads), 1.0, "");
+            // Up to every hardware thread (the default is 16; a value above it is the user's to ask for).
+            if (p.hardware.cpuThreads > 0) threads = std::min<uint64_t>(threads, uint64_t(p.hardware.cpuThreads));
             o.threads = int(threads);
         }
-        const char* draftNames[] = {"Draft brushes: automatic", "Draft brushes: always", "Draft brushes: never"};
+        const char* draftNames[] = {tr("Draft brushes: automatic"), tr("Draft brushes: always"), tr("Draft brushes: never")};
         ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::Combo("##perf.draft", &o.draftBrush, draftNames, 3)) edited = true;
-        const char* fpsNames[] = {"Target: automatic", "30 fps", "60 fps", "120 fps", "144 fps"};
+        const char* fpsNames[] = {tr("Target: automatic"), tr("30 fps"), tr("60 fps"), tr("120 fps"), tr("144 fps")};
         const int fpsValues[] = {0, 30, 60, 120, 144};
         int fpsIndex = 0;
         for (int i = 0; i < 5; ++i)
@@ -489,10 +529,14 @@ void App::drawPerformanceProfileSection() {
             o.targetFps = fpsValues[fpsIndex];
             edited = true;
         }
-        if (o.any() && ImGui::Button("Back to automatic")) {
-            const bool governorWas = o.governor;
+        if (o.any() && ImGui::Button(tr("Back to automatic"))) {
+            const ProfileOverrides was = o;
             o = ProfileOverrides{};
-            o.governor = governorWas;
+            o.governor = was.governor;
+            o.compute = was.compute; // (choices, not tuning: kept)
+            o.gpu = was.gpu;
+            o.turbo = was.turbo;
+            o.tierCardFor = was.tierCardFor;
             edited = true;
         }
         if (edited) {
@@ -505,6 +549,130 @@ void App::drawPerformanceProfileSection() {
     }
     ImGui::Separator();
     ImGui::Spacing();
+}
+
+} // namespace sf
+
+// --- Help > Record a performance trace (core/PerfTrace.h, #127) ---
+
+namespace sf {
+
+namespace {
+
+std::string millions(size_t n) { return n < 1000000 ? std::to_string(n) : fmt("%.2fM", double(n) * 1e-6); }
+
+} // namespace
+
+void App::togglePerfTrace() {
+    if (perftrace::on()) {
+        perftrace::stop();
+        status_ = "Performance trace stopped: sculptforge-trace.log is in the log folder (Help > Open log folder)";
+        return;
+    }
+    std::string folder = crashlog::path();
+    if (const size_t slash = folder.find_last_of("/\\"); slash != std::string::npos) folder.resize(slash + 1);
+    else folder.clear();
+    if (folder.empty()) {
+        folder = userDataDir();
+    }
+    HardwareInfo hw;
+    if (hwProfile_) hw = hwProfile_->profile.hardware;
+    else probeHardware(hw);
+    std::string header = std::string("SculptForge ") + SCULPTFORGE_VERSION + " performance trace | GPU " + hw.glRenderer +
+                         " (" + hw.glVendor + ", " + gpuKindName(hw.gpuKind) + ", " + std::to_string(hw.vramMB) +
+                         " MB) | OpenGL " + hw.glVersion + " | " + hw.cpu + ", " + std::to_string(hw.cpuThreads) +
+                         " threads, " + std::to_string(hw.ramMB) + " MB RAM, " + hw.simdBuild + " | " + hw.os;
+    if (hwProfile_)
+        header += std::string(" | profile ") + tierName(hwProfile_->profile.tier) + ", " +
+                  std::to_string(hwProfile_->tier.targetHz) + " Hz target, display " + std::to_string(hwProfile_->displayHz) + " Hz";
+    perf_.traceLongMs = perftrace::kLongFrameMs;
+    if (const char* ms = std::getenv("SF_PERF_TRACE_MS"); ms && *ms) perf_.traceLongMs = std::atof(ms);
+    header += fmt(" | frames over %.0f ms are written", perf_.traceLongMs);
+    if (folder.empty() || !perftrace::start(folder, header)) {
+        status_ = "Couldn't write the performance trace (the user data folder couldn't be written)";
+        return;
+    }
+    perf_.traceJobs = perfTraceJobs();
+    perf_.traceJobsSince = double(SDL_GetTicksNS()) * 1e-9;
+    perftrace::line("recording | " + perfTraceScene() + (perf_.traceJobs.empty() ? "" : " | running: " + perf_.traceJobs));
+    status_ = "Recording a performance trace: do what is slow, then Help > Record a performance trace again to stop";
+}
+
+std::string App::perfTraceScene() const {
+    const Mesh& m = doc_.mesh;
+    std::string s = "Part " + std::to_string(doc_.activePart + 1) + "/" + std::to_string(doc_.partCount()) + " " +
+                    millions(m.triangleCount()) + " tris " + millions(m.vertexCount()) + " verts";
+    if (const int levels = subdivLevelCount(m); levels > 0)
+        s += ", level " + std::to_string(subdivCurrentLevel(m) + 1) + "/" + std::to_string(levels);
+    if (m.micro) s += ", micro level " + std::to_string(m.micro->level) + " (" + millions(m.micro->microTriangles()) + " tris)";
+    s += " | scene " + millions(perf_.sceneTriangles) + " tris, drawn " + millions(renderer_.lastDrawnTriangles());
+    s += ", AA " + std::to_string(perf_.samplesUsed) + fmt(", view %.0f%%", double(uiPrefs_.viewResolution));
+    if (perf_.movingNow) s += ", moving";
+    if (perf_.proxyNow) s += ", proxy";
+    if (doc_.sculptor.strokeActive()) s += ", stroke";
+    if (perf_.gpuOutOfMemory) s += ", GPU out of memory";
+    return s;
+}
+
+std::string App::perfTraceJobs() const {
+    auto running = [](const auto& f) { return f.valid() && f.wait_for(std::chrono::seconds(0)) != std::future_status::ready; };
+    std::string s;
+    auto add = [&](bool busy, const char* name) {
+        if (!busy) return;
+        if (!s.empty()) s += ", ";
+        s += name;
+    };
+    add(bool(voxelRemesh_), "remesh");
+    add(bool(qremesh_), "QRemesh");
+    add(bool(autoUv_), "Auto UV");
+    add(bakeBusy(), "bake");
+    add(meshMapsBusy(), "mesh maps");
+    add(uvEditorBusy(), "UV editor");
+    add(thumbs_.busy(), "thumbnails");
+    add(libraryScanner_.busy(), "library scan");
+    add(galleryBusy(), "brush gallery");
+    add(renderer_.environmentPending(), "environment");
+    add(splatTrainBusy(), "splat training");
+    add(sculptableBusy(), "make sculptable");
+    add(phoneBusy(), "phone");
+    add(bool(updateJob_), "update check");
+    add(running(pendingBrush_) || running(pendingGenerator_) || running(pendingBase_) || running(pendingModels_) || running(pendingUnreal_) ||
+            running(pendingComfyCheck_),
+        "AI / bridge request");
+    add(solverBusy(), "stroke solver");
+    return s;
+}
+
+void App::tracePerfFrame(const double* phase) {
+    // Background jobs that started or ended since the last frame.
+    const double now = double(SDL_GetTicksNS()) * 1e-9;
+    if (std::string jobs = perfTraceJobs(); jobs != perf_.traceJobs) {
+        perftrace::line(fmt("jobs after %.2f s: ", now - perf_.traceJobsSince) + (perf_.traceJobs.empty() ? "none" : perf_.traceJobs) +
+                        " -> " + (jobs.empty() ? "none" : jobs));
+        perf_.traceJobs = std::move(jobs);
+        perf_.traceJobsSince = now;
+    }
+    const double total = phase[6] - phase[0];
+    if (total <= perf_.traceLongMs) return;
+    char buf[320];
+    std::snprintf(buf, sizeof buf,
+                  "long frame %.1f ms: events %.1f, dabs %.1f, UI %.1f, ghost + sync %.1f (uploads %.1f), draw %.1f, "
+                  "UI draw + swap %.1f | GPU %s ms (a frame before) | ",
+                  total, phase[1] - phase[0], phase[2] - phase[1], phase[3] - phase[2], phase[4] - phase[3], perf_.lastSyncMs,
+                  phase[5] - phase[4], phase[6] - phase[5],
+                  hwProfile_ && hwProfile_->lastGpuMs >= 0.0 ? fmt("%.1f", hwProfile_->lastGpuMs).c_str() : "?");
+    perftrace::line(buf + perfTraceScene() + (perf_.traceJobs.empty() ? "" : " | running: " + perf_.traceJobs));
+}
+
+void App::tracePerfStroke(const std::string& label) {
+    const SculptTimings& t = perf_.lastStroke;
+    char buf[256];
+    std::snprintf(buf, sizeof buf,
+                  "stroke %s: %llu dabs, %s verts moved, kernel %.1f ms, normals %.1f, BVH %.1f, dynamic topology %.1f, "
+                  "uploads %.1f over %d frames | ",
+                  label.c_str(), (unsigned long long)t.dabs, millions(size_t(t.vertices)).c_str(), t.kernelMs, t.normalsMs,
+                  t.bvhMs, t.remeshMs, perf_.lastStrokeSyncMs, perf_.lastStrokeFrames);
+    perftrace::line(buf + perfTraceScene());
 }
 
 } // namespace sf

@@ -17,13 +17,24 @@ const char* powerSourceName(PowerSource power) {
     return "unknown";
 }
 
+size_t strokeShadeBudget(size_t points, double ms, double nsPerPoint, size_t minPoints) {
+    if (!(ms > 0.0) || !(nsPerPoint > 0.0)) return points;
+    const size_t timed = std::max(size_t(ms * 1e6 / nsPerPoint), minPoints);
+    return points ? std::min(points, timed) : timed;
+}
+
+size_t microShadeBudget(const TierConfig& tier, bool stroking, bool viewMoving, double nsPerPoint, size_t minPoints) {
+    const size_t points = size_t(tier.shadeBudgetPoints) / (stroking && tier.draftBrushMode ? 4 : 1);
+    return stroking || viewMoving ? strokeShadeBudget(points, tier.strokeShadeMs, nsPerPoint, minPoints) : points;
+}
+
 int targetHzForDisplay(int hz) {
     if (hz >= 143) return 144;
     if (hz >= 119) return 120;
     return 60;
 }
 
-TierConfig tierConfigFor(const HardwareProfile& p, PowerSource power, int displayHz) {
+TierConfig tierConfigFor(const HardwareProfile& p, PowerSource power, int displayHz, int memoryStepDown) {
     TierConfig c;
     c.tier = p.tier;
     c.power = power;
@@ -62,6 +73,20 @@ TierConfig tierConfigFor(const HardwareProfile& p, PowerSource power, int displa
     c.outOfCorePoints = (c.residentCacheCapMB << 20) / 2;
     if (p.overrides.draftBrush == 1) c.draftBrushMode = true;
     else if (p.overrides.draftBrush == 2) c.draftBrushMode = false;
+    // The hardware tier's budgets, stepped down by the memory guard.
+    c.chosenHwTier = p.hwTier;
+    c.memoryStepDown = std::clamp(memoryStepDown, 0, int(p.hwTier));
+    c.hwTier = HwTier(int(p.hwTier) - c.memoryStepDown);
+    c.budgets = budgetsForTier(c.hwTier);
+    // Focus Detail's GPU pool on a small graphics card: 256 MB under a 1.5 GB video memory budget.
+    if (c.hwTier == HwTier::Floor && s.vramBudgetMB && s.vramBudgetMB < 1536) c.budgets.focusGpuPoolMB = 256;
+    c.budgets.maxTextureSize = s.maxTextureSize;
+    c.budgets.threads = s.threads; // (SF_HW_SIMULATE=floor: the app sets 4)
+    applyTierBudgetEnv(c.budgets);
+    ComputeChoice saved = ComputeChoice::Auto;
+    computeChoiceFromName(p.overrides.compute, saved);
+    c.compute = computeChoiceWithEnv(saved);
+    c.turbo = p.overrides.turbo;
     return c;
 }
 
@@ -71,6 +96,7 @@ Json tierConfigJson(const TierConfig& c) {
     j.set("resident_cache_cap_mb", double(c.residentCacheCapMB));
     j.set("active_triangle_budget", double(c.activeTriangleBudget));
     j.set("shade_budget_points", double(c.shadeBudgetPoints));
+    j.set("stroke_shade_ms", c.strokeShadeMs);
     j.set("out_of_core_points", double(c.outOfCorePoints));
     j.set("upload_budget_mb_per_frame", double(c.uploadBudgetMBPerFrame));
     j.set("draft_brush_mode", c.draftBrushMode);
@@ -78,6 +104,12 @@ Json tierConfigJson(const TierConfig& c) {
     j.set("target_hz", c.targetHz);
     j.set("power", powerSourceName(c.power));
     j.set("on_battery", c.onBattery());
+    j.set("hw_tier", hwTierName(c.hwTier));
+    j.set("chosen_hw_tier", hwTierName(c.chosenHwTier));
+    j.set("memory_step_down", c.memoryStepDown);
+    j.set("budgets", tierBudgetsJson(c.budgets));
+    j.set("compute", computeChoiceName(c.compute));
+    j.set("turbo", c.turbo);
     return j;
 }
 

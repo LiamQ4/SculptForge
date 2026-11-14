@@ -1,33 +1,69 @@
-# Help > What's New opens the guide's What's New chapter (it also opens by itself once after an update).
-run ui_look look=classic layout=zbrush        # written for the Classic look and the ZBrush-style palette bar and shelves
+# What's New: Help > What's New opens the newest version's feature cards (docs/guide/whats-new.md, its ```features
+# block); Esc closes it, Try it opens the feature, Full release notes opens the guide chapter, which shows the last
+# three versions in full and folds the older ones into groups.
+# The window is pinned to 0.12.0's five cards (SF_WHATS_NEW_VERSION; the chapter starts at 0.11.0), so this stays valid
+# after each release; the guide chapter below is pinned to 0.12.16 (SF_GUIDE_VERSION), so it checks 0.12.16's section
+# before and after the release.
+env SF_WHATS_NEW_VERSION 0.12.0
+env SF_GUIDE_VERSION 0.12.16
+run ui_look look=classic layout=classic        # written for the Classic look and the classic palette bar and shelves
 run new_sphere subdivisions=3
 click "Help##palette.help"
 click "What's New##help.whats_new"
+wait 0.5
+expect_value whats_new_open == 1
+expect_value whats_new_cards == 5
+expect_text "What's new in 0.12.0"
+expect_text "Garments and cloth"
+expect_text "Plugins"
+expect_text "Pose all Parts"
+expect_text "Tube shapes"
+expect_text "Edge creases"
+expect "Read more##whats_new.try.0"
+shot whats-new-popup
+
+# Esc closes it; nothing under it moved.
+key escape
+wait 0.3
+expect_value whats_new_open == 0
+expect_value guide_open == 0
+
+# Tab to the third card, Enter tries it: the guide opens at Pose all Parts.
+click "Help##palette.help"
+click "What's New##help.whats_new"
+wait 0.4
+key tab
+key tab
+key tab
+key enter
+wait 0.3
+expect_value whats_new_open == 0
+expect_value whats_new_tries == 1
+expect_value guide_open == 1
+expect_guide parts.md
+key shift+f1
+wait 0.2
+expect_value guide_open == 0
+
+# The same window in Forge Terminal (the look's colours), then Full release notes: the guide chapter.
+run ui_look look=forge scheme=tokyo_night layout=classic   # Forge Terminal's colours
+action help.whats_new
+wait 0.5
+shot whats-new-popup-forge
+click "Full release notes##whats_new"
+wait 0.3
+expect_value whats_new_open == 0
 expect_value guide_open == 1
 expect_guide whats-new.md
-expect_text "Version 0.10.7"
-expect_text "A new look"
-expect_text "Version 0.10.6"
-expect_text "Version 0.10.5"
-expect_text "Version 0.10.4"
-expect_text "Version 0.10.3"
-expect_text "Version 0.10.2"
-expect_text "Version 0.9.6"
-expect_text "Extract"
-expect_text "Version 0.9.5"
-expect_text "Version 0.9.4"
-expect_text "Version 0.9.3"
-expect_text "Version 0.9.2"
-expect_text "Version 0.9.1"
-expect_text "Version 0.9.0"
-expect_text "Version 0.8.1"
-expect_text "Version 0.8"
-expect_text "Version 0.7"
-expect_text "Version 0.6"
-expect_text "Version 0.5"
-expect_text "Version 0.4.2"
-# The newest section is on screen.
-shot whats-new
+expect_text "Version 0.12.16"
+expect_text "Pop-ups and the guide take colour by role, and sculpts with Micro detail show again in PBR shading."
+expect_text "Version 0.12.15"
+expect_text "Android tablet trays open again, and links on Linux open one browser window."
+expect_text "Version 0.12.14"
+expect_text "Shelf slots keep your own brushes after a restart, and the welcome window fits a phone held sideways."
+expect_value whats_new_contents == 5   # 3 versions in full, then 0.12.0 to 0.12.2 and 0.11.x (the chapter starts at 0.11.0)
+expect_value whats_new_expanded == 1
+shot whats-new-guide
 
 # The end of the chapter: a quiet line about supporting SculptForge; its button only asks for the website's page
 # (UI tests never start a browser).

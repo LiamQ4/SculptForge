@@ -1,10 +1,10 @@
-run ui_look look=classic layout=zbrush
-input_style zbrush
+run ui_look look=classic layout=classic
+input_style classic
 # Windows PNG and bitmap clipboard formats from Chromium/Codex. Bitmap size may legally be zero.
 run new_sphere subdivisions=2 ; uv_auto resolution=1024
 wait 0.2
-click "Texture Map##tool.texture"
-hover "Texture Map/##texturepaste"
+click "Texture Image##tool.texture"
+hover "Texture Image/##texturepaste"
 clipboard_png $SCRIPT_DIR/data/phone/photo.png
 key ctrl+v
 expect_status Pasted texture

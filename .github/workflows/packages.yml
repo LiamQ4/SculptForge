@@ -1,31 +1,40 @@
 name: Packages
 
 # The release packages (.deb, AppImage, .tar.gz, Flatpak, .rpm and VFX Reference Platform tarballs, .dmg, Windows
-# installer and .zip), each built and tested exactly as a release ships them. It runs on every push to main that
-# changes the app, so a tagged release can promote the packages of the commit it tags instead of building them again
-# (.github/workflows/release.yml); the release workflow also calls it to build from scratch when there are none.
+# installer and .zip), each built and tested exactly as a release ships them. It runs on every push to staging and main,
+# so a tagged release promotes those packages instead of building them again (.github/workflows/release.yml);
+# release.yml also calls it to build from the tag (--rebuild).
 #
-# Integrity: the release promotes only artifacts of a successful run of THIS workflow on a push to main for exactly
-# the tagged commit (checked in release.yml). Compiler caches are restored here but saved only by branch runs (pushes
-# to main, maintainers' own dispatches): never from a tag (a release that calls this builds from main's cache and
-# writes nothing) and never from a pull request (this workflow doesn't run on pull requests). See ci.yml for ccache.
+# Build once: job reuse computes the push's build-input key (tools/release/build_key.py: a hash of every file that goes
+# into the packages, tools/release/build_inputs.txt) and, when an earlier green run of THIS workflow on a maintainer's
+# push to main or staging built the same key (tools/release/staged_run.py, the same rule the release uses), skips every
+# build and says which run it reuses. A website or release-paperwork change never builds again; there is no `paths:`
+# filter (it skipped staging's push of 0.11.14 and the release rebuilt from the tag).
+#
+# Integrity: the release promotes only artifacts of a successful run of THIS workflow triggered by a maintainer's push
+# to `staging` or `main` for the tagged commit or one with the same key (tools/release/staged_run.py, in release.yml and
+# scripts/release.sh; release.yml recomputes both keys from git). Every package gets a GitHub
+# artifact attestation (job permissions id-token/attestations: write, nothing else) and job sums records their SHA-256;
+# release.yml checks both before publishing (tools/release/verify_staged.py). Artifacts are kept 14 days.
+# Compiler caches are restored here but saved only by branch runs (pushes to main or staging, maintainers' own
+# dispatches): never from a tag (a release that calls this builds from main's cache and writes nothing) and
+# never from a pull request (this workflow doesn't run on pull requests). See ci.yml for ccache.
 # Runners: repository variables SF_RUNNER_* (Settings > Secrets and variables > Actions > Variables) name other
-# runners for these build-and-test jobs; unset, they are GitHub's standard ones. No job here gets a secret.
+# runners for these build-and-test jobs; unset, they are GitHub's standard ones. No job here gets a secret except
+# Windows x64, and that one only the SignPath token, only in the two signing steps, only with the repository variable
+# SIGNING=signpath on a run for main, staging or a tag (docs/releasing.md "Windows code signing"; the rules are
+# tools/release/check_workflows.py). Everything else about signing is in that job.
 
 on:
   push:
-    branches: [main]
-    paths: # everything but the website (its phone page, website/link, is built into the app) and release paperwork
-      - '**'
-      - '!website/**'
-      - website/link/**
-      - '!.github/workflows/pages.yml'
-      - '!.github/workflows/download-stats.yml'
-      - '!packaging/arch/**'
-      - '!tools/publish/**'
-      - '!scripts/release.sh'
-      - '!docs/releasing.md'
+    branches: [main, staging] # staging: the merge queue's batch, the release's packages (built once, promoted unchanged)
+    # No paths: job reuse skips the builds when nothing that goes into the packages changed (tools/release/build_inputs.txt).
   workflow_dispatch:
+    inputs:
+      sign_test:
+        description: Sign this run's Windows packages with SignPath's TEST policy (self-signed cert; never promotable, never for release)
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       ref:
@@ -36,24 +45,79 @@ on:
         description: Release tag, e.g. v1.2.3 (names the AppImage and the VFX tarballs)
         type: string
         required: true
+    secrets:
+      SIGNPATH_API_TOKEN: # release.yml's --rebuild passes it on; used only by job windows, only with SIGNING=signpath
+        required: false
 
 permissions:
   contents: read
 
 concurrency:
   group: packages-${{ inputs.ref || github.ref }}
-  cancel-in-progress: true # a newer push to main supersedes; a tag of the older commit then builds its own
+  # main never cancels a build in progress: with no paths: filter every push runs, and a website push (the queue page
+  # merges often) would cancel the build of the app change before it; the newer run waits, then reuses that build.
+  # (Waiting runs still replace each other: the newest push is the one checked.) A newer staging batch supersedes.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   REF: ${{ inputs.ref || github.sha }}
   CCACHE_MAXSIZE: 500M
   CCACHE_DEPEND: 'true'
+  # Downloads (cmake/Fetch.cmake, tools/ci/fetch.sh, the AppImage tools) go to .deps, cached per job by hash.
+  SF_DEPS_CACHE: .deps
   # Saved by branch runs only: never a tag, never a pull request.
   SAVE_CACHE: ${{ !startsWith(github.ref, 'refs/tags/') && github.event_name != 'pull_request' }}
+  # Tests that open real network connections return early here (tests/TestHarness.h networkTestsOff): a runner's
+  # network stalled ar_link_sends_the_model_over_webrtc on Windows. CI (ci.yml) still runs them.
+  SF_TEST_NO_NETWORK: '1'
 
 jobs:
+  reuse:
+    # The packages of an earlier green run on a maintainer's push to main or staging whose build inputs are byte for
+    # byte this commit's (tools/release/staged_run.py: the same SHA, or the same tools/release/build_key.py key): reused,
+    # not rebuilt, and the release promotes that run. Only runs older than this one count, so two runs never wait for
+    # each other; one in progress is waited for. Failed, cancelled, expired or none: build. Dispatches and tags build.
+    name: Reuse an earlier build of the same inputs
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run-id: ${{ steps.find.outputs.run-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # trees only (the key hashes git objects, never file contents): earlier runs' commits are fetched the same way
+        with: { persist-credentials: false, filter: 'blob:none', sparse-checkout: tools/release }
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN: ${{ github.run_id }}
+        run: |
+          key=$(python3 tools/release/build_key.py "$SHA" | cut -d' ' -f1)
+          echo "Build-input key of $SHA: \`$key\`" >> "$GITHUB_STEP_SUMMARY"
+          rc=0
+          found=$(python3 tools/release/staged_run.py --repo "$REPO" --sha "$SHA" --before-run "$RUN" --wait --wait-minutes 45 --full) || rc=$?
+          if [ $rc = 0 ]; then
+            read -r id built ref <<<"$found"
+            echo "::notice::reuses run $id ($ref, $built): the same build inputs, built and tested there (https://github.com/$REPO/actions/runs/$id)"
+            echo "Reuses run [$id](https://github.com/$REPO/actions/runs/$id) ($ref, $built): nothing rebuilt." >> "$GITHUB_STEP_SUMMARY"
+            echo "run-id=$id" >> "$GITHUB_OUTPUT"
+          else
+            echo "No earlier green build of these inputs (exit $rc, above): building here" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
   linux:
     name: Linux ${{ matrix.arch }} (.deb, AppImage, .tar.gz)
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.run-id == '' }}
+    permissions: # the attestation: a signed statement of what this run built
+      contents: read
+      id-token: write
+      attestations: write
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -65,12 +129,19 @@ jobs:
       - uses: actions/checkout@v7
         with: { ref: '${{ env.REF }}' }
       - name: Tag (the release's, or v<project version>)
-        run: echo "TAG=${{ inputs.tag }}" | sed "s/^TAG=$/TAG=v$(sed -n 's/^project(SculptForge VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)/" >> "$GITHUB_ENV"
+        # (a beta's tag names its packages without the prerelease: v0.11.0-beta.1 makes SculptForge-0.11.0-*)
+        run: echo "TAG=${{ inputs.tag }}" | sed "s/^TAG=$/TAG=v$(sed -n 's/^project(SculptForge VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)/; s/^\(TAG=v[0-9.]*\)-.*/\1/" >> "$GITHUB_ENV"
       - run: |
           sudo ./packaging/linux/install-build-deps.sh
-          sudo apt-get install -y --no-install-recommends ccache xvfb libgl1-mesa-dri
+          sudo ./packaging/linux/apt-retry.sh install -y --no-install-recommends ccache xvfb libgl1-mesa-dri
           echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
           echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+      - name: Downloads (cmake/Fetch.cmake's archives and pinned tools, kept by hash by tools/ci/fetch.sh)
+        uses: actions/cache@v5
+        with:
+          path: .deps
+          key: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Fetch.cmake', 'packaging/linux/build-appimage.sh', '.github/workflows/packages.yml') }}
+          restore-keys: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-
       - uses: actions/cache/restore@v5
         with:
           path: .ccache
@@ -78,8 +149,9 @@ jobs:
           restore-keys: ccache-pkg-linux-${{ matrix.arch }}.
       - name: Build
         run: |
+          ccache -z # (ccache -s below: this run's hits, not the restored cache's lifetime)
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DSCULPTFORGE_USE_SYSTEM_SDL=OFF \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DSCULPTFORGE_MOLD=OFF
           cmake --build build --parallel 4
           ccache -s
       - if: env.SAVE_CACHE == 'true'
@@ -87,10 +159,13 @@ jobs:
         with:
           path: .ccache
           key: ccache-pkg-linux-${{ matrix.arch }}.${{ github.sha }}
-      - name: Test (every test, UI tests under Xvfb + Mesa)
+      # The release smoke test only (open, sculpt, save, reopen the built app). Every unit and UI test already runs in
+      # CI on the same commit (Linux x86_64 and ARM64 included); on the 0.12.0 stage the full suite here was cut off
+      # by the hosted runner (exit 143) four times and leaked state between UI scripts, while CI was green.
+      - name: Smoke test (the full suite runs in CI on the same commit)
         run: |
           xvfb-run -a -s "-screen 0 1920x1080x24" env LIBGL_ALWAYS_SOFTWARE=1 \
-            ctest --test-dir build --output-on-failure -j 4
+            ctest --test-dir build --output-on-failure -R '^release_smoke$'
       - name: .deb and .tar.gz
         run: cd build && cpack -G "DEB;TGZ"
       - name: AppImage
@@ -99,19 +174,37 @@ jobs:
           # Named the AppImage way (SculptForge-1.2.3-x86_64.AppImage, no "linux"), with update information so
           # AppImageUpdate and similar tools can update it from the newest GitHub release (the .zsync file). The
           # AppDir's root gets PNG icons (AppImage managers cannot use the SVG), and appimagetool checks it (#17).
-          packaging/linux/build-appimage.sh AppDir "${TAG#v}" ${{ matrix.ld }} build
+          SF_APPIMAGE_TOOLS=.deps/appimage packaging/linux/build-appimage.sh AppDir "${TAG#v}" ${{ matrix.ld }} build
+      - name: Claude Desktop bundle (.mcpb; build_mcpb.py also runs its server)
+        run: python3 tools/release/build_mcpb.py --cli build/sculptforge-cli --version auto --platform linux --out "build/SculptForge-{version}-linux-${{ matrix.arch }}.mcpb"
       - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
           path: |
+            build/*.mcpb
             build/*.deb
             build/*.tar.gz
             build/*.AppImage
             build/*.AppImage.zsync
+          retention-days: 14
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            build/*.deb
+            build/*.tar.gz
+            build/*.AppImage
+            build/*.AppImage.zsync
+            build/*.mcpb
 
   # Built in the freedesktop SDK (packaging/flatpak/build.sh), installed, and UI tests run inside the sandbox.
   flatpak:
     name: Flatpak ${{ matrix.arch }}
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.run-id == '' }}
+    permissions: # the attestation: a signed statement of what this run built
+      contents: read
+      id-token: write
+      attestations: write
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -123,7 +216,13 @@ jobs:
       - uses: actions/checkout@v7
         with: { ref: '${{ env.REF }}' }
       - name: flatpak and flatpak-builder
-        run: sudo apt-get update && sudo apt-get install -y flatpak flatpak-builder xvfb
+        run: sudo ./packaging/linux/apt-retry.sh update && sudo ./packaging/linux/apt-retry.sh install -y flatpak flatpak-builder xvfb
+      - name: The manifest's sources (flatpak-builder's downloads, checked by their sha256 in the manifest)
+        uses: actions/cache@v5
+        with:
+          path: build-flatpak/state/downloads
+          key: flatpak-src-${{ matrix.arch }}-${{ hashFiles('packaging/flatpak/*.yml') }}
+          restore-keys: flatpak-src-${{ matrix.arch }}-
       - uses: actions/cache/restore@v5
         with:
           path: build-flatpak/state/ccache
@@ -149,9 +248,19 @@ jobs:
         with:
           name: flatpak-${{ matrix.arch }}
           path: dist/*.flatpak
+          retention-days: 14
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.flatpak
 
   vfx:
     name: ${{ matrix.label }} ${{ matrix.arch }}
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.run-id == '' }}
+    permissions: # the attestation: a signed statement of what this run built
+      contents: read
+      id-token: write
+      attestations: write
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.image }}
     strategy:
@@ -159,27 +268,32 @@ jobs:
       matrix:
         include:
           # CY2026: EL8 / glibc 2.28 also gives the .rpm for RHEL 8, 9, 10 and Fedora.
-          - { label: 'RPM + VFX CY2026', suffix: vfx2026, cy: CY2026, generators: 'RPM;TGZ', image: 'rockylinux:8', arch: x86_64, ccarch: x86_64, os: "${{ vars.SF_RUNNER_LINUX || 'ubuntu-24.04' }}" }
+          - { label: 'RPM + VFX CY2026', suffix: vfx2026, cy: CY2026, generators: 'RPM;TGZ', image: 'rockylinux:8', arch: x86_64, ccarch: x86_64, ci: 'ccache-ci-CY2026.', os: "${{ vars.SF_RUNNER_LINUX || 'ubuntu-24.04' }}" }
           - { label: 'RPM + VFX CY2026', suffix: vfx2026, cy: CY2026, generators: 'RPM;TGZ', image: 'rockylinux:8', arch: arm64, ccarch: aarch64, os: "${{ vars.SF_RUNNER_LINUX_ARM || 'ubuntu-24.04-arm' }}" }
-          - { label: 'VFX CY2027', suffix: vfx2027, cy: CY2027, generators: 'TGZ', image: 'rockylinux:9', arch: x86_64, ccarch: x86_64, os: "${{ vars.SF_RUNNER_LINUX || 'ubuntu-24.04' }}" }
+          - { label: 'VFX CY2027', suffix: vfx2027, cy: CY2027, generators: 'TGZ', image: 'rockylinux:9', arch: x86_64, ccarch: x86_64, ci: 'ccache-ci-CY2027.', os: "${{ vars.SF_RUNNER_LINUX || 'ubuntu-24.04' }}" }
           - { label: 'VFX CY2027', suffix: vfx2027, cy: CY2027, generators: 'TGZ', image: 'rockylinux:9', arch: arm64, ccarch: aarch64, os: "${{ vars.SF_RUNNER_LINUX_ARM || 'ubuntu-24.04-arm' }}" }
     steps:
       - run: dnf -y install git tar gzip zstd
       - uses: actions/checkout@v7
         with: { ref: '${{ env.REF }}' }
       - name: Tag (the release's, or v<project version>)
-        run: echo "TAG=${{ inputs.tag }}" | sed "s/^TAG=$/TAG=v$(sed -n 's/^project(SculptForge VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)/" >> "$GITHUB_ENV"
+        # (a beta's tag names its packages without the prerelease: v0.11.0-beta.1 makes SculptForge-0.11.0-*)
+        run: echo "TAG=${{ inputs.tag }}" | sed "s/^TAG=$/TAG=v$(sed -n 's/^project(SculptForge VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)/; s/^\(TAG=v[0-9.]*\)-.*/\1/" >> "$GITHUB_ENV"
       - run: ./packaging/linux/install-build-deps.sh
+      - name: Downloads (cmake/Fetch.cmake's archives and pinned tools, kept by hash by tools/ci/fetch.sh)
+        uses: actions/cache@v5
+        with:
+          path: .deps
+          key: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Fetch.cmake', '.github/workflows/packages.yml') }}
+          restore-keys: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-
       - name: ccache (the static release binary, pinned by hash)
         run: |
           f=ccache-4.14.2-linux-${{ matrix.ccarch }}-musl-static.tar.gz
-          curl -fsSLO "https://github.com/ccache/ccache/releases/download/v4.14.2/$f"
           case ${{ matrix.ccarch }} in
             x86_64) sum=d540ba01f160addbd3dd5e18eda9bd34005591b095c09ac8ae9d0a1b655e7ef5 ;;
             aarch64) sum=2be524bbccfc7e9ff0085d110da7dc9964de983bd92d29acf3b872e557194945 ;;
           esac
-          echo "$sum  $f" | sha256sum -c
-          tar xzf "$f" -C /opt
+          tar xzf "$(tools/ci/fetch.sh "https://github.com/ccache/ccache/releases/download/v4.14.2/$f" $sum)" -C /opt
           echo "/opt/${f%.tar.gz}" >> "$GITHUB_PATH"
           echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
           echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
@@ -187,21 +301,27 @@ jobs:
         with:
           path: .ccache
           key: ccache-pkg-${{ matrix.suffix }}-${{ matrix.arch }}.${{ github.sha }}
-          # CI's job for the same image and compiler (x86_64) shares most object files.
+          # CI's job for the same image and compiler (x86_64 only: CI builds no arm64 VFX image) shares most object files.
           restore-keys: |
             ccache-pkg-${{ matrix.suffix }}-${{ matrix.arch }}.
-            ccache-ci-${{ matrix.cy }}.
-      - name: Python 3.13
+            ${{ matrix.ci }}
+      - name: Python 3.13 (python-build-standalone, pinned by hash)
         run: |
-          curl -LsSf https://astral.sh/uv/0.9.5/install.sh | sh
-          ~/.local/bin/uv venv --python 3.13 /opt/py313
-          ~/.local/bin/uv pip install --python /opt/py313/bin/python numpy
+          case $(uname -m) in
+            x86_64) sum=c0ccda275948c79996e46993c2c5476ff5cca606dee530f1dea712179131b348 ;;
+            aarch64) sum=baa3d107d17e4328448e30c3c9c83cca0eb41ca7a37c10982e14d46a5c3db07d ;;
+          esac
+          f=$(tools/ci/fetch.sh "https://github.com/astral-sh/python-build-standalone/releases/download/20251014/cpython-3.13.9%2B20251014-$(uname -m)-unknown-linux-gnu-install_only_stripped.tar.gz" $sum)
+          tar xzf "$f" -C /opt # /opt/python
+          /opt/python/bin/python3.13 -m venv /opt/py313
+          /opt/py313/bin/python -m pip install --retries 8 --timeout 60 numpy
           echo "PYTHON313=/opt/py313/bin/python" >> "$GITHUB_ENV"
       - name: Build with GCC 14
         run: |
           source /opt/rh/gcc-toolset-14/enable
+          ccache -z
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DSCULPTFORGE_USE_SYSTEM_SDL=OFF \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DSCULPTFORGE_MOLD=OFF \
             -DSCULPTFORGE_BUILD_PYTHON=ON -DPython_EXECUTABLE="$PYTHON313" -DSCULPTFORGE_PYTHON_INSTALL_DIR=lib/sculptforge/python
           cmake --build build --parallel 4
           ccache -s
@@ -223,18 +343,35 @@ jobs:
           path: |
             build/*.rpm
             build/*.tar.gz
+          retention-days: 14
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            build/*.rpm
+            build/*.tar.gz
 
   macos:
     name: macOS (universal .dmg)
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.run-id == '' }}
+    permissions: # the attestation: a signed statement of what this run built
+      contents: read
+      id-token: write
+      attestations: write
     runs-on: ${{ vars.SF_RUNNER_MAC || 'macos-15' }}
     steps:
       - uses: actions/checkout@v7
         with: { ref: '${{ env.REF }}' }
+      - name: Downloads (cmake/Fetch.cmake's archives and pinned tools, kept by hash by tools/ci/fetch.sh)
+        uses: actions/cache@v5
+        with:
+          path: .deps
+          key: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Fetch.cmake', '.github/workflows/packages.yml') }}
+          restore-keys: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-
       - name: ccache (the release binary, pinned by hash)
         run: |
-          curl -fsSLO https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-darwin.tar.gz
-          echo "cf240009630b605b775c7c5c7b7105a3b196c79f31af322c1557969aa28003fc  ccache-4.14.2-darwin.tar.gz" | shasum -a 256 -c
-          tar xzf ccache-4.14.2-darwin.tar.gz -C "$RUNNER_TEMP"
+          tar xzf "$(tools/ci/fetch.sh https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-darwin.tar.gz \
+            cf240009630b605b775c7c5c7b7105a3b196c79f31af322c1557969aa28003fc)" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/ccache-4.14.2-darwin" >> "$GITHUB_PATH"
           echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
           echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
@@ -245,6 +382,7 @@ jobs:
           restore-keys: ccache-pkg-macos.
       - name: Build
         run: |
+          ccache -z
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -259,26 +397,66 @@ jobs:
         # UI tests need a display; they run under Xvfb in the Linux jobs above and in CI.
         run: ctest --test-dir build --output-on-failure -LE ui -j 4
       - name: Package (signed ad-hoc inside CPack, see cmake/MacSign.cmake)
-        run: cd build && cpack -G DragNDrop
+        # hdiutil sometimes fails with "Resource busy" on the runner (a disk image still attached): up to 3 tries.
+        run: |
+          cd build
+          for attempt in 1 2 3; do
+            if cpack -G DragNDrop 2>&1 | tee cpack.log; [ "${PIPESTATUS[0]}" = 0 ]; then exit 0; fi
+            grep -q "Resource busy" cpack.log || exit 1
+            echo "hdiutil: Resource busy (try $attempt of 3)"; sleep 15
+          done
+          exit 1
+      - name: Claude Desktop bundle (.mcpb; build_mcpb.py also runs its server)
+        run: python3 tools/release/build_mcpb.py --cli build/sculptforge-cli --version auto --platform darwin --out "build/SculptForge-{version}-darwin-universal.mcpb"
       - uses: actions/upload-artifact@v7
         with:
           name: macos
-          path: build/*.dmg
+          path: |
+            build/*.dmg
+            build/*.mcpb
+          retention-days: 14
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            build/*.dmg
+            build/*.mcpb
 
   windows:
     name: Windows x64 (installer, .zip)
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.run-id == '' }}
+    permissions: # the attestation: a signed statement of what this run built
+      contents: read
+      id-token: write
+      attestations: write
+      actions: read # SignPath's connector reads this run and its uploaded artifact (only used with SIGNING=signpath)
     runs-on: ${{ vars.SF_RUNNER_WIN || 'windows-2022' }}
+    env:
+      # Code signing (SignPath Foundation). Off unless the repository variable SIGNING is `signpath`; then the exes are
+      # signed before the installer and .zip are made and the installer after, and any failure fails the job (never an
+      # unsigned package under SIGNING=signpath). Only runs for main, staging and release tags sign: a dispatch from
+      # another branch builds unsigned (it can never be promoted: staged_run.py wants a push to staging or main).
+      # SIGN_TEST: a maintainer's workflow_dispatch with sign_test signs with the TEST policy instead (self-signed
+      # "SculptForge Test" certificate; the packages say "test-signed (not for release)" and can't be promoted).
+      SIGN_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_test == true }}
+      SIGN: ${{ (vars.SIGNING == 'signpath' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging' || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'workflow_dispatch' && inputs.sign_test == true) }}
+      SIGN_POLICY: ${{ (github.event_name == 'workflow_dispatch' && inputs.sign_test == true) && (vars.SIGNPATH_TEST_POLICY_SLUG || 'test-signing') || vars.SIGNPATH_SIGNING_POLICY_SLUG }}
     steps:
       - uses: actions/checkout@v7
         with: { ref: '${{ env.REF }}' }
+      - name: Downloads (cmake/Fetch.cmake's archives and pinned tools, kept by hash by tools/ci/fetch.sh)
+        uses: actions/cache@v5
+        with:
+          path: .deps
+          key: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Fetch.cmake', '.github/workflows/packages.yml') }}
+          restore-keys: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-
       - name: ccache (the release binary, pinned by hash, standing in for cl.exe)
+        shell: bash
+        run: tools/ci/fetch.sh https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-windows-x86_64.zip 6993ce645e53192cec592ee23186200b574ac4c59097ecde8d9cfd681b47ae84
+      - name: ccache (unpacked, as cl.exe)
         shell: pwsh
         run: |
-          $zip = 'ccache-4.14.2-windows-x86_64.zip'
-          Invoke-WebRequest "https://github.com/ccache/ccache/releases/download/v4.14.2/$zip" -OutFile $zip
-          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne '6993CE645E53192CEC592EE23186200B574AC4C59097ECDE8D9CFD681B47AE84') {
-            throw 'ccache archive hash mismatch'
-          }
+          $zip = '.deps\6993ce645e53192cec592ee23186200b574ac4c59097ecde8d9cfd681b47ae84-ccache-4.14.2-windows-x86_64.zip'
           Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP
           $dir = "$env:RUNNER_TEMP\ccache-4.14.2-windows-x86_64"
           "$dir" >> $env:GITHUB_PATH
@@ -298,6 +476,7 @@ jobs:
             ccache-ci-windows.
       - name: Build (Visual Studio generator; ccache as cl.exe, one compiler per file)
         run: |
+          ccache -z
           cmake -S . -B build -DSCULPTFORGE_USE_SYSTEM_SDL=OFF `
             -DCMAKE_VS_GLOBALS="CLToolExe=cl.exe;CLToolPath=${{ env.SF_CCACHE_CL }};TrackFileAccess=false;UseMultiToolTask=true;EnforceProcessCountAcrossBuilds=true"
           cmake --build build --config Release --parallel 4
@@ -310,11 +489,157 @@ jobs:
       - name: Test
         # UI tests need a display; they run in CI with Mesa's software OpenGL.
         run: ctest --test-dir build -C Release --output-on-failure -LE ui -j 4
+      - name: Signing - settings present
+        if: env.SIGN == 'true'
+        shell: pwsh
+        env:
+          ORG: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          PROJECT: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          POLICY: ${{ env.SIGN_POLICY }}
+        run: |
+          foreach ($n in 'ORG', 'PROJECT', 'POLICY') {
+            if (-not (Get-Item "env:$n").Value) { throw "SIGNING=signpath but the variable for $n (SIGNPATH_ORGANIZATION_ID / SIGNPATH_PROJECT_SLUG / SIGNPATH_SIGNING_POLICY_SLUG; the test policy needs none) is empty" }
+          }
+      - name: Signing - the exes and DLLs we built, for SignPath
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory signing\binaries | Out-Null
+          Copy-Item build\Release\sculptforge.exe, build\Release\sculptforge-cli.exe signing\binaries
+          Copy-Item build\Release\*.dll signing\binaries -ErrorAction SilentlyContinue
+      - name: Signing - upload the unsigned binaries
+        if: env.SIGN == 'true'
+        id: sign-binaries-in
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signing-binaries-unsigned # not windows*: job sums and release.yml take windows* for packages
+          path: signing/binaries/*
+          retention-days: 1
+      - name: Signing - SignPath signs the binaries
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGN_POLICY }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_CONFIG_BINARIES || 'binaries' }}
+          github-artifact-id: ${{ steps.sign-binaries-in.outputs.artifact-id }}
+          wait-for-completion-timeout-in-seconds: ${{ vars.SIGNPATH_TIMEOUT || '3600' }} # a release policy may wait for an approval
+          output-artifact-directory: signing/binaries-signed
+      - name: Signing - signed binaries replace the built ones (the installer and .zip take them), checked
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          foreach ($f in Get-ChildItem signing\binaries -File) {
+            $s = Join-Path signing\binaries-signed $f.Name
+            if (-not (Test-Path $s)) { throw "SignPath returned no $($f.Name)" }
+            Copy-Item $s (Join-Path build\Release $f.Name) -Force
+          }
+          ./tools/ci/verify_signed.ps1 -Test:($env:SIGN_TEST -eq 'true') -Path (Get-ChildItem signing\binaries -File | ForEach-Object { Join-Path build\Release $_.Name })
+          build\Release\sculptforge-cli.exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "the signed sculptforge-cli.exe does not start" }
       - name: Package
         run: cd build && cpack -C Release -G "NSIS;ZIP"
+      - name: Signing - the installer, for SignPath
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory signing\installer | Out-Null
+          Copy-Item build\SculptForge-*-windows-*.exe signing\installer
+      - name: Signing - upload the unsigned installer
+        if: env.SIGN == 'true'
+        id: sign-installer-in
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signing-installer-unsigned
+          path: signing/installer/*
+          retention-days: 1
+      - name: Signing - SignPath signs the installer
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGN_POLICY }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_CONFIG_INSTALLER || 'installer' }}
+          github-artifact-id: ${{ steps.sign-installer-in.outputs.artifact-id }}
+          wait-for-completion-timeout-in-seconds: ${{ vars.SIGNPATH_TIMEOUT || '3600' }}
+          output-artifact-directory: signing/installer-signed
+      - name: Signing - signed installer replaces the built one, checked
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          foreach ($f in Get-ChildItem signing\installer -File) {
+            $s = Join-Path signing\installer-signed $f.Name
+            if (-not (Test-Path $s)) { throw "SignPath returned no $($f.Name)" }
+            Copy-Item $s (Join-Path build $f.Name) -Force
+          }
+          ./tools/ci/verify_signed.ps1 -Test:($env:SIGN_TEST -eq 'true') -Path (Get-ChildItem build\SculptForge-*-windows-*.exe).FullName
+      - name: Claude Desktop bundle (.mcpb; build_mcpb.py also runs its server)
+        run: python tools/release/build_mcpb.py --cli build/Release/sculptforge-cli.exe --version auto --platform win32 --out "build/SculptForge-{version}-windows-x86_64.mcpb"
+      - name: Signing - the .zip and .mcpb carry the signed exes and DLLs
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          foreach ($pkg in 'zip', 'mcpb') {
+            $dir = Join-Path $env:RUNNER_TEMP "check-$pkg"
+            python -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" (Get-Item "build\SculptForge-*.$pkg").FullName $dir
+            if ($LASTEXITCODE -ne 0) { throw "cannot unpack the .$pkg" }
+            ./tools/ci/verify_signed.ps1 -Test:($env:SIGN_TEST -eq 'true') -Path (Get-ChildItem $dir -Recurse -File -Include *.exe, *.dll).FullName
+          }
+      - name: Windows signing state (job summary and notice; release.sh --stage prints it)
+        shell: pwsh
+        env:
+          SIGNING_VAR: ${{ vars.SIGNING }}
+          REF_NAME: ${{ github.ref }}
+        run: |
+          if ($env:SIGN_TEST -eq 'true') {
+            $subject = (Get-AuthenticodeSignature (Get-Item build\SculptForge-*-windows-*.exe).FullName).SignerCertificate.Subject
+            $line = "Windows: test-signed (not for release; SignPath test policy, $subject)"
+          } elseif ($env:SIGN -eq 'true') {
+            $subject = (Get-AuthenticodeSignature (Get-Item build\SculptForge-*-windows-*.exe).FullName).SignerCertificate.Subject
+            $line = "Windows: signed (SignPath, $subject)"
+          } elseif ($env:SIGNING_VAR -eq 'signpath') {
+            $line = "Windows: unsigned (SIGNING=signpath ignored on $env:REF_NAME: only main, staging and tags sign)"
+          } else {
+            $line = 'Windows: unsigned (SIGNING off)'
+          }
+          $line >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "::notice title=Windows signing::$line"
       - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: |
             build/*.exe
             build/*.zip
+            build/*.mcpb
+          retention-days: 14
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            build/*.exe
+            build/*.zip
+            build/*.mcpb
+
+  # The SHA-256 of every package this run built, as an artifact of its own: release.yml publishes these files only if
+  # each one still has exactly this checksum and its attestation (tools/release/verify_staged.py).
+  sums:
+    name: Record checksums
+    needs: [linux, flatpak, vfx, macos, windows]
+    # Explicit: job reuse is skipped outside a push to main or staging, and a skipped ancestor would skip this job too.
+    if: ${{ !cancelled() && needs.linux.result == 'success' && needs.flatpak.result == 'success' && needs.vfx.result == 'success' && needs.macos.result == 'success' && needs.windows.result == 'success' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+          pattern: '{linux,flatpak,vfx,macos,windows}*'
+      - run: cd dist && sha256sum * > ../SHA256SUMS.staged.txt && cat ../SHA256SUMS.staged.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: staged-sums
+          path: SHA256SUMS.staged.txt
+          retention-days: 14

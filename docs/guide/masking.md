@@ -1,56 +1,62 @@
 # Masking
 
-A mask protects part of the model from change. Masked areas are drawn darker, and every brush, the Paint
-brush and colour fills leave them alone. This chapter covers painting masks with <kbd>Ctrl</kbd>, masking
-with a lasso or rectangle, the background gestures, and the **Tool > Masking** controls for inverting, blurring, growing and building masks
-from cavities, face groups or the mesh border.
-
 ![A mask painted on the lion's mane, with the Masking sub-palette](images/masking.jpg)
+
+> **In short:**
+> - A mask protects part of the model; brushes and paint leave it alone.
+> - Hold <kbd>Ctrl</kbd> to paint a mask, or pick a lasso or rectangle.
+> - **Tool > Masking** inverts, blurs, grows and builds masks from the surface.
+
+A mask protects part of the model from change. Masked areas are drawn darker (or in a colour you pick, see below), and every brush, the Paint
+brush and colour fills leave them alone. This chapter covers painting masks with <kbd>Ctrl</kbd>, masking
+with a lasso or rectangle, the background gestures, and the **Tool > Masking** panel for inverting, blurring, growing and building masks
+from cavities, peaks, face groups, vertex paint, the direction the surface faces or the mesh border.
 
 ## How masks work
 
 - A mask is a value per vertex from 0 (free) to 1 (fully masked). Values in between give partial protection,
   so a soft mask edge blends sculpting into the protected area.
 - Masks belong to a Part: each Part has its own mask.
-- Masks are saved in projects (`.sfproj`) and in `.GoZ` files, so they survive a round trip to ZBrush.
+- Masks are saved in projects (`.sfproj`) and in Bridge files, so they survive a round trip through the Bridge.
 - Masking is not a layer and isn't affected by sculpt layers: a mask stroke always works on the model itself.
 - Mask strokes and mask commands are undoable like any other change.
 
-To see the mask, keep **Mask** on in the right shelf (it is on by default; <kbd>Ctrl</kbd>+<kbd>H</kbd> toggles it,
-as ZBrush's View Mask). The same toggle is **Show mask** in **Tool > Masking**, and **Show Mask** in the **Render**
-palette. Turning it off hides the darkening without clearing the mask: it still protects the surface, the status
-bar says so, and turning it on again shows the same mask. **Clear Mask** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>)
-is what removes it.
+To see the mask, keep **Mask** on in the right shelf. The same toggle is **Show mask** in **Tool > Masking**, and
+**Show Mask** in the **View** menu.
+
+Turning it off hides the darkening without clearing the mask: it still protects the surface, the status bar says so,
+and turning it on again shows the same mask. **Clear Mask** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>) is what
+removes it.
+
+**Mask colour**: **Edit > Preferences > Interface > Mask colour** picks the colour masked areas show (the default is the
+model's own colours, darkened); **Mask darkness** there sets how much of it shows, and **Reset** goes back to the default.
 
 ## Paint a mask
 
 1. Hold <kbd>Ctrl</kbd> and drag on the model. The area under the brush becomes masked.
 2. Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd> and drag to erase the mask.
 
-Mask strokes use the current **Draw Size**, symmetry and, with a pen, pressure (when **Pressure > Strength**
+Mask strokes use the current **Size**, symmetry and, with a pen, pressure (when **Pressure > Strength**
 is on). How much each stroke masks is set by **Mask Strength** in **Tool > Masking** (0.01 to 1, default 1):
 lower values build up a soft, partial mask over several strokes. Mask strokes always use a round tip, whatever
 alpha you have selected, and a **Drag Stamp** stroke masks with dabs along the path instead of one stamp.
 
 On macOS, <kbd>Cmd</kbd> works wherever this guide says <kbd>Ctrl</kbd>.
 
-> **ZBrush:** this is ZBrush's Ctrl-masking with its MaskPen brush, the default. Mask Lasso and Mask Rectangle are
-> described next.
-
 ## Mask with a lasso or rectangle
 
-To mask a large or sharply outlined area in one go, pick a mask selection shape. As in ZBrush, holding
+To mask a large or sharply outlined area in one go, pick a mask selection shape. Holding
 <kbd>Ctrl</kbd> turns the brush on the left shelf into the mask brush: with <kbd>Ctrl</kbd> held, click the brush
-tile (or press <kbd>B</kbd>) to pick **Mask Pen**, **Mask Lasso** or **Mask Rectangle**, or click the stroke tile to pick
+tile (or press <kbd>B</kbd>) to pick **Mask Pen**, **Lasso Mask** or **Rectangle Mask**, or click the stroke tile to pick
 the stroke (**Dots**, **Lasso** or **Rect**). The same shapes sit at the top of **Tool > Masking**:
 
 | Shape | <kbd>Ctrl</kbd> + drag |
 |---|---|
 | **Mask Pen** (default) | Paints the mask with the brush, as described above. |
-| **Mask Lasso** | Draws a free-hand outline that closes back to where you started. Everything inside is masked. |
-| **Mask Rectangle** | Draws a rectangle. Everything inside is masked. |
+| **Lasso Mask** | Draws a free-hand outline that closes back to where you started. Everything inside is masked. |
+| **Rectangle Mask** | Draws a rectangle. Everything inside is masked. |
 
-With **Mask Lasso** or **Mask Rectangle**:
+With **Lasso Mask** or **Rectangle Mask**:
 
 1. Hold <kbd>Ctrl</kbd> and drag around the area. The drag can start on the model or on the background. The
    shape is drawn as you drag, white with a dark veil.
@@ -58,20 +64,19 @@ With **Mask Lasso** or **Mask Rectangle**:
    is drawn blue). You can press or release <kbd>Alt</kbd> while dragging; what counts is whether it is held when
    you let go.
 
-The selection works in screen space, like the visibility rectangle: a vertex counts as inside when it falls
-inside the shape as you see it, including vertices on the far side of the model. Hidden parts are left alone.
-With symmetry on (**X**, **Y**, **Z** on the top shelf), the mirror image of what's inside is masked too, as a
-mask stroke mirrors. A shape that covers none of the model clears the mask instead (as in ZBrush).
-**Mask Strength** sets how much a selection masks or unmasks, and each selection is one undo step. A lasso that
-crosses itself leaves out the areas it encloses twice.
+The selection works in screen space, like the visibility rectangle: a vertex counts as inside when it falls inside the
+shape as you see it, including vertices on the far side of the model. Hidden parts are left alone. With symmetry on
+(**X**, **Y**, **Z** on the top shelf), the mirror image of what's inside is masked too, as a mask stroke mirrors.
+
+A shape that covers none of the model clears the mask instead. **Mask Strength** sets how much a selection masks or
+unmasks, and each selection is one undo step. A lasso that crosses itself leaves out the areas it encloses twice.
+
+Turn on **Front faces only** (under the shape buttons, shown for Lasso Mask and Rectangle Mask) to mask only what
+faces you: the far side of the model and folds turned away from you are left as they are. It follows the mirror
+image too when symmetry is on.
 
 The cursor turns into a small cross while <kbd>Ctrl</kbd> is held, since the brush size doesn't matter for a
 selection.
-
-> **ZBrush:** these are ZBrush's MaskLasso and MaskRect brushes. Like ZBrush, the shape stays selected until you
-> pick another one, so switch back to **Mask Pen** to paint masks again. Holding <kbd>Ctrl</kbd> shows the mask
-> brush on the shelf and <kbd>Ctrl</kbd> with the Brush or Stroke picker picks it, as in ZBrush. MaskCurve is not
-> available yet.
 
 ## Background gestures
 
@@ -80,13 +85,10 @@ With <kbd>Ctrl</kbd> held, clicks and drags on the empty background act on the w
 | Gesture | Effect |
 |---|---|
 | <kbd>Ctrl</kbd> + click the background | Invert the mask |
-| <kbd>Ctrl</kbd> + drag on the background | Draw a mask rectangle (Mask Pen; Mask Lasso draws a lasso): what it covers is masked, mirrored by the symmetry. A shape that covers none of the model clears the mask. |
-| <kbd>Ctrl</kbd> + drag on the background, with nothing masked | Zoom the view in the SculptForge style (the default); with the ZBrush-style keys it draws the mask rectangle above (see [Keyboard and mouse](shortcuts.md#zbrush-style-keys)) |
+| <kbd>Ctrl</kbd> + drag on the background | Draw a mask rectangle (Mask Pen; Lasso Mask draws a lasso): what it covers is masked, mirrored by the symmetry. A shape that covers none of the model clears the mask. |
+| <kbd>Ctrl</kbd> + drag on the background, with nothing masked | Zoom the view in the SculptForge style (the default); with the Classic sculpting keys it draws the mask rectangle above (see [Keyboard and mouse](shortcuts.md#classic-sculpting-keys)) |
 
-> **ZBrush:** with DynaMesh on, ZBrush also remeshes when a <kbd>Ctrl</kbd> + drag on the background misses the
-> model. SculptForge doesn't: remesh with **Tool > Remesh** instead.
-
-On the model, a <kbd>Ctrl</kbd> + click that doesn't drag works on the mask's edges, as in ZBrush, whichever
+On the model, a <kbd>Ctrl</kbd> + click that doesn't drag works on the mask's edges, whichever
 mask shape is picked:
 
 | Gesture | Effect |
@@ -102,36 +104,63 @@ mask shape is picked:
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> | Clear Mask |
 | <kbd>Ctrl</kbd>+<kbd>I</kbd> | Invert Mask |
 | <kbd>Ctrl</kbd>+<kbd>H</kbd> | Show or hide the mask's shading (View Mask) |
-| <kbd>Ctrl</kbd>+<kbd>W</kbd> | Group Masked: the masked part becomes a new face group and the mask is cleared (see [Face Groups](face-groups.md)) |
+| <kbd>Ctrl</kbd>+<kbd>W</kbd> | Group from Mask: the masked part becomes a new face group and the mask is cleared (see [Face Groups](face-groups.md)) |
 
-A drag starts after the cursor moves a few pixels, so a slightly shaky click still inverts. With **Mask Lasso**
-or **Mask Rectangle**, a <kbd>Ctrl</kbd> + drag on the background draws that shape; to clear the mask, draw it away
+A drag starts after the cursor moves a few pixels, so a slightly shaky click still inverts. With **Lasso Mask**
+or **Rectangle Mask**, a <kbd>Ctrl</kbd> + drag on the background draws that shape; to clear the mask, draw it away
 from the model, or use **Clear**.
 
-## The Masking sub-palette
+## The Masking panel
 
-Open **Tool > Masking** (the Tool palette is in the right tray by default). Every button is one undo step.
+Open **Tool > Masking** (the Tool palette is in the right tray by default). It has three rows of buttons, each
+with a picture of what it does (the masked part dark, as in the viewport); hold <kbd>Ctrl</kbd> over a button for
+its hint. Every button is one undo step.
 
-| Control | What it does | Command |
+![Tool > Masking: Shapes, Mask by and Adjust](images/masking-panel.jpg)
+
+**Shapes**: what <kbd>Ctrl</kbd> + drag does.
+
+| Button | What it does | Command |
 |---|---|---|
-| **Show mask** | Darken masked areas in the viewport. | |
-| **Mask Pen** / **Mask Lasso** / **Mask Rectangle** | What <kbd>Ctrl</kbd> + drag does: paint with the brush, or mask inside a lasso or rectangle. | `mask_lasso` / `mask_rect` |
-| **Mask Strength** | How much each mask stroke or selection masks (0.01 to 1), and the mask value **By cavity** gives the deepest cavities. | |
-| **Clear** | Unmask everything. | `mask_clear` |
+| **Mask Pen** | Paint the mask with the brush; <kbd>Ctrl</kbd>+<kbd>Alt</kbd> erases. | |
+| **Lasso Mask** | Mask what is inside a free shape you draw. | `mask_lasso` |
+| **Rectangle Mask** | Mask what is inside a rectangle. | `mask_rect` |
+
+**Front faces only** (lasso and rectangle) masks only what faces you. **Mask Strength** is how much each stroke,
+shape or **Mask by** button masks (0.01 to 1).
+
+**Mask by**: build a whole mask at once. Each one replaces the current mask.
+
+| Button | What it masks | Command |
+|---|---|---|
+| **By cavity** | Concave areas: creases, folds, pores. | `mask_by_cavity` |
+| **By peaks** | Convex areas: ridges, peaks and sharp edges (the opposite of By cavity). | `mask_by_peaks` |
+| **By face group** | One face group (the number under **Mask by options**). | `mask_by_facegroup` |
+| **By colour** | Vertex paint close to the main colour (the left shelf's swatch); unpainted clay counts as white. | `mask_by_color` |
+| **By facing** | Surface that faces the camera (or up, or down) within an angle: the front of a face, the top of a rock. | `mask_by_facing` |
+| **By border** | The open edges of the mesh and the rings of edges inside them, so sculpting keeps the border in place. A closed mesh has no open edges, and the status bar says so. | `mask_border` |
+
+**Adjust**: change the mask there is.
+
+| Button | What it does | Command |
+|---|---|---|
+| **Grow** / **Shrink** | Expand or contract the masked region by one ring of edges per pass. | `mask_grow` / `mask_shrink` |
+| **Sharpen** / **Blur** | Tighten or soften the mask's edges. | `mask_sharpen` / `mask_blur` |
 | **Invert** | Masked becomes free and free becomes masked. | `mask_invert` |
+| **Clear** | Unmask everything. | `mask_clear` |
 | **All** | Mask every visible vertex. | `mask_all` |
-| **Blur** | Soften the mask edges by averaging with neighbouring vertices. | `mask_blur` |
-| **Sharpen** | Tighten soft edges, pushing values toward fully masked or free. | `mask_sharpen` |
-| **Grow** | Expand the masked region by one ring of edges per pass. | `mask_grow` |
-| **Shrink** | Contract the masked region by one ring of edges per pass. | `mask_shrink` |
-| **passes** | How many times Blur, Sharpen, Grow and Shrink run (1 to 20 here, default 1). | `iterations=` |
-| **By cavity** | Mask concave areas (creases, folds, pores), replacing the current mask. | `mask_by_cavity` |
-| **threshold** | How concave a spot must be for **By cavity** (-0.2 to 0.5, default 0.02). 0 masks anything concave; higher values keep only deep creases. | `threshold=` |
-| **By face group** | Mask one face group, replacing the current mask. The number field next to it is the face group id. | `mask_by_polygroup` |
-| **By border** | Mask the open edges of the mesh (edges with only one face) and the rings of edges inside them, replacing the current mask, so sculpting keeps the border in place. Uses **Mask Strength**. A closed mesh has no open edges, and the status bar says so. | `mask_border` |
-| **Rings** | How wide **By border** masks, in rings of edges from the border (1 to 20, default 2; 1 masks the border vertices only). | `rings=` |
-| **Face Group borders** | **By border** also masks where face groups meet (ZBrush: Mask by Polygroups border). | `polygroups=true` |
-| **Soft** | **By border** fades the mask from the border towards the innermost ring. | `soft=true` |
+
+**Passes** sets how many times Grow, Shrink, Sharpen and Blur run (1 to 20). **Mask by options** holds the rest:
+
+| Option | For | |
+|---|---|---|
+| **Cavity / peaks threshold** | How deep a crease (By cavity) or sharp a ridge (By peaks) must be (-0.2 to 0.5, default 0.02). 0 takes anything; higher keeps only the strongest. | `threshold=` |
+| **Face group** | The face group id By face group masks. | `group=` |
+| **Colour tolerance** | How different a colour may be and still count for By colour (0.01 to 1, default 0.15). | `tolerance=` |
+| **Faces the camera / up / down** and **Angle** | The direction By facing compares with, and how far the surface may turn from it (default 60 degrees). | `x= y= z= angle=` |
+| **Border rings** | How wide By border masks, in rings of edges (1 to 20, default 2). | `rings=` |
+| **Face Group borders** | By border also masks where face groups meet. | `facegroups=true` |
+| **Soft** | By border fades the mask from the border towards the innermost ring. | `soft=true` |
 
 Mask operations only change visible parts of the model; hidden parts keep their mask. **Clear** is the
 exception and frees everything.
@@ -162,8 +191,8 @@ The quickest way works without knowing the group's number:
 3. <kbd>Ctrl</kbd>+<kbd>Shift</kbd> + click the background to show everything again. The mask stays.
 
 **By face group** masks a group by its id. The viewport doesn't show ids, but the console does: isolate the
-group, then open the console (<kbd>`</kbd>) and read the `isolate_polygroup group=N` line. Enter that number in
-the field next to **By face group** and click it.
+group, then open the console (<kbd>`</kbd>) and read the `isolate_face group group=N` line. Enter that number in
+**Mask by options > Face group** and click **By face group**.
 
 ### Sculpt without breaking the border
 
@@ -199,8 +228,8 @@ you can mask an area and fill the rest with a colour. See [Vertex Paint and mate
 | `mask_clear`, `mask_all`, `mask_invert` | |
 | `mask_blur`, `mask_sharpen`, `mask_grow`, `mask_shrink` | `iterations` (1-100, default 1) |
 | `mask_by_cavity` | `strength` (0-1, default 1), `threshold` (-1 to 1, default 0.02) |
-| `mask_by_polygroup` | `group` (required), `add=true` to add to the current mask instead of replacing it |
-| `mask_border` | `rings` (1-20, default 1), `polygroups=true` to also mask face group borders, `soft=true` to fade inwards, `strength` (0-1, default 1), `add=true` to add to the current mask |
+| `mask_by_facegroup` | `group` (required), `add=true` to add to the current mask instead of replacing it |
+| `mask_border` | `rings` (1-20, default 1), `facegroups=true` to also mask face group borders, `soft=true` to fade inwards, `strength` (0-1, default 1), `add=true` to add to the current mask |
 | `mask_rect` | `x0 y0 x1 y1` (-1 to 1, y up), `unmask`, `strength` (0-1, default 1), optional `view_proj` matrix; without a view the rectangle spans the mesh seen from the front |
 | `mask_lasso` | `points` (required): the outline as `"x0 y0 x1 y1 ..."`, at least 3 points in the same -1 to 1 space; `unmask`, `strength`, `view_proj` as for `mask_rect` |
 

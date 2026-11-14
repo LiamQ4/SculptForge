@@ -6,12 +6,12 @@
 # Blender meshes.
 #
 # The two programs share a per-user folder (docs/blender.md):
-#   <root>/to_sculptforge/manifest.json + r<rev>_<k>.GoZ   written here
-#   <root>/to_blender/manifest.json     + r<rev>_<k>.GoZ   written by SculptForge
+#   <root>/to_sculptforge/manifest.json + r<rev>_<k>.<ext>   written here
+#   <root>/to_blender/manifest.json     + r<rev>_<k>.<ext>   written by SculptForge
 #   <root>/app.json    where SculptForge is installed (it writes this when it starts)
 #   <root>/alive.json  SculptForge's heartbeat (pid, time), rewritten every 2 s while it runs
-# Meshes travel as ZBrush .GoZ files, which SculptForge reads and writes already. The .GoZ layout and
-# the axis convention follow GoB (github.com/JoseConseco/GoB, GPL), the Blender GoZ add-on by Daniel
+# Meshes travel as Bridge files, which SculptForge reads and writes already. The Bridge layout and
+# the axis convention follow GoB (github.com/JoseConseco/GoB, GPL), the Blender Bridge add-on by Daniel
 # Grauer, JoseConseco and contributors: many thanks to them.
 
 import glob
@@ -83,7 +83,7 @@ def read_manifest(folder):
         raise ValueError("Not a SculptForge bridge manifest")
     if data.get("version", 1) > VERSION:
         raise ValueError("The manifest is from a newer SculptForge; update the add-on")
-    for obj in data.get("objects", []):
+    for obj in data.get("objects", []) + data.get("splats", []):
         name = obj.get("file", "")
         if not name or os.path.basename(name) != name or name in (".", ".."):
             raise ValueError("The manifest names a bad file: %r" % name)
@@ -105,9 +105,11 @@ def _write_atomically(path, data):
     os.replace(tmp, path)
 
 
-def write_manifest(folder, objects, sender_version=""):
+def write_manifest(folder, objects, sender_version="", splats=None):
     """Writes manifest.json for `objects` (dicts with name, file and optionally matrix_world as 4 rows) with
-    the next revision, then removes the files of earlier sends. Returns the revision."""
+    the next revision, then removes the files of earlier sends. `splats`: the same for Gaussian splat objects
+    (PLY files), in their own key so that older readers skip them. Returns the revision."""
+    splats = splats or []
     os.makedirs(folder, exist_ok=True)
     rev = max(revision(folder), 0) + 1
     manifest = {
@@ -119,8 +121,10 @@ def write_manifest(folder, objects, sender_version=""):
         "time": time.time(),
         "objects": objects,
     }
+    if splats:
+        manifest["splats"] = splats
     _write_atomically(manifest_path(folder), json.dumps(manifest, indent=2).encode("utf-8"))
-    keep = {o["file"] for o in objects}
+    keep = {o["file"] for o in objects + splats}
     for path in glob.glob(os.path.join(folder, "r*_*")):
         if os.path.basename(path) not in keep and not os.path.basename(path).startswith("r%d_" % rev):
             try:
@@ -136,17 +140,17 @@ def next_file_prefix(folder):
 
 
 # --------------------------------------------------------------------------------------------------
-# Axes: Blender is Z-up, ZBrush (GoZ) Y-down. GoB maps GoZ (x, y, z) to Blender (x, z, -y).
-# SculptForge reads GoZ as Y-up (x, -y, -z), so Blender (x, y, z) arrives as (x, z, -y): metres both.
+# Axes: Blender is Z-up, Bridge files Y-down. GoB maps Bridge (x, y, z) to Blender (x, z, -y).
+# SculptForge reads Bridge as Y-up (x, -y, -z), so Blender (x, y, z) arrives as (x, z, -y): metres both.
 # --------------------------------------------------------------------------------------------------
 
 
-def blender_to_goz(co):
+def blender_to_bridge(co):
     co = np.asarray(co, dtype=np.float64).reshape(-1, 3)
     return np.stack([co[:, 0], -co[:, 2], co[:, 1]], axis=1)
 
 
-def goz_to_blender(co):
+def bridge_to_blender(co):
     co = np.asarray(co, dtype=np.float64).reshape(-1, 3)
     return np.stack([co[:, 0], co[:, 2], -co[:, 1]], axis=1)
 
@@ -158,12 +162,12 @@ def transform_points(matrix, co):
 
 
 # --------------------------------------------------------------------------------------------------
-# Faces: Blender polygons -> GoZ faces (triangles and quads; n-gons as triangle fans)
+# Faces: Blender polygons -> Bridge faces (triangles and quads; n-gons as triangle fans)
 # --------------------------------------------------------------------------------------------------
 
 
 def polygon_corners(loop_start, loop_total, mirrored=False):
-    """GoZ faces for Blender polygons, as loop indices.
+    """Bridge faces for Blender polygons, as loop indices.
 
     Returns (loops, face_polygon): loops is (F, 4) with -1 in the 4th column of triangles, face_polygon (F,)
     the polygon each face comes from. Triangles and quads stay as they are; an n-gon becomes the fan
@@ -197,7 +201,7 @@ def faces_from_loops(loops, loop_vertex):
 
 
 def reverse_faces(faces, corner_data=None):
-    """Reverses the winding of GoZ faces (a, b, c, d) -> (a, d, c, b), (a, b, c) -> (a, c, b), and the same
+    """Reverses the winding of Bridge faces (a, b, c, d) -> (a, d, c, b), (a, b, c) -> (a, c, b), and the same
     for per-corner data (F, 4, ...)."""
     faces = np.asarray(faces)
     quad = faces[:, 3] != NO_INDEX
@@ -242,7 +246,7 @@ def corner_map(sent_faces, received_faces):
 
 
 # --------------------------------------------------------------------------------------------------
-# .GoZ files (docs/goz.md)
+# Bridge files (docs/bridge-format.md)
 # --------------------------------------------------------------------------------------------------
 
 TAG_MESH_NAME = 0x1389
@@ -250,13 +254,16 @@ TAG_VERTICES = 0x2711
 TAG_FACES = 0x4E21
 TAG_UVS = 0x61A9
 TAG_MASK = 0x7532
-TAG_POLYPAINT = 0x88B9
-TAG_POLYGROUPS = 0x9C41
-HEADER = b"GoZb 1.0 ZBrush GoZ Binary" + b"." * 6
+TAG_VERTEXPAINT = 0x88B9
+TAG_FACEGROUPS = 0x9C41
+try:
+    from .bridge_protocol import EXT, HEADER, MAGIC, NAME_PREFIX
+except ImportError:  # imported alone (tests/blender/test_exchange.py), not as the add-on package
+    from bridge_protocol import EXT, HEADER, MAGIC, NAME_PREFIX
 
 
-def goz_name(name):
-    """GoZ object names: ASCII letters, digits, '_' and '-' (GoB's escaping); the manifest keeps the real name."""
+def bridge_name(name):
+    """Bridge file object names: ASCII letters, digits, '_' and '-' (GoB's escaping); the manifest keeps the real name."""
     out = ""
     for ch in name:
         if ch.isascii() and (ch.isalnum() or ch in "_-"):
@@ -271,44 +278,44 @@ def _section(tag, payload, count):
     return struct.pack("<IIQ", tag, len(payload) + 16, count) + payload
 
 
-def write_goz(path, name, positions, faces, uvs=None, colors=None, mask=None, groups=None):
-    """Writes a .GoZ file.
+def write_bridge(path, name, positions, faces, uvs=None, colors=None, mask=None, groups=None):
+    """Writes a Bridge file.
 
     positions (N, 3) Blender coordinates; faces (F, 4) vertex indices with NO_INDEX as the 4th of
     triangles; uvs (F, 4, 2) per face corner (V up, as Blender has it); colors (N, 3) sRGB 0..1; mask (N,)
-    0 = free, 1 = masked; groups (F,) polygroup ids (0..65535).
+    0 = free, 1 = masked; groups (F,) facegroup ids (0..65535).
     """
-    name = goz_name(name).encode("ascii")
-    pos = blender_to_goz(positions).astype("<f4")
+    name = bridge_name(name).encode("ascii")
+    pos = blender_to_bridge(positions).astype("<f4")
     faces = np.ascontiguousarray(faces, dtype="<u4").reshape(-1, 4)
-    parts = [HEADER, struct.pack("<IIQ", 1, len(name) + 24, 1), b"GoZMesh_", name,
+    parts = [HEADER, struct.pack("<IIQ", 1, len(name) + 24, 1), NAME_PREFIX, name,
              struct.pack("<IIQI", TAG_MESH_NAME, 20, 1, 0),
              _section(TAG_VERTICES, pos.tobytes(), len(pos)),
              _section(TAG_FACES, faces.tobytes(), len(faces))]
     if uvs is not None:
         uv = np.array(uvs, dtype="<f4").reshape(-1, 4, 2)
-        uv[:, :, 1] = 1.0 - uv[:, :, 1]  # GoZ stores V downwards
+        uv[:, :, 1] = 1.0 - uv[:, :, 1]  # Bridge stores V downwards
         uv[faces[:, 3] == NO_INDEX, 3] = (0.0, 1.0)  # GoB's padding for triangles
         parts.append(_section(TAG_UVS, uv.tobytes(), len(faces)))
     if colors is not None:
         c = np.clip(np.asarray(colors, dtype=np.float64).reshape(-1, 3), 0.0, 1.0)
         bgra = np.zeros((len(c), 4), dtype=np.uint8)
         bgra[:, :3] = np.floor(c[:, ::-1] * 255.0 + 0.5).astype(np.uint8)
-        parts.append(_section(TAG_POLYPAINT, bgra.tobytes(), len(c)))
+        parts.append(_section(TAG_VERTEXPAINT, bgra.tobytes(), len(c)))
     if mask is not None:
         m = np.clip(np.asarray(mask, dtype=np.float64), 0.0, 1.0)
         parts.append(_section(TAG_MASK, np.floor((1.0 - m) * 65535.0 + 0.5).astype("<u2").tobytes(), len(m)))
     if groups is not None:
         g = np.asarray(groups, dtype=np.int64)
-        if len(g) and (g.min() < 0 or g.max() > 0xFFFF):  # GoZ groups are 16-bit: renumber 0, 1, 2...
+        if len(g) and (g.min() < 0 or g.max() > 0xFFFF):  # Bridge groups are 16-bit: renumber 0, 1, 2...
             g = np.unique(g, return_inverse=True)[1] & 0xFFFF
-        parts.append(_section(TAG_POLYGROUPS, g.astype("<u2").tobytes(), len(g)))
+        parts.append(_section(TAG_FACEGROUPS, g.astype("<u2").tobytes(), len(g)))
     parts.append(b"\0" * 16)
     _write_atomically(path, b"".join(parts))
 
 
-class GozMesh:
-    """A .GoZ file read into Blender coordinates (see write_goz for the arrays)."""
+class BridgeMesh:
+    """A Bridge file read into Blender coordinates (see write_bridge for the arrays)."""
 
     def __init__(self):
         self.name = ""
@@ -320,12 +327,12 @@ class GozMesh:
         self.groups = None
 
 
-def read_goz(path):
+def read_bridge(path):
     with open(path, "rb") as f:
         data = f.read()
-    if len(data) < 40 or data[:4] != b"GoZb":
-        raise ValueError("Not a GoZ file: %s" % path)
-    out = GozMesh()
+    if len(data) < 40 or data[:4] != MAGIC:
+        raise ValueError("Not a Bridge file: %s" % path)
+    out = BridgeMesh()
     (name_len,) = struct.unpack_from("<I", data, 36)
     if name_len >= 24 and 32 + name_len <= len(data):
         out.name = data[56:32 + name_len].decode("ascii", "replace")
@@ -346,27 +353,27 @@ def read_goz(path):
 
         if tag == TAG_VERTICES:
             v = np.frombuffer(payload, dtype="<f4", count=records(12) * 3).reshape(-1, 3)
-            out.positions = goz_to_blender(v)
+            out.positions = bridge_to_blender(v)
         elif tag == TAG_FACES:
             out.faces = np.frombuffer(payload, dtype="<u4", count=records(16) * 4).reshape(-1, 4).copy()
         elif tag == TAG_UVS:
             uv = np.frombuffer(payload, dtype="<f4", count=records(32) * 8).reshape(-1, 4, 2).astype(np.float64)
             uv[:, :, 1] = 1.0 - uv[:, :, 1]
             out.uvs = uv
-        elif tag == TAG_POLYPAINT:
+        elif tag == TAG_VERTEXPAINT:
             c = np.frombuffer(payload, dtype=np.uint8, count=records(4) * 4).reshape(-1, 4)
             out.colors = c[:, 2::-1].astype(np.float64) / 255.0
         elif tag == TAG_MASK:
             out.mask = 1.0 - np.frombuffer(payload, dtype="<u2", count=records(2)).astype(np.float64) / 65535.0
-        elif tag == TAG_POLYGROUPS:
+        elif tag == TAG_FACEGROUPS:
             out.groups = np.frombuffer(payload, dtype="<u2", count=records(2)).astype(np.int64)
     nv, nf = len(out.positions), len(out.faces)
     if nv == 0 or nf == 0:
-        raise ValueError("GoZ file has no %s: %s" % ("vertices" if nv == 0 else "faces", path))
+        raise ValueError("Bridge file has no %s: %s" % ("vertices" if nv == 0 else "faces", path))
     quad = out.faces[:, 3] != NO_INDEX
     corners = np.where(quad[:, None], out.faces, np.where(np.arange(4) < 3, out.faces, 0))
     if corners.max() >= nv:
-        raise ValueError("GoZ file has faces with bad vertex indices: %s" % path)
+        raise ValueError("Bridge file has faces with bad vertex indices: %s" % path)
     if out.uvs is not None and len(out.uvs) != nf:
         out.uvs = None
     if out.colors is not None and len(out.colors) != nv:
@@ -381,7 +388,7 @@ def read_goz(path):
 def read_shapes(path):
     """A SculptForge blend shapes file (an object's sculpt layers, e.g. the 52 ARKit facial shapes): a list of
     (name, weight, indices, offsets) with offsets (N, 3) in Blender's axes, world space, and the vertex count.
-    The object's .GoZ then holds the base shape (every layer at zero)."""
+    The object's Bridge file then holds the base shape (every layer at zero)."""
     with open(path, "rb") as f:
         data = f.read()
     if len(data) < 20 or data[:8] != b"SFSHAPES":

@@ -168,7 +168,7 @@ struct Baker {
                 if (out[size_t(MeshMapKind::WorldNormal)])
                     for (int c = 0; c < 3; ++c) put8(MeshMapKind::WorldNormal, c, nrm[c] * 0.5f + 0.5f);
                 if (out[size_t(MeshMapKind::Id)]) {
-                    const glm::vec3 col = idMapColor(mesh.polygroupAt(t) * 2654435761u + 1u);
+                    const glm::vec3 col = idMapColor(mesh.facegroupAt(t) * 2654435761u + 1u);
                     for (int c = 0; c < 3; ++c) put8(MeshMapKind::Id, c, col[c]);
                 }
             }
@@ -218,7 +218,7 @@ bool parseMeshMap(const std::string& text, MeshMapKind& out) {
         if (!std::isspace(static_cast<unsigned char>(c))) s += char(std::tolower(static_cast<unsigned char>(c)));
     if (s == "occlusion" || s == "ambient_occlusion") s = "ao";
     if (s == "normal" || s == "worldnormal" || s == "object_normal") s = "world_normal";
-    if (s == "polygroups" || s == "polygroup") s = "id";
+    if (s == "facegroups" || s == "facegroup") s = "id";
     for (int i = 0; i < kMeshMapCount; ++i)
         if (s == meshMapId(MeshMapKind(i))) {
             out = MeshMapKind(i);
@@ -333,7 +333,7 @@ bool bakeMeshMaps(const Mesh& mesh, int width, int height, uint32_t kinds, const
                   std::string& error, const BakeProgress& progress) {
     const auto start = Clock::now();
     if (mesh.triangleCount() == 0 || mesh.uvs.size() != mesh.triangleCount() * 3) {
-        error = "The Part has no UVs: run Auto UV (Tool > Texture Map) first";
+        error = "The Part has no UVs: run Auto UV (Tool > Texture Image) first";
         return false;
     }
     if (width < 64 || height < 64 || width > 16384 || height > 16384) {
@@ -494,7 +494,7 @@ bool prepareMeshMapUpdate(const Mesh& mesh, const std::shared_ptr<const MeshMapS
         localTri[t] = uint32_t(L.triangles.size());
         L.triangles.push_back(lt);
         for (int c = 0; c < 3; ++c) L.uvs.push_back(mesh.uvs[size_t(t) * 3 + size_t(c)]);
-        if (mesh.hasPolygroups()) L.polygroups.push_back(mesh.polygroups[t]);
+        if (mesh.hasFaceGroups()) L.facegroups.push_back(mesh.facegroups[t]);
     }
     // The tiles the baked triangles reach, and their texel maps in local triangles (others keep their values).
     const int tilesX = (set->width + kTextureTile - 1) / kTextureTile;
@@ -604,7 +604,7 @@ void registerMeshMapCommands(CommandRegistry& reg) {
     using T = ParamSpec::Type;
     reg.add({"mesh_maps",
              "Mesh Maps of the active Part, on its texture's UVs at the texture's size, for Fill layers: ambient "
-             "occlusion, curvature, thickness, position, world normal and ID (polygroups). bake makes them, info "
+             "occlusion, curvature, thickness, position, world normal and ID (facegroups). bake makes them, info "
              "describes them, clear drops them, live=true re-bakes the changed tiles after sculpting (in the app). "
              "Derived data: not saved, not an undo step.",
              {{"action", T::String, "bake (default), info, clear, or live (with live=true/false).", false},
@@ -617,7 +617,7 @@ void registerMeshMapCommands(CommandRegistry& reg) {
               {"live", T::Bool, "Re-bake changed tiles after sculpting (default true).", false}},
              [](Document& doc, const Args& a) -> CommandResult {
                  Mesh& m = doc.mesh;
-                 if (!hasTexture(m)) return {false, "The Part has no texture: Tool > Texture Map > New Texture"};
+                 if (!hasTexture(m)) return {false, "The Part has no texture: Tool > Texture Image > New Texture"};
                  const std::string action = argString(a, "action", "bake");
                  PaintTexture& tex = *m.texture;
                  if (action == "info") return {true, tex.meshMaps ? describeMeshMaps(*tex.meshMaps) : std::string("No Mesh Maps")};

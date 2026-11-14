@@ -9,16 +9,16 @@ void App::drawMhMaskManager() {
     if (!showMhMaskManager_) return;
     ImGui::SetNextWindowSize(ImVec2(390*uiScale_,0),ImGuiCond_FirstUseEver);
     if (ImGui::Begin("CRKW MH Mask Manager",&showMhMaskManager_,ImGuiWindowFlags_AlwaysAutoResize)) {
-        const auto role=doc_.activeSubtoolInfo().crkwMetaHuman["role"].asString();
+        const auto role=doc_.activePartInfo().crkwMetaHuman["role"].asString();
         const bool valid=(role=="head"||role=="full")&&doc_.mesh.hasUvs();
-        ImGui::TextUnformatted(doc_.activeSubtoolInfo().name.c_str());
+        ImGui::TextUnformatted(doc_.activePartInfo().name.c_str());
         if (!valid) {
-            ImGui::TextWrapped("Select a native MetaHuman head or full-body SubTool with its primary UVs.");
+            ImGui::TextWrapped("Select a native MetaHuman head or full-body Part with its primary UVs.");
             if (ImGui::Button("Select head##mhmask.head",ImVec2(-1,0))) {
-                for (int i=0;i<doc_.subtoolCount();++i) {
-                    const auto& ref=doc_.subtools[size_t(i)].crkwMetaHuman;
+                for (int i=0;i<doc_.partCount();++i) {
+                    const auto& ref=doc_.parts[size_t(i)].crkwMetaHuman;
                     if (ref["role"].asString()=="head"||ref["role"].asString()=="full") {
-                        runCommand("subtool_select",{{"index",double(i)}});break;
+                        runCommand("part_select",{{"index",double(i)}});break;
                     }
                 }
             }

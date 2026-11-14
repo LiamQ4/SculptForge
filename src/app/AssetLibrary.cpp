@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "app/AssetLibrary.h"
 
+#include "core/LegacyNames.h"
+#include "io/BridgeProtocol.h"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -89,7 +92,7 @@ const char* libraryTabFolder(LibraryTab tab) {
     case LibraryTab::Alpha:
         return "Alphas";
     case LibraryTab::Material:
-        return "MatCaps"; // custom MatCap images, loaded at start-up (core/Matcap.h)
+        return "Lit Spheres"; // custom lit-sphere images, loaded at start-up (core/Lit Sphere.h)
     case LibraryTab::Image:
         return "Images";
     case LibraryTab::Splats:
@@ -102,7 +105,7 @@ const char* libraryTabFolder(LibraryTab tab) {
 }
 
 bool isMeshFile(const std::string& path) {
-    return anyOf(lowerExt(path), {".obj", ".glb", ".gltf", ".fbx", ".stl", ".ply", ".usda", ".usdz", ".usd", ".goz"});
+    return anyOf(lowerExt(path), {".obj", ".glb", ".gltf", ".fbx", ".stl", ".ply", ".usda", ".usdz", ".usd", bridgefile::kExtLower});
 }
 bool isSplatFile(const std::string& path) { return anyOf(lowerExt(path), {".ply", ".splat"}); }
 bool isImageFile(const std::string& path) {
@@ -110,6 +113,26 @@ bool isImageFile(const std::string& path) {
 }
 bool isBrushFile(const std::string& path) { return lowerExt(path) == ".sfbrush"; }
 bool isProjectFile(const std::string& path) { return lowerExt(path) == ".sfproj"; }
+
+std::string pathKey(const std::string& path, bool windowsRules) {
+    std::string s = path;
+    if (windowsRules) std::replace(s.begin(), s.end(), '\\', '/');
+    const std::u8string g = fsPath(s).lexically_normal().generic_u8string();
+    s.assign(g.begin(), g.end());
+    if (windowsRules) {
+        std::replace(s.begin(), s.end(), '\\', '/');
+        for (char& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+    }
+    std::string out; // doubled separators once, no trailing one (but keep a root "/")
+    for (char c : s)
+        if (c != '/' || out.empty() || out.back() != '/') out += c;
+    while (out.size() > 1 && out.back() == '/') out.pop_back();
+    return out;
+}
+
+bool samePath(const std::string& a, const std::string& b, bool windowsRules) {
+    return a == b || pathKey(a, windowsRules) == pathKey(b, windowsRules);
+}
 
 AssetKind fileKindForTab(LibraryTab tab, const std::string& path) {
     switch (tab) {
@@ -166,6 +189,16 @@ bool ensureUserLibrary(const std::string& root, std::string& error) {
         return false;
     }
     std::error_code ec;
+    // A library from an older version: move its Lit Spheres folder over.
+    for (fs::directory_iterator it(fsPath(root), ec), end; !ec && it != end; it.increment(ec)) {
+        const std::string name = utf8(it->path().filename());
+        if (legacy::modernize(name) != "LitSpheres" || !it->is_directory(ec)) continue;
+        const fs::path to = fsPath(root) / "Lit Spheres";
+        std::error_code mv;
+        if (!fs::exists(to, mv)) fs::rename(it->path(), to, mv);
+        break;
+    }
+    ec.clear();
     for (int i = 0; i < int(LibraryTab::Count); ++i) {
         const char* sub = libraryTabFolder(LibraryTab(i));
         if (!*sub) continue;
@@ -319,13 +352,12 @@ std::string typedName(const std::string& name) {
     return out;
 }
 
-std::string typedZBrushAlias(const std::string& typed) {
-    // The brushes SculptForge names its own way, under the names ZBrush users type for them.
-    static const std::pair<const char*, const char*> kAliases[] = {
-        {"sharpcrease", "damstandard"}, {"clayblock", "claybuildup"}, {"tendril", "snakehook"},
-        {"elastictendril", "kelvinsnake"}};
-    for (const auto& [name, alias] : kAliases)
-        if (typed == name) return alias;
+std::string typedClassicKeys(const std::string& typed) {
+    // The two classic pop-up letters for the brushes whose names don't start with them (B D S picks Sharp Crease).
+    static const std::pair<const char*, const char*> kKeys[] = {
+        {"sharpcrease", "ds"}, {"clayblock", "cb"}, {"tendril", "sh"}, {"elastictendril", "ks"}};
+    for (const auto& [name, keys] : kKeys)
+        if (typed == name) return keys;
     return {};
 }
 
@@ -333,7 +365,7 @@ namespace {
 bool typedStarts(const std::string& name, const std::string& typed) {
     const std::string n = typedName(name);
     if (n.rfind(typed, 0) == 0) return true;
-    const std::string alias = typedZBrushAlias(n);
+    const std::string alias = typedClassicKeys(n);
     return !alias.empty() && alias.rfind(typed, 0) == 0;
 }
 } // namespace
@@ -360,22 +392,21 @@ std::vector<std::pair<char, size_t>> letterBadges(const std::vector<std::string>
     auto has = [&](size_t i) {
         return std::any_of(badges.begin(), badges.end(), [i](const auto& b) { return b.second == i; });
     };
-    // ZBrush's keys for the brushes both apps have (B S T Standard, B C B for Clay Block, ZBrush's ClayBuildup ...)
-    // come first, so the hands that know ZBrush pick the same brush.
-    static const std::pair<const char*, const char*> kZBrushKeys[] = {
-        {"standard", "st"}, {"smooth", "sm"}, {"snakehook", "sh"}, {"claybuildup", "cb"}, {"clay", "cl"},
-        {"damstandard", "ds"}, {"move", "mv"}, {"inflate", "in"}, {"pinch", "pi"}, {"flatten", "fl"},
+    // The classic letters (B S T Standard, B C B Clay Block ...) come first, so practised hands pick the same brush.
+    static const std::pair<const char*, const char*> kClassicKeys[] = {
+        {"standard", "st"}, {"smooth", "sm"}, {"tendril", "sh"}, {"clayblock", "cb"}, {"clay", "cl"},
+        {"sharpcrease", "ds"}, {"move", "mv"}, {"inflate", "in"}, {"pinch", "pi"}, {"flatten", "fl"},
         {"trim", "td"}, {"layer", "ly"}, {"nudge", "nu"}, {"crease", "cr"}};
     if (typed.size() == 1)
         for (size_t i : kept) {
-            const std::string n = typedName(names[i]), alias = typedZBrushAlias(n);
-            for (const auto& [name, keys] : kZBrushKeys)
-                if ((n == name || alias == name) && keys[0] == typed[0] && !taken(keys[1]) && !has(i)) badges.emplace_back(keys[1], i);
+            const std::string n = typedName(names[i]);
+            for (const auto& [name, keys] : kClassicKeys)
+                if (n == name && keys[0] == typed[0] && !taken(keys[1]) && !has(i)) badges.emplace_back(keys[1], i);
         }
     for (size_t i : kept) {
         if (has(i)) continue;
         std::string n = typedName(names[i]);
-        if (n.rfind(typed, 0) != 0) n = typedZBrushAlias(n); // typed by its ZBrush name
+        if (n.rfind(typed, 0) != 0) n = typedClassicKeys(n); // typed by its classic letters
         if (n.rfind(typed, 0) != 0) continue;
         for (size_t k = typed.size(); k < n.size(); ++k)
             if (std::isalpha(static_cast<unsigned char>(n[k])) && !taken(n[k])) {

@@ -1,15 +1,15 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Transforms (core/MeshTransform.h, the Gizmo 3D and the `transform` command): exact results, masked parts with a
-// smooth falloff, sculpt layers, symmetry, All SubTools, attributes left alone and bit-for-bit undo.
+// Transforms (core/MeshTransform.h, the Transform gizmo and the `transform` command): exact results, masked parts with a
+// smooth falloff, sculpt layers, symmetry, All Parts, attributes left alone and bit-for-bit undo.
 #include "TestHarness.h"
 
 #include "core/Commands.h"
 #include "core/MeshTransform.h"
 #include "core/Primitives.h"
 #include "core/Project.h"
-#include "core/SubTools.h"
+#include "core/Parts.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -60,11 +60,24 @@ Mesh makeArm(int subdivisions = 4) {
 TEST(transform_translate_is_exact) {
     Document d = makeDoc(makeIcosphere(3));
     const auto before = d.mesh.positions;
-    CHECK(run(d, "transform", {{"translate", std::string("0.25,-1,3")}}).ok);
+    const CommandResult moved = run(d, "transform", {{"translate", std::string("0.25,-1,3")}});
+    CHECK(moved.ok);
+    CHECK(moved.message == "Moved " + vertexCountText(before.size())); // a plain sentence, no raw pivot floats
     bool exact = true;
     for (size_t v = 0; v < before.size(); ++v) exact = exact && d.mesh.positions[v] == before[v] + glm::vec3(0.25f, -1.0f, 3.0f);
     CHECK(exact);
     CHECK(d.undo.canUndo());
+}
+
+TEST(transform_status_counts_read_as_text) {
+    CHECK(vertexCountText(1) == "1 vertex");
+    CHECK(vertexCountText(642) == "642 vertices");
+    CHECK(vertexCountText(2562) == "2,562 vertices");
+    CHECK(vertexCountText(1234567) == "1,234,567 vertices");
+    Document d = makeDoc(makeIcosphere(3));
+    CHECK(run(d, "transform", {{"rotate", std::string("0,90,0")}}).message.rfind("Turned ", 0) == 0);
+    CHECK(run(d, "transform", {{"scale", 2.0}}).message.rfind("Scaled ", 0) == 0);
+    CHECK(run(d, "transform", {{"scale", 0.5}, {"translate", std::string("1,0,0")}}).message.rfind("Transformed ", 0) == 0);
 }
 
 TEST(transform_matches_the_formula) {
@@ -237,6 +250,105 @@ TEST(transform_sculpt_layers_move_with_the_surface) {
     CHECK(sameBits(m.layers[0].delta, delta));
 }
 
+// GitHub #133: with a sculpt layer active, Move / Scale / Rotate record into that layer like a stroke (masked or
+// not): the base and other layers stay, the layer's weight dials the move in and out, undo restores it.
+TEST(transform_records_into_the_active_layer) {
+    Document d = makeDoc(makeArm());
+    Mesh& m = d.mesh;
+    CHECK(run(d, "layer_add", {{"name", std::string("Other")}}).ok);
+    for (uint32_t v = 0; v < m.vertexCount(); ++v) m.layers[0].delta[v] = m.normals[v] * 0.05f;
+    m.setLayerWeight(0, 0.5f);
+    CHECK(run(d, "layer_add", {{"name", std::string("Pose")}}).ok);
+    CHECK(d.activeLayer == 1);
+    const auto pos = m.positions, base = m.base, other = m.layers[0].delta;
+
+    // Unmasked rotate: the whole Part turns, all of it in the active layer.
+    CHECK(run(d, "transform", {{"rotate", std::string("0,0,90")}, {"pivot", std::string("origin")}}).ok);
+    auto rot = [](const glm::vec3& p) { return glm::vec3(-p.y, p.x, p.z); };
+    float err = 0.0f;
+    for (size_t v = 0; v < pos.size(); ++v) err = std::max(err, glm::length(m.positions[v] - rot(pos[v])));
+    CHECK(err < 1e-5f);
+    CHECK(sameBits(m.base, base));
+    CHECK(sameBits(m.layers[0].delta, other));
+    m.setLayerWeight(1, 0.0f); // the layer off: the shape as before
+    CHECK(maxDistance(m.positions, pos) < 1e-5f);
+    m.setLayerWeight(1, 0.5f); // half: halfway along each vertex's move
+    err = 0.0f;
+    for (size_t v = 0; v < pos.size(); ++v) err = std::max(err, glm::length(m.positions[v] - glm::mix(pos[v], rot(pos[v]), 0.5f)));
+    CHECK(err < 1e-5f);
+    m.setLayerWeight(1, 1.0f);
+    CHECK(run(d, "undo").ok);
+    CHECK(maxDistance(m.positions, pos) < 1e-6f);
+    for (const glm::vec3& o : m.layers[1].delta) CHECK(o == glm::vec3(0.0f));
+
+    // Masked (the issue: mask, invert, move): only the unmasked part moves, into the layer, at the layer's weight.
+    maskBelowX(m, 0.0f);
+    m.setLayerWeight(1, 0.25f);
+    const auto pos2 = m.positions;
+    CHECK(run(d, "transform", {{"translate", std::string("0,1,0")}}).ok);
+    bool still = true, full = true;
+    for (size_t v = 0; v < pos2.size(); ++v) {
+        if (m.mask[v] >= 1.0f) still = still && m.positions[v] == pos2[v];
+        else full = full && glm::length(m.positions[v] - (pos2[v] + glm::vec3(0, 1, 0))) < 1e-5f;
+    }
+    CHECK(still);
+    CHECK(full);
+    CHECK(sameBits(m.base, base));
+    m.setLayerWeight(1, 0.0f);
+    float e2 = 0.0f; // the layer off: base + the other layer at 0.5
+    for (size_t v = 0; v < base.size(); ++v) e2 = std::max(e2, glm::length(m.positions[v] - (base[v] + 0.5f * other[v])));
+    CHECK(e2 < 1e-5f);
+    m.setLayerWeight(1, 0.25f);
+    CHECK(run(d, "undo").ok);
+    CHECK(maxDistance(m.positions, pos2) < 1e-6f);
+
+    // Weight 0: refused, like a stroke.
+    m.setLayerWeight(1, 0.0f);
+    const auto off = m.positions;
+    CHECK(!run(d, "transform", {{"translate", std::string("0,1,0")}}).ok);
+    CHECK(sameBits(m.positions, off));
+
+    // Base mesh active: the old behaviour (the base and every layer move).
+    m.setLayerWeight(1, 1.0f);
+    CHECK(run(d, "layer_set_active", {{"index", -1.0}}).ok);
+    CHECK(run(d, "transform", {{"translate", std::string("0,1,0")}, {"masked", false}}).ok);
+    CHECK(m.base[0] == base[0] + glm::vec3(0, 1, 0));
+}
+
+// The gizmo's path: a TransformSession recording into a layer, dragged (applied many times), cancelled, finished.
+TEST(transform_session_into_a_layer) {
+    Document d = makeDoc(makeIcosphere(3));
+    Mesh& m = d.mesh;
+    m.addLayer("Pose");
+    m.setLayerWeight(0, 0.5f);
+    d.syncBvh();
+    const auto pos = m.positions, base = m.base;
+    TransformSession s;
+    CHECK(s.begin(m, {}, Symmetry{false, false, false}, glm::vec3(0.0f), 0));
+    MeshTransform t;
+    for (int k = 1; k <= 10; ++k) {
+        t.rotate = eulerRotation(glm::vec3(0, 0, 9.0f * float(k)));
+        t.scale = glm::vec3(1.0f + 0.05f * float(k));
+        s.apply(m, t);
+    }
+    s.restore(m);
+    CHECK(maxDistance(m.positions, pos) < 1e-6f);
+    s.apply(m, t);
+    float err = 0.0f;
+    for (size_t v = 0; v < pos.size(); ++v) err = std::max(err, glm::length(m.positions[v] - t.apply(pos[v])));
+    CHECK(err < 1e-4f);
+    CHECK(sameBits(m.base, base));
+    UndoRecord r = s.finish(m, d.bvh, "Gizmo Rotate");
+    CHECK(r.layer == 0 && r.layerOffsets.empty());
+    d.undo.push(std::move(r));
+    CHECK(run(d, "undo").ok);
+    CHECK(maxDistance(m.positions, pos) < 1e-6f);
+    // Weight 0: nothing to do.
+    m.setLayerWeight(0, 0.0f);
+    CHECK(!s.begin(m, {}, Symmetry{false, false, false}, glm::vec3(0.0f), 0));
+    CHECK(TransformSession::layerWeightZero(m, 0));
+}
+
 TEST(transform_leaves_topology_and_attributes) {
     Document d = makeDoc(makeCube(6));
     Mesh& m = d.mesh;
@@ -246,14 +358,14 @@ TEST(transform_leaves_topology_and_attributes) {
     const auto tris = m.triangles;
     const auto uvs = m.uvs;
     const auto quads = m.quadPartners;
-    const auto groups = m.polygroups;
+    const auto groups = m.facegroups;
     const auto colors = m.colors;
     CHECK(m.quadCount() > 0);
     CHECK(run(d, "transform", {{"rotate", std::string("15,25,35")}, {"scale", 1.3}}).ok);
     CHECK(m.triangles == tris);
     CHECK(sameBits(m.uvs, uvs));
     CHECK(m.quadPartners == quads);
-    CHECK(m.polygroups == groups);
+    CHECK(m.facegroups == groups);
     CHECK(sameBits(m.colors, colors));
 }
 
@@ -286,22 +398,22 @@ TEST(transform_symmetry_mirrors_a_masked_pose) {
     CHECK(d.mesh.bounds().max.y > bar.bounds().max.y + 0.2f);
 }
 
-TEST(transform_all_subtools) {
+TEST(transform_all_parts) {
     Document d = makeDoc(makeIcosphere(2));
-    d.addSubtool(makeCube(4), "Box", false);
-    const auto a = d.subtoolMesh(0).positions, b = d.subtoolMesh(1).positions;
+    d.addPart(makeCube(4), "Box", false);
+    const auto a = d.partMesh(0).positions, b = d.partMesh(1).positions;
     CHECK(run(d, "transform", {{"translate", std::string("0,2,0")}, {"all", true}}).ok);
-    CHECK(d.subtoolMesh(0).positions[0] == a[0] + glm::vec3(0, 2, 0));
-    CHECK(d.subtoolMesh(1).positions[0] == b[0] + glm::vec3(0, 2, 0));
-    // One undo step in each SubTool.
+    CHECK(d.partMesh(0).positions[0] == a[0] + glm::vec3(0, 2, 0));
+    CHECK(d.partMesh(1).positions[0] == b[0] + glm::vec3(0, 2, 0));
+    // One undo step in each Part.
     CHECK(d.undo.canUndo());
-    CHECK(d.subtools[1].undo.canUndo());
-    d.selectSubtool(1);
+    CHECK(d.parts[1].data->undo.canUndo());
+    d.selectPart(1);
     CHECK(run(d, "undo").ok);
     CHECK(sameBits(d.mesh.positions, b));
     // Without all=1 only the active one moves.
     CHECK(run(d, "transform", {{"translate", std::string("1,0,0")}}).ok);
-    CHECK(d.subtoolMesh(0).positions[0] == a[0] + glm::vec3(0, 2, 0));
+    CHECK(d.partMesh(0).positions[0] == a[0] + glm::vec3(0, 2, 0));
 }
 
 TEST(transform_session_never_accumulates) {
@@ -320,7 +432,7 @@ TEST(transform_session_never_accumulates) {
         s.apply(a.mesh, t);
     }
     a.undo.push(s.finish(a.mesh, a.bvh, "Rotate"));
-    CHECK(transformSubtool(b, 0, t, true, 0.1f, Symmetry{false, false, false}, "Rotate") > 0);
+    CHECK(transformPart(b, 0, t, true, 0.1f, Symmetry{false, false, false}, "Rotate") > 0);
     CHECK(sameBits(a.mesh.positions, b.mesh.positions));
     CHECK(maxDistance(a.mesh.normals, b.mesh.normals) < 1e-5f);
     // An identity drag (click without moving) leaves no undo step and no change.
@@ -362,7 +474,7 @@ TEST(transform_euler_round_trip) {
 }
 
 TEST(transform_perf_million_triangles) {
-    // 1.3M triangles: a whole-SubTool drag frame and a masked (posing) drag frame, plus begin / finish.
+    // 1.3M triangles: a whole-Part drag frame and a masked (posing) drag frame, plus begin / finish.
     Mesh m = makeIcosphere(8);
     maskBelowX(m, 0.3f);
     Document d = makeDoc(std::move(m));
@@ -391,13 +503,13 @@ TEST(transform_perf_million_triangles) {
         CHECK(run(d, "undo").ok);
         const double undo = ms(t0);
         std::printf("  %zu tris, %s: begin %.1f ms, %.1f ms per drag frame (%zu verts), finish %.1f ms, undo %.1f ms\n",
-                    d.mesh.triangleCount(), masked ? "masked + falloff 0.1" : "whole SubTool", begin, frame,
+                    d.mesh.triangleCount(), masked ? "masked + falloff 0.1" : "whole Part", begin, frame,
                     moving, finish, undo);
     }
 }
 
 TEST(transform_saved_in_projects) {
-    // A posed SubTool with a sculpt layer and quads saves and opens as it is.
+    // A posed Part with a sculpt layer and quads saves and opens as it is.
     Document d = makeDoc(makeCube(6));
     d.mesh.addLayer("Detail");
     for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) d.mesh.layers[0].delta[v] = d.mesh.normals[v] * 0.05f;

@@ -5,11 +5,12 @@
 // remove, their keymaps, pie menus and macros), New Pack, recording and editing macros, the confirmation a macro
 // shows before it first runs, and its file dialogs. The checks themselves are in core/Pack.cpp and core/Macro.cpp.
 #include "app/App.h"
+#include "app/NativeDialog.h"
 
 #include "app/I18n.h"
 #include "app/Ui.h"
 #include "core/BrushLibrary.h"
-#include "core/Matcap.h"
+#include "core/LitSphere.h"
 #include "core/MaterialRecipe.h"
 #include "core/Project.h"
 #include "core/Texture.h"
@@ -111,7 +112,7 @@ void App::registerPackActions() {
         [this] { openNewPack(); });
     add("pack.library", "Packs", ICON_LC_PACKAGE, "Library",
         "Library > Packs: the installed packs. Switch one off or remove it, apply its keymap, add its pie menus.",
-        [this] { lightbox_.show(LibraryTab::Packs); });
+        [this] { libraryBrowser_.show(LibraryTab::Packs); });
     add("macro.record", "Record Macro", ICON_LC_CIRCLE_DOT, "Library > Packs",
         "Start recording: the commands you run (menus, buttons, the console) are kept as a macro until you press it "
         "again. Files inside the project folder are kept as relative paths, any other file is asked for when the "
@@ -126,8 +127,9 @@ void App::registerPackActions() {
     packs_.materials = enabledPackItems(PackItemType::Material);
     packs_.keymaps = enabledPackItems(PackItemType::Keymap);
     packs_.pieMenus = enabledPackItems(PackItemType::PieMenu);
-    loadPackMatcaps();
+    loadPackLitSpheres();
     refreshMacroActions();
+    refreshPlugins();
 }
 
 void App::refreshMacroActions() {
@@ -152,18 +154,18 @@ void App::refreshMacroActions() {
     }
 }
 
-void App::loadPackMatcaps() {
-    for (int i : packs_.matcaps) removeCustomMatcap(i);
-    packs_.matcaps.clear();
-    for (const PackContentItem& item : enabledPackItems(PackItemType::Matcap)) {
-        CustomMatcap m;
+void App::loadPackLitSpheres() {
+    for (int i : packs_.litspheres) removeCustomLitSphere(i);
+    packs_.litspheres.clear();
+    for (const PackContentItem& item : enabledPackItems(PackItemType::LitSphere)) {
+        CustomLitSphere m;
         std::string err;
-        if (!readMatcapImage(item.file, m, err)) {
+        if (!readLitSphereImage(item.file, m, err)) {
             SDL_Log("Lit Spheres: %s (pack %s): %s", item.file.c_str(), item.packName.c_str(), err.c_str());
             continue;
         }
         m.name = item.label(); // "Chrome (Member pack)": never mistaken for (or replacing) another
-        packs_.matcaps.push_back(addCustomMatcap(std::move(m)));
+        packs_.litspheres.push_back(addCustomLitSphere(std::move(m)));
     }
 }
 
@@ -176,8 +178,9 @@ void App::refreshPacks() {
     packs_.materials = enabledPackItems(PackItemType::Material);
     packs_.keymaps = enabledPackItems(PackItemType::Keymap);
     packs_.pieMenus = enabledPackItems(PackItemType::PieMenu);
-    loadPackMatcaps();
+    loadPackLitSpheres();
     refreshMacroActions();
+    refreshPlugins();
 }
 
 std::string App::macroProjectDir() const {
@@ -201,16 +204,16 @@ void App::openPackDialog(int kind, int pathKind) {
     const std::string project = macroProjectDir();
     const char* where = project.empty() ? nullptr : project.c_str();
     switch (kind) {
-    case kPackDialogInstall: SDL_ShowOpenFileDialog(onPackDialog, this, window_, kPackFilters, 2, nullptr, false); break;
+    case kPackDialogInstall: sf::dialogs::openFile(onPackDialog, this, window_, kPackFilters, 2, nullptr, false); break;
     case kPackDialogSave: {
         const std::string name = std::string(packs_.name[0] ? packs_.name : "My Pack") + kPackExtension;
-        SDL_ShowSaveFileDialog(onPackDialog, this, window_, kPackFilters, 2, name.c_str());
+        sf::dialogs::saveFile(onPackDialog, this, window_, kPackFilters, 2, name.c_str());
         break;
     }
     case kPackDialogMacro:
-        if (pathKind == int(MacroPathKind::Folder)) SDL_ShowOpenFolderDialog(onPackDialog, this, window_, where, false);
-        else if (pathKind == int(MacroPathKind::Save)) SDL_ShowSaveFileDialog(onPackDialog, this, window_, kAll, 1, where);
-        else SDL_ShowOpenFileDialog(onPackDialog, this, window_, kAll, 1, where, false);
+        if (pathKind == int(MacroPathKind::Folder)) sf::dialogs::openFolder(onPackDialog, this, window_, where, false);
+        else if (pathKind == int(MacroPathKind::Save)) sf::dialogs::saveFile(onPackDialog, this, window_, kAll, 1, where);
+        else sf::dialogs::openFile(onPackDialog, this, window_, kAll, 1, where, false);
         break;
     default: break;
     }
@@ -317,7 +320,7 @@ void App::drawPackReview() {
         }
         ImGui::Text("%s %s", tr("Author:"), m.author.c_str());
         ImGui::Text("%s %s", tr("License:"), m.license.c_str());
-        ImGui::TextDisabled("%s  -  %s unpacked", utf8(fsPath(packs_.reviewPath).filename()).c_str(),
+        ImGui::TextDisabled(tr("%s  -  %s unpacked"), utf8(fsPath(packs_.reviewPath).filename()).c_str(),
                             r->bytes >= 1024 * 1024 ? (std::to_string(r->bytes / (1024 * 1024)) + " MB").c_str()
                                                     : (std::to_string(std::max<uint64_t>(1, r->bytes / 1024)) + " KB").c_str());
         if (!m.description.empty()) ImGui::TextWrapped("%s", m.description.c_str());
@@ -325,7 +328,7 @@ void App::drawPackReview() {
             ImGui::TextColored(ImColor(kAccent), "%s %s", tr("Replaces the installed version"), r->installedVersion.c_str());
         ImGui::Separator();
         ImGui::TextWrapped("%s %s", tr("Contains:"), packCountsText(r->counts).c_str());
-        const float listH = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 4.2f;
+        const float listH = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * (4.2f + 2.4f * float(r->plugins.size()));
         ImGui::BeginChild("##packitems", ImVec2(ImGui::GetContentRegionAvail().x * 0.48f, std::max(60.0f, listH)),
                           ImGuiChildFlags_Borders);
         for (const std::string& n : r->itemNames) ImGui::TextUnformatted(n.c_str());
@@ -335,8 +338,23 @@ void App::drawPackReview() {
         if (r->licenseText.empty()) ImGui::TextDisabled("%s", tr("No license text in the pack (see License above)."));
         else ImGui::TextWrapped("%s", r->licenseText.c_str());
         ImGui::EndChild();
-        ImGui::TextWrapped("%s", tr("Packs hold data only: nothing in this one runs on install or when a project "
-                                    "opens. Its macros list their commands and ask before they first run."));
+        for (const PackReview::Plugin& pl : r->plugins) {
+            ImGui::TextColored(ImColor(kAccent), "%s %s %s", ICON_LC_WAND_SPARKLES, pl.name.c_str(), pl.version.c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled(tr("%s plugin, %s KB"), tr(pl.kind.c_str()), std::to_string(std::max<uint64_t>(1, pl.bytes / 1024)).c_str());
+            ImGui::Indent(20 * s);
+            ImGui::TextWrapped("%s", tr("Permissions: none. It sees only the mesh it's given and returns a mesh: no "
+                                        "files, network, clock or system access."));
+            if (!pl.params.empty()) ImGui::TextDisabled("%s %s", tr("Settings:"), pl.params.c_str());
+            ImGui::Unindent(20 * s);
+        }
+        if (r->plugins.empty())
+            ImGui::TextWrapped("%s", tr("Packs hold data only: nothing in this one runs on install or when a project "
+                                        "opens. Its macros list their commands and ask before they first run."));
+        else
+            ImGui::TextWrapped("%s", tr("Nothing in this pack runs on install or when a project opens. Its plugins run "
+                                        "sandboxed, only when you run them, with time and memory limits; macros list "
+                                        "their commands and ask before they first run."));
         if (r->counts[size_t(PackItemType::Keymap)] || r->counts[size_t(PackItemType::PieMenu)])
             ImGui::TextDisabled("%s", tr("Keymaps and pie menus are only applied when you choose to (Library > Packs)."));
         if (ImGui::Button(tr("Install##packreview"), ImVec2(120 * s, 0))) {
@@ -345,7 +363,7 @@ void App::drawPackReview() {
                 refreshPacks();
                 status_ = "Installed " + m.name + " " + m.version + ": " + packCountsText(r->counts) +
                           (packsSafeMode() ? " (packs are off this session: --no-packs)" : "");
-                lightbox_.show(LibraryTab::Packs);
+                libraryBrowser_.show(LibraryTab::Packs);
                 close = true;
             } else {
                 status_ = "Could not install " + m.name + ": " + err;
@@ -413,7 +431,7 @@ void App::drawPacksTab(float height) {
         std::array<int, kPackItemTypes> counts{};
         for (const PackItem& it : m.contents) ++counts[size_t(it.type)];
         ImGui::SameLine();
-        ImGui::TextDisabled("by %s  -  %s  -  %s", m.author.c_str(), m.license.c_str(), packCountsText(counts).c_str());
+        ImGui::TextDisabled(tr("by %s  -  %s  -  %s"), m.author.c_str(), m.license.c_str(), packCountsText(counts).c_str());
         ImGui::SameLine();
         const bool expanded = packs_.expanded == m.id;
         if (ImGui::SmallButton((std::string(expanded ? tr("Hide") : tr("Details")) + "##" + m.id).c_str()))
@@ -443,6 +461,7 @@ void App::drawPacksTab(float height) {
                         requestMacroRun(mac);
                     ImGui::SameLine();
                 }
+            drawPluginButtons(m.id, false); // on the same row
             ImGui::NewLine();
             ImGui::TextDisabled("%s", p.dir.c_str());
             ImGui::Unindent(24 * s);
@@ -463,7 +482,7 @@ void App::drawPacksTab(float height) {
         ImGui::PushID(mac.path.c_str());
         ImGui::TextUnformatted(mac.name.c_str());
         ImGui::SameLine();
-        ImGui::TextDisabled("%d commands", int(mac.statements.size()));
+        ImGui::TextDisabled(tr("%d commands"), int(mac.statements.size()));
         ImGui::SameLine();
         if (ImGui::SmallButton((std::string(tr("Run")) + "##run" + mac.path).c_str())) requestMacroRun(mac);
         ImGui::SameLine();
@@ -519,7 +538,7 @@ bool App::applyPackKeymap(const std::string& file) {
         ++applied;
     }
     status_ = "Keymap " + (k.name.empty() ? utf8(fsPath(file).stem()) : k.name) + ": " + std::to_string(applied) +
-              " keys" + (skipped ? " (" + std::to_string(skipped) + " unknown left out)" : "") + " - Store Config keeps them";
+              " keys" + (skipped ? " (" + std::to_string(skipped) + " unknown left out)" : "") + "";
     return applied > 0;
 }
 
@@ -531,7 +550,7 @@ void App::drawPackKeymapRows() {
         if (ImGui::SmallButton((std::string(tr("Apply")) + " " + k.label() + "##" + k.file).c_str())) applyPackKeymap(k.file);
         ui::HelpText("Apply keymap", nullptr,
                      "Take the keys of this keymap from an installed pack (only actions SculptForge knows; a key another "
-                     "action had moves here). Store Config keeps them.",
+                     "action had moves here). Saved automatically.",
                      "Preferences > Input");
     }
 }
@@ -558,9 +577,9 @@ void App::openNewPack() {
     if (!library_.user.empty())
         for (const std::string& f : filesIn(library_.user + "/Alphas", images))
             add(PackItemType::Alpha, utf8(fsPath(f).stem()), f);
-    for (const std::string& f : filesIn(matcapFolder(), images)) add(PackItemType::Matcap, utf8(fsPath(f).stem()), f);
+    for (const std::string& f : filesIn(litsphereFolder(), images)) add(PackItemType::LitSphere, utf8(fsPath(f).stem()), f);
     if (hasTexture(doc_.mesh)) {
-        const std::string name = doc_.activeSubtoolInfo().name + " Material";
+        const std::string name = doc_.activePartInfo().name + " Material";
         const std::string text = materialRecipeText(*doc_.mesh.texture, name);
         MaterialRecipe probe;
         std::string err;
@@ -632,7 +651,7 @@ void App::drawNewPack() {
         ImGui::InputText(label, buf, size);
         ui::HelpText(label, nullptr, help, "Library > Packs > New Pack");
     };
-    field("Name##newpack", packs_.name, sizeof packs_.name, "The pack's name, shown next to every item it brings.");
+    field(tr("Name##newpack"), packs_.name, sizeof packs_.name, "The pack's name, shown next to every item it brings.");
     if (!packs_.id[0] && packs_.name[0]) {
         std::string id;
         for (unsigned char c : std::string(packs_.name))
@@ -641,16 +660,16 @@ void App::drawNewPack() {
         while (!id.empty() && id.back() == '-') id.pop_back();
         std::snprintf(packs_.id, sizeof packs_.id, "%s", id.substr(0, 64).c_str());
     }
-    field("Id##newpack", packs_.id, sizeof packs_.id,
+    field(tr("Id##newpack"), packs_.id, sizeof packs_.id,
           "Its folder name: lower-case letters, digits, '.', '_' or '-'. A newer version keeps the same id.");
-    field("Version##newpack", packs_.version, sizeof packs_.version, "1.0, 1.1, 2.0 ...");
-    field("Author##newpack", packs_.author, sizeof packs_.author, "Who made it (shown when it's installed).");
-    field("License##newpack", packs_.license, sizeof packs_.license, "For example CC-BY-4.0, CC0-1.0 or your own terms.");
+    field(tr("Version##newpack"), packs_.version, sizeof packs_.version, "1.0, 1.1, 2.0 ...");
+    field(tr("Author##newpack"), packs_.author, sizeof packs_.author, "Who made it (shown when it's installed).");
+    field(tr("License##newpack"), packs_.license, sizeof packs_.license, "For example CC-BY-4.0, CC0-1.0 or your own terms.");
     ImGui::SetNextItemWidth(-110 * s);
     ImGui::InputTextMultiline("Description##newpack", packs_.description, sizeof packs_.description,
                               ImVec2(-110 * s, ImGui::GetTextLineHeight() * 3.0f));
     ui::Checkbox("Member pack (insider channel)##newpack", &packs_.insider);
-    ui::HelpText("Member pack", nullptr, "Marks the pack as the monthly pack or an Insider drop. Display only: anyone can install it.",
+    ui::HelpText("Member pack", nullptr, "Marks the pack as a members' pack (Member Requests). Display only: anyone can install it.",
                  "Library > Packs > New Pack");
     ImGui::Separator();
     const float listH = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.6f;
@@ -679,7 +698,7 @@ void App::drawNewPack() {
     ui::HelpText("Save Pack", nullptr, "Write the .sfpack, checked exactly as an install would check it.",
                  "Library > Packs > New Pack");
     ImGui::SameLine();
-    ImGui::TextDisabled("%d items", chosen);
+    ImGui::TextDisabled(tr("%d items"), chosen);
     ImGui::SameLine();
     if (ImGui::Button(tr("Cancel##newpack"), ImVec2(100 * s, 0))) open = false;
     ImGui::End();
@@ -821,7 +840,7 @@ void App::drawMacroEditor() {
         return;
     }
     ImGui::SetNextItemWidth(-80 * s);
-    ImGui::InputText("Name##macroname", macros_.name, sizeof macros_.name);
+    ImGui::InputText(tr("Name##macroname"), macros_.name, sizeof macros_.name);
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", tr("One command per line, as in the console (# starts a comment). Files: a path inside "
                                 "the project folder, or ? to pick one when it runs."));
@@ -904,7 +923,7 @@ double App::packsTestValue(const std::string& name) const {
     }
     if (name == "pack_alphas") return double(packs_.alphas.size());
     if (name == "pack_materials") return double(packs_.materials.size());
-    if (name == "pack_matcaps") return double(packs_.matcaps.size());
+    if (name == "pack_litspheres") return double(packs_.litspheres.size());
     if (name == "pack_keymaps") return double(packs_.keymaps.size());
     if (name == "pack_brushes")
         return double(std::count_if(doc_.brushes.begin(), doc_.brushes.end(),
@@ -925,6 +944,11 @@ double App::packsTestValue(const std::string& name) const {
         return double(std::count_if(actions_.all().begin(), actions_.all().end(),
                                     [](const Action& a) { return a.id.rfind("macro.run.", 0) == 0; }));
     if (name == "undo_steps") return double(doc_.undo.undoCount());
+    if (name == "plugins_installed") return double(plugins_.list.size());
+    if (name == "plugins_off")
+        return double(std::count_if(plugins_.list.begin(), plugins_.list.end(), [](const InstalledPlugin& p) { return p.off; }));
+    if (name == "plugin_window_open") return plugins_.open.empty() ? 0.0 : 1.0;
+    if (name == "plugin_running") return plugins_.running ? 1.0 : 0.0;
     return std::nan("");
 }
 

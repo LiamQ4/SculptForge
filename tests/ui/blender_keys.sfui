@@ -1,12 +1,12 @@
 # The Blender input style (#12): Preferences > Input > Blender, middle-drag navigation and Alt+left-drag for pens,
 # the numpad views (orthographic until turned), Blender's sculpt-mode brush letters, F / Shift+F, Ctrl to invert,
 # M for the Mask brush, H / Shift+H / Alt+H, Alt+1 / Alt+2, Emulate Numpad, the Controls window, a keymap
-# exported from Blender, and back to the ZBrush style with its keys intact.
-run ui_look look=classic layout=zbrush        # written for the Classic look and the ZBrush-style palette bar and shelves
+# exported from Blender, and back to the classic with its keys intact.
+run ui_look look=classic layout=classic        # written for the Classic look and the classic palette bar and shelves
 run new_sphere subdivisions=4
-# New installs start with the SculptForge keys; this script is about the ZBrush-style ones.
+# New installs start with the SculptForge keys; this script is about the classic ones.
 expect_value input_style == 1
-input_style zbrush
+input_style classic
 expect_value input_style == 0
 expect_value shortcut_conflicts == 0
 # The numpad views work in every style.
@@ -54,16 +54,26 @@ key k
 expect_value brush_type == 10
 key v
 expect_value brush_type == 0
-# S is Smooth now, not the Draw Size pop-up; F is the radius, Shift+F the strength.
+# S is Smooth now, not the Size pop-up; F is the radius, Shift+F the strength.
 mouse_move 0.5 0.5
 key f
-expect_text Draw Size
+expect_text Size
 key escape
 key shift+f
 expect_text Intensity
-key escape
+expect_no_text Smooth Intensity               # Blender's Shift+F is the brush's Strength, not Smooth's (#77)
+key 3
+key 0
+key enter
+expect_value z_intensity == 30
+key u
+key 5
+key 0
+key enter
+expect_value z_intensity == 50
 
-# --- Sculpting: a plain drag adds, Ctrl+drag subtracts, Alt+drag navigates instead of sculpting ---
+# --- Sculpting: a plain drag adds, Ctrl+drag subtracts; Alt+drag on the model masks and Ctrl+Alt+drag unmasks
+# (Blender 5.1+, #77); Alt+drag beside the model and Alt+Shift+drag navigate ---
 snapshot
 stroke 0.3 0.5 0.7 0.5
 expect_value moved_out > 0
@@ -80,7 +90,38 @@ hold alt
 stroke 0.3 0.5 0.7 0.5
 hold none
 expect_value moved == 0
+expect_value camera_yaw == $y0
+expect_value masked > 100
+remember masked am
+hold ctrl+alt
+stroke 0.3 0.5 0.7 0.5
+hold none
+expect_value masked < $am
+expect_value camera_yaw == $y0
+key alt+m
+expect_value masked == 0
+hold alt
+drag_path -0.3 0.5 -0.1 0.2
+hold none
 expect_value camera_yaw != $y0
+expect_value masked == 0
+key home
+# Preferences > Input > Emulate 3 Button Mouse: Alt+left-drag turns the view on the model too.
+click "Preferences##palette.preferences"      # (Input is still open from the top of the script)
+click "Emulate 3 Button Mouse##input.emulate_3_button"
+expect_value emulate_3_button == 1
+key escape
+remember camera_yaw y0
+hold alt
+stroke 0.3 0.5 0.7 0.5
+hold none
+expect_value moved == 0
+expect_value masked == 0
+expect_value camera_yaw != $y0
+click "Preferences##palette.preferences"      # (Input is still open from the top of the script)
+click "Emulate 3 Button Mouse##input.emulate_3_button"
+expect_value emulate_3_button == 0
+key escape
 remember camera_pan p0
 hold alt+shift
 stroke 0.3 0.5 0.7 0.5
@@ -167,7 +208,7 @@ key m
 key s
 expect_value mask_brush == 0
 
-# --- H hides the polygroup under the cursor, Shift+H shows only it, Alt+H shows everything ---
+# --- H hides the face group under the cursor, Shift+H shows only it, Alt+H shows everything ---
 key v
 key m
 stroke 0.0 0.3 1.0 0.3
@@ -186,13 +227,56 @@ mouse_move 0.5 0.3
 key shift+h
 expect_value hidden == 0
 
+# Ctrl+Shift keeps the visibility gestures and the Cut shapes (Discord, dm4nd: Ctrl was the invert, so Ctrl+Shift
+# smoothed inverted and nothing hid or cut): drag hides outside, Alt inside.
+hold ctrl+shift
+drag_path 0.4 0.2 0.6 0.4
+hold none
+wait 0.2
+expect_value hidden > 0
+key alt+h
+expect_value hidden == 0
+hold ctrl+shift+alt
+drag_path 0.4 0.2 0.6 0.4
+hold none
+wait 0.2
+expect_value hidden > 0
+key alt+h
+expect_value hidden == 0
+# The brush tile with Ctrl+Shift held offers the Cut shapes; Ctrl+Shift+drag cuts, one undo step.
+remember triangles t0
+hold ctrl+shift
+click "##tile.brush"
+wait 0.1
+expect "Cut Rectangle##held.cut.rect"
+click "Cut Rectangle##held.cut.rect"
+hold none
+expect_value hide_shape == 5
+hold ctrl+shift
+drag_path 0.38 0.36 0.62 0.6
+hold none
+wait 0.2
+expect_value triangles != $t0
+expect_value hidden == 0
+shot blender-cut
+key ctrl+z
+expect_value triangles == $t0
+# Ctrl+Shift+B: the same picker from the keyboard; back to Select Rectangle.
+hold ctrl+shift
+key ctrl+shift+b
+wait 0.1
+click "Select Rectangle##held.select.rect"
+hold none
+expect_value hide_shape == 2
+mouse_move 0.5 0.5                            # (back over the view: the keys below are the view's)
+
 # --- Alt+1 / Alt+2 step the subdivision levels; X swaps the colours; Shift+Z wireframe ---
 run subdiv_divide
-expect_value sdiv == 2
+expect_value subdiv_level == 2
 key alt+1
-expect_value sdiv == 1
+expect_value subdiv_level == 1
 key alt+2
-expect_value sdiv == 2
+expect_value subdiv_level == 2
 remember paint_r r0
 key x
 expect_value paint_r != $r0
@@ -223,7 +307,7 @@ click "Mouse & pen"
 expect_text Middle drag
 shot controls-blender
 # The style row in Controls switches too.
-click "ZBrush-style##input.style_zbrush"
+click "Classic sculpting keys##input.style_classic"
 expect_value input_style == 0
 expect_text Alt + click it
 key f1
@@ -234,7 +318,7 @@ expect_status Blender keymap: 13 keys
 expect_value input_style == 2
 expect_shortcut brush.standard D
 expect_shortcut geometry.higher_res Alt+2
-expect_shortcut brush.claybuildup Shift+Q
+expect_shortcut brush.clayblock Shift+Q
 expect_shortcut ui.strength_popup Shift+R
 expect_shortcut view.ortho \
 expect_shortcut view.front Numpad 1
@@ -244,14 +328,15 @@ expect_value brush_type == 0
 key shift+q
 expect_value brush_type == 9
 
-# --- Back to ZBrush: its keys and gestures are as they were (the imported keys stay until Restore Standard UI) ---
+# --- Back to its keys and gestures are as they were (the imported keys stay until Reset Layout and Shortcuts) ---
 click "Preferences##palette.preferences"
-click "Config##preferences.config"
-click "Restore Standard UI##config.restore_standard"
+click "Saving & Layouts##preferences.config"
+click "Reset Layout and Shortcuts##config.restore_standard"
+wait 0.2
 expect_value shortcut_conflicts == 0
 expect_shortcut brush.standard V
 key f1
-click "ZBrush-style##input.style_zbrush"
+click "Classic sculpting keys##input.style_classic"
 key f1
 expect_value input_style == 0
 expect_value shortcut_conflicts == 0
@@ -260,7 +345,7 @@ expect_shortcut view.frame F
 expect_shortcut brush.standard
 mouse_move 0.5 0.5
 key s
-expect_text Draw Size
+expect_text Size
 key escape
 key b
 key s

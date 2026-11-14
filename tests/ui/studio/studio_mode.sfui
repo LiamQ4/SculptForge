@@ -1,0 +1,13 @@
+# Studio mode (core/StudioProfile.h), started with --studio tests/data/studio/studio.json (CMakeLists.txt): About names
+# the studio and shows its logo, the title bar says its name, AI is off and locked, and the update check reads only
+# the studio's mirror (a file here that doesn't exist: nothing is asked of the internet).
+run ui_look look=classic layout=classic
+run new_sphere subdivisions=3
+# A Studio member's own build: no membership heart (nor badge) in the top bar.
+expect_not "Support SculptForge##topbar.heart"
+expect_not "Member##topbar.member"
+click "Help##palette.help"
+click "About SculptForge##help.about"
+expect_text "Studio build for Example Studio"
+expect_text "Offline: no outside connections."
+shot about_studio

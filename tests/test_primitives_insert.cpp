@@ -6,6 +6,7 @@
 #include "core/Commands.h"
 #include "core/Document.h"
 #include "core/Json.h"
+#include "core/Parts.h"
 #include "core/Primitives.h"
 #include "io/GltfIO.h"
 #include "io/ObjIO.h"
@@ -14,6 +15,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <map>
 
 #include <algorithm>
@@ -102,37 +105,37 @@ TEST(insert_primitive_mirrors_with_symmetry) {
 namespace {
 size_t groupTriangles(const Mesh& m, uint32_t g) {
     size_t n = 0;
-    for (uint32_t t = 0; t < m.triangleCount(); ++t) n += m.polygroupAt(t) == g;
+    for (uint32_t t = 0; t < m.triangleCount(); ++t) n += m.facegroupAt(t) == g;
     return n;
 }
 uint32_t topGroup(const Mesh& m) {
     uint32_t g = 0;
-    for (uint32_t x : m.polygroups) g = std::max(g, x);
+    for (uint32_t x : m.facegroups) g = std::max(g, x);
     return g;
 }
 } // namespace
 
-TEST(insert_mesh_from_subtool) {
+TEST(insert_mesh_from_part) {
     Document doc;
     CommandRegistry reg;
     CHECK(reg.execute(doc, "new_sphere", {{"subdivisions", 3.0}}).ok);
-    // A tall, off-centre box SubTool to insert: it's centred and scaled so its largest side is `size`.
-    CHECK(reg.execute(doc, "subtool_append", {{"type", std::string("cube")}, {"name", std::string("Stud")}}).ok);
+    // A tall, off-centre box Part to insert: it's centred and scaled so its largest side is `size`.
+    CHECK(reg.execute(doc, "part_append", {{"type", std::string("cube")}, {"name", std::string("Stud")}}).ok);
     for (auto& p : doc.mesh.positions) p = glm::vec3(p.x, p.y * 4.0f, p.z) + glm::vec3(5.0f, 3.0f, 0.0f);
     const size_t studTris = doc.mesh.triangleCount();
-    CHECK(reg.execute(doc, "subtool_select", {{"index", 0.0}}).ok);
+    CHECK(reg.execute(doc, "part_select", {{"index", 0.0}}).ok);
     const size_t before = doc.mesh.triangleCount();
-    CommandResult r = reg.execute(doc, "insert_mesh", {{"subtool", std::string("Stud")}, {"x", 1.0}, {"y", 0.0}, {"z", 0.0},
+    CommandResult r = reg.execute(doc, "insert_mesh", {{"part", std::string("Stud")}, {"x", 1.0}, {"y", 0.0}, {"z", 0.0},
                                                         {"nx", 1.0}, {"ny", 0.0}, {"nz", 0.0}, {"size", 0.4}});
     CHECK(r.ok);
     CHECK(doc.mesh.triangleCount() == before + studTris);
-    CHECK(doc.subtoolCount() == 2); // the source SubTool stays
+    CHECK(doc.partCount() == 2); // the source Part stays
     // Its long (Y) axis lies along the normal (+X): it reaches 0.2 out from the surface point, 0.05 to the sides.
     const uint32_t g = topGroup(doc.mesh);
     CHECK(groupTriangles(doc.mesh, g) == studTris);
     AABB box;
     for (uint32_t t = 0; t < doc.mesh.triangleCount(); ++t)
-        if (doc.mesh.polygroupAt(t) == g)
+        if (doc.mesh.facegroupAt(t) == g)
             for (int k = 0; k < 3; ++k) box.expand(doc.mesh.positions[doc.mesh.triangles[t][k]]);
     CHECK(std::abs(box.max.x - 1.2f) < 0.01f);
     CHECK(std::abs(box.min.x - 0.8f) < 0.01f);
@@ -140,17 +143,17 @@ TEST(insert_mesh_from_subtool) {
     CHECK(reg.execute(doc, "undo", {}).ok);
     CHECK(doc.mesh.triangleCount() == before);
     // Symmetry makes a mirrored copy, as with the primitives.
-    CHECK(reg.execute(doc, "insert_mesh", {{"subtool", std::string("Stud")}, {"symmetry", std::string("x")}, {"x", 1.0},
+    CHECK(reg.execute(doc, "insert_mesh", {{"part", std::string("Stud")}, {"symmetry", std::string("x")}, {"x", 1.0},
                                            {"y", 0.0}, {"z", 0.0}, {"nx", 1.0}, {"ny", 0.0}, {"nz", 0.0}, {"size", 0.4}}).ok);
     CHECK(doc.mesh.triangleCount() == before + 2 * studTris);
     float minX = 0.0f;
     for (const auto& p : doc.mesh.positions) minX = std::min(minX, p.x);
     CHECK(minX < -1.1f);
-    // Errors: nothing named, both named, an unknown SubTool.
+    // Errors: nothing named, both named, an unknown Part.
     CHECK(!reg.execute(doc, "insert_mesh", {{"x", 0.0}, {"y", 0.0}, {"z", 0.0}}).ok);
-    CHECK(!reg.execute(doc, "insert_mesh", {{"subtool", std::string("Stud")}, {"file", std::string("a.obj")}, {"x", 0.0},
+    CHECK(!reg.execute(doc, "insert_mesh", {{"part", std::string("Stud")}, {"file", std::string("a.obj")}, {"x", 0.0},
                                             {"y", 0.0}, {"z", 0.0}}).ok);
-    CHECK(!reg.execute(doc, "insert_mesh", {{"subtool", std::string("Nope")}, {"x", 0.0}, {"y", 0.0}, {"z", 0.0}}).ok);
+    CHECK(!reg.execute(doc, "insert_mesh", {{"part", std::string("Nope")}, {"x", 0.0}, {"y", 0.0}, {"z", 0.0}}).ok);
 }
 
 TEST(insert_mesh_from_file) {
@@ -184,4 +187,123 @@ TEST(insert_mesh_from_file) {
     CHECK(!reg.execute(doc, "insert_mesh", {{"file", tempPath("sf_insert_mesh_missing.obj")}, {"x", 0.0}, {"y", 1.0}, {"z", 0.0}}).ok);
     CHECK(doc.mesh.triangleCount() == before + 12);
     for (const std::string& p : {obj, ply, glb}) std::remove(p.c_str());
+}
+
+// Insert sets: one item at a time from a multi-object file or a folder of files.
+TEST(insert_mesh_from_set) {
+    Document doc;
+    CommandRegistry reg;
+    CHECK(reg.execute(doc, "new_sphere", {{"subdivisions", 3.0}}).ok);
+    const size_t before = doc.mesh.triangleCount();
+    const Mesh tet = [] {
+        Mesh m;
+        m.positions = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+        m.triangles = {{0, 2, 1}, {0, 1, 3}, {0, 3, 2}, {1, 2, 3}};
+        m.sanitizeAttributes();
+        return m;
+    }();
+    const Mesh cube = makeCube(2, 1.0f);
+    std::string err;
+    const std::string glb = tempPath("sf_insert_set.glb");
+    CHECK(saveGlb(glb, {{"Tet", &tet}, {"Box", &cube}}, "kit", err));
+    std::vector<InsertSetItem> items;
+    CHECK(listInsertSet(glb, items, err));
+    CHECK(items.size() == 2 && items[0].name == "Tet" && items[1].name == "Box");
+    const Args at{{"x", 0.0}, {"y", 1.0}, {"z", 0.0}, {"size", 0.3}};
+    Args a = at;
+    a["set"] = glb;
+    CHECK(reg.execute(doc, "insert_mesh", a).ok);
+    CHECK(doc.mesh.triangleCount() == before + 4);
+    a["index"] = 1.0;
+    CommandResult r = reg.execute(doc, "insert_mesh", a);
+    CHECK(r.ok && r.message.find("Box") != std::string::npos);
+    CHECK(doc.mesh.triangleCount() == before + 4 + cube.triangleCount());
+    a["index"] = 2.0;
+    CHECK(!reg.execute(doc, "insert_mesh", a).ok);
+    CHECK(reg.execute(doc, "insert_set_items", {{"set", glb}}).message.find("1. Box") != std::string::npos);
+
+    // A folder: its model files by name, not its other files or subfolders.
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "sf_insert_set_dir";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir / "sub");
+    std::filesystem::create_directories(dir / "empty");
+    CHECK(saveObj((dir / "b_box.obj").string(), cube, err));
+    CHECK(saveGlb((dir / "a_tet.glb").string(), tet, "tet", err));
+    CHECK(saveObj((dir / "sub" / "c.obj").string(), cube, err));
+    if (FILE* f = std::fopen((dir / "notes.txt").string().c_str(), "w")) std::fclose(f);
+    CHECK(listInsertSet(dir.string(), items, err));
+    CHECK(items.size() == 2 && items[0].name == "a_tet" && items[1].name == "b_box");
+    const size_t now = doc.mesh.triangleCount();
+    a["set"] = dir.string();
+    a["index"] = 0.0;
+    CHECK(reg.execute(doc, "insert_mesh", a).ok);
+    CHECK(doc.mesh.triangleCount() == now + 4);
+    CHECK(reg.execute(doc, "undo", {}).ok);
+    CHECK(doc.mesh.triangleCount() == now);
+    // Not a set: a file type Insert doesn't read, an empty folder, a missing file.
+    CHECK(!listInsertSet((dir / "notes.txt").string(), items, err));
+    CHECK(!listInsertSet((dir / "empty").string(), items, err));
+    CHECK(!listInsertSet((dir / "missing.glb").string(), items, err));
+    std::filesystem::remove_all(dir);
+    std::remove(glb.c_str());
+}
+
+// The built-in Creature bones set (#154): no file to pick, every piece inserts as quads, one undo step each.
+TEST(insert_builtin_creature_bones) {
+#if defined(_WIN32)
+    const char* var = "APPDATA";
+#else
+    const char* var = "XDG_DATA_HOME";
+#endif
+    // the per-user data folder in a temp folder (the set is written there once per run)
+    const std::filesystem::path data = std::filesystem::temp_directory_path() / "sf_builtin_sets";
+    std::filesystem::remove_all(data);
+    const char* had = std::getenv(var);
+    const std::string old = had ? had : "";
+    auto setVar = [&](const std::string& v) {
+#if defined(_WIN32)
+        _putenv_s(var, v.c_str());
+#else
+        if (v.empty() && !had) unsetenv(var);
+        else setenv(var, v.c_str(), 1);
+#endif
+    };
+    setVar(data.string());
+    CHECK(builtinInsertSets().size() == 1 && std::string(builtinInsertSets()[0].id) == "creature-bones");
+    const std::string set = std::string(kBuiltinInsertSetPrefix) + "creature-bones";
+    std::vector<InsertSetItem> items;
+    std::string err;
+    CHECK(listInsertSet(set, items, err));
+    const std::vector<std::string> names = {"Skull", "Jaw", "Fang", "Blade tooth", "Swept horn", "Spiral horn", "Claw",
+                                            "Vertebra", "Tail vertebrae", "Rib", "Limb bone", "Wing bone",
+                                            "Wing finger"};
+    CHECK(items.size() == names.size());
+    for (size_t i = 0; i < items.size() && i < names.size(); ++i) CHECK(items[i].name == names[i]);
+    std::string file;
+    CHECK(resolveInsertSetPath(set, file, err) && std::filesystem::exists(std::filesystem::path(std::u8string(file.begin(), file.end()))));
+    CHECK(file.find("insert-sets") != std::string::npos);
+
+    Document doc;
+    CommandRegistry reg;
+    CHECK(reg.execute(doc, "new_sphere", {{"subdivisions", 3.0}}).ok);
+    const size_t before = doc.mesh.triangleCount();
+    for (size_t i = 0; i < names.size(); ++i) {
+        Mesh piece;
+        std::string name;
+        CHECK(loadInsertSetItem(set, int(i), piece, name, err) && name == names[i]);
+        // clean starting pieces: closed, low-to-mid poly, nearly all quads
+        size_t quads = 0;
+        for (size_t t = 0; t < piece.triangles.size(); ++t)
+            if (piece.hasQuads() && piece.quadPartners[t] != Mesh::kNoQuad) ++quads;
+        CHECK(piece.triangleCount() >= 400 && piece.triangleCount() <= 12000);
+        CHECK(quads >= piece.triangleCount() * 9 / 10);
+        const CommandResult r = reg.execute(doc, "insert_mesh", {{"set", set}, {"index", double(i)}, {"x", 0.0}, {"y", 1.0}, {"z", 0.0}, {"size", 0.4}});
+        CHECK(r.ok && r.message.find(names[i]) != std::string::npos);
+        CHECK(doc.mesh.triangleCount() == before + piece.triangleCount());
+        CHECK(reg.execute(doc, "undo", {}).ok);
+        CHECK(doc.mesh.triangleCount() == before);
+    }
+    CHECK(reg.execute(doc, "insert_set_items", {{"set", set}}).message.find("12. Wing finger") != std::string::npos);
+    CHECK(!listInsertSet(std::string(kBuiltinInsertSetPrefix) + "nothing", items, err));
+    setVar(old);
 }

@@ -1,5 +1,5 @@
-run ui_look look=classic layout=zbrush
-input_style zbrush
+run ui_look look=classic layout=classic
+input_style classic
 # CRKW: MaskRect (and MaskLasso) follow the symmetry axes, like a MaskPen stroke.
 run new_sphere subdivisions=5
 camera 0 0

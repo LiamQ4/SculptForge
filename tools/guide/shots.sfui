@@ -1,19 +1,20 @@
-# Screenshots for the user guide (docs/guide/images). Run from the source folder:
+# Screenshots for the user guide (docs/guide/images), in the default look and layout (Forge Terminal, Tokyo Night,
+# the SculptForge layout's task menus). Run from the source folder:
 #   build/sculptforge --ui-test tools/guide/shots.sfui --ui-out build/guide-shots
 #   python3 tools/guide/make_images.py build/guide-shots
+# For the HiDPI check, run it again with --size 3200x1920 (the same layout at 2x) and look at the shots.
 # make_images.py crops, labels and compresses them into docs/guide/images.
+run ui_look look=forge scheme=tokyo_night layout=sculptforge
 run open path=assets/demo/lion-head.glb
 wait_idle 20
 shot overview
 
-# Palettes: a drop-down, then the same palette in the right tray.
-click "Draw##palette.draw"
+# Menus: the Sculpt menu on its Draw & Tablet and Stroke sections, then the Stroke palette in the right tray.
+click "Sculpt##menu.sculpt"
+click "Draw & Tablet##section.draw"
 shot draw-palette
-key escape
-click "File##palette.file"
+click "Stroke##section.stroke"
 shot palette-dropdown
-key escape
-click "Stroke##palette.stroke"
 click "Stroke/##totray"
 click "Tool/Parts"
 shot palette-tray
@@ -24,7 +25,7 @@ key comma
 click "Library/Tool"
 wait_idle 20
 wait 1
-shot lightbox
+shot library
 key comma
 key b
 wait_idle 20
@@ -48,7 +49,7 @@ key escape
 # Help: Ctrl-hover, the command palette, the console.
 click "Tool/Geometry"
 hold ctrl
-hover "Subdivide"
+hover "Subdivide (removes levels)"
 wait 0.3
 shot ctrl-help
 hold none
@@ -67,9 +68,10 @@ key escape
 key backtick
 expect_value console_open == 0
 
-# Preferences: Config and Interface open (Shift+click keeps both).
-click "Preferences##palette.preferences"
-click "Preferences/Config"
+# Preferences: Saving & Layouts and Interface open (Shift+click keeps both).
+click "Edit##menu.edit"
+click "Preferences##section.preferences"
+click "Preferences/Saving & Layouts"
 hold shift
 click "Preferences/Interface"
 hold none
@@ -77,35 +79,45 @@ shot preferences
 key escape
 
 # Brushes: Brush Lab, the Brush palette's custom brushes with their menu, the community gallery.
+click "Sculpt##menu.sculpt"
+click "Brush##section.brush"
 click "AI Brush"
 wait 0.3
 shot brush-lab
+click "Sculpt##menu.sculpt"
+click "Brush##section.brush"
 click "AI Brush"
-click "Brush##palette.brush"
+key escape
+click "Sculpt##menu.sculpt"
+click "Brush##section.brush"
 right_click "Wrinkle"
 wait 0.2
 shot brush-library
 key escape
 key escape
-click "Brush##palette.brush"
+click "Sculpt##menu.sculpt"
+click "Brush##section.brush"
 click "Community brushes##ui.brush_gallery"
 key escape
 wait_idle 30
 wait 1
 shot community-brushes
-click "Brush##palette.brush"
+click "Sculpt##menu.sculpt"
+click "Brush##section.brush"
 click "Community brushes##ui.brush_gallery"
 key escape
 expect_not "Community brushes/Share yours"
 
 
 # Generate 3D and the Tool > Export sub-palette.
-click "Generate##palette.generate"
+click "Mesh##menu.mesh"
+click "Generate 3D##section.generate"
 click "Generate 3D##ui.generate3d"
 drop ../../assets/demo/teddy-sketch.png
 wait 0.5
 shot generate-3d
-click "Generate##palette.generate"
+click "Mesh##menu.mesh"
+click "Generate 3D##section.generate"
 click "Generate 3D##ui.generate3d"
 key escape
 expect_not "Generate 3D/From image"
@@ -126,9 +138,9 @@ run mask_clear
 # Vertex Paint: cavity paint, with the Color palette.
 run paint_fill color=bone
 run paint_from_cavity color=4a2c18 strength=0.9
-click "Color##palette.color"
+click "Paint##menu.paint"
 wait 0.2
-shot polypaint
+shot vertex-paint
 key escape
 run undo
 run undo
@@ -161,55 +173,53 @@ shot user-guide
 key shift+f1
 
 # Parts: append a sphere and a cube.
-run subtool_append type=sphere name=Eye
-run subtool_append type=cube name=Crate size=0.3
+run part_append type=sphere name=Eye
+run part_append type=cube name=Crate size=0.3
 key f
 click "Tool/Parts"
 wait 0.3
-shot subtools
+shot parts
 
 # Face Groups on a cube.
 run new_cube
-run polygroup_auto_by_normals
-click "Groups##view.polygroups"
+run facegroup_auto_by_normals
+click "Groups##view.facegroups"
 click "Tool/Face Groups"
 key f
 drag_item "Rotate##nav.rotate" -160 60
 wait 0.3
-shot polygroups
-click "Groups##view.polygroups"
+shot face-groups
+click "Groups##view.facegroups"
 
 # Remesh: an uneven mesh, then voxel remeshed.
 run new_sphere subdivisions=4
 run decimate ratio=0.08
-click "Wire##view.polyf"
+click "Wire##view.wire"
 key f
 wait 0.2
 shot remesh-before
 run remesh resolution=26
 wait 0.2
 shot remesh-after
-click "Wire##view.polyf"
+click "Wire##view.wire"
 
 # Gaussian splats made from the lion.
 run open path=assets/demo/lion-head.glb
 run mesh_to_splats
-click "Render##palette.render"
+click "View##menu.view"
 click "Show Mesh"
 key escape
-click "Splats##palette.splats"
 wait 0.3
 shot splats
-key escape
 run splat_clear
-click "Render##palette.render"
+click "View##menu.view"
 click "Show Mesh"
 key escape
 
 # Subdivision levels: a cube cage divided five times, sculpted at a low and the top level.
 run new_sphere subdivisions=1
-run subtool_append type=cube name=Box
-run subtool_delete index=0
+run part_append type=cube name=Box
+run part_delete index=0
 run subdiv_reconstruct; subdiv_reconstruct; subdiv_reconstruct; subdiv_reconstruct; subdiv_delete_higher
 run subdiv_divide; subdiv_divide; subdiv_divide; subdiv_divide; subdiv_divide
 orbit 140 -70
@@ -240,23 +250,23 @@ stroke 0.2 0.45 0.8 0.5 1.0
 stroke 0.25 0.58 0.75 0.62 1.0
 stroke 0.3 0.7 0.7 0.74 1.0
 run subdiv_level level=1
-click "Wire##view.polyf"
+click "Wire##view.wire"
 wait 0.2
-shot sdiv-1
+shot level-1
 run subdiv_level level=3
 wait 0.2
-shot sdiv-3
-click "Wire##view.polyf"
+shot level-3
+click "Wire##view.wire"
 run subdiv_level level=6
 click "Tool/Geometry"
 wait 0.2
-shot sdiv-6
+shot level-6
 
 # Dynamic topology: Tendril pulls horns out of a sphere (mirrored), with new triangles all along them.
 run new_sphere subdivisions=3
 click "Dynamic##draw.dynamic"
 run dyntopo detail=60
-click "Tendril##brush.snakehook"
+click "Tendril##brush.tendril"
 drag_path 0.76 0.32 0.85 0.25 0.95 0.17 1.05 0.08 1.12 0.0 S=1.5
 drag_path 0.5 0.2 0.5 0.05 0.5 -0.1 S=1.0
 click "Standard##brush.standard"
@@ -264,10 +274,10 @@ stroke 0.3 0.65 0.7 0.65 1.0
 key f
 orbit 60 -25
 wait 0.2
-click "Wire##view.polyf"
+click "Wire##view.wire"
 wait 0.2
 shot dyntopo-wire
-click "Wire##view.polyf"
+click "Wire##view.wire"
 wait 0.2
 shot dyntopo-shaded
 click "Dynamic##draw.dynamic"
@@ -283,27 +293,27 @@ run stroke points="0.35,0.25,2 0.3,0.25,2" brush=Clay radius=0.2 strength=1 inve
 run stroke points="0.35,0.25,2 0.3,0.25,2" brush=Clay radius=0.2 strength=1 invert=true
 run stroke points="0,0.15,2 0,-0.15,2" brush=Standard radius=0.12 strength=1
 run stroke points="0,0.15,2 0,-0.15,2" brush=Standard radius=0.12 strength=1
-run stroke points="-0.3,-0.42,2 0,-0.46,2 0.3,-0.42,2" brush=DamStandard radius=0.08 strength=1
+run stroke points="-0.3,-0.42,2 0,-0.46,2 0.3,-0.42,2" brush=SharpCrease radius=0.08 strength=1
 run stroke points="-0.25,-0.36,2 0,-0.38,2 0.25,-0.36,2" brush=Standard radius=0.08 strength=0.6
 run stroke points="-0.25,-0.5,2 0,-0.53,2 0.25,-0.5,2" brush=Standard radius=0.08 strength=0.6
 run qremesh target=1500 symmetry=x keep_original=true
-click "Wire##view.polyf"
+click "Wire##view.wire"
 wait 0.2
 shot guides-without
 key ctrl+z
-run subtool_delete index=1
-click "Wire##view.polyf"
-click "Quad Remesh/Quad Remesh Guides"
+run part_delete index=1
+click "Wire##view.wire"
+click "QRemesh/Quad Remesh Guides"
 drag_path 0.780 0.375 0.779 0.388 0.776 0.401 0.772 0.413 0.766 0.425 0.758 0.436 0.749 0.446 0.739 0.454 0.728 0.462 0.715 0.467 0.702 0.472 0.689 0.474 0.675 0.475 0.661 0.474 0.648 0.472 0.635 0.467 0.623 0.462 0.611 0.454 0.601 0.446 0.592 0.436 0.584 0.425 0.578 0.413 0.574 0.401 0.571 0.388 0.570 0.375 0.571 0.362 0.574 0.349 0.578 0.337 0.584 0.325 0.592 0.314 0.601 0.304 0.611 0.296 0.623 0.288 0.635 0.283 0.648 0.278 0.661 0.276 0.675 0.275 0.689 0.276 0.702 0.278 0.715 0.283 0.728 0.288 0.739 0.296 0.749 0.304 0.758 0.314 0.766 0.325 0.772 0.337 0.776 0.349 0.779 0.362 0.780 0.375
 drag_path 0.700 0.720 0.698 0.731 0.693 0.742 0.685 0.753 0.673 0.762 0.659 0.772 0.641 0.780 0.622 0.787 0.600 0.794 0.577 0.799 0.552 0.802 0.526 0.804 0.500 0.805 0.474 0.804 0.448 0.802 0.423 0.799 0.400 0.794 0.378 0.787 0.359 0.780 0.341 0.772 0.327 0.762 0.315 0.753 0.307 0.742 0.302 0.731 0.300 0.720 0.302 0.709 0.307 0.698 0.315 0.687 0.327 0.677 0.341 0.668 0.359 0.660 0.378 0.653 0.400 0.646 0.423 0.641 0.448 0.638 0.474 0.636 0.500 0.635 0.526 0.636 0.552 0.638 0.577 0.641 0.600 0.646 0.622 0.653 0.641 0.660 0.659 0.668 0.673 0.677 0.685 0.687 0.693 0.698 0.698 0.709 0.700 0.720
 wait 0.2
 shot guides-drawn
 run qremesh target=1500 symmetry=x
 click "Clay##brush.clay"
-click "Wire##view.polyf"
+click "Wire##view.wire"
 wait 0.2
 shot guides-with
-click "Wire##view.polyf"
+click "Wire##view.wire"
 
 # Make sculptable (scan-to-sculptable.md): the built-in test head capture, the review with its face landmarks and
 # loops, and the finished quads with the capture's colours.
@@ -326,10 +336,10 @@ shot sculptable-review
 click "Make sculptable/Finish"
 wait_idle 120
 camera 0 0
-click "Wire##view.polyf"
+click "Wire##view.wire"
 wait 0.2
 shot sculptable-result
-click "Wire##view.polyf"
+click "Wire##view.wire"
 click "Make sculptable/Review##sculptable"
 run splat_clear
 
@@ -339,9 +349,10 @@ camera 25 5
 zoom 1.6
 wait 0.2
 shot shading-smooth
-click "Material##palette.material"
+click "Render##menu.render"
+click "Materials##section.material"
 click "Flat##material.flat"
-run subtool_shading name=Eyes mode=smooth
+run part_shading name=Eyes mode=smooth
 wait 0.2
 shot shading-palette
 key escape
@@ -352,13 +363,27 @@ run set_shading mode=smooth
 
 # Your own Lit Spheres (vertex-paint.md): one loaded from an image, in the Material palette.
 run new_sphere subdivisions=5
-run load_matcap path=tests/ui/data/Gold.png
+run load_litsphere path=tests/ui/data/Gold.png
 camera 20 10
-click "Material##palette.material"
+click "Render##menu.render"
+click "Materials##section.material"
 wait_idle 20
 wait 0.2
-shot custom-matcaps
+shot custom-lit-spheres
 key escape
+# ... organised in a folder (#124): its heading, and the right-click menu's Move to folder.
+run load_litsphere path=tests/ui/data/Rose.png
+run move_litsphere name=Gold folder=Metals
+click "Render##menu.render"
+click "Materials##section.material"
+wait_idle 20
+right_click "Material/Rose"
+hover "Move to folder##litsphere"
+wait 0.3
+shot lit-sphere-folders
+key escape
+key escape
+run move_litsphere name=Gold folder=""
 run set_material name="Soft Clay"
 
 # Extract (parts.md): a cap made from the masked top of a sphere, shown with its face groups (outer, inner, rim).
@@ -367,12 +392,29 @@ run mask_rect y0=0.3
 run extract thickness=0.04 smooth=8 accept=true
 run mask_clear
 camera 30 25
-click "Groups##view.polygroups"
+click "Groups##view.facegroups"
 wait 0.2
 shot extract
-click "Groups##view.polygroups"
+click "Groups##view.facegroups"
 
-# Mirror And Weld (geometry.md): a head sculpted on one side, then mirrored and welded.
+# Booleans (parts.md): a cube with a sphere biting its corner and a slot through it, both set to Subtract; the view
+# shows the result live and the Parts list the Boolean marks.
+run new_cube
+run part_append type=sphere name=Bolt size=0.5
+run transform translate=-0.75,0.85,0.85
+run part_append type=cube name=Slot size=0.3
+run transform scale=0.4,4,0.4 translate=-2.11,-0.175,0.425
+run part_boolean index=0 mode=add
+run part_boolean name=Bolt mode=subtract
+run part_boolean name=Slot mode=subtract
+run part_select index=0
+camera 30 -25
+key f
+wait_value boolean_preview > 0 30
+wait 0.3
+shot booleans
+
+# Make Symmetric (geometry.md): a head sculpted on one side, then mirrored and welded.
 run new_head
 run stroke points="0.035,0.005,0.2 0.06,-0.03,0.2 0.07,-0.07,0.2" brush=Standard radius=0.012 strength=1
 run stroke points="0.015,0.105,0.2 0.04,0.1,0.2 0.065,0.085,0.2" brush=Standard radius=0.014 strength=1
@@ -383,3 +425,14 @@ shot mirror-weld-before
 run mirror_and_weld axis=x
 wait 0.2
 shot mirror-weld-after
+
+# Quad Remesh (retopology.md): the lion as quads, wireframe on, the Geometry sub-palette open.
+run open path=assets/demo/lion-head.glb
+wait_idle 20
+run qremesh target=5000 keep_original=true
+wait_idle 60
+click "Wire##view.wire"
+click "Geometry##tool.geometry"
+wait 0.3
+shot qremesh
+click "Wire##view.wire"

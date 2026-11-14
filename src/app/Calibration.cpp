@@ -1,6 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "app/Calibration.h"
+#include "app/I18n.h"
 
 #include "core/ThreadPool.h"
 #include "core/TierConfig.h"
@@ -9,10 +10,14 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <fstream>
+#include <filesystem>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #if defined(_WIN32)
@@ -20,6 +25,7 @@
 #include <windows.h>
 #include <dxgi.h>
 #elif defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h> // (osLanguageTag; sculptforge_core links it already for the keychain)
 #include <dlfcn.h>
 #endif
 
@@ -381,6 +387,15 @@ double measureUpload(bool quick) {
 
 } // namespace
 
+uint64_t queryFreeVideoMemoryMB(const std::string& source) {
+    const bool nvx = source.rfind("GL_NVX", 0) == 0, ati = source.rfind("GL_ATI", 0) == 0;
+    if (!nvx && !ati) return 0;
+    while (gl::GetError() != GL_NO_ERROR) {}
+    GLint v[4] = {};
+    gl::GetIntegerv(nvx ? kGL_GPU_MEMORY_INFO_CURRENT_AVAILABLE_VIDMEM_NVX : kGL_TEXTURE_FREE_MEMORY_ATI, v);
+    return gl::GetError() == GL_NO_ERROR && v[0] > 0 ? uint64_t(v[0]) >> 10 : 0;
+}
+
 void probeHardware(HardwareInfo& info) {
     probeSystem(info);
     const GlExtra e = loadExtra();
@@ -478,7 +493,11 @@ bool GpuFrameTimer::available() {
 
 void GpuFrameTimer::begin() {
     if (!available() || active_ >= 0) return;
-    if (pending_[next_]) pending_[next_] = false; // never read in time: dropped
+    if (pending_[next_]) { // never read in time: dropped
+        pending_[next_] = false;
+        if (fences_[next_]) gl::DeleteSync(fences_[next_]);
+        fences_[next_] = nullptr;
+    }
     static const GlExtra e = loadExtra();
     e.BeginQuery(kGL_TIME_ELAPSED, queries_[next_]);
     active_ = next_;
@@ -488,6 +507,7 @@ void GpuFrameTimer::end(uint64_t frame) {
     if (active_ < 0) return;
     static const GlExtra e = loadExtra();
     e.EndQuery(kGL_TIME_ELAPSED);
+    fences_[active_] = gl::FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     frames_[active_] = frame;
     pending_[active_] = true;
     next_ = (active_ + 1) % kSlots;
@@ -502,9 +522,16 @@ bool GpuFrameTimer::poll(uint64_t& frame, double& ms) {
     for (int k = 0; k < kSlots; ++k) {
         const int i = (next_ + k) % kSlots;
         if (!pending_[i] || i == active_) continue;
-        uint64_t ready = 0;
-        e.GetQueryObjectui64v(queries_[i], kGL_QUERY_RESULT_AVAILABLE, &ready);
-        if (!ready) return false; // later ones aren't either
+        if (fences_[i]) { // done on the GPU? (a zero timeout: never waits)
+            const GLenum r = gl::ClientWaitSync(fences_[i], 0, 0);
+            if (r == GL_TIMEOUT_EXPIRED) return false; // later ones aren't either
+            gl::DeleteSync(fences_[i]);
+            fences_[i] = nullptr;
+        } else { // (no fence: the driver's word)
+            uint64_t ready = 0;
+            e.GetQueryObjectui64v(queries_[i], kGL_QUERY_RESULT_AVAILABLE, &ready);
+            if (!ready) return false;
+        }
         uint64_t ns = 0;
         e.GetQueryObjectui64v(queries_[i], kGL_QUERY_RESULT, &ns);
         pending_[i] = false;
@@ -520,6 +547,10 @@ void GpuFrameTimer::release() {
         static const GlExtra e = loadExtra();
         if (active_ >= 0) e.EndQuery(kGL_TIME_ELAPSED);
         e.DeleteQueries(kSlots, queries_);
+        for (auto*& f : fences_) {
+            if (f) gl::DeleteSync(f);
+            f = nullptr;
+        }
     }
     ok_ = false;
     loaded_ = false;
@@ -570,9 +601,50 @@ HardwareProfile Calibrator::profile(const ProfileOverrides& overrides, const Pro
 }
 
 void applyCachedThreadCount() {
+    if (simulatedFloorTier()) { // (4 cores; the renderer leaves out GL 4.4 buffer storage: Renderer::persistentUpload)
+        ThreadPool::setSharedThreadCount(4);
+        return;
+    }
     HardwareProfile cached;
-    if (loadHardwareProfile(hardwareProfilePath(), cached) && cached.settings.threads > 0)
-        ThreadPool::setSharedThreadCount(cached.settings.threads);
+    if (loadHardwareProfile(hardwareProfilePath(), cached) && cached.settings.threads > 0 &&
+        !ThreadPool::setSharedThreadCount(cached.settings.threads)) // (#184: the pool was made first, at the default 16)
+        SDL_Log("Threads: the pool started before the profile was read; %d apply at the next start", cached.settings.threads);
+}
+
+namespace {
+std::string gpuMarkerPath() {
+    const std::string profile = hardwareProfilePath();
+    return profile.empty() ? std::string() : profile + ".gpu-starting";
+}
+} // namespace
+
+std::string applyCachedGpuChoice() {
+    const std::string marker = gpuMarkerPath();
+    if (marker.empty()) return {};
+    std::error_code ec;
+    const std::filesystem::path m(std::u8string(marker.begin(), marker.end()));
+    if (std::filesystem::exists(m, ec)) {
+        // The last start with a chosen card never reached its GL context: the system's choice this time.
+        std::filesystem::remove(m, ec);
+        clearGpuChoice();
+        SDL_Log("Graphics card: the last start on the chosen card failed; using the system's choice");
+        return "The chosen graphics card didn't start last time, so SculptForge uses the system's choice "
+               "(Preferences > Performance > Graphics card)";
+    }
+    HardwareProfile cached;
+    const std::string choice = loadHardwareProfile(hardwareProfilePath(), cached) ? cached.overrides.gpu : std::string();
+    const std::string did = applyGpuChoice(choice, listGpus());
+    if (did.empty()) return {};
+    SDL_Log("Graphics card: %s", did.c_str());
+    std::ofstream(m) << did << "\n";
+    return {};
+}
+
+void gpuChoiceStarted() {
+    const std::string marker = gpuMarkerPath();
+    if (marker.empty()) return;
+    std::error_code ec;
+    std::filesystem::remove(std::filesystem::path(std::u8string(marker.begin(), marker.end())), ec);
 }
 
 HardwareProfile calibrateNow(bool quick, const ProfileOverrides& overrides, const ProfileTier* previous) {
@@ -637,6 +709,45 @@ int runCalibrateCommandLine(bool quick, bool save) {
     SDL_DestroyWindow(window);
     SDL_Quit();
     return code;
+}
+
+// The language the operating system's interface is in, for the first start's language offer (I18n.h); one code path
+// per OS, the mapping to a shipped language is languageFromOsLocale (tested). Here because this file already has the
+// per-OS includes.
+std::string osLanguageTag() {
+    if (const char* forced = std::getenv("SF_OS_LANGUAGE"); forced && *forced) return forced; // QA: pretend the OS is in this
+#if defined(_WIN32)
+    // The display language Windows was set to (not the regional format): LANGID -> "es-MX", "zh-TW", "zh-CN"...
+    wchar_t name[LOCALE_NAME_MAX_LENGTH] = {};
+    if (LCIDToLocaleName(MAKELCID(GetUserDefaultUILanguage(), SORT_DEFAULT), name, LOCALE_NAME_MAX_LENGTH, 0) <= 0) return {};
+    char utf8[LOCALE_NAME_MAX_LENGTH * 3] = {};
+    if (WideCharToMultiByte(CP_UTF8, 0, name, -1, utf8, int(sizeof utf8), nullptr, nullptr) <= 0) return {};
+    return utf8;
+#elif defined(__APPLE__)
+    // The first of the user's preferred languages: "es-MX", "zh-Hant-TW", "en-US".
+    std::string out;
+    if (CFArrayRef languages = CFLocaleCopyPreferredLanguages()) {
+        if (CFArrayGetCount(languages) > 0) {
+            if (auto first = static_cast<CFStringRef>(CFArrayGetValueAtIndex(languages, 0))) {
+                char buf[128] = {};
+                if (CFStringGetCString(first, buf, sizeof buf, kCFStringEncodingUTF8)) out = buf;
+            }
+        }
+        CFRelease(languages);
+    }
+    return out;
+#else
+    // POSIX order: LC_ALL, then LC_MESSAGES, then LANG; "C" and "POSIX" name no language. (LANGUAGE is a list
+    // that only works when LANG is set: the three above are what a desktop session sets.)
+    for (const char* var : {"LC_ALL", "LC_MESSAGES", "LANG"}) {
+        const char* value = std::getenv(var);
+        if (!value || !*value) continue;
+        const std::string v = value;
+        if (v == "C" || v == "POSIX" || v.rfind("C.", 0) == 0) return {};
+        return v;
+    }
+    return {};
+#endif
 }
 
 } // namespace sf

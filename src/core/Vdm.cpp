@@ -682,7 +682,7 @@ void Sculptor::dabVdmSingle(Mesh& mesh, BVH& bvh, const DabParams& p, float hand
     const glm::vec3 right = glm::cross(up, n) * handedness;
 
     const float r = p.radius;
-    // Z Intensity 50 (the default) presses the map at its own size; 100 doubles it. Alt digs the shape in
+    // Intensity 50 (the default) presses the map at its own size; 100 doubles it. Alt digs the shape in
     // (Blender's convention: X and Y stay, Z flips).
     const float amount = 2.0f * std::clamp(p.strength, 0.0f, 1.0f) * std::clamp(p.pressure, 0.0f, 1.0f) * r;
     const float zSign = p.invert ? -1.0f : 1.0f;
@@ -861,21 +861,21 @@ void registerVdmCommands(CommandRegistry& registry) {
                       return {true, "Exported VDM '" + v->name + "' to " + path};
                   }});
     registry.add({"vdm_new_plane",
-                  "Add a VDM plane to sculpt a new vector displacement brush on (ZBrush's VDM plane template): a flat "
+                  "Add a VDM plane to sculpt a new vector displacement brush on: a flat "
                   "2 x 2 grid seen from the top, its border masked; the other Parts are hidden. Then vdm_capture.",
                   {{"resolution", T::Number, "Quads per side (16-1024). Default 256; divide it for finer detail.", false}},
                   [](Document& doc, const Args& a) -> CommandResult {
                       const int res = std::clamp(int(argNumber(a, "resolution", 256)), 16, 1024);
-                      for (auto& s : doc.subtools) s.visible = false;
-                      doc.addSubtool(makeVdmPlane(res), doc.uniqueSubtoolName("VDM Plane"));
-                      doc.activeSubtoolInfo().visible = true;
+                      for (auto& s : doc.parts) s.visible = false;
+                      doc.addPart(makeVdmPlane(res), doc.uniquePartName("VDM Plane"));
+                      doc.activePartInfo().visible = true;
                       doc.modified = true;
                       return {true, "VDM plane (" + std::to_string(res) + " x " + std::to_string(res) +
                                         "): sculpt it from the top, then Create VDM"};
                   }});
     registry.add({"vdm_capture",
                   "Create a VDM brush from the active VDM plane: how far each point moved from the flat grid becomes "
-                  "a new vector displacement map in the brush library (ZBrush: create brush from the VDM plane).",
+                  "a new vector displacement map in the brush library.",
                   {{"name", T::String, "Name of the new VDM (default 'My VDM').", false},
                    {"resolution", T::Number, "Map size in pixels (16-2048, default 256; Blender suggests 512 or less).", false},
                    {"exr", T::String, "Also write it as a 32-bit OpenEXR here, for Blender.", false},

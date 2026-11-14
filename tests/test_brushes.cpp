@@ -1,7 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// v0.2 brushes (DamStandard, ClayBuildup, SnakeHook, Trim, Layer, Nudge),
+// v0.2 brushes (Sharp Crease, Clay Block, SnakeHook, Trim, Layer, Nudge),
 // alphas, stroke helpers (lazy mouse, spray, spacing) and brush_set_alpha.
 #include "TestHarness.h"
 
@@ -55,15 +55,15 @@ glm::vec3 moved(const Document& d, const std::vector<glm::vec3>& before, uint32_
 } // namespace
 
 TEST(brush_names_cover_new_types) {
-    CHECK(std::string(brushName(BrushType::DamStandard)) == "DamStandard");
-    CHECK(std::string(brushName(BrushType::ClayBuildup)) == "ClayBuildup");
-    CHECK(std::string(brushName(BrushType::SnakeHook)) == "SnakeHook");
+    CHECK(std::string(brushName(BrushType::SharpCrease)) == "SharpCrease");
+    CHECK(std::string(brushName(BrushType::ClayBlock)) == "ClayBlock");
+    CHECK(std::string(brushName(BrushType::SnakeHook)) == "Tendril");
     CHECK(std::string(brushName(BrushType::Trim)) == "Trim");
     CHECK(std::string(brushName(BrushType::Layer)) == "Layer");
     CHECK(std::string(brushName(BrushType::Nudge)) == "Nudge");
     for (int i = 0; i < int(BrushType::Count); ++i) CHECK(std::string(brushName(BrushType(i))) != "?");
     // Original brushes keep their slots (hotkeys 1-8, saved settings).
-    CHECK(int(BrushType::Standard) == 0 && int(BrushType::Pinch) == 7 && int(BrushType::DamStandard) == 8);
+    CHECK(int(BrushType::Standard) == 0 && int(BrushType::Pinch) == 7 && int(BrushType::SharpCrease) == 8);
 }
 
 TEST(round_alpha_leaves_existing_brushes_unchanged) {
@@ -84,7 +84,7 @@ TEST(round_alpha_leaves_existing_brushes_unchanged) {
     CHECK(std::abs(d.mesh.positions[nearest(d.mesh, glm::vec3(0))].y - 0.3f * 0.06f * 0.5f) < 1e-5f);
 }
 
-// ZBrush Focal Shift: 0 leaves the falloff (and so every brush) exactly as before; below 0 the tip is broader
+// classic Falloff: 0 leaves the falloff (and so every brush) exactly as before; below 0 the tip is broader
 // and harder, above 0 a softer point; the cursor's inner ring sits where the falloff is one half.
 TEST(focal_shift_shapes_the_falloff) {
     for (float d : {0.0f, 0.1f, 0.33f, 0.5f, 0.77f, 1.0f}) {
@@ -113,12 +113,12 @@ TEST(focal_shift_shapes_the_falloff) {
     CHECK(c.mesh.positions[off].y < a.mesh.positions[off].y);
 }
 
-TEST(dam_standard_carves_sharp_pinched_groove) {
+TEST(sharp_crease_carves_sharp_pinched_groove) {
     Document d = planeDoc();
     const auto before = d.mesh.positions;
     DabParams p = dabAt(glm::vec3(0.0f));
     p.strokeDelta = glm::vec3(0, 0, 0.05f); // stroke runs along +z
-    stroke(d, BrushType::DamStandard, p);
+    stroke(d, BrushType::SharpCrease, p);
     const uint32_t c = nearest(d.mesh, glm::vec3(0)), side = nearest(d.mesh, glm::vec3(0.15f, 0, 0));
     const uint32_t along = nearest(d.mesh, glm::vec3(0, 0, 0.15f));
     CHECK(moved(d, before, c).y < -0.005f);                         // carves inward
@@ -130,14 +130,14 @@ TEST(dam_standard_carves_sharp_pinched_groove) {
 
     Document r = planeDoc();
     p.invert = true;
-    stroke(r, BrushType::DamStandard, p);
+    stroke(r, BrushType::SharpCrease, p);
     CHECK(r.mesh.positions[c].y > 0.005f); // Alt raises a sharp ridge
 }
 
-TEST(clay_buildup_is_square_and_flat_topped) {
+TEST(clay_block_is_square_and_flat_topped) {
     Document d = planeDoc(), clay = planeDoc();
     const DabParams p = dabAt(glm::vec3(0.0f));
-    stroke(d, BrushType::ClayBuildup, p);
+    stroke(d, BrushType::ClayBlock, p);
     stroke(clay, BrushType::Clay, p);
     const uint32_t c = nearest(d.mesh, glm::vec3(0)), diag = nearest(d.mesh, glm::vec3(0.2f, 0, 0.2f));
     const uint32_t mid = nearest(d.mesh, glm::vec3(0.1f, 0, 0));
@@ -147,7 +147,7 @@ TEST(clay_buildup_is_square_and_flat_topped) {
     CHECK(d.mesh.positions[diag].y > 0.6f * hc);                // square: corners filled
     CHECK(clay.mesh.positions[diag].y < 0.3f * clay.mesh.positions[c].y); // round Clay is not
     // Builds up over strokes.
-    stroke(d, BrushType::ClayBuildup, p);
+    stroke(d, BrushType::ClayBlock, p);
     CHECK(d.mesh.positions[c].y > 1.5f * hc);
     // Nothing outside the rounded square moves.
     CHECK(d.mesh.positions[nearest(d.mesh, glm::vec3(0.45f, 0, 0))].y == 0.0f);
@@ -235,6 +235,43 @@ TEST(layer_brush_raises_constant_height_without_stacking) {
     CHECK(std::abs(d.mesh.positions[c].y - height) < 1e-5f);
 }
 
+TEST(smooth_peaks_lowers_only_the_high_points) {
+    // A bump and a pit on a plane: Smooth Peaks wears the bump down and leaves the pit's floor where it was,
+    // where plain Smooth fills the pit.
+    const auto bumpy = [] {
+        Document d = planeDoc();
+        DabParams bump = dabAt(glm::vec3(0.3f, 0, 0), 0.2f, 1.0f);
+        stroke(d, BrushType::Standard, bump, kNoSymmetry, 3);
+        DabParams pit = dabAt(glm::vec3(-0.3f, 0, 0), 0.2f, 1.0f);
+        pit.invert = true;
+        stroke(d, BrushType::Standard, pit, kNoSymmetry, 3);
+        return d;
+    };
+    Document d = bumpy();
+    uint32_t top = 0, floor = 0;
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) {
+        if (d.mesh.positions[v].y > d.mesh.positions[top].y) top = v;
+        if (d.mesh.positions[v].y < d.mesh.positions[floor].y) floor = v;
+    }
+    CHECK(d.mesh.positions[top].y > 0.005f && d.mesh.positions[floor].y < -0.005f);
+    const auto before = d.mesh.positions;
+
+    Document plain = bumpy();
+    stroke(plain, BrushType::Smooth, dabAt(glm::vec3(0.0f), 0.8f, 1.0f), kNoSymmetry, 4);
+    CHECK(plain.mesh.positions[floor].y > before[floor].y * 0.95f); // (Smooth fills the pit)
+
+    stroke(d, BrushType::SmoothPeaks, dabAt(glm::vec3(0.0f), 0.8f, 1.0f), kNoSymmetry, 12);
+    CHECK(d.mesh.positions[top].y < 0.85f * before[top].y);
+    CHECK(glm::distance(d.mesh.positions[floor], before[floor]) < 1e-5f);
+    float maxUp = 0.0f;
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) maxUp = std::max(maxUp, moved(d, before, v).y);
+    CHECK(maxUp < 1e-5f); // nothing rises
+    CHECK(std::string(brushName(BrushType::SmoothPeaks)) == "SmoothPeaks");
+    CHECK(std::string(brushLabel(BrushType::SmoothPeaks)) == "Smooth Peaks");
+    BrushType t{};
+    CHECK(brushFromName("smooth peaks", t) && t == BrushType::SmoothPeaks);
+}
+
 TEST(nudge_slides_along_the_surface) {
     Document d = planeDoc();
     const auto before = d.mesh.positions;
@@ -251,7 +288,7 @@ TEST(nudge_slides_along_the_surface) {
 }
 
 TEST(new_brushes_respect_mask_and_symmetry) {
-    const BrushType types[] = {BrushType::DamStandard, BrushType::ClayBuildup, BrushType::SnakeHook,
+    const BrushType types[] = {BrushType::SharpCrease, BrushType::ClayBlock, BrushType::SnakeHook,
                                BrushType::Trim,        BrushType::Layer,       BrushType::Nudge};
     for (BrushType type : types) {
         DabParams p = dabAt(glm::vec3(0.5f, 0, 0), 0.3f, 1.0f);
@@ -330,7 +367,7 @@ TEST(alpha_shapes_and_orients_dabs) {
     BrushAlpha square = BrushAlpha::square();
     DabParams p = dabAt(glm::vec3(0));
     p.alpha = &square;
-    p.focal = -1.0f; // (Focal Shift -100: the alpha shows hard to its edges; at 0 it rounds the corners, #60)
+    p.focal = -1.0f; // (Falloff -100: the alpha shows hard to its edges; at 0 it rounds the corners, #60)
     stroke(sq, BrushType::Standard, p);
     p.focal = 0.0f;
     const uint32_t c = nearest(sq.mesh, glm::vec3(0)), diag = nearest(sq.mesh, glm::vec3(0.25f, 0, 0.25f));
@@ -371,7 +408,7 @@ TEST(alpha_shapes_and_orients_dabs) {
     CHECK(r.mesh.positions[nearest(r.mesh, glm::vec3(0.12f, 0, 0))].y == 0.0f);
 }
 
-// #60: Focal Shift shapes alpha brushes as in ZBrush. The alpha is multiplied by a round falloff reaching the
+// #60: Falloff shapes alpha brushes. The alpha is multiplied by a round falloff reaching the
 // stamp's corners: -100 shows the whole square, 0 rounds its corners into a soft mound, +100 leaves a small point.
 TEST(focal_shift_shapes_alpha_dabs) {
     CHECK(alphaFalloff(0.0f, 1.0f, 0.0f) == 1.0f);
@@ -383,7 +420,7 @@ TEST(focal_shift_shapes_alpha_dabs) {
     CHECK(square.stamp(0.7f, 0.7f, -1.0f) == square.sample(0.7f, 0.7f));
     CHECK(square.stamp(0.7f, 0.7f, 0.0f) < 0.5f * square.stamp(0.7f, 0.0f, 0.0f)); // rounded corners
     CHECK(square.stamp(1.2f, 0.0f, -1.0f) == 0.0f);
-    const BrushAlpha round = BrushAlpha::round(); // (empty: the plain brush falloff, Focal Shift included)
+    const BrushAlpha round = BrushAlpha::round(); // (empty: the plain brush falloff, Falloff included)
     CHECK(round.stamp(0.4f, 0.0f, 0.5f) == brushFalloff(0.4f, 1.0f, 0.5f) && round.stamp(1.1f, 0.0f, -1.0f) == 0.0f);
 
     // A square-alpha dab: how much moves (footprint) and how much of the corner survives.
@@ -401,7 +438,7 @@ TEST(focal_shift_shapes_alpha_dabs) {
         f.centre = d.mesh.positions[nearest(d.mesh, glm::vec3(0))].y;
         return f;
     };
-    for (BrushType type : {BrushType::Standard, BrushType::ClayBuildup}) {
+    for (BrushType type : {BrushType::Standard, BrushType::ClayBlock}) {
         const Footprint hard = dabWith(type, -1.0f), soft = dabWith(type, 0.0f), point = dabWith(type, 1.0f);
         CHECK(hard.centre > 0.0f && soft.centre > 0.0f && point.centre > 0.0f);
         CHECK(hard.moved > soft.moved && soft.moved > point.moved);
@@ -412,8 +449,8 @@ TEST(focal_shift_shapes_alpha_dabs) {
     }
 }
 
-// #60: Focal Shift reaches the built-in square ClayBuildup tip and custom (recipe) brushes; 0 keeps their own tip.
-TEST(focal_shift_reaches_clay_buildup_and_recipes) {
+// #60: Falloff reaches the built-in square Clay Block tip and custom (recipe) brushes; 0 keeps their own tip.
+TEST(focal_shift_reaches_clay_block_and_recipes) {
     auto height = [&](float focal, bool recipe, const glm::vec3& at) {
         Document d = planeDoc();
         DabParams p = dabAt(glm::vec3(0));
@@ -425,7 +462,7 @@ TEST(focal_shift_reaches_clay_buildup_and_recipes) {
             d.sculptor.dabRecipe(d.mesh, d.bvh, r, p, kNoSymmetry);
             d.undo.push(d.sculptor.endStroke());
         } else {
-            stroke(d, BrushType::ClayBuildup, p);
+            stroke(d, BrushType::ClayBlock, p);
         }
         const uint32_t v = nearest(d.mesh, at);
         return d.mesh.positions[v].y / std::max(d.mesh.positions[nearest(d.mesh, glm::vec3(0))].y, 1e-9f);
@@ -435,16 +472,16 @@ TEST(focal_shift_reaches_clay_buildup_and_recipes) {
         const float hard = height(-0.8f, recipe, at), plain = height(0.0f, recipe, at), soft = height(0.8f, recipe, at);
         CHECK(hard > plain + 0.02f && plain > soft + 0.02f);
     }
-    // 0 is bit-identical to no Focal Shift at all (the brush's own tip).
+    // 0 is bit-identical to no Falloff at all (the brush's own tip).
     Document a = planeDoc(), b = planeDoc();
     DabParams p = dabAt(glm::vec3(0));
-    stroke(a, BrushType::ClayBuildup, p);
+    stroke(a, BrushType::ClayBlock, p);
     p.focal = 0.0f;
-    stroke(b, BrushType::ClayBuildup, p);
+    stroke(b, BrushType::ClayBlock, p);
     CHECK(a.mesh.positions == b.mesh.positions);
 }
 
-// #75: custom and Community (recipe) brushes show the whole alpha at Focal Shift -100, as the built-ins do (#60):
+// #75: custom and Community (recipe) brushes show the whole alpha at Falloff -100, as the built-ins do (#60):
 // a DragRect-style single stamp of a corner-reaching alpha with Clay Slab displaces the square's corners, not
 // only the round tip inside the brush circle. At 0 the preset keeps its own round tip.
 TEST(custom_brush_full_alpha_at_focal_minus_100) {
@@ -599,9 +636,9 @@ TEST(spray_and_spacing_are_deterministic) {
 }
 
 TEST(alpha_generated_builtins) {
-    // #43: twelve patterns made in code (no image files), after Round, Square and Noise.
+    // #43: twelve patterns made in code (no image files), after Round, Square and Noise, six for the brush packs and six for wood.
     const auto& all = BrushAlpha::builtins();
-    CHECK(all.size() == 15);
+    CHECK(all.size() == 30); // ...and three procedural wood grains
     CHECK(all[0].empty() && all[0].name == "Round" && all[1].name == "Square" && all[2].name == "Noise");
     for (size_t i = 3; i < all.size(); ++i) {
         const BrushAlpha& a = all[i];

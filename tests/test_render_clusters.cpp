@@ -11,11 +11,14 @@
 #include "core/ThreadPool.h"
 #include "core/UploadOrder.h"
 #include "render/Clusters.h"
+#include "render/Renderer.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <map>
+#include <set>
 #include <random>
 
 using namespace sf;
@@ -349,4 +352,283 @@ TEST(motion_proxy_is_closed_and_light) {
     order.build(h);
     ClusterBounds b;
     CHECK(clusterProxy(h, order, 0, order.clusterTriangles(0), proxy, b) && proxy.empty());
+}
+
+TEST(motion_proxy_keeps_thin_shell_faces_apart) {
+    // A thin shell (Make Shell: an outer and an inner face a fraction of an edge apart): the motion proxy snaps vertices to the
+    // cells of a grid a few edges wide, and a cell holding both faces took one vertex for both, so proxy triangles mixed the faces
+    // (specks while the view moved, Discord 11-12). No proxy triangle may touch both faces, and the shell's proxy folds over no
+    // more than the single surface's does.
+    Mesh base = makeBenchSphere(120000);
+    const size_t nv = base.vertexCount();
+    double edge = 0.0;
+    for (const glm::uvec3& tri : base.triangles) edge += glm::distance(base.positions[tri.x], base.positions[tri.y]);
+    edge /= double(base.triangleCount());
+    const float thickness = float(edge) * 0.15f; // (a tenth of the grid cell and less)
+    Mesh m;
+    m.positions = base.positions;
+    m.triangles = base.triangles;
+    for (size_t v = 0; v < nv; ++v) {
+        const glm::vec3 p = base.positions[v];
+        m.positions.push_back(p - glm::normalize(p) * thickness);
+    }
+    for (const glm::uvec3& tri : base.triangles) m.triangles.push_back(glm::uvec3(tri.x, tri.z, tri.y) + glm::uvec3(uint32_t(nv)));
+    m.recomputeAllNormals();
+    base.recomputeAllNormals();
+    // (Triangles of `mesh`'s proxies that mix the faces of a shell whose outer face is the vertices below `outerCount`, and those
+    // facing against the radial direction a closed sphere's or a shell's faces have.)
+    auto count = [](const Mesh& mesh, size_t outerCount, size_t& mixed, size_t& flipped, size_t& total) {
+        UploadOrder order;
+        order.build(mesh);
+        std::vector<uint16_t> proxy;
+        for (uint32_t c = 0; c < order.clusters().size(); ++c) {
+            ClusterBounds b = clusterBounds(mesh, order, c);
+            if (!clusterProxy(mesh, order, c, order.clusterTriangles(c) / 4, proxy, b)) continue;
+            const auto& cl = order.clusters()[c];
+            for (size_t i = 0; i < proxy.size(); i += 3) {
+                uint32_t v[3];
+                for (int k = 0; k < 3; ++k) v[k] = order.fromGpu()[cl.firstVertex + proxy[i + size_t(k)]];
+                ++total;
+                const bool outer = v[0] < outerCount;
+                mixed += (v[1] < outerCount) != outer || (v[2] < outerCount) != outer;
+                const glm::vec3 n = glm::cross(mesh.positions[v[1]] - mesh.positions[v[0]], mesh.positions[v[2]] - mesh.positions[v[0]]);
+                const glm::vec3 centre = (mesh.positions[v[0]] + mesh.positions[v[1]] + mesh.positions[v[2]]) / 3.0f;
+                flipped += (glm::dot(n, centre) > 0.0f) != outer;
+            }
+        }
+    };
+    size_t mixed = 0, flipped = 0, total = 0, bm = 0, bf = 0, bt = 0;
+    count(m, nv, mixed, flipped, total);
+    count(base, base.vertexCount(), bm, bf, bt);
+    std::printf("  thin shell proxy: %zu triangles, %zu mixing the faces, %zu facing the wrong way (a single sphere's: %zu of %zu)\n",
+                total, mixed, flipped, bf, bt);
+    CHECK(total > 0);
+    CHECK(mixed == 0);
+    {
+        UploadOrder order;
+        order.build(m);
+        const CoarseLevels L = buildCoarseLevels(m, order);
+        size_t cellsMixing = 0, cells = L.levels[0].keys.size();
+        for (uint32_t k = 0; k < cells; ++k) {
+            bool outer = false, inner = false;
+            for (uint32_t i = L.memberFirst[k]; i < L.memberFirst[k + 1]; ++i) (L.members[i] < nv ? outer : inner) = true;
+            cellsMixing += outer && inner;
+        }
+        std::printf("  thin shell coarse level 0: %zu of %zu cells hold both faces\n", cellsMixing, cells);
+        // No level a cluster keeps may have a triangle on a cell that holds both faces (at any level: through the parents).
+        std::vector<uint8_t> faces(L.positions.size(), 0);
+        for (size_t v = 0; v < m.vertexCount(); ++v)
+            for (uint32_t k = L.vertexCell[v]; k != ~0u; k = L.parent[k]) faces[k] |= v < nv ? 1 : 2;
+        size_t bad = 0, kept = 0;
+        for (const CoarseLevels::Lod& lod : L.clusters)
+            for (int level = 0; level < lod.levels; ++level, ++kept)
+                for (uint32_t i = lod.first[level]; i < lod.first[level] + lod.count[level]; ++i) bad += faces[L.indices[i]] == 3;
+        std::printf("  thin shell coarse levels kept: %zu, indices on a cell with both faces: %zu\n", kept, bad);
+        CHECK(bad == 0);
+    }
+    CHECK(double(flipped) / double(total) <= 1.5 * double(bf) / double(bt) + 0.002);
+}
+
+namespace {
+
+// Every cell point the mean of its vertices where they are now (the build's membership: a vertex's level-0 cell,
+// then its parents up the levels), brute force over the whole mesh.
+bool cellPointsAreMeans(const CoarseLevels& L, const Mesh& m, float& worst) {
+    std::vector<glm::dvec3> sum(L.positions.size(), glm::dvec3(0.0));
+    std::vector<uint32_t> n(L.positions.size(), 0);
+    for (size_t v = 0; v < m.vertexCount(); ++v)
+        for (uint32_t k = L.vertexCell[v]; k != ~0u; k = L.parent[k]) sum[k] += glm::dvec3(m.positions[v]), ++n[k];
+    worst = 0.0f;
+    for (size_t k = 0; k < sum.size(); ++k)
+        if (n[k]) worst = std::max(worst, glm::distance(L.positions[k], glm::vec3(sum[k] / double(n[k]))));
+    return worst < L.cell * 1e-4f;
+}
+
+Mesh detailedSphere(size_t triangles) {
+    Mesh m = makeBenchSphere(triangles);
+    for (size_t v = 0; v < m.vertexCount(); ++v) {
+        const glm::vec3 p = m.positions[v];
+        m.positions[v] = p * (1.0f + 0.02f * std::sin(p.x * 31.0f) * std::sin(p.z * 29.0f));
+    }
+    m.recomputeAllNormals();
+    return m;
+}
+
+} // namespace
+
+TEST(coarse_levels_closed_at_each_level_and_light) {
+    // Coarse levels (buildCoarseLevels) on one grid per level for the whole mesh: with every cluster at one level the
+    // surface stays closed (neighbours share their cells' points), each level lighter than the one before.
+    Mesh m = detailedSphere(1000000);
+    UploadOrder order;
+    order.build(m);
+    const CoarseLevels L = buildCoarseLevels(m, order);
+    CHECK(L.clusters.size() == order.clusters().size());
+    float worst = 0.0f;
+    CHECK(cellPointsAreMeans(L, m, worst));
+    size_t first = 0, coarsest = 0, minLevels = CoarseLevels::kMaxLevels;
+    bool shrinking = true;
+    for (const CoarseLevels::Lod& l : L.clusters) {
+        minLevels = std::min(minLevels, size_t(l.levels));
+        if (l.levels == 0) continue;
+        first += l.count[0] / 3;
+        coarsest += l.count[l.levels - 1] / 3;
+        for (int k = 1; k < l.levels; ++k) shrinking = shrinking && l.count[k] <= l.count[k - 1] && l.error[k] >= l.error[k - 1];
+    }
+    std::printf("  coarse levels: %zu cells; level 0 %zu, coarsest %zu of %zu triangles; every cluster has %zu levels or more\n",
+                L.positions.size(), first, coarsest, m.triangleCount(), minLevels);
+    CHECK(shrinking);
+    CHECK(minLevels >= 1);
+    CHECK(first * 8 < m.triangleCount());
+    // No cracks: every edge of the level's distinct triangles is shared by two of them or more (a cluster drops
+    // the repeats of a triangle, so counting oriented edges exactly would be too strict).
+    for (int level = 0; level < int(minLevels); ++level) {
+        std::set<std::array<uint32_t, 3>> tris;
+        for (const CoarseLevels::Lod& l : L.clusters)
+            for (uint32_t i = l.first[level]; i < l.first[level] + l.count[level]; i += 3)
+                tris.insert({L.indices[i], L.indices[i + 1], L.indices[i + 2]});
+        std::map<std::pair<uint32_t, uint32_t>, int> edges;
+        for (const auto& t : tris)
+            for (int k = 0; k < 3; ++k) ++edges[std::minmax(t[size_t(k)], t[size_t((k + 1) % 3)])];
+        size_t open = 0;
+        for (const auto& [e, n] : edges) open += n < 2;
+        if (open) std::printf("  level %d: %zu of %zu edges with one triangle\n", level, open, edges.size());
+        CHECK(open == 0);
+    }
+}
+
+TEST(coarse_levels_follow_edits) {
+    // After a stroke (some vertices pushed out), updateCoarseLevels moves the points of the cells those vertices are
+    // in and of their cells up the levels: every cell point is again the mean of its vertices, everywhere; the
+    // triangles stay as built (closed); updating again changes nothing.
+    Mesh m = detailedSphere(300000);
+    UploadOrder order;
+    order.build(m);
+    CoarseLevels L = buildCoarseLevels(m, order);
+    const std::vector<glm::vec3> before(L.positions);
+    const glm::vec3 centre = glm::normalize(glm::vec3(0.3f, 0.8f, 0.5f)) * glm::length(m.positions[0]);
+    const float radius = glm::length(m.positions[0]) * 0.2f;
+    std::vector<uint8_t> moved(m.vertexCount(), 0);
+    for (size_t v = 0; v < m.vertexCount(); ++v) {
+        const float d = glm::distance(m.positions[v], centre);
+        if (d >= radius) continue;
+        m.positions[v] += m.normals[v] * (radius * 0.08f * (1.0f - d / radius)); // (a clay-like push, over a cell)
+        moved[v] = 1;
+    }
+    std::vector<uint32_t> dirty;
+    for (uint32_t c = 0; c < order.clusters().size(); ++c) {
+        const auto& cl = order.clusters()[c];
+        for (uint32_t l = 0; l < cl.vertexCount; ++l)
+            if (moved[order.fromGpu()[cl.firstVertex + l]]) {
+                dirty.push_back(c);
+                break;
+            }
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const std::vector<uint32_t> changed = updateCoarseLevels(L, m, order, dirty);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    float worst = 0.0f;
+    const bool means = cellPointsAreMeans(L, m, worst);
+    size_t pointsMoved = 0;
+    for (size_t k = 0; k < before.size(); ++k) pointsMoved += before[k] != L.positions[k];
+    std::printf("  coarse update: %zu dirty clusters, %zu cells recomputed (%zu moved) in %.1f ms; worst point off by %g cells\n",
+                dirty.size(), changed.size(), pointsMoved, ms, double(worst / L.cell));
+    CHECK(!dirty.empty());
+    CHECK(pointsMoved > 0);
+    CHECK(means);
+    const std::vector<glm::vec3> after(L.positions);
+    updateCoarseLevels(L, m, order, dirty);
+    CHECK(L.positions == after);
+}
+
+TEST(coarse_levels_carry_colour_and_mask) {
+    // The cells carry their vertices' mean colour and mask (a coarse frame shows the paint as full detail does):
+    // built with the colours, gained after a Fill, updated after a stroke over some clusters, dropped with them.
+    Mesh m = detailedSphere(100000);
+    UploadOrder order;
+    order.build(m);
+    const size_t nv = m.vertexCount();
+    auto colourMeans = [&](const CoarseLevels& L) {
+        if (L.colors.size() != L.positions.size() || L.mask.size() != L.positions.size()) return false;
+        std::vector<glm::dvec3> sum(L.positions.size(), glm::dvec3(0.0));
+        std::vector<double> msum(L.positions.size(), 0.0);
+        std::vector<uint32_t> n(L.positions.size(), 0);
+        for (size_t v = 0; v < nv; ++v)
+            for (uint32_t k = L.vertexCell[v]; k != ~0u; k = L.parent[k]) sum[k] += glm::dvec3(m.colors[v]), msum[k] += m.mask[v], ++n[k];
+        float worst = 0.0f;
+        for (size_t k = 0; k < sum.size(); ++k)
+            if (n[k])
+                worst = std::max({worst, glm::distance(L.colors[k], glm::vec3(sum[k] / double(n[k]))),
+                                  std::abs(L.mask[k] - float(msum[k] / double(n[k])))});
+        return worst < 1e-4f;
+    };
+    CoarseLevels L = buildCoarseLevels(m, order);
+    CHECK(L.colors.empty() && L.mask.empty() && coarseAttributesMatch(L, m));
+    // A Fill (colours and a mask appear): no longer matching; any update recomputes every cell's.
+    m.colors.assign(nv, glm::vec3(0.1f, 0.6f, 0.2f));
+    m.mask.assign(nv, 0.0f);
+    for (size_t v = 0; v < nv; ++v) m.mask[v] = m.positions[v].y > 0.0f ? 1.0f : 0.0f;
+    CHECK(!coarseAttributesMatch(L, m));
+    updateCoarseLevels(L, m, order, {0u});
+    CHECK(coarseAttributesMatch(L, m));
+    CHECK(colourMeans(L));
+    // A red stroke over a few clusters: their cells (and up) follow.
+    std::vector<uint32_t> dirty;
+    for (uint32_t c = 0; c < order.clusters().size(); c += 7) {
+        dirty.push_back(c);
+        const auto& cl = order.clusters()[c];
+        for (uint32_t l = 0; l < cl.vertexCount; ++l) m.colors[order.fromGpu()[cl.firstVertex + l]] = glm::vec3(0.9f, 0.05f, 0.05f);
+    }
+    updateCoarseLevels(L, m, order, dirty);
+    CHECK(colourMeans(L));
+    // Built with them, the same.
+    CHECK(colourMeans(buildCoarseLevels(m, order)));
+    // Cleared: gone.
+    m.colors.clear();
+    m.mask.clear();
+    updateCoarseLevels(L, m, order, {0u});
+    CHECK(L.colors.empty() && L.mask.empty());
+}
+
+TEST(coarse_still_frame_estimate_survives_a_slow_frame) {
+    // #151: a paint layer added on a 4.28M-triangle top level left the mesh on its coarse level at rest until a
+    // restart. The frame that added it spent ~400 ms on the CPU (the layer, the upload, the coarse levels) while the
+    // GPU timer, which brackets the whole frame, waited: 400 ms over 4.28M triangles put the full-detail still frame
+    // past its 100 ms budget, and coarse frames never measure the full mesh again.
+    const uint64_t top = 4279936;
+    double e = 0.0;
+    for (int i = 0; i < 10; ++i) e = nextGpuMsPerTriangle(e, 6.0, 0.5, top); // a 3080 Ti class GPU: ~6 ms a frame
+    const double settled = e;
+    CHECK(double(top) * settled < 10.0);
+    // The slow frame, a few times over (the add, then the coarse levels catching up): the CPU's part isn't counted.
+    for (int i = 0; i < 4; ++i) e = nextGpuMsPerTriangle(e, 420.0, 410.0, top);
+    CHECK(double(top) * e < 100.0);
+    CHECK(e < 1.5 * settled);
+    // A spike inside the draw itself (a first draw linking its shaders): one frame moves it by at most 1.6 times.
+    e = nextGpuMsPerTriangle(settled, 2000.0, 0.5, top);
+    CHECK(e <= 1.6 * settled * 1.0001);
+    CHECK(double(top) * e < 100.0);
+    // A GPU that really is that slow still gets there after a few frames.
+    e = settled;
+    for (int i = 0; i < 30; ++i) e = nextGpuMsPerTriangle(e, 300.0, 0.5, top);
+    CHECK(double(top) * e > 100.0);
+    // Frames too small to say, or with no GPU time left after the CPU's, leave it alone.
+    CHECK(nextGpuMsPerTriangle(settled, 50.0, 0.5, 100000) == settled);
+    CHECK(nextGpuMsPerTriangle(settled, 50.0, 60.0, top) == settled);
+    CHECK(nextGpuMsPerTriangle(0.0, 6.0, 0.5, top) > 0.0);
+}
+
+// A mesh shader variant a driver won't build falls back to a simpler one instead of leaving the mesh undrawn.
+// (Feature bits as in Renderer.h: paint 1, per-triangle data 2, texture 4, normal map 8, flat 16, micro 32, ghost 64, PBR 128.)
+TEST(mesh_shader_fallback_walks_down_to_a_plain_variant) {
+    int f = 1 | 2 | 4 | 8 | 16 | 64 | 128; // every bit a view can ask for
+    std::vector<int> seen{f};
+    for (int next = Renderer::simplerMeshFeatures(f); next != f; f = next, next = Renderer::simplerMeshFeatures(f))
+        seen.push_back(next);
+    CHECK(seen.size() == 7);    // six drops, each removing one bit
+    CHECK(f == 1);              // what the start-up check already built (paint) is where it ends
+    CHECK(seen[1] == (seen[0] & ~64) && seen[2] == (seen[1] & ~128)); // ghost first, then PBR
+    CHECK(Renderer::simplerMeshFeatures(0) == 0);
+    CHECK(Renderer::simplerMeshFeatures(32) == 32);                 // a micro level with nothing to drop
+    CHECK(Renderer::simplerMeshFeatures(32 | 16 | 128) == (32 | 16)); // micro keeps its own bits, drops PBR first
 }

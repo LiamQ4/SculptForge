@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Tool > Selection Sets: store, restore, rename, delete and combine named snapshots of the active Part's mask,
-// polygroups, vertex paint, visibility, UVs and shape; pick one as the Morph brush's target or morph toward it.
+// face groups, vertex paint, visibility, UVs and shape; pick one as the Morph brush's target or morph toward it.
 // Every button runs a selection_set_* command (core/SelectionSets.h), so each is one undo step.
 #include "app/App.h"
 
@@ -27,7 +27,7 @@ struct ChannelToggle {
 };
 constexpr ChannelToggle kToggles[] = {
     {kSetMask, "Mask##setch", "mask", "The mask (masked and partly masked vertices)."},
-    {kSetPolygroups, "Groups##setch", "polygroups", "The face groups."},
+    {kSetFaceGroups, "Groups##setch", "facegroups", "The face groups."},
     {kSetVisibility, "Visibility##setch", "visibility", "Which faces are shown and which are hidden."},
     {kSetPaint, "Vertex Paint##setch", "paint", "The vertex paint colours."},
     {kSetUvs, "UVs##setch", "uvs", "The UV layout (only when the Part has UVs)."},
@@ -123,7 +123,7 @@ void App::drawSelectionSetsSection() {
             if (!fits) ImGui::PopStyleColor();
             if (ImGui::IsItemHovered()) {
                 std::string tip = setChannelNames(s.channels);
-                if (subdivLevelCount(doc_.mesh)) tip += "\nStored at SDiv " + std::to_string(s.level + 1);
+                if (subdivLevelCount(doc_.mesh)) tip += "\nStored at Level " + std::to_string(s.level + 1);
                 if (!fits) tip += "\nDoesn't fit this mesh (its topology changed)";
                 tip += "\nDouble-click to restore";
                 ImGui::SetTooltip("%s", tip.c_str());

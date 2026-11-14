@@ -1,7 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The UV Editor (Tool > Texture Map > UV Editor, Alt+U): a window with the active Part's UV layout in 2D,
+// The UV Editor (Tool > Texture Image > UV Editor, Alt+U): a window with the active Part's UV layout in 2D,
 // drawn on the GPU (render/UvView.h) over the UDIM tile grid with a checker or the painted texture behind it.
 //
 // - Select vertices, edges, faces or islands (1-4) by clicking or dragging a box (Shift adds, Ctrl removes), or
@@ -17,6 +17,7 @@
 // Every operation goes through the uv_* commands (core/UvCommands.cpp) or one UvEditStep (core/UvEdit.h), so it
 // is one undo step and scriptable; big unwraps run in the background.
 #include "app/App.h"
+#include "app/I18n.h"
 #include "app/Theme.h"
 #include "app/Ui.h"
 
@@ -43,7 +44,7 @@ namespace {
 constexpr const char* kPath = "UV Editor";
 constexpr int kSizes[] = {1024, 2048, 4096, 8192};
 constexpr const char* kSizeLabels[] = {"1K", "2K", "4K", "8K"};
-constexpr UvUnwrapMethod kMethods[] = {UvUnwrapMethod::Isometric, UvUnwrapMethod::Conformal, UvUnwrapMethod::Polygroups,
+constexpr UvUnwrapMethod kMethods[] = {UvUnwrapMethod::Isometric, UvUnwrapMethod::Conformal, UvUnwrapMethod::FaceGroups,
                                        UvUnwrapMethod::Planar,    UvUnwrapMethod::Unfold,    UvUnwrapMethod::Auto};
 constexpr const char* kColorLabels[] = {"Islands", "Stretch", "Density", "Plain"};
 constexpr const char* kImageLabels[] = {"No Image", "Checker", "Texture"};
@@ -104,7 +105,7 @@ struct UvEditorState {
     bool keepTexture = true; // paint stays on the model
     int sizeChoice = 1;      // texture size for density and margins without a texture
     // Caches of the active mesh's UVs, rebuilt when they change.
-    uint32_t subtool = ~0u;
+    uint32_t part = ~0u;
     uint64_t revision = ~uint64_t(0);
     const void* uvData = nullptr;
     size_t uvCount = 0, flagCount = 0;
@@ -122,6 +123,7 @@ struct UvEditorState {
     size_t selIslands = 0;
     float selDensity = 0.0f;
     glm::ivec2 tiles{1, 1};
+    glm::ivec2 frameGrid{0, 0}; // after a pack: frame the view on this grid (Columns x Rows) at the next draw
     std::vector<int> tileList;
     MeshOverlay overlay;
     // Interaction.
@@ -140,7 +142,6 @@ struct UvEditorState {
     int method = 0; // kMethods
     int iterations = 10;
     float marginPx = 8.0f;
-    int packTiles = 1;
     bool rotate = true;
     bool equalDensity = true;
     float targetDensity = 512.0f;
@@ -159,20 +160,34 @@ struct UvEditorState {
     // Seams drawn on the model.
     std::vector<uint32_t> seamCorners;
     uint64_t seamKey = ~uint64_t(0);
-    // Background unwrap.
+    // Unwrap and Pack on a worker thread (progress and Cancel under the view).
     struct Job {
         std::future<bool> done;
         std::shared_ptr<std::atomic<float>> progress;
         std::shared_ptr<std::atomic<bool>> cancel;
         std::shared_ptr<UvUnwrapResult> result;
         std::shared_ptr<std::string> error;
-        uint32_t subtool = 0;
+        uint32_t part = 0;
         size_t triangles = 0;
         UvUnwrapMethod method = UvUnwrapMethod::Isometric;
         bool keepTexture = true;
+        // Pack: the packed copy, its result and the arguments (for the grid fields); the UVs it started from,
+        // which must still be the Part's when it lands.
+        bool pack = false;
+        std::shared_ptr<Mesh> packed;
+        std::shared_ptr<UvPackResult> packResult;
+        UvPackOptions packOptions;
+        Args packArgs;
+        std::vector<glm::vec2> uvsBefore;
     };
     std::unique_ptr<Job> job;
     int unwraps = 0; // finished (UI tests)
+    int packs = 0;   // background packs finished, landed or not (UI tests: uv_packs)
+    int frames = 0;  // Frame clicks and F presses (UI tests: uv_frames)
+    // The toolbar's items as drawn last frame and the window's right edge (UI tests: uv_toolbar_overlap / _clipped).
+    struct Box { ImVec2 Min, Max; };
+    std::vector<Box> toolbarItems;
+    float toolbarRight = 0.0f;
     double frameMs = 0.0; // what the last frame of the window cost on the CPU (UI tests: uv_frame_ms)
 };
 
@@ -190,9 +205,9 @@ struct UvEditorUi {
 
     void refresh() {
         const Mesh& m = mesh();
-        const uint32_t id = app.doc_.activeSubtoolInfo().id;
+        const uint32_t id = app.doc_.activePartInfo().id;
         if (s.drag != UvEditorState::Drag::None) return; // (the drag keeps its own caches up to date)
-        if (id != s.subtool || app.doc_.undo.revision() != s.revision || m.uvs.data() != s.uvData || m.uvs.size() != s.uvCount ||
+        if (id != s.part || app.doc_.undo.revision() != s.revision || m.uvs.data() != s.uvData || m.uvs.size() != s.uvCount ||
             m.uvFlags.size() != s.flagCount)
             s.dirty = true;
         if (!s.dirty && !s.colorsDirty) return;
@@ -203,7 +218,7 @@ struct UvEditorUi {
 
     void rebuildTopology() {
         Mesh& m = mesh();
-        s.subtool = app.doc_.activeSubtoolInfo().id;
+        s.part = app.doc_.activePartInfo().id;
         s.revision = app.doc_.undo.revision();
         s.uvData = m.uvs.data();
         s.uvCount = m.uvs.size();
@@ -372,6 +387,7 @@ struct UvEditorUi {
         s.zoom = std::min(s.viewSize.x / size.x, s.viewSize.y / size.y) * 0.88f;
     }
     void frameAll() {
+        ++s.frames;
         const Mesh& m = mesh();
         if (!s.selCorners.empty() && !app.doc_.uvSelection.empty()) {
             frame(s.selLo, s.selHi);
@@ -605,7 +621,8 @@ struct UvEditorUi {
 
     Args packArgs() {
         Args a{{"margin", double(s.marginPx)},
-               {"tiles", double(s.packTiles)},
+               {"columns", double(app.uvPackColumns_)},
+               {"rows", double(app.uvPackRows_)},
                {"rotate", s.rotate},
                {"equal_density", s.equalDensity},
                {"resolution", double(resolution())},
@@ -620,17 +637,12 @@ struct UvEditorUi {
         Args a = packArgs();
         a["method"] = std::string(uvUnwrapMethodId(method));
         a["iterations"] = double(s.iterations);
-        if (m.triangleCount() < 60000) { // quick enough to wait for
-            run("uv_unwrap", a);
-            ++s.unwraps;
-            return;
-        }
         auto job = std::make_unique<UvEditorState::Job>();
         job->progress = std::make_shared<std::atomic<float>>(0.0f);
         job->cancel = std::make_shared<std::atomic<bool>>(false);
         job->result = std::make_shared<UvUnwrapResult>();
         job->error = std::make_shared<std::string>();
-        job->subtool = app.doc_.activeSubtoolInfo().id;
+        job->part = app.doc_.activePartInfo().id;
         job->triangles = m.triangleCount();
         job->method = method;
         job->keepTexture = s.keepTexture;
@@ -639,7 +651,7 @@ struct UvEditorUi {
         copy->triangles = m.triangles;
         copy->uvs = m.uvs;
         copy->uvFlags = m.uvFlags;
-        copy->polygroups = m.polygroups;
+        copy->facegroups = m.facegroups;
         auto faces = std::make_shared<std::vector<uint8_t>>();
         const UvSelection& sel = app.doc_.uvSelection;
         if (sel.valid(m) && !sel.empty() && m.hasUvs()) {
@@ -655,7 +667,8 @@ struct UvEditorUi {
         o.pack = method != UvUnwrapMethod::Unfold;
         o.packing.resolution = resolution();
         o.packing.marginPx = s.marginPx;
-        o.packing.tiles = s.packTiles;
+        o.packing.columns = app.uvPackColumns_;
+        o.packing.tiles = app.uvPackColumns_ * app.uvPackRows_;
         o.packing.rotate = s.rotate;
         o.packing.equalDensity = s.equalDensity;
         std::promise<bool> promise;
@@ -675,27 +688,67 @@ struct UvEditorUi {
         app.status_ = std::string("Unwrapping (") + uvUnwrapMethodLabel(method) + ") " + std::to_string(m.triangleCount()) + " triangles...";
     }
 
+    // Pack (the button, Pack at Density): uv_pack's work on a copy of the Part on a worker thread; the result
+    // lands as uv_pack's undo step and status line would.
+    void packInBackground(Args a) {
+        Mesh& m = mesh();
+        if (s.job || !m.hasUvs()) return;
+        auto job = std::make_unique<UvEditorState::Job>();
+        job->pack = true;
+        job->progress = std::make_shared<std::atomic<float>>(0.0f);
+        job->cancel = std::make_shared<std::atomic<bool>>(false);
+        job->error = std::make_shared<std::string>();
+        job->part = app.doc_.activePartInfo().id;
+        job->triangles = m.triangleCount();
+        job->keepTexture = argBool(a, "keep_texture", true);
+        job->packOptions = uvPackOptions(app.doc_, a);
+        job->packArgs = a;
+        job->uvsBefore = m.uvs;
+        job->packResult = std::make_shared<UvPackResult>();
+        job->packed = std::make_shared<Mesh>();
+        job->packed->positions = m.positions;
+        job->packed->triangles = m.triangles;
+        job->packed->uvs = m.uvs;
+        job->packed->uvFlags = m.uvFlags;
+        std::promise<bool> promise;
+        job->done = promise.get_future();
+        std::thread([promise = std::move(promise), copy = job->packed, sel = app.doc_.uvSelection, o = job->packOptions,
+                     progress = job->progress, cancel = job->cancel, result = job->packResult, error = job->error]() mutable {
+            const UvTopology topo = buildUvTopology(*copy);
+            const std::vector<uint8_t> islands = uvSelectedIslands(*copy, topo, sel, true);
+            const bool ok = uvPack(*copy, topo, islands, o, *result, *error, [&](float f) {
+                progress->store(f);
+                return !cancel->load();
+            });
+            promise.set_value(ok);
+            wakeMainLoop();
+        }).detach();
+        s.job = std::move(job);
+        app.status_ = "Packing...";
+    }
+
     void poll() {
         if (!s.job) return;
         if (s.job->done.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-            app.status_ = "Unwrapping: " + std::to_string(int(s.job->progress->load() * 100.0f)) + "%";
+            app.status_ = std::string(s.job->pack ? "Packing: " : "Unwrapping: ") + std::to_string(int(s.job->progress->load() * 100.0f)) + "%";
             return;
         }
+        if (app.jobWaitsForStroke()) return; // (the result lands when the stroke ends)
         const std::unique_ptr<UvEditorState::Job> job = std::move(s.job);
+        if (job->pack) return landPack(*job);
         ++s.unwraps;
         if (!job->done.get()) {
-            app.status_ = *job->error;
+            app.status_ = *job->error == "Unwrap was cancelled" || *job->error == "Cancelled" ? "Unwrap cancelled" : *job->error;
             return;
         }
         int index = -1;
-        for (int i = 0; i < app.doc_.subtoolCount(); ++i)
-            if (app.doc_.subtools[size_t(i)].id == job->subtool) index = i;
-        if (index < 0 || app.doc_.subtoolMesh(index).triangleCount() != job->triangles) {
+        for (int i = 0; i < app.doc_.partCount(); ++i)
+            if (app.doc_.parts[size_t(i)].id == job->part) index = i;
+        if (index < 0 || app.doc_.partMesh(index).triangleCount() != job->triangles) {
             app.status_ = "Unwrap skipped: the mesh changed while it was being unwrapped";
             return;
         }
-        if (index != app.doc_.activeSubtool) app.doc_.selectSubtool(index);
-        if (app.doc_.sculptor.strokeActive()) app.endStroke();
+        const App::JobPart part(app, index);
         UvEditStep step(app.doc_, std::string("Unwrap (") + uvUnwrapMethodLabel(job->method) + ")", job->keepTexture);
         mesh().uvs = std::move(job->result->uvs);
         const std::string note = step.commit();
@@ -704,11 +757,34 @@ struct UvEditorUi {
         s.dirty = true;
     }
 
+    void landPack(UvEditorState::Job& job) {
+        ++s.packs;
+        if (!job.done.get()) {
+            app.status_ = *job.error == "Cancelled" ? "Pack cancelled: the UVs stay as they were" : *job.error;
+            return;
+        }
+        int index = -1;
+        for (int i = 0; i < app.doc_.partCount(); ++i)
+            if (app.doc_.parts[size_t(i)].id == job.part) index = i;
+        if (index < 0 || app.doc_.partMesh(index).triangleCount() != job.triangles || app.doc_.partMesh(index).uvs != job.uvsBefore) {
+            app.status_ = "Pack skipped: the UVs changed while they were being packed";
+            return;
+        }
+        const App::JobPart part(app, index);
+        UvEditStep step(app.doc_, "Pack UVs", job.keepTexture);
+        mesh().uvs = std::move(job.packed->uvs);
+        const std::string note = step.commit();
+        app.status_ = uvPackNote(*job.packResult, job.packOptions) + note;
+        app.uvEditorChanged();
+        app.uvPackGridUsed(job.packArgs);
+        s.dirty = true;
+    }
+
     // --- The 3D tool ----------------------------------------------------------------------------------------
 
     const std::vector<uint32_t>& twins() {
         const Mesh& m = mesh();
-        const uint64_t key = (uint64_t(uintptr_t(m.triangles.data())) << 8) ^ m.triangles.size() ^ (uint64_t(app.doc_.activeSubtoolInfo().id) << 48);
+        const uint64_t key = (uint64_t(uintptr_t(m.triangles.data())) << 8) ^ m.triangles.size() ^ (uint64_t(app.doc_.activePartInfo().id) << 48);
         if (key != s.twinKey || s.twin.size() != m.triangleCount() * 3) {
             s.twin = cornerTwins(m);
             s.twinKey = key;
@@ -805,7 +881,7 @@ void App::registerUvEditorActions() {
             showUvEditor_ = !showUvEditor_;
             if (showUvEditor_) { // the model to the left of the window, which opens over the right of the canvas
                 const CanvasRect cr = canvasRect();
-                camera_.frame(sceneBounds());
+                frameView(sceneBounds());
                 camera_.zoom(-1.5f);
                 camera_.pan(-cr.w * 0.33f, 0.0f, cr.h);
             }
@@ -831,18 +907,20 @@ void App::registerUvEditorActions() {
         "Unwrap with the chosen method: the selected faces (fitted where they were), or the whole Part (packed). Least "
         "Stretch keeps angles and lengths along the marked seams; Conformal keeps angles; By Face Groups cuts along the "
         "face group borders too; Planar projects each piece; Unfold flattens the current islands again in place, keeping "
-        "pins; Auto Seams finds its own. Closed pieces get cut automatically. Big meshes unwrap in the background.",
+        "pins; Auto Seams finds its own. Closed pieces get cut automatically. Runs in the background (Cancel under the "
+        "view stops it).",
         "uv_unwrap");
-    add("uv.pack", "Pack", ICON_LC_PACKAGE, "", [this] { uvUi(*this, uvEditor_).run("uv_pack", uvUi(*this, uvEditor_).packArgs()); },
-        nullptr, uvs,
-        "Pack the selected islands (or all) as large as they fit into the 0-1 tile, or across the chosen number of UDIM "
-        "tiles: turned to their smallest box, scaled to one texel density, with the margin between them.",
+    add("uv.pack", "Pack", ICON_LC_PACKAGE, "", [this] { uvUi(*this, uvEditor_).packInBackground(uvUi(*this, uvEditor_).packArgs()); },
+        nullptr, [this] { return doc_.mesh.hasUvs() && !(uvEditor_ && uvEditor_->job); },
+        "Pack the selected islands (or all) as large as they fit into the 0-1 tile, or across the Columns x Rows grid "
+        "of UDIM tiles: turned to their smallest box, scaled to one texel density, with the margin between them. "
+        "Runs in the background (Cancel under the view stops it).",
         "uv_pack");
     add("uv.seam_mark", "Mark Seam", ICON_LC_SCISSORS, "", [runUv] { runUv("uv_seam", {{"op", std::string("mark")}}); }, nullptr,
         selected, "Mark the selected edges (or the border of the selected faces) as seams: Unwrap cuts there.", "uv_seam");
     add("uv.seam_clear", "Clear Seam", nullptr, "", [runUv] { runUv("uv_seam", {{"op", std::string("clear")}}); }, nullptr,
         selected, "Clear the seams on the selected edges (or the border of the selected faces).", "uv_seam");
-    add("uv.seam_polygroups", "Face Groups", nullptr, "", [runUv] { runUv("uv_seam", {{"op", std::string("polygroups")}}); },
+    add("uv.seam_facegroups", "Face Groups", nullptr, "", [runUv] { runUv("uv_seam", {{"op", std::string("facegroups")}}); },
         nullptr, nullptr, "Mark every face group border as a seam.", "uv_seam");
     add("uv.seam_islands", "Island Borders", nullptr, "", [runUv] { runUv("uv_seam", {{"op", std::string("islands")}}); }, nullptr,
         uvs, "Mark every current UV island border as a seam (keeps an imported layout's cuts for Unwrap).", "uv_seam");
@@ -908,11 +986,11 @@ void App::registerUvEditorActions() {
             UvEditorUi u = uvUi(*this, uvEditor_);
             Args a = u.packArgs();
             a["density"] = double(uvEditor_->targetDensity);
-            u.run("uv_pack", a);
+            u.packInBackground(a);
         },
-        nullptr, uvs,
-        "Pack at exactly the target texel density, using as many UDIM tiles as it takes (1001, 1002, ...): every island "
-        "keeps the same texels per unit across the tiles.",
+        nullptr, [this] { return doc_.mesh.hasUvs() && !(uvEditor_ && uvEditor_->job); },
+        "Pack at exactly the target texel density, using as many UDIM tiles as it takes (1001, 1002, ..., Columns "
+        "wide, then the next row up): every island keeps the same texels per unit across the tiles.",
         "uv_pack");
     add("uv.trim", "Assign to Strip", ICON_LC_STRETCH_HORIZONTAL, "",
         [this, runUv] {
@@ -938,10 +1016,27 @@ void App::uvEditorChanged() {
     if (uvEditor_) uvEditor_->dirty = true;
 }
 
-const MeshOverlay* App::uvEditorOverlay(uint32_t subtool) {
-    if (!showUvEditor_ || !uvEditor_ || subtool != doc_.activeSubtoolInfo().id) return nullptr;
-    if (!uvEditor_->hasUvs || uvEditor_->subtool != subtool) return nullptr;
+const MeshOverlay* App::uvEditorOverlay(uint32_t part) {
+    if (!showUvEditor_ || !uvEditor_ || part != doc_.activePartInfo().id) return nullptr;
+    if (!uvEditor_->hasUvs || uvEditor_->part != part) return nullptr;
     return &uvEditor_->overlay;
+}
+
+void App::uvPackGridUsed(const Args& a) {
+    int columns = 0, rows = 0;
+    if (a.contains("columns") || a.contains("rows")) { // (as UvCommands.cpp's packOptions reads them)
+        columns = std::clamp(int(argNumber(a, "columns", 10)), 1, 10);
+        if (a.contains("rows")) rows = std::clamp(int(argNumber(a, "rows", 1)), 1, 10);
+        else rows = std::clamp((std::clamp(int(argNumber(a, "tiles", columns)), 1, 100) + columns - 1) / columns, 1, 10);
+    } else {
+        // tiles= alone fills ten per row: the same grid when it's under a row or whole rows; otherwise left as is.
+        const int tiles = std::clamp(int(argNumber(a, "tiles", 1)), 1, 100);
+        if (tiles > 10 && tiles % 10) return;
+        columns = std::min(tiles, 10), rows = (tiles + 9) / 10;
+    }
+    uiPrefs_.uvPackColumns = uvPackColumns_ = columns;
+    uiPrefs_.uvPackRows = uvPackRows_ = rows;
+    if (uvEditor_) uvEditor_->frameGrid = {columns, rows};
 }
 
 void App::drawUvEditor() {
@@ -961,22 +1056,36 @@ void App::drawUvEditor() {
     const CanvasRect cr = canvasRect();
     ImGui::SetNextWindowPos(ImVec2(cr.x + cr.w * 0.34f, cr.y + 6 * scale), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(cr.w * 0.66f - 6 * scale, cr.h - 12 * scale), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(520 * scale, 360 * scale), ImVec2(FLT_MAX, FLT_MAX));
+    // Never bigger than the canvas (a small window at a big UI scale), and pulled back inside the screen.
+    const ImVec2 screen = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(520 * scale, cr.w), std::min(360 * scale, cr.h)),
+                                        ImVec2(FLT_MAX, FLT_MAX));
     ImGui::SetNextWindowBgAlpha(1.0f);
-    if (!ImGui::Begin("UV Editor", &showUvEditor_, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar)) {
+    if (!ImGui::Begin(tr("UV Editor"), &showUvEditor_, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar)) {
         ImGui::End();
         return;
+    }
+    {
+        const ImVec2 pos = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
+        const ImVec2 to(std::max(0.0f, std::min(pos.x, screen.x - size.x)), std::max(0.0f, std::min(pos.y, screen.y - size.y)));
+        if (to.x != pos.x || to.y != pos.y) ImGui::SetWindowPos(to);
+        if (size.x > screen.x || size.y > screen.y) ImGui::SetWindowSize(ImVec2(std::min(size.x, screen.x), std::min(size.y, screen.y)));
     }
     Mesh& m = doc_.mesh;
     const ImGuiStyle& style = ImGui::GetStyle();
 
     // Toolbar: selection mode, colours, image, the model overlay, frame.
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("Select");
+    ImGui::TextDisabled("%s", tr("Select"));
     ImGui::SameLine();
+    const ImVec2 segmentsMin = ImGui::GetCursorScreenPos();
     ui::Segmented(*this, {"uv.mode_vertex", "uv.mode_edge", "uv.mode_face", "uv.mode_island"}, 248 * scale);
-    // The rest of the toolbar wraps onto a second line when the window is narrow.
-    const float frameW = 74 * scale;
+    s.toolbarItems.assign(1, {segmentsMin, ImGui::GetItemRectMax()});
+    auto toolbarItem = [&] { s.toolbarItems.push_back({ImGui::GetItemRectMin(), ImGui::GetItemRectMax()}); };
+    // The rest of the toolbar wraps onto more lines when the window is narrow or the interface is scaled up (4K at
+    // 2.4): every item measured as drawn, in the interface language, with room kept for Frame at the right.
+    const float frameW = std::max(74 * scale, ImGui::CalcTextSize(tr("Frame")).x + ImGui::GetFrameHeight() +
+                                                  style.FramePadding.x * 2);
     const float rowStart = ImGui::GetCursorPosX();
     auto nextOnLine = [&](float itemW, float gap) {
         ImGui::SameLine(0, gap);
@@ -985,9 +1094,15 @@ void App::drawUvEditor() {
             ImGui::SetCursorPosX(rowStart);
         }
     };
+    auto checkboxW = [&](const char* label) {
+        return ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize(tr(label), nullptr, true).x;
+    };
     nextOnLine(130 * scale, 14 * scale);
     ImGui::SetNextItemWidth(130 * scale);
-    if (ImGui::Combo("##uvcolor", &s.color, kColorLabels, 4)) s.colorsDirty = true;
+    const char* colorLabels[4];
+    for (int i = 0; i < 4; ++i) colorLabels[i] = tr(kColorLabels[i]);
+    if (ImGui::Combo("##uvcolor", &s.color, colorLabels, 4)) s.colorsDirty = true;
+    toolbarItem();
     ui::HelpText("Colours", nullptr,
                  "What the faces show, here and on the model: Islands (a colour each), Stretch (green: true to the surface; "
                  "yellow to red: stretched or squashed; magenta: folded over), Density (texel density; blue: fewer texels than the "
@@ -995,22 +1110,32 @@ void App::drawUvEditor() {
                  kPath);
     nextOnLine(110 * scale, style.ItemSpacing.x);
     ImGui::SetNextItemWidth(110 * scale);
-    ImGui::Combo("##uvimage", &s.image, kImageLabels, 3);
+    const char* imageLabels[3];
+    for (int i = 0; i < 3; ++i) imageLabels[i] = tr(kImageLabels[i]);
+    ImGui::Combo("##uvimage", &s.image, imageLabels, 3);
+    toolbarItem();
     ui::HelpText("Image", nullptr, "Behind the layout: nothing, a checker, or the painted texture (tile 1001).", kPath);
-    nextOnLine(ImGui::CalcTextSize("Model").x + ImGui::GetFrameHeight() * 2, 14 * scale);
+    // "On model" stays with its first checkbox; the second wraps on its own.
+    nextOnLine(ImGui::CalcTextSize(tr("On model")).x + style.ItemSpacing.x + checkboxW("Colours##uvmodel"), 14 * scale);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("On model");
+    ImGui::TextDisabled("%s", tr("On model"));
     ImGui::SameLine();
     if (ui::Checkbox("Colours##uvmodel", &s.modelColors)) s.colorsDirty = true;
+    toolbarItem();
     ui::HelpText("Colours on the model", nullptr,
                  "Show the same colours on the model (islands, stretch, density and the selection), live while you edit.",
                  kPath);
-    ImGui::SameLine();
+    nextOnLine(checkboxW("Checker##uvchecker"), style.ItemSpacing.x);
     if (ui::Checkbox("Checker##uvchecker", &s.modelChecker)) s.colorsDirty = true;
+    toolbarItem();
     ui::HelpText("Checker on the model", nullptr,
                  "A checker on the model's UVs (tinted per UDIM tile): squares that stay square mean no stretch.", kPath);
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - frameW);
+    // Frame at the right end of the last line (there is always room: nextOnLine kept it).
+    ImGui::SameLine(std::max(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - frameW,
+                             ImGui::GetCursorPosX()));
     ui::ActionButton(*this, "uv.frame", ImVec2(frameW, 0));
+    toolbarItem();
+    s.toolbarRight = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
 
     // Sidebar on the right, the view in the rest.
     const float sideW = 236 * scale;
@@ -1023,6 +1148,10 @@ void App::drawUvEditor() {
     if (s.zoom <= 0.0f) {
         u.frame(glm::vec2(0.0f), glm::vec2(float(s.tiles.x), float(s.tiles.y)));
         if (s.zoom <= 0.0f) s.zoom = 400.0f * scale;
+    }
+    if (s.frameGrid.x > 0 && !s.dirty) { // (the tiles in use are up to date: a density pack may spill past the rows)
+        u.frame(glm::vec2(0.0f), glm::vec2(glm::max(s.frameGrid, s.tiles)));
+        s.frameGrid = {0, 0};
     }
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImGui::InvisibleButton("##uvview", viewSize, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
@@ -1110,7 +1239,7 @@ void App::drawUvEditor() {
     v.min = s.center - half;
     v.max = s.center + half;
     v.imageMode = s.image;
-    v.image = s.image == 2 && hasTexture(m) ? renderer_.paintTexture(doc_.activeSubtoolInfo().id) : 0;
+    v.image = s.image == 2 && hasTexture(m) ? renderer_.paintTexture(doc_.meshKey(doc_.activePart)) : 0;
     v.imageOpacity = s.image == 2 ? 1.0f : s.imageOpacity;
     v.checkerScale = s.checkerScale;
     v.tiles = s.tiles;
@@ -1122,13 +1251,25 @@ void App::drawUvEditor() {
     else dl->AddRectFilled(viewMin, viewMax, IM_COL32(25, 25, 27, 255));
     dl->PushClipRect(viewMin, viewMax, true);
     // UDIM tile numbers.
-    for (int ty = 0; ty < std::max(s.tiles.y, 1) + 1; ++ty)
-        for (int tx = 0; tx < std::min(std::max(s.tiles.x, 1) + 1, 10); ++tx) {
-            const ImVec2 p = u.toScreen(glm::vec2(float(tx), float(ty) + 1.0f));
+    // (over the tiles in use and the Pack grid, one more each way)
+    const glm::ivec2 labelled = glm::max(glm::max(s.tiles, glm::ivec2(1)), glm::ivec2(uvPackColumns_, uvPackRows_));
+    for (int ty = 0; ty < labelled.y + 1; ++ty)
+        for (int tx = 0; tx < std::min(labelled.x + 1, 10); ++tx) {
             const bool used = tx < s.tiles.x && ty < s.tiles.y;
             char label[8];
             std::snprintf(label, sizeof label, "%d", 1001 + tx + 10 * ty);
-            dl->AddText(ImVec2(p.x + 5 * scale, p.y + 3 * scale), used ? IM_COL32(170, 170, 182, 210) : IM_COL32(110, 110, 118, 150), label);
+            // In the tile's top-left corner, kept inside the tile and the view (a tile at the edge still shows its
+            // number whole); none when the visible part of the tile is too small for it.
+            const ImVec2 a = u.toScreen(glm::vec2(float(tx), float(ty) + 1.0f)), b = u.toScreen(glm::vec2(float(tx) + 1.0f, float(ty)));
+            const ImVec2 size = ImGui::CalcTextSize(label);
+            const float pad = 4 * scale; // (room for the backing on both sides: small tiles of a 10-wide grid keep it)
+            const float x0 = std::max(a.x, viewMin.x) + pad, y0 = std::max(a.y, viewMin.y) + 3 * scale;
+            if (x0 + size.x + 3 * scale > std::min(b.x, viewMax.x) || y0 + size.y > std::min(b.y, viewMax.y)) continue;
+            // Tiles in use: a small dark backing keeps the number readable over the islands.
+            if (used)
+                dl->AddRectFilled(ImVec2(x0 - 3 * scale, y0 - 1 * scale), ImVec2(x0 + size.x + 3 * scale, y0 + size.y + 1 * scale),
+                                  IM_COL32(14, 14, 17, 205), 3 * scale);
+            dl->AddText(ImVec2(x0, y0), used ? IM_COL32(205, 205, 215, 240) : IM_COL32(110, 110, 118, 150), label);
         }
     // Trim strips (while the Trim Sheet section is open).
     if (s.trimOpen) {
@@ -1189,19 +1330,22 @@ void App::drawUvEditor() {
                     IM_COL32(240, 136, 46, 220), 0, 0, 1.0f * scale);
     }
     if (!s.hasUvs) {
-        const char* msg = m.triangleCount() ? "No UVs yet: pick a method and Unwrap (or mark seams first)" : "No mesh";
-        const ImVec2 ts = ImGui::CalcTextSize(msg);
-        const ImVec2 at(viewMin.x + (viewSize.x - ts.x) * 0.5f, viewMin.y + viewSize.y * 0.5f - ts.y);
+        const char* msg = tr(m.triangleCount() ? "No UVs yet: pick a method and Unwrap (or mark seams first)" : "No mesh");
+        // Wrapped to the view (a narrow view, a big UI scale or a longer translation), centred in it.
+        const float wrap = std::max(viewSize.x - 48 * scale, 32 * scale);
+        const ImVec2 ts = ImGui::CalcTextSize(msg, nullptr, false, wrap);
+        const ImVec2 at(viewMin.x + (viewSize.x - ts.x) * 0.5f, viewMin.y + (viewSize.y - ts.y) * 0.5f);
         dl->AddRectFilled(ImVec2(at.x - 12 * scale, at.y - 8 * scale), ImVec2(at.x + ts.x + 12 * scale, at.y + ts.y + 8 * scale),
                           IM_COL32(24, 24, 27, 235), 6 * scale);
-        dl->AddText(at, IM_COL32(215, 215, 220, 255), msg);
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), at, IM_COL32(215, 215, 220, 255), msg, nullptr, wrap);
     }
     if (s.job) {
         const float f = s.job->progress->load();
         const ImVec2 a(viewMin.x + viewSize.x * 0.25f, viewMin.y + viewSize.y * 0.5f), b(viewMin.x + viewSize.x * 0.75f, a.y + 8 * scale);
         dl->AddRectFilled(a, b, IM_COL32(40, 40, 44, 230), 4 * scale);
         dl->AddRectFilled(a, ImVec2(a.x + (b.x - a.x) * f, b.y), theme::u32(theme::accent), 4 * scale);
-        dl->AddText(ImVec2(a.x, a.y - ImGui::GetTextLineHeight() - 4 * scale), IM_COL32(220, 220, 225, 255), "Unwrapping...");
+        dl->AddText(ImVec2(a.x, a.y - ImGui::GetTextLineHeight() - 4 * scale), IM_COL32(220, 220, 225, 255),
+                    tr(s.job->pack ? "Packing..." : "Unwrapping..."));
     }
     dl->PopClipRect();
     dl->AddRect(viewMin, viewMax, IM_COL32(60, 60, 66, 255));
@@ -1221,11 +1365,17 @@ void App::drawUvEditor() {
         for (size_t i = 0; i < s.tileList.size() && i < 6; ++i) tiles += (i ? ", " : "") + std::to_string(s.tileList[i]);
         if (s.tileList.size() > 6) tiles += "...";
         if (s.hasUvs)
-            std::snprintf(line, sizeof line, "%u islands  |  %zu selected  |  stretch %.3f%s  |  %.0f tx/u at %dK  |  %s",
-                          s.topo.islandCount, nsel, double(s.meanStretch), s.flipped > 0.001f ? " (folds)" : "",
+            std::snprintf(line, sizeof line, tr("%u islands  |  %zu selected  |  stretch %.3f%s  |  %.0f tx/u at %dK  |  %s"),
+                          s.topo.islandCount, nsel, double(s.meanStretch), s.flipped > 0.001f ? tr(" (folds)") : "",
                           double(s.meanDensity), u.resolution() / 1024, tiles.c_str());
         else
-            std::snprintf(line, sizeof line, "%zu seam edges marked", uvSeamCount(m));
+            std::snprintf(line, sizeof line, tr("%zu seam edges marked"), uvSeamCount(m));
+        if (s.job) { // (the running Unwrap or Pack: Cancel, and how far it is)
+            if (ImGui::SmallButton((std::string(tr("Cancel")) + "##uvjobcancel").c_str())) s.job->cancel->store(true);
+            ui::HelpText("Cancel", nullptr, "Stop the Unwrap or Pack that is running; the UVs stay as they are.", kPath);
+            ImGui::SameLine();
+            std::snprintf(line, sizeof line, tr(s.job->pack ? "Packing: %d%%" : "Unwrapping: %d%%"), int(s.job->progress->load() * 100.0f));
+        }
         ImGui::TextDisabled("%s", line);
     }
 
@@ -1234,7 +1384,10 @@ void App::drawUvEditor() {
     ImGui::BeginChild("##uvside", ImVec2(sideW, avail.y), false);
     const float w = ImGui::GetContentRegionAvail().x;
     const float halfW = (w - style.ItemSpacing.x) * 0.5f;
-    auto section = [&](const char* title, bool open) { return ImGui::CollapsingHeader(title, open ? ImGuiTreeNodeFlags_DefaultOpen : 0); };
+    auto section = [&](const char* title, bool open) { // the id stays English, so the open state survives a language change
+        return ImGui::CollapsingHeader((std::string(tr(title)) + "###uvsection." + title).c_str(),
+                                       open ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+    };
     if (section("Unwrap", true)) {
         const char* labels[6];
         for (int i = 0; i < 6; ++i) labels[i] = uvUnwrapMethodLabel(kMethods[i]);
@@ -1245,7 +1398,7 @@ void App::drawUvEditor() {
                      "By Face Groups: also cuts along the face group borders. Planar: each piece projected flat. Unfold Islands: "
                      "the current islands flattened again where they are, keeping pins. Auto Seams: finds its own seams.",
                      kPath);
-        if (kMethods[std::clamp(s.method, 0, 5)] == UvUnwrapMethod::Isometric || kMethods[s.method] == UvUnwrapMethod::Polygroups ||
+        if (kMethods[std::clamp(s.method, 0, 5)] == UvUnwrapMethod::Isometric || kMethods[s.method] == UvUnwrapMethod::FaceGroups ||
             kMethods[s.method] == UvUnwrapMethod::Unfold) {
             float it = float(s.iterations);
             ImGui::SetNextItemWidth(w);
@@ -1257,19 +1410,19 @@ void App::drawUvEditor() {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::accentHover);
         ImGui::PushStyleColor(ImGuiCol_Text, theme::textOnAccent);
         ImGui::BeginDisabled(s.job != nullptr || m.triangleCount() == 0);
-        if (ImGui::Button(sel ? "Unwrap Selected##uvunwrap" : "Unwrap##uvunwrap", ImVec2(w, 0))) u.unwrap();
+        if (ImGui::Button(tr(tr(sel ? "Unwrap Selected##uvunwrap" : "Unwrap##uvunwrap")), ImVec2(w, 0))) u.unwrap();
         ImGui::EndDisabled();
         ImGui::PopStyleColor(3);
         ui::HelpAction(*this, "uv.unwrap");
         ImGui::Spacing();
-        ImGui::TextDisabled("Seams (%zu edges)", uvSeamCount(m));
+        ImGui::TextDisabled(tr("Seams (%zu edges)"), uvSeamCount(m));
         ui::ActionButton(*this, "uv.tool_seams", ImVec2(halfW, 0), ui::Look::IconLabel);
         ImGui::SameLine();
         ui::ActionButton(*this, "uv.tool_select", ImVec2(-1, 0), ui::Look::IconLabel);
         ui::ActionButton(*this, "uv.seam_mark", ImVec2(halfW, 0));
         ImGui::SameLine();
         ui::ActionButton(*this, "uv.seam_clear", ImVec2(-1, 0));
-        ui::ActionButton(*this, "uv.seam_polygroups", ImVec2(halfW, 0));
+        ui::ActionButton(*this, "uv.seam_facegroups", ImVec2(halfW, 0));
         ImGui::SameLine();
         ui::ActionButton(*this, "uv.seam_islands", ImVec2(-1, 0));
         ImGui::SetNextItemWidth(halfW);
@@ -1283,10 +1436,19 @@ void App::drawUvEditor() {
         ImGui::SetNextItemWidth(w);
         ui::SliderInside("##uvmargin", &s.marginPx, 0.0f, 64.0f, "Margin %.0f px");
         ui::HelpText("Margin", nullptr, "Texels kept free between islands (half of it at the tile borders), at the texture's size.", kPath);
-        float tiles = float(s.packTiles);
-        ImGui::SetNextItemWidth(w);
-        if (ui::SliderInside("##uvtiles", &tiles, 1.0f, 10.0f, "UDIM Tiles %.0f")) s.packTiles = int(std::round(tiles));
-        ui::HelpText("UDIM tiles", nullptr, "Pack across this many tiles (1001 onwards, along u): more tiles, more texels per island.", kPath);
+        // The UDIM grid (#135): Columns along u (UDIM's row is ten wide), Rows up v; 10 x 2 fills 1001-1020.
+        float columns = float(uvPackColumns_), rows = float(uvPackRows_);
+        ImGui::SetNextItemWidth(halfW);
+        if (ui::SliderInside("##uvcolumns", &columns, 1.0f, 10.0f, "Columns %.0f"))
+            uiPrefs_.uvPackColumns = uvPackColumns_ = std::clamp(int(std::round(columns)), 1, 10);
+        ui::HelpText("Columns", nullptr, "UDIM tiles across (along u, 1001 onwards; ten make a full UDIM row). Packing fills "
+                     "Columns x Rows tiles and never goes wider, also when it packs at a fixed texel density.", kPath);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(halfW);
+        if (ui::SliderInside("##uvrows", &rows, 1.0f, 10.0f, "Rows %.0f"))
+            uiPrefs_.uvPackRows = uvPackRows_ = std::clamp(int(std::round(rows)), 1, 10);
+        ui::HelpText("Rows", nullptr, "UDIM rows up (along v: 1011 sits above 1001). 10 Columns x 2 Rows fills 1001-1020; "
+                     "more tiles, more texels per island.", kPath);
         ui::Checkbox("Rotate##uvrot", &s.rotate);
         ui::HelpText("Rotate", nullptr, "Turn islands to their smallest box and allow quarter turns, so more fit.", kPath);
         ImGui::SameLine();
@@ -1308,7 +1470,7 @@ void App::drawUvEditor() {
         }
         ui::HelpText("Texture size", nullptr, "The texture size densities and margins are measured at (the Part's texture's when it has one).", kPath);
         ImGui::SameLine();
-        ImGui::TextDisabled("%s %.0f", s.selIslands ? "Selected" : "Mean", double(s.selDensity));
+        ImGui::TextDisabled("%s %.0f", tr(s.selIslands ? "Selected" : "Mean"), double(s.selDensity));
         ImGui::SetNextItemWidth(halfW);
         ImGui::InputFloat("##uvtarget", &s.targetDensity, 0.0f, 0.0f, "%.0f tx/u");
         s.targetDensity = std::clamp(s.targetDensity, 1.0f, 65536.0f);
@@ -1500,7 +1662,7 @@ void App::uvToolRelease() {
 }
 
 void App::drawUvEditorOverlay() {
-    if (!showUvEditor_ || !uvEditor_ || !doc_.activeSubtoolInfo().visible) return;
+    if (!showUvEditor_ || !uvEditor_ || !doc_.activePartInfo().visible) return;
     UvEditorState& s = *uvEditor_;
     const Mesh& m = doc_.mesh;
     const size_t nc = m.triangleCount() * 3;
@@ -1515,7 +1677,7 @@ void App::drawUvEditorOverlay() {
                 if ((m.uvFlags[c] & kUvSeam) && (twin[c] == kNoCorner || c < twin[c])) s.seamCorners.push_back(c);
             s.seamKey = key;
         }
-        const glm::vec3 eye = camera_.position();
+        const glm::vec3 eye = partCamera().position();
         ImDrawList* dl = ImGui::GetBackgroundDrawList();
         const CanvasRect cr = canvasRect();
         dl->PushClipRect(ImVec2(cr.x, cr.y), ImVec2(cr.x + cr.w, cr.y + cr.h), true);
@@ -1533,7 +1695,7 @@ void App::drawUvEditorOverlay() {
             const bool front = faces(c / 3, mid) || (twin.size() == nc && twin[c] != kNoCorner && faces(twin[c] / 3, mid));
             if (!front) continue;
             ImVec2 pa, pb;
-            if (!gizmoProject(a, pa) || !gizmoProject(b, pb)) continue;
+            if (!partProject(a, pa) || !partProject(b, pb)) continue;
             dl->AddLine(pa, pb, IM_COL32(245, 78, 64, 225), 1.6f * uiScale_);
         }
         dl->PopClipRect();
@@ -1545,7 +1707,7 @@ void App::drawUvEditorOverlay() {
         if (canvasRect().contains(mouse.x, mouse.y) && pick(mouse.x, mouse.y, hit)) {
             ImVec2 p;
             const glm::vec3 at = s.tool == 1 ? m.positions[UvEditorUi{*this, s}.nearestVertex(hit)] : hit.position;
-            if (gizmoProject(at, p)) {
+            if (partProject(at, p)) {
                 ImDrawList* fg = ImGui::GetForegroundDrawList();
                 const ImU32 col = s.tool == 1 ? ((inputMods() & SDL_KMOD_ALT) ? IM_COL32(150, 200, 255, 255) : IM_COL32(245, 78, 64, 255))
                                               : theme::u32(theme::accent);
@@ -1564,12 +1726,31 @@ double App::uvEditorTestValue(const std::string& name) {
     if (name == "uv_seams") return double(uvSeamCount(m));
     if (name == "uv_selected") return doc_.uvSelection.valid(m) ? double(doc_.uvSelection.count()) : 0.0;
     if (name == "uv_select_mode") return double(int(doc_.uvSelection.mode));
-    if (name == "uv_unwrapping") return uvEditor_ && uvEditor_->job ? 1.0 : 0.0;
+    if (name == "uv_unwrapping") return uvEditor_ && uvEditor_->job ? 1.0 : 0.0; // (an Unwrap or Pack running)
+    if (name == "uv_packs") return uvEditor_ ? double(uvEditor_->packs) : 0.0;
     if (name == "uv_unwraps") return uvEditor_ ? double(uvEditor_->unwraps) : 0.0;
+    if (name == "uv_pack_columns") return double(uvPackColumns_); // the Pack fields
+    if (name == "uv_pack_rows") return double(uvPackRows_);
     if (name == "uv_frame_ms") return uvEditor_ ? uvEditor_->frameMs : 0.0;
+    if (name == "uv_frames") return uvEditor_ ? double(uvEditor_->frames) : 0.0; // Frame clicks and F presses
+    if (name == "uv_model_colors") return uvEditor_ && uvEditor_->modelColors ? 1.0 : 0.0;
+    if (name == "uv_model_checker") return uvEditor_ && uvEditor_->modelChecker ? 1.0 : 0.0;
+    if (name == "uv_toolbar_overlap" || name == "uv_toolbar_clipped") { // toolbar items on top of each other / cut off
+        double n = 0;
+        if (!uvEditor_) return n;
+        const auto& r = uvEditor_->toolbarItems;
+        for (size_t i = 0; i < r.size(); ++i) {
+            if (name == "uv_toolbar_clipped") n += r[i].Max.x > uvEditor_->toolbarRight + 0.5f;
+            else
+                for (size_t j = i + 1; j < r.size(); ++j)
+                    n += r[i].Min.x < r[j].Max.x - 0.5f && r[j].Min.x < r[i].Max.x - 0.5f && r[i].Min.y < r[j].Max.y - 0.5f &&
+                         r[j].Min.y < r[i].Max.y - 0.5f;
+        }
+        return n;
+    }
     if (name == "uv_tool") return uvEditor_ ? double(uvEditor_->tool) : 0.0;
     if (name == "uv_view_triangles") return uvEditor_ ? double(uvEditor_->gpu.triangles()) : 0.0;
-    if (name == "uv_overlay") return uvEditorOverlay(doc_.activeSubtoolInfo().id) && !uvEditor_->overlay.colors.empty() ? 1.0 : 0.0;
+    if (name == "uv_overlay") return uvEditorOverlay(doc_.activePartInfo().id) && !uvEditor_->overlay.colors.empty() ? 1.0 : 0.0;
     if (name == "uv_pins") {
         double n = 0;
         for (uint8_t f : m.uvFlags) n += (f & kUvPin) != 0;

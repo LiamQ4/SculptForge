@@ -366,8 +366,8 @@ TEST(bake_color_transfer) {
 
 TEST(bake_command) {
     Document doc = makeDoc(highPoly(4));
-    doc.subtools[0].name = "High";
-    doc.addSubtool(lowPoly(), "Low");
+    doc.parts[0].name = "High";
+    doc.addPart(lowPoly(), "Low");
     CommandRegistry reg;
     const std::string dir = tempPath("sf_bake_cmd");
     std::filesystem::remove_all(dir);
@@ -394,7 +394,7 @@ TEST(bake_command) {
     CHECK(!reg.execute(doc, "bake", {{"source", std::string("Nope")}, {"out", dir}}).ok);
     CHECK(!reg.execute(doc, "bake", {{"size", 300.0}, {"out", dir}}).ok);
     CHECK(!reg.execute(doc, "bake", {{"green", std::string("purple")}, {"out", dir}}).ok);
-    doc.subtools[0].visible = false; // nothing visible to bake from
+    doc.parts[0].visible = false; // nothing visible to bake from
     CHECK(!reg.execute(doc, "bake", {{"out", dir}}).ok);
     setBakeListener({});
     std::filesystem::remove_all(dir);
@@ -413,7 +413,7 @@ TEST(bake_perf_4k_from_1m_triangles) {
     std::printf("  4K normal + displacement, 2x2 samples, from %zu triangles: %.2f s (BVH %.2f s), %zu island texels\n",
                 r.sourceTriangles, r.seconds, r.bvhSeconds, r.islandTexels);
     CHECK(r.sourceTriangles > 1000000);
-    CHECK(r.seconds < 60.0);
+    CHECK(r.seconds < timeLimit(60.0));
 }
 
 // Send to Unreal takes the baked normal map along: imported as T_<name>_N, set up as a normal map, green flipped

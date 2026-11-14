@@ -1,22 +1,28 @@
 # Micro levels: hundreds of millions of polygons
 
-Subdivision levels store every vertex of every level. That is what lets you step down and reshape, but it costs
-about 90 bytes per triangle: a 300 million triangle model would need 27 GB. **Micro levels** go past the highest
-subdivision level without a mesh: each triangle of that level carries a regular grid of heights, one 16-bit number
-per point, and the micro triangles are worked out on the fly by the brushes and by the graphics card. 300 million
-micro triangles take about 0.4 GB, sculpt in real time and draw at 60+ frames per second.
+![A detailed sculpture](images/wn-0120-plugins.jpg)
+
+> **In short:**
+> - Micro levels go past the top subdivision level as a grid of heights per triangle.
+> - 300 million micro triangles take about 0.4 GB and sculpt in real time.
+> - **Bake Micro** turns a micro level into a regular mesh in a new Part.
+
+Subdivision levels store every vertex of every level. That is what lets you step down and reshape, but it costs about
+90 bytes per triangle: a 300 million triangle model would need 27 GB.
+
+**Micro levels** go past the highest subdivision level without a mesh: each triangle of that level carries a regular
+grid of heights, one 16-bit number per point, and the micro triangles are worked out on the fly by the brushes and by
+the graphics card. 300 million micro triangles take about 0.4 GB, sculpt in real time and draw at 60+ frames per
+second.
 
 ![A sphere with 335 million micro triangles: surface noise, a Clay Block band, Crease and Sharp Crease lines (Micro 4, 420 MB)](images/micro-300m.jpg)
 
-> **ZBrush:** HD Geometry also goes past the subdivision levels, but you sculpt it one small region at a time.
-> A micro level is the whole model, all the time: every brush stroke, every view, every Part at once.
-
 ## Making a micro level
 
-1. Divide the Part to a comfortable highest level (0.3 to 2 million triangles is the sweet spot).
+1. Add levels to the Part up to a comfortable highest one (0.3 to 2 million triangles is the sweet spot).
 2. In **Tool > Geometry**, set the **Micro** slider. Each step is four times the triangles: the label shows the
    total (Micro 4 on a 1.2 million triangle level is 300 million micro triangles).
-3. Click **Divide to Micro**. The surface stays exactly as smooth as before; the micro level starts flat on it.
+3. Click **Add Micro**. The surface stays exactly as smooth as before; the micro level starts flat on it.
 
 The micro level sits on the highest subdivision level, so step up to it first. While a micro level exists you
 can't change subdivision levels (Bake it or delete it first).
@@ -35,11 +41,12 @@ triangles draws faster than Micro 4 on 1.2 million.
 
 These brushes work on micro levels: **Standard**, **Clay**, **Clay Block**, **Smooth**, **Inflate**,
 **Flatten**, **Trim**, **Layer**, **Pinch**, **Crease**, **Sharp Crease** and **Mask** (with
-<kbd>Ctrl</kbd>). Symmetry, Falloff, pressure and the mask work as usual, and every stroke is one undo step.
+<kbd>Ctrl</kbd>). Symmetry, Falloff, pressure, alphas (Drag Stamp included) and the mask work as usual, and every
+stroke is one undo step.
 
 - A micro level stores one height per point, so it moves the surface in and out, never sideways. **Pinch**,
-  **Crease** and **Sharp Crease** sharpen the height profile instead of pulling points together (the result
-  looks the same for creases and folds).
+  **Crease** and **Sharp Crease** pull the height profile together instead of the points (the result looks the
+  same for creases and folds), and stay clean at full strength.
 - **Move** reshapes the level below the micro level (the base) and the micro detail rides along on it, in its own
   frame: drag an ear back without smearing the pores. To move the micro surface itself along its normals, tick
   **Move along normals**.
@@ -66,11 +73,12 @@ versions open them). Untouched areas take almost no room in the file.
 
 ## Very large levels and laptops
 
-A micro level larger than the resident cache your hardware profile allows (a quarter of
-the memory when there is no profile yet) is kept **out of core**: in a file in
-the cache folder (`~/.cache/sculptforge`), of which only the parts you sculpt or look at stay in memory. A
-billion micro triangles then fit on a 16 GB machine. The status line under the slider says when a level is out
-of core. `SF_MICRO_OUT_OF_CORE=1` forces it (for testing); `SF_MICRO_SWAP_DIR` picks the folder.
+A micro level larger than the resident cache your hardware profile allows (a quarter of the memory when there is no
+profile yet) is kept **out of core**: in a file in the cache folder (`~/.cache/sculptforge`), of which only the parts
+you sculpt or look at stay in memory. A billion micro triangles then fit on a 16 GB machine.
+
+The status line under the slider says when a level is out of core. `SF_MICRO_OUT_OF_CORE=1` forces it (for testing);
+`SF_MICRO_SWAP_DIR` picks the folder.
 
 How many triangles a frame draws for micro levels follows the machine: the view lowers the detail of far and
 small areas until a frame fits the budget (2 million on a laptop profile, 8 million on a workstation).

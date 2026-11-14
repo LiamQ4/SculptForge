@@ -51,27 +51,40 @@ std::vector<uint32_t> targetCorners(const Document& doc, const UvTopology& topo)
     return all;
 }
 
-UvPackOptions packOptions(const Document& doc, const Args& a) {
+// A fit pack that left part of the grid empty says why first (the status line may cut the rest off).
+std::string gridNote(const UvPackResult& p, const UvPackOptions& o) {
+    if (o.density > 0.0f || o.tiles <= 1 || p.tilesUsed <= 0 || p.tilesUsed >= o.tiles) return {};
+    return std::to_string(p.tilesUsed) + " of " + std::to_string(o.tiles) +
+           " tiles used: the largest island limits the scale; Pack at Density fills more. ";
+}
+
+} // namespace
+
+UvPackOptions uvPackOptions(const Document& doc, const Args& a) {
     UvPackOptions o;
     o.resolution = resolutionArg(doc, a);
     o.marginPx = float(std::clamp(argNumber(a, "margin", 8.0), 0.0, 256.0));
     o.rotate = argBool(a, "rotate", true);
     o.tiles = std::clamp(int(argNumber(a, "tiles", 1)), 1, 100);
+    // A Columns x Rows grid (the UV Editor's Pack target): `columns` wide, `rows` high (or `tiles` in that width).
+    if (a.contains("columns") || a.contains("rows")) {
+        o.columns = std::clamp(int(argNumber(a, "columns", 10)), 1, 10);
+        if (a.contains("rows")) o.tiles = o.columns * std::clamp(int(argNumber(a, "rows", 1)), 1, 10);
+        else if (!a.contains("tiles")) o.tiles = o.columns;
+    }
     o.equalDensity = argBool(a, "equal_density", true);
     o.density = float(std::max(argNumber(a, "density", 0.0), 0.0));
     o.firstTile = std::clamp(int(argNumber(a, "first_tile", 1001)), 1001, 1100);
     return o;
 }
 
-std::string packNote(const UvPackResult& p) {
-    std::string s = plural(p.islands, "island") + " packed";
+std::string uvPackNote(const UvPackResult& p, const UvPackOptions& o) {
+    std::string s = gridNote(p, o) + plural(p.islands, "island") + " packed";
     if (p.tilesUsed > 1) s += " into " + std::to_string(p.tilesUsed) + " UDIM tiles";
     s += ", " + fmt("%.0f", double(p.coverage) * 100.0) + "% of the space used, " + fmt("%.1f", double(p.density)) +
          " texels per unit";
     return s;
 }
-
-} // namespace
 
 UvEditStep::UvEditStep(Document& doc, std::string label, bool keepTexture) : doc_(doc), texture_(keepTexture && hasTexture(doc.mesh)) {
     if (texture_) record_ = captureTexture(doc.mesh, label);
@@ -129,18 +142,20 @@ std::string uvInfoText(const Mesh& m, int resolution) {
 void registerUvCommands(CommandRegistry& reg) {
     reg.add({"uv_unwrap",
              "Unwrap the active Part's UVs (UV Editor > Unwrap). Methods: isometric (least stretch: angles and lengths, "
-             "along the marked seams; the default), conformal (LSCM: angles, along the seams), polygroups (cut along "
+             "along the marked seams; the default), conformal (LSCM: angles, along the seams), facegroups (cut along "
              "the face group borders and the seams), planar (each piece projected flat), unfold (flatten the current "
              "islands again in place, keeping pinned corners), auto (finds its own seams, xatlas). Pieces that are "
              "closed or looped get extra cuts. The result is packed into the 0-1 tile, or across UDIM tiles. With a UV "
              "selection only the selected faces are unwrapped (fitted where they were). A painted texture moves onto "
              "the new UVs (keep_texture). One undo step.",
-             {{"method", T::String, "isometric (default), conformal, polygroups, planar, unfold or auto", false},
+             {{"method", T::String, "isometric (default), conformal, facegroups, planar, unfold or auto", false},
               {"selected", T::Bool, "Only the UV Editor's selected faces (default true when something is selected)", false},
               {"iterations", T::Number, "Least-stretch refinement steps (default 10; 0 = conformal)", false},
               {"resolution", T::Number, "Texture size the margin is measured in (default: the texture's, or 2048)", false},
               {"margin", T::Number, "Texels between packed islands (default 8)", false},
               {"tiles", T::Number, "UDIM tiles to pack across (default 1)", false},
+              {"columns", T::Number, "Pack into a grid this many tiles wide (1-10; with rows, columns x rows tiles)", false},
+              {"rows", T::Number, "Rows of the grid (1-10): fills columns x rows tiles", false},
               {"rotate", T::Bool, "Turn islands to fit better when packing (default true)", false},
               {"density", T::Number, "Pack at exactly this texel density (texels per unit; uses as many tiles as needed)", false},
               {"pack", T::Bool, "Pack the result (default true; false fits each island where its old UVs were)", false},
@@ -150,10 +165,10 @@ void registerUvCommands(CommandRegistry& reg) {
                  if (m.triangleCount() == 0) return {false, "There is no mesh to unwrap"};
                  UvUnwrapOptions o;
                  if (a.contains("method") && !parseUvUnwrapMethod(argString(a, "method"), o.method))
-                     return {false, "method must be isometric, conformal, polygroups, planar, unfold or auto"};
+                     return {false, "method must be isometric, conformal, facegroups, planar, unfold or auto"};
                  o.resolution = resolutionArg(doc, a);
                  o.iterations = std::clamp(int(argNumber(a, "iterations", 10)), 0, 100);
-                 o.packing = packOptions(doc, a);
+                 o.packing = uvPackOptions(doc, a);
                  o.pack = argBool(a, "pack", o.method != UvUnwrapMethod::Unfold);
                  const bool haveSel = doc.uvSelection.valid(m) && !doc.uvSelection.empty();
                  std::vector<uint8_t> faces;
@@ -174,7 +189,7 @@ void registerUvCommands(CommandRegistry& reg) {
                  UvEditStep edit(doc, std::string("Unwrap (") + uvUnwrapMethodLabel(o.method) + ")", argBool(a, "keep_texture", true));
                  m.uvs = std::move(r.uvs);
                  const std::string note = edit.commit();
-                 std::string msg = std::string("Unwrapped (") + uvUnwrapMethodLabel(o.method) + "): " + plural(r.islands, "island");
+                 std::string msg = (o.faces ? std::string() : gridNote(r.packing, o.packing)) + "Unwrapped (" + uvUnwrapMethodLabel(o.method) + "): " + plural(r.islands, "island");
                  if (r.extraCuts) msg += ", " + plural(r.extraCuts, "edge") + " cut automatically to flatten closed pieces";
                  if (r.packing.tilesUsed > 1) msg += ", " + std::to_string(r.packing.tilesUsed) + " UDIM tiles";
                  const UvStretchStats st = uvStretchStats(m);
@@ -190,7 +205,10 @@ void registerUvCommands(CommandRegistry& reg) {
              {{"margin", T::Number, "Texels between islands (default 8)", false},
               {"resolution", T::Number, "Texture size the margin and density are measured in (default: the texture's, or 2048)", false},
               {"rotate", T::Bool, "Turn islands to fit better (default true)", false},
-              {"tiles", T::Number, "UDIM tiles to fill, 1001 onwards (default 1)", false},
+              {"tiles", T::Number, "UDIM tiles to fill, 1001 onwards, ten per row (default 1)", false},
+              {"columns", T::Number, "Fill a grid this many tiles wide (1-10): 1001 + column + 10 x row, never past it; "
+                                     "with density, the spill stays in it too", false},
+              {"rows", T::Number, "Rows of the grid (1-10): fills columns x rows tiles (e.g. columns=10 rows=2: 1001-1020)", false},
               {"first_tile", T::Number, "The UDIM tile to start at (default 1001)", false},
               {"equal_density", T::Bool, "Scale islands to one texel density first (default true; false keeps their sizes relative)", false},
               {"density", T::Number, "Keep exactly this texel density (texels per unit) and spill into more tiles", false},
@@ -203,17 +221,18 @@ void registerUvCommands(CommandRegistry& reg) {
                  UvEditStep edit(doc, "Pack UVs", argBool(a, "keep_texture", true));
                  UvPackResult r;
                  std::string err;
-                 if (!uvPack(m, topo, islands, packOptions(doc, a), r, err)) return {false, err};
+                 const UvPackOptions po = uvPackOptions(doc, a);
+                 if (!uvPack(m, topo, islands, po, r, err)) return {false, err};
                  const std::string note = edit.commit();
-                 return {true, packNote(r) + note};
+                 return {true, uvPackNote(r, po) + note};
              }});
 
     reg.add({"uv_seam",
              "Mark or clear UV seams on the active Part (seams are where Unwrap cuts). op: mark / clear (the UV "
              "Editor's selected edges, or the border of its selected faces), path (mark the shortest edge path from "
-             "vertex `from` to vertex `to`; clear=true clears it), polygroups (every face group border), islands (every "
+             "vertex `from` to vertex `to`; clear=true clears it), facegroups (every face group border), islands (every "
              "current UV island border), angle (edges sharper than `angle` degrees), clear_all. One undo step.",
-             {{"op", T::String, "mark, clear, path, polygroups, islands, angle or clear_all", true},
+             {{"op", T::String, "mark, clear, path, facegroups, islands, angle or clear_all", true},
               {"from", T::Number, "path: the vertex to start at", false},
               {"to", T::Number, "path: the vertex to end at", false},
               {"clear", T::Bool, "path: clear the seams along it instead of marking them", false},
@@ -246,8 +265,8 @@ void registerUvCommands(CommandRegistry& reg) {
                      const std::vector<uint32_t> path = uvEdgePath(m, uint32_t(from), uint32_t(to));
                      if (path.empty()) return {false, "Those vertices aren't connected"};
                      uvSetSeams(m, twin, path, !argBool(a, "clear", false));
-                 } else if (op == "polygroups" || op == "face_groups") {
-                     uvSeamsFromPolygroups(m, twin);
+                 } else if (op == "facegroups" || op == "face_groups") {
+                     uvSeamsFromFaceGroups(m, twin);
                  } else if (op == "islands") {
                      if (!m.hasUvs()) return {false, kNoUvs};
                      uvSeamsFromIslands(m, buildUvTopology(m, twin));
@@ -256,7 +275,7 @@ void registerUvCommands(CommandRegistry& reg) {
                  } else if (op == "clear_all") {
                      uvClearSeams(m);
                  } else {
-                     return {false, "op must be mark, clear, path, polygroups, islands, angle or clear_all"};
+                     return {false, "op must be mark, clear, path, facegroups, islands, angle or clear_all"};
                  }
                  edit.commit();
                  const size_t after = uvSeamCount(m);
@@ -266,13 +285,13 @@ void registerUvCommands(CommandRegistry& reg) {
 
     reg.add({"uv_select",
              "Set the UV Editor's selection on the active Part (what the other uv_* commands work on). op: all, none, "
-             "invert, island (the island of triangle `face`), face (triangle `face`), polygroup (every face of face group "
+             "invert, island (the island of triangle `face`), face (triangle `face`), facegroup (every face of face group "
              "`group`), rect (faces touching u0 v0 u1 v1), seams (the marked seam edges), mode (just switch to `mode`). "
              "`mode` (vertex, edge, face, island) converts the selection; `add` adds to it instead of replacing it.",
-             {{"op", T::String, "all, none, invert, island, face, polygroup, rect, seams or mode", true},
+             {{"op", T::String, "all, none, invert, island, face, facegroup, rect, seams or mode", true},
               {"mode", T::String, "vertex, edge, face or island", false},
               {"face", T::Number, "island / face: a triangle index", false},
-              {"group", T::Number, "polygroup: the face group id", false},
+              {"group", T::Number, "facegroup: the face group id", false},
               {"u0", T::Number, "rect: lower u", false},
               {"v0", T::Number, "rect: lower v", false},
               {"u1", T::Number, "rect: upper u", false},
@@ -328,10 +347,10 @@ void registerUvCommands(CommandRegistry& reg) {
                          faces[uint32_t(f)] = 1;
                      }
                      pickFaces(faces);
-                 } else if (op == "polygroup") {
+                 } else if (op == "facegroup") {
                      const uint32_t g = uint32_t(std::max(argNumber(a, "group", 0), 0.0));
                      std::vector<uint8_t> faces(nt, 0);
-                     for (uint32_t t = 0; t < nt; ++t) faces[t] = m.polygroupAt(t) == g;
+                     for (uint32_t t = 0; t < nt; ++t) faces[t] = m.facegroupAt(t) == g;
                      pickFaces(faces);
                  } else if (op == "rect") {
                      const glm::vec2 p0(float(argNumber(a, "u0", 0)), float(argNumber(a, "v0", 0)));
@@ -347,7 +366,7 @@ void registerUvCommands(CommandRegistry& reg) {
                      if (m.uvFlags.size() == nt * 3)
                          for (uint32_t c = 0; c < nt * 3; ++c) sel.corners[c] = (m.uvFlags[c] & kUvSeam) != 0;
                  } else if (op != "mode") {
-                     return {false, "op must be all, none, invert, island, face, polygroup, rect, seams or mode"};
+                     return {false, "op must be all, none, invert, island, face, facegroup, rect, seams or mode"};
                  }
                  if (sel.mode == UvSelectMode::Island) uvConvertSelection(m, topo, sel, UvSelectMode::Island);
                  const size_t n = sel.count();

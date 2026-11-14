@@ -3,7 +3,9 @@
 #include "core/Tablet.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
 
 namespace sf {
 
@@ -73,6 +75,9 @@ Json toJson(const TabletSettings& t) {
     for (PenAction a : t.buttons) buttons.push(std::string(penActionId(a)));
     j.set("buttons", buttons);
     j.set("mouseMode", t.mouseMode);
+    j.set("viewSpeed", double(t.viewSpeed));
+    j.set("classicPenTiming", t.classicTiming);
+    j.set("palmRejection", t.palmRejection);
     return j;
 }
 
@@ -97,12 +102,102 @@ void fromJson(const Json& j, TabletSettings& t) {
                 if (a != PenAction::EraseMask) t.buttons[i] = a;
             }
     t.mouseMode = j["mouseMode"].asBool(t.mouseMode);
+    t.viewSpeed = std::clamp(float(j["viewSpeed"].asNumber(t.viewSpeed)), 0.1f, 2.0f);
+    t.classicTiming = j["classicPenTiming"].asBool(t.classicTiming);
+    t.palmRejection = j["palmRejection"].asBool(t.palmRejection);
 }
 
-void PenPressureTracker::sample(float pressure) {
+bool PenPressureTracker::sample(float pressure) {
+    if (!std::isfinite(pressure) || (holdLostZero && down_ && sinceDown_ && raw_ > kContact && pressure <= 0.0f))
+        return false;
     raw_ = clamp01(pressure);
     sinceDown_ = true;
     everSampled_ = true;
+    if (raw_ > kContact) pressed_ = true;
+    return true;
+}
+
+void PenDiagnostics::sampled(float p, bool touching) {
+    lastPressure = p;
+    if (!touching) return;
+    strokeMin = strokeMin < 0.0f ? p : std::min(strokeMin, p);
+    strokeMax = std::max(strokeMax, p);
+}
+
+std::string penReport(const std::vector<std::pair<std::string, std::string>>& facts, const PenDiagnostics& d) {
+    std::string s;
+    for (const auto& [name, value] : facts) s += name + ": " + value + "\n";
+    char buf[512];
+    std::snprintf(buf, sizeof buf,
+                  "Pen events: proximity %llu, down %llu, up %llu, motion %llu, pressure %llu, other axes %llu, "
+                  "buttons %llu\n"
+                  "Lost pressure samples: %llu\nSystem mouse events while the pen was in range: %llu\n"
+                  "Touch events from the pen: %llu\nPressure after motion: %s\n",
+                  (unsigned long long)d.proximity, (unsigned long long)d.down, (unsigned long long)d.up,
+                  (unsigned long long)d.motion, (unsigned long long)d.pressure, (unsigned long long)d.otherAxes,
+                  (unsigned long long)d.buttons, (unsigned long long)d.lostSamples, (unsigned long long)d.strayMouse,
+                  (unsigned long long)d.penTouchEvents, d.axesAfterMotion ? "yes" : "not seen");
+    s += buf;
+    if (d.lastPressure < 0.0f) s += "Last pressure: none yet\n";
+    else {
+        std::snprintf(buf, sizeof buf, "Last pressure: %.3f\n", double(d.lastPressure));
+        s += buf;
+    }
+    if (d.strokeMax >= 0.0f) {
+        std::snprintf(buf, sizeof buf, "Last stroke's pressure: %.3f to %.3f\n", double(d.strokeMin), double(d.strokeMax));
+        s += buf;
+    }
+    return s;
+}
+
+void PenPressureTracker::motion() {
+    if (down_ && !pressed_ && silentMotions_ < kSilentMotions) ++silentMotions_;
+}
+
+bool looksLikeTablet(const std::string& name) {
+    std::string s = name;
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    for (const char* what : {"wacom", "intuos", "cintiq", "bamboo", "huion", "kamvas", "xp-pen", "xppen", "gaomon",
+                             "ugee", "veikk", "tablet", "stylus", "digitizer", " pen"})
+        if (s.find(what) != std::string::npos) return true;
+    return false;
+}
+
+TabletHotplug::Note TabletHotplug::mouseAdded(uint32_t id, const std::string& name) {
+    if (looksLikeTablet(name)) {
+        if (std::find(tabletMice_.begin(), tabletMice_.end(), id) == tabletMice_.end()) tabletMice_.push_back(id);
+        pens_.clear(); // its pens are new, even with an id seen before
+        candidate_ = 0;
+        announced_ = true;
+        return Note::Connected;
+    }
+    candidate_ = id;
+    announced_ = false;
+    return Note::None;
+}
+
+TabletHotplug::Note TabletHotplug::mouseRemoved(uint32_t id) {
+    if (id == candidate_) candidate_ = 0;
+    const auto it = std::find(tabletMice_.begin(), tabletMice_.end(), id);
+    if (it == tabletMice_.end()) return Note::None;
+    tabletMice_.erase(it);
+    pens_.clear();
+    announced_ = false;
+    return Note::Disconnected;
+}
+
+TabletHotplug::Note TabletHotplug::penIn(uint32_t penId) {
+    if (std::find(pens_.begin(), pens_.end(), penId) != pens_.end()) return Note::None;
+    pens_.push_back(penId);
+    if (candidate_ != 0) { // the generic device added just before was this tablet
+        tabletMice_.push_back(candidate_);
+        candidate_ = 0;
+        if (!announced_) {
+            announced_ = true;
+            return Note::Connected;
+        }
+    }
+    return Note::NewPen;
 }
 
 void PenCursor::cursorAt(float x, float y) {
@@ -112,27 +207,9 @@ void PenCursor::cursorAt(float x, float y) {
     anchored_ = false;
 }
 
-void PenCursor::systemCursor(float x, float y) {
-    if (!std::isfinite(x) || !std::isfinite(y)) return;
-    systemX_ = x;
-    systemY_ = y;
-    haveSystem_ = true;
-}
-
 void PenCursor::map(float& x, float& y, uint64_t nowNs) {
     if (!std::isfinite(x) || !std::isfinite(y)) return;
-    const bool system = haveSystem_;
-    haveSystem_ = false; // (one reading per position)
-    if (mouseMode && system) {
-        // The system cursor is the one cursor; the pen only adds pressure and tilt. Should the system stop
-        // saying where it is, the pen carries on from here.
-        offsetX_ = systemX_ - x;
-        offsetY_ = systemY_ - y;
-        anchored_ = true;
-        lastNs_ = nowNs;
-        x = systemX_;
-        y = systemY_;
-    } else if (mouseMode) {
+    if (mouseMode) {
         // A pen that comes back (into range, or after a pause) moves the cursor on from where it is.
         if (!anchored_ || nowNs - lastNs_ > kLiftedNs) {
             offsetX_ = haveCursor_ ? cursorX_ - x : 0.0f;

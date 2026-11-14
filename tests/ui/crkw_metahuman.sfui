@@ -1,8 +1,8 @@
-run ui_look look=classic layout=zbrush
-input_style zbrush
+run ui_look look=classic layout=classic
+input_style classic
 # Native panel remains usable without redistributing proprietary/local templates.
 run new_sphere subdivisions=3
-remember subtools count_before
+remember parts count_before
 click "CrokedWillo##palette.ckw"
 click "MetaHuman Sculpt##crkw.metahuman"
 expect_text "Native template sculpting"
@@ -13,5 +13,5 @@ expect "Export for MetaHuman##crkw.mh_export"
 type "##crkw.mh_assets" "missing-crkw-metahuman-templates"
 click "Create MetaHuman##crkw.mh_create"
 expect_status "Cannot read FBX"
-expect_value subtools == $count_before
+expect_value parts == $count_before
 shot native-panel

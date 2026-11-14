@@ -10,9 +10,13 @@
 //  5. stitches: copies of a point on a shared edge or corner are averaged (they differ only where a brush read
 //     neighbours, like Smooth), so the surface stays closed.
 #include "core/Micro.h"
+#include "core/AtomicRef.h"
+#include "core/FocusDetail.h"
 
 #include "core/BVH.h"
+#include "core/BrushAlpha.h"
 #include "core/Sculpt.h"
+#include "core/SculptKernel.h"
 #include "core/ThreadPool.h"
 #include "core/TierConfig.h"
 
@@ -26,15 +30,16 @@ int microBrushSupport(BrushType type) {
     switch (type) {
     case BrushType::Standard:
     case BrushType::Clay:
-    case BrushType::ClayBuildup:
+    case BrushType::ClayBlock:
     case BrushType::Smooth:
+    case BrushType::SmoothPeaks:
     case BrushType::Inflate:
     case BrushType::Flatten:
     case BrushType::Trim:
     case BrushType::Layer: return 2;
     case BrushType::Pinch:
     case BrushType::Crease:
-    case BrushType::DamStandard:
+    case BrushType::SharpCrease:
     case BrushType::Move: return 1;
     default: return 0;
     }
@@ -43,6 +48,24 @@ int microBrushSupport(BrushType type) {
 namespace {
 
 glm::vec3 projectOnPlane(const glm::vec3& v, const glm::vec3& n) { return v - n * glm::dot(v, n); }
+
+// The freedom (1 - mask) the base mesh's own mask leaves each grid point of triangle t, interpolated from its corners
+// (the micro level's mask is per grid point, beside it). False, `out` untouched, when its corners are all free.
+bool baseFreedom(const Mesh& m, uint32_t t, uint32_t n, std::vector<float>& out) {
+    if (!m.hasMask()) return false;
+    const glm::uvec3 tr = m.triangles[t];
+    const float m0 = m.maskAt(tr.x), m1 = m.maskAt(tr.y), m2 = m.maskAt(tr.z);
+    if (m0 <= 0.0f && m1 <= 0.0f && m2 <= 0.0f) return false;
+    out.resize(size_t(n + 1) * (n + 2) / 2);
+    const float inv = 1.0f / float(n);
+    size_t k = 0;
+    for (uint32_t j = 0; j <= n; ++j)
+        for (uint32_t i = 0; i + j <= n; ++i, ++k) {
+            const float masked = (float(n - i - j) * m0 + float(i) * m1 + float(j) * m2) * inv;
+            out[k] = masked >= 0.9999f ? 0.0f : 1.0f - masked; // (fully masked corners: exactly none, not rounding off)
+        }
+    return true;
+}
 
 // A base triangle's box grown by its Phong bulge and displacement range.
 bool triangleNear(const Mesh& m, const MicroMesh& mm, uint32_t t, const glm::vec3& c, float r) {
@@ -58,11 +81,10 @@ bool triangleNear(const Mesh& m, const MicroMesh& mm, uint32_t t, const glm::vec
     return glm::dot(q - c, q - c) <= r * r;
 }
 
-// Writes the change at every grid point of an n-grid from `coarse` changes on the points `stride` apart (a grid of
-// n / stride): each point gets the coarse micro triangle's values interpolated (exactly the coarse value on coarse
-// points). apply(index, change) is called for the points whose change isn't 0.
-template <class F>
-void interpolateCoarse(const float* coarse, uint32_t n, uint32_t stride, F&& apply) {
+// Every grid point of an n-grid with the values on the points `stride` apart (a grid of n / stride) interpolated
+// over the coarse micro triangle holding it (exactly the coarse value on coarse points): each(index, i, j, value).
+template <class T, class F>
+void forInterpolated(const T* coarse, uint32_t n, uint32_t stride, F&& each) {
     const uint32_t cm = n / stride;
     const float inv = 1.0f / float(stride);
     uint32_t idx = 0;
@@ -72,7 +94,7 @@ void interpolateCoarse(const float* coarse, uint32_t n, uint32_t stride, F&& app
         for (uint32_t i = 0; i + j <= n; ++i, ++idx) {
             const uint32_t ci = i / stride, ri = i % stride;
             const float fi = float(ri) * inv;
-            float d;
+            T d;
             if (ri == 0 && rj == 0) d = coarse[MicroMesh::index(ci, cj, cm)];
             else if (fi + fj <= 1.0f)
                 d = coarse[MicroMesh::index(ci, cj, cm)] * (1.0f - fi - fj) + coarse[MicroMesh::index(ci + 1, cj, cm)] * fi +
@@ -80,9 +102,18 @@ void interpolateCoarse(const float* coarse, uint32_t n, uint32_t stride, F&& app
             else
                 d = coarse[MicroMesh::index(ci + 1, cj, cm)] * (1.0f - fj) + coarse[MicroMesh::index(ci + 1, cj + 1, cm)] * (fi + fj - 1.0f) +
                     coarse[MicroMesh::index(ci, cj + 1, cm)] * (1.0f - fi);
-            if (d != 0.0f) apply(idx, d);
+            each(idx, i, j, d);
         }
     }
+}
+
+// Writes the change at every grid point from `coarse` changes on the points `stride` apart (forInterpolated):
+// apply(index, change) for the points whose change isn't 0.
+template <class F>
+void interpolateCoarse(const float* coarse, uint32_t n, uint32_t stride, F&& apply) {
+    forInterpolated(coarse, n, stride, [&](uint32_t idx, uint32_t, uint32_t, float d) {
+        if (d != 0.0f) apply(idx, d);
+    });
 }
 
 // Rounds `units` (a displacement over its step) to the nearest storable value (no libm call: brushes write
@@ -103,6 +134,77 @@ void forNeighbors(uint32_t i, uint32_t j, uint32_t n, F&& f) {
     if (i > 0) f(i - 1, j + 1);
 }
 
+// Pinch on a height field (Pinch, Crease, Sharp Crease; #125). Pulling the surface sideways towards the brush
+// centre is, for a scalar displacement, resampling it from farther out: each point takes the value found where the
+// pull brings the surface from (semi-Lagrangian). The values come from the grids as the dab found them (`snap` for
+// the triangles it writes), interpolated on the micro triangles, walking across base triangles as far as the pull
+// reaches. A scale-adaptive dab (stride > 1) works out the pull on its coarse points and resamples every grid point
+// with it interpolated: resampling only the coarse points and interpolating their change handed each coarse point's
+// detail to the points between, dab after dab (a hatch along big strokes). An interpolated value never leaves the range of the values around it, so
+// unlike sharpening against the neighbours' average (which made every dab grow grid-scale noise) nothing amplifies,
+// however many dabs land on a point.
+struct PinchSampler {
+    const Mesh& m;
+    const MicroMesh& mm;
+    const int16_t* snap = nullptr;
+    const uint32_t* snapOf = nullptr; // per base triangle: its tile in `snap` + 1 (0: not written this dab, read mm.disp)
+
+    const int16_t* grid(uint32_t t) const {
+        return snapOf[t] ? snap + size_t(snapOf[t] - 1) * mm.samples : mm.disp.data() + size_t(t) * mm.samples;
+    }
+    // The flat base point of grid point (i, j) of triangle t (corners in triangle order).
+    glm::vec3 flat(uint32_t t, float i, float j) const {
+        const glm::uvec3 tr = m.triangles[t];
+        const glm::vec3 a = m.positions[tr.x];
+        const float inv = 1.0f / float(mm.n);
+        return a + (m.positions[tr.y] - a) * (i * inv) + (m.positions[tr.z] - a) * (j * inv);
+    }
+    // The displacement (in units of the step) at `q` near the flat base, starting from triangle t.
+    float sample(uint32_t t, const glm::vec3& q) const {
+        float w1 = 0.0f, w2 = 0.0f;
+        for (int steps = 0;; ++steps) {
+            const glm::uvec3 tr = m.triangles[t];
+            const glm::vec3 a = m.positions[tr.x], e1 = m.positions[tr.y] - a, e2 = m.positions[tr.z] - a, d = q - a;
+            const float g11 = glm::dot(e1, e1), g12 = glm::dot(e1, e2), g22 = glm::dot(e2, e2);
+            const float det = g11 * g22 - g12 * g12;
+            if (!(det > 0.0f)) break; // (degenerate: its first corner)
+            const float d1 = glm::dot(d, e1), d2 = glm::dot(d, e2);
+            w1 = (g22 * d1 - g12 * d2) / det;
+            w2 = (g11 * d2 - g12 * d1) / det;
+            const float w0 = 1.0f - w1 - w2;
+            // Outside: on to the neighbour across the edge facing the most negative weight (edge e runs from corner
+            // e to e + 1, so w2 < 0 is past edge 0, w0 past edge 1, w1 past edge 2).
+            const float lowest = std::min({w0, w1, w2});
+            if (lowest >= -1e-5f || steps == 32) break;
+            const int e = lowest == w2 ? 0 : lowest == w0 ? 1 : 2;
+            const uint32_t nb = mm.edgeNeighbor[size_t(t) * 3 + size_t(e)];
+            if (nb == MicroMesh::kNone) break; // (a boundary: the nearest point inside)
+            t = nb >> 2;
+        }
+        // Clamped into the triangle.
+        w1 = std::max(w1, 0.0f), w2 = std::max(w2, 0.0f);
+        if (w1 + w2 > 1.0f) {
+            const float k = 1.0f / (w1 + w2);
+            w1 *= k, w2 *= k;
+        }
+        const uint32_t cm = mm.n, n = mm.n;
+        const int16_t* g = grid(t);
+        const float fi = w1 * float(cm), fj = w2 * float(cm);
+        uint32_t i0 = std::min(uint32_t(fi), cm - 1), j0 = std::min(uint32_t(fj), cm - 1);
+        if (i0 + j0 > cm - 1) {
+            if (fi >= fj) i0 = cm - 1 - j0;
+            else j0 = cm - 1 - i0;
+        }
+        const float a = std::clamp(fi - float(i0), 0.0f, 1.0f), b = std::clamp(fj - float(j0), 0.0f, 1.0f);
+        auto at = [&](uint32_t i, uint32_t j) { return float(g[MicroMesh::index(i, j, n)]); };
+        if (a + b <= 1.0f || i0 + j0 + 2 > cm) {
+            const float c = std::max(1.0f - a - b, 0.0f);
+            return (at(i0, j0) * c + at(i0 + 1, j0) * a + at(i0, j0 + 1) * b) / (c + a + b);
+        }
+        return at(i0 + 1, j0) * (1.0f - b) + at(i0 + 1, j0 + 1) * (a + b - 1.0f) + at(i0, j0 + 1) * (1.0f - a);
+    }
+};
+
 } // namespace
 
 void MicroStroke::begin(Mesh& m) {
@@ -116,6 +218,7 @@ void MicroStroke::begin(Mesh& m) {
     maskAdded_ = false;
     if (dabStamp_.size() != mm.baseTriangles) {
         dabStamp_.assign(mm.baseTriangles, 0);
+        stitchStamp_.assign(mm.baseTriangles, 0);
         dabEpoch_ = 0;
     }
     if (vertStamp_.size() != m.vertexCount()) vertStamp_.assign(m.vertexCount(), 0);
@@ -131,6 +234,7 @@ void MicroStroke::begin(Mesh& m) {
 
 // Saves the grids of the triangles in `tris` that this stroke hasn't touched yet.
 void MicroStroke::touch(MicroMesh& mm, std::span<const uint32_t> tris) {
+    if (mm.focus) mm.focus->ensureFull(mm, tris, true); // (edits write full tiles only)
     const size_t S = mm.samples, before = tiles_.size();
     for (uint32_t t : tris)
         if (!tileOf_[t]) {
@@ -150,10 +254,12 @@ void MicroStroke::touch(MicroMesh& mm, std::span<const uint32_t> tris) {
 }
 
 // Makes the copies of every shared point of triangles `tris` equal again (see the file comment).
-void MicroStroke::stitch(const Mesh& m, MicroMesh& mm, std::span<const uint32_t> tris) {
+void MicroStroke::stitch(const Mesh& m, MicroMesh& mm, std::span<const uint32_t> tris, const uint8_t* changed) {
     const uint32_t n = mm.n, S = mm.samples;
     const uint32_t epoch = dabEpoch_;
     auto inDab = [&](uint32_t t) { return dabStamp_[t] == epoch; };
+    if (stitchStamp_.size() != mm.baseTriangles) stitchStamp_.assign(mm.baseTriangles, 0);
+    auto hit = [&](uint32_t t) { AtomicRef<uint32_t>(stitchStamp_[t]).store(epoch, std::memory_order_relaxed); };
     // Edges: each shared edge once, by the lower triangle of the two (both in this dab), or copied from a hidden
     // neighbour (which brushes leave alone).
     poolFor(tris.size(), [&](size_t b, size_t e) {
@@ -178,12 +284,16 @@ void MicroStroke::stitch(const Mesh& m, MicroMesh& mm, std::span<const uint32_t>
                     MicroMesh::edgePoint(f, reversed ? n - k : k, n, i2, j2);
                     const uint32_t a = MicroMesh::index(i, j, n), c = MicroMesh::index(i2, j2, n);
                     if (hiddenU) {
+                        if (g[a] != h[c] || (mk && mk[a] != hk[c])) hit(t);
                         g[a] = h[c];
                         if (mk) mk[a] = hk[c];
                     } else {
                         const int16_t v = int16_t((int(g[a]) + int(h[c]) + (int(g[a]) + int(h[c]) >= 0 ? 1 : 0)) / 2);
+                        const uint8_t mv = mk ? uint8_t((int(mk[a]) + int(hk[c]) + 1) / 2) : 0;
+                        if (g[a] != v || (mk && mk[a] != mv)) hit(t);
+                        if (h[c] != v || (mk && hk[c] != mv)) hit(u);
                         g[a] = h[c] = v;
-                        if (mk) mk[a] = hk[c] = uint8_t((int(mk[a]) + int(hk[c]) + 1) / 2);
+                        if (mk) mk[a] = hk[c] = mv;
                     }
                 }
             }
@@ -235,6 +345,7 @@ void MicroStroke::stitch(const Mesh& m, MicroMesh& mm, std::span<const uint32_t>
             for (uint32_t u : ring) {
                 if (!inDab(u)) continue;
                 const size_t ci = cornerIndex(u);
+                if (mm.disp[ci] != value || (mm.hasMask() && mm.mask[ci] != mval)) hit(u);
                 mm.disp[ci] = value;
                 if (mm.hasMask()) mm.mask[ci] = mval;
             }
@@ -256,7 +367,9 @@ void MicroStroke::stitch(const Mesh& m, MicroMesh& mm, std::span<const uint32_t>
             mm.triRange[t] = uint16_t(std::min(r, 32767));
         }
     }, 64);
-    for (uint32_t t : tris) {
+    for (size_t s = 0; s < tris.size(); ++s) {
+        const uint32_t t = tris[s];
+        if (changed && !changed[s] && stitchStamp_[t] != epoch) continue; // (nothing of it moved)
         mm.rangeMax = std::max(mm.rangeMax, mm.triRange[t]);
         mm.markDirty(t);
     }
@@ -264,7 +377,9 @@ void MicroStroke::stitch(const Mesh& m, MicroMesh& mm, std::span<const uint32_t>
 }
 
 void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& center, const glm::vec3& viewDir, float radius,
-                      float strength, bool invert, float focal, const glm::vec3& alphaUp, bool maskBrush, float maskStrength) {
+                      float strength, bool invert, float focal, const glm::vec3& alphaUp, bool maskBrush, float maskStrength,
+                      const BrushAlpha* alpha, const std::function<float(const glm::vec3&)>& texture,
+                      const glm::vec3& strokeDir) {
     if (!active_ || !m.micro || radius <= 0.0f) return;
     if (!maskBrush && microBrushSupport(type) == 0) return;
     auto clock = std::chrono::steady_clock::now();
@@ -273,7 +388,9 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
     const float r = radius, r2 = r * r;
     const float s = std::clamp(strength, 0.0f, 1.0f);
     const float sign = invert ? -1.0f : 1.0f;
-    const float reach = type == BrushType::ClayBuildup && !maskBrush ? 1.3f : 1.0f;
+    // An alpha reaches its square's corners, the square Clay Block tip a little past the circle (as Sculpt.cpp).
+    const bool useAlpha = alpha && !alpha->empty() && !maskBrush;
+    const float reach = useAlpha ? kAlphaReach : type == BrushType::ClayBlock && !maskBrush ? 1.3f : 1.0f;
 
     // The displacement range this dab may need: widened first (it costs precision) when what a dab adds could
     // pass it; a dab that still clips (planes far off) widens it for the next one.
@@ -282,10 +399,11 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
     // 1. The base triangles within reach.
     if (++dabEpoch_ == 0) {
         std::fill(dabStamp_.begin(), dabStamp_.end(), 0);
+        std::fill(stitchStamp_.begin(), stitchStamp_.end(), 0);
         std::fill(vertStamp_.begin(), vertStamp_.end(), 0);
         dabEpoch_ = 1;
     }
-    bvh.queryTriangles(m, center, r * reach + mm.bulgeMax + float(mm.rangeMax) * mm.step, cand_);
+    microQueryTriangles(m, bvh, center, r * reach, cand_); // (each node grown by the displacement under it)
     std::erase_if(cand_, [&](uint32_t t) { return m.triangleHidden(t) || !triangleNear(m, mm, t, center, r * reach); });
     if (cand_.empty()) return;
     for (uint32_t t : cand_) dabStamp_[t] = dabEpoch_;
@@ -300,7 +418,7 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
 
     // 2. The brush plane: weighted area normal and centre over every second grid point under the brush.
     glm::vec3 areaNormal(0.0f), areaCenter(0.0f);
-    const bool needPlane = !maskBrush && type != BrushType::Smooth && type != BrushType::Inflate && type != BrushType::Pinch;
+    const bool needPlane = !maskBrush && type != BrushType::Smooth && type != BrushType::SmoothPeaks && type != BrushType::Inflate && type != BrushType::Pinch;
     if (needPlane) {
         const uint32_t stride = n >= 4 ? 2 : 1;
         struct Sum {
@@ -349,8 +467,22 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
     up = glm::normalize(up);
     const glm::vec3 right = glm::cross(up, areaNormal);
     const float layerHeight = r * 0.08f * s;
-    const bool readsNeighbours = type == BrushType::Smooth || type == BrushType::Pinch || type == BrushType::Crease ||
-                                 type == BrushType::DamStandard;
+    const bool readsNeighbours = type == BrushType::Smooth || type == BrushType::SmoothPeaks;
+    // Pinch, Crease and Sharp Crease pull the surface towards the centre (PinchSampler), reading the grids as the
+    // dab found them: those it writes copied first.
+    const bool pinches = !maskBrush && (type == BrushType::Pinch || type == BrushType::Crease || type == BrushType::SharpCrease);
+    if (pinches) {
+        if (snapOf_.size() != mm.baseTriangles) snapOf_.assign(mm.baseTriangles, 0);
+        snap_.resize(cand_.size() * S);
+        poolFor(cand_.size(), [&](size_t b, size_t e) {
+            for (size_t ci = b; ci < e; ++ci) {
+                std::copy_n(mm.disp.data() + size_t(cand_[ci]) * S, S, snap_.data() + ci * S);
+                snapOf_[cand_[ci]] = uint32_t(ci + 1);
+            }
+        }, 64);
+    }
+    // Sharp Crease pulls across the stroke only (as on a mesh), so the groove narrows without bunching up along it.
+    const glm::vec3 alongStroke = glm::length(strokeDir) > 1e-12f ? glm::normalize(strokeDir) : glm::vec3(0.0f);
 
     // 3. The kernel, in parallel over the triangles (each writes only its own grid). Scale-adaptive: the brush is
     // evaluated on the grid points `stride` apart, about kBrushSamples across its radius, and the points in between
@@ -366,9 +498,12 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
     std::vector<uint64_t> visited((cand_.size() + 7) / 8, 0);
     std::vector<float> clipped((cand_.size() + 7) / 8, 0.0f); // per block: the largest |d| that didn't fit
     const float invStep = 1.0f / mm.step;
+    const PinchSampler pinchSampler{m, mm, snap_.data(), snapOf_.data()};
     poolFor(cand_.size(), [&](size_t b, size_t e) {
         thread_local std::vector<int16_t> before;
-        thread_local std::vector<float> coarse;
+        thread_local std::vector<float> coarse, baseFree;
+        thread_local std::vector<glm::vec3> coarsePull; // pinches at stride > 1: the pull on the coarse points
+        thread_local std::vector<glm::vec4> coarsePinch; // ... with the depth change
         MicroTriangle T;
         uint64_t count = 0;
         float over = 0.0f;
@@ -377,9 +512,12 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
             T.set(m, t, n);
             int16_t* g = mm.disp.data() + size_t(t) * S;
             uint8_t* mk = mm.hasMask() ? mm.mask.data() + size_t(t) * S : nullptr;
+            const float* bf = !maskBrush && baseFreedom(m, t, n, baseFree) ? baseFree.data() : nullptr;
             if (readsNeighbours && !maskBrush) before.assign(g, g + S); // Jacobi: neighbours as they were
             const int16_t* old = !maskBrush && type == BrushType::Layer ? oldDisp_.data() + size_t(tileOf_[t] - 1) * S : nullptr;
             coarse.assign(size_t(cm + 1) * (cm + 2) / 2, 0.0f);
+            const bool pullCoarse = pinches && stride > 1;
+            if (pullCoarse) coarsePull.assign(coarse.size(), glm::vec3(0.0f));
             bool any = false;
             uint32_t cidx = 0;
             for (uint32_t cj = 0; cj <= cm; ++cj)
@@ -399,16 +537,27 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
                         any = true;
                         continue;
                     }
-                    float f = brushFalloff(std::sqrt(dist2), r, focal);
-                    if (type == BrushType::ClayBuildup) { // square tip, rounded corners (as Sculpt.cpp)
+                    float f = useAlpha ? alpha->stamp(glm::dot(o, right) / r, glm::dot(o, up) / r, focal)
+                                       : brushFalloff(std::sqrt(dist2), r, focal);
+                    if (type == BrushType::ClayBlock && !useAlpha) { // square tip, rounded corners (as Sculpt.cpp)
                         const float cheb = std::max(std::abs(glm::dot(o, right)), std::abs(glm::dot(o, up))) / r;
                         const float corner = std::clamp((1.3f - std::sqrt(dist2) / r) / 0.3f, 0.0f, 1.0f);
                         const float edge = std::clamp((1.0f - cheb) / 0.35f, 0.0f, 1.0f);
                         f = edge * edge * (3.0f - 2.0f * edge) * corner;
                     }
+                    if (texture) f *= texture(p);
                     if (mk && stride == 1) f *= 1.0f - float(mk[idx]) / 255.0f; // (coarse: the fine points' mask, below)
+                    if (bf && stride == 1) f *= bf[idx];
                     if (f <= 0.0f) continue;
-                    const float facing = std::max(glm::dot(nn, areaNormal), 0.3f); // moving along nn reaches a plane this much slower
+                    const float facingRaw = glm::dot(nn, areaNormal);
+                    const float facing = std::max(facingRaw, 0.3f); // moving along nn reaches a plane this much slower
+                    // The plane brushes (Flatten, Clay, Clay Block, Trim) move a point along its normal towards their
+                    // plane. A point turned edge-on or away from it (a fold's far wall, a scan's noisy normal) can't
+                    // get there that way: moving it anyway only takes it further, dab after dab, into a spike where
+                    // the dabs pile up (a stroke's end). Those stay put, and no point moves more than a quarter of
+                    // the brush a dab.
+                    const bool reachesPlane = facingRaw > 0.1f;
+                    const float planeCap = r * 0.25f * f;
                     float delta = 0.0f;
                     auto neighbourAverage = [&](float& lo, float& hi) {
                         float sum = 0.0f;
@@ -421,12 +570,18 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
                         });
                         return c ? sum / float(c) : float(before[idx]);
                     };
-                    auto sharpen = [&](float k) { // pinch, on a height field: away from the neighbour average, kept within them
-                        float lo, hi;
-                        const float avg = neighbourAverage(lo, hi);
-                        const float cur = float(before[idx]);
-                        const float target = std::clamp(cur + (cur - avg) * k, lo, hi);
-                        return (target - cur) * mm.step;
+                    // The surface pulled by k times its offset from the centre (along the base): the change, in world
+                    // units (at stride > 1 the pull is kept for the write below, which resamples every grid point).
+                    auto pinch = [&](float k, bool across) {
+                        glm::vec3 pull = projectOnPlane(center - p, nn);
+                        if (across) pull -= alongStroke * glm::dot(pull, alongStroke);
+                        if (pullCoarse) {
+                            coarsePull[cidx] = pull * k;
+                            any = any || k != 0.0f;
+                            return 0.0f;
+                        }
+                        const glm::vec3 from = pinchSampler.flat(t, float(i), float(j)) - pull * k;
+                        return (pinchSampler.sample(t, from) - float(pinchSampler.grid(t)[idx])) * mm.step;
                     };
                     switch (type) {
                     case BrushType::Standard: delta = sign * s * r * 0.06f * f * glm::dot(areaNormal, nn); break;
@@ -437,27 +592,38 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
                         delta = (avg - float(before[idx])) * mm.step * std::min(1.0f, s * f);
                         break;
                     }
+                    case BrushType::SmoothPeaks: { // the heights above the neighbours' average come down
+                        float lo, hi;
+                        const float avg = neighbourAverage(lo, hi);
+                        delta = std::min(0.0f, avg - float(before[idx])) * mm.step * std::min(1.0f, s * f);
+                        break;
+                    }
                     case BrushType::Flatten: {
+                        if (!reachesPlane) break;
                         const float h = glm::dot(p - areaCenter, areaNormal);
-                        delta = -h * s * f * (invert ? -0.5f : 1.0f) / facing;
+                        delta = std::clamp(-h * s * f * (invert ? -0.5f : 1.0f) / facing, -planeCap, planeCap);
                         break;
                     }
                     case BrushType::Clay: {
-                        const glm::vec3 pp = areaCenter + areaNormal * (sign * r * 0.05f * s);
+                        if (!reachesPlane) break;
+                        float k;
+                        const glm::vec3 pp = PlaneKernel::clayPlaneAt(areaCenter, areaNormal, center, sign, r * 0.05f * s, k); // (reaches the cursor)
                         const float h = glm::dot(p - pp, areaNormal);
-                        if (sign * h < 0.0f) delta = -h * f / facing;
+                        if (sign * h < 0.0f) delta = std::clamp(-h * f * clayPull(s) * k / facing, -planeCap, planeCap);
                         break;
                     }
-                    case BrushType::ClayBuildup: {
+                    case BrushType::ClayBlock: {
+                        if (!reachesPlane) break;
                         const glm::vec3 pp = areaCenter + areaNormal * (sign * r * 0.08f * s);
                         const float h = glm::dot(p - pp, areaNormal);
-                        if (sign * h < 0.0f) delta = -h * f / facing;
+                        if (sign * h < 0.0f) delta = std::clamp(-h * f * clayPull(s) / facing, -planeCap, planeCap);
                         break;
                     }
                     case BrushType::Trim: {
+                        if (!reachesPlane) break;
                         const glm::vec3 pp = areaCenter - areaNormal * (sign * r * 0.02f * s);
                         const float h = glm::dot(p - pp, areaNormal);
-                        if (sign * h > 0.0f) delta = -h * std::min(1.0f, std::sqrt(f) * (0.5f + s)) / facing;
+                        if (sign * h > 0.0f) delta = std::clamp(-h * std::min(1.0f, std::sqrt(f) * (0.5f + s)) / facing, -planeCap, planeCap);
                         break;
                     }
                     case BrushType::Layer: {
@@ -467,12 +633,11 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
                         delta = sign > 0.0f ? std::max(0.0f, target - d) : std::min(0.0f, target - d);
                         break;
                     }
-                    case BrushType::Pinch: delta = sign * sharpen(0.6f * s * f); break;
-                    case BrushType::Crease:
-                        delta = -sign * s * r * 0.05f * f * f + sharpen(0.5f * s * f);
-                        break;
-                    case BrushType::DamStandard:
-                        delta = -sign * s * r * 0.08f * f * f * f * f + sharpen(0.7f * s * f);
+                    // (the pulls of the mesh brushes, core/SculptKernel.h)
+                    case BrushType::Pinch: delta = pinch(sign * 0.2f * s * f, false); break;
+                    case BrushType::Crease: delta = -sign * s * r * 0.05f * f * f + pinch(0.25f * s * f, false); break;
+                    case BrushType::SharpCrease:
+                        delta = -sign * s * r * 0.08f * f * f * f * f + pinch(0.3f * s * f, true);
                         break;
                     default: break;
                     }
@@ -491,6 +656,7 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
                     return;
                 }
                 if (stride > 1 && mk) delta *= 1.0f - float(mk[idx]) * (1.0f / 255.0f);
+                if (stride > 1 && bf) delta *= bf[idx];
                 const float nd = float(g[idx]) + delta * invStep; // (in units of the step)
                 if (std::abs(nd) > 32767.0f) over = std::max(over, std::abs(nd) * mm.step);
                 const int16_t q = quantizeUnits(nd);
@@ -500,6 +666,20 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
             if (stride == 1) {
                 for (uint32_t k = 0; k < S; ++k)
                     if (coarse[k] != 0.0f) apply(k, coarse[k]);
+            } else if (pullCoarse) {
+                // The depth change and the pull interpolated together; each grid point resampled with its pull.
+                coarsePinch.resize(coarse.size());
+                for (size_t k = 0; k < coarse.size(); ++k) coarsePinch[k] = glm::vec4(coarsePull[k], coarse[k]);
+                const int16_t* own = pinchSampler.grid(t);
+                forInterpolated(coarsePinch.data(), n, stride, [&](uint32_t idx, uint32_t i, uint32_t j, const glm::vec4& v) {
+                    float delta = v.w;
+                    if (v.x != 0.0f || v.y != 0.0f || v.z != 0.0f) {
+                        const glm::vec3 from = pinchSampler.flat(t, float(i), float(j)) - glm::vec3(v);
+                        delta += (pinchSampler.sample(t, from) - float(own[idx])) * mm.step;
+                    }
+                    if (delta != 0.0f) apply(idx, delta);
+                });
+                count += S;
             } else {
                 interpolateCoarse(coarse.data(), n, stride, apply);
                 count += S;
@@ -514,8 +694,11 @@ void MicroStroke::dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& 
     float over = 0.0f;
     for (float c : clipped) over = std::max(over, c);
 
+    if (pinches)
+        for (uint32_t t : cand_) snapOf_[t] = 0;
+
     // 4. Stitch the shared points.
-    stitch(m, mm, cand_);
+    stitch(m, mm, cand_, maskBrush ? nullptr : changed_.data());
     if (over > 0.0f) widen(mm, over * 1.5f);
     stitchMs += lapMs(clock);
 }
@@ -540,7 +723,7 @@ void MicroStroke::beginGrab(Mesh& m, const BVH& bvh, const glm::vec3& center, fl
     lastStride = stride;
     const uint32_t cm = n / stride, cs = (cm + 1) * (cm + 2) / 2;
     std::vector<uint32_t> cand;
-    bvh.queryTriangles(m, center, radius + mm.bulgeMax + float(mm.rangeMax) * mm.step, cand);
+    microQueryTriangles(m, bvh, center, radius, cand);
     std::erase_if(cand, [&](uint32_t t) { return m.triangleHidden(t) || !triangleNear(m, mm, t, center, radius); });
     touch(mm, cand);
     GrabMirror gm;
@@ -592,7 +775,7 @@ void MicroStroke::grab(Mesh& m, const glm::vec3& delta) {
         const uint32_t cm = n / gm.stride, cs = (cm + 1) * (cm + 2) / 2;
         const glm::vec3 dm = gm.mirror * delta;
         poolFor(gm.tris, [&](size_t b, size_t e) {
-            thread_local std::vector<float> coarse;
+            thread_local std::vector<float> coarse, baseFree;
             coarse.resize(cs);
             for (size_t k = b; k < e; ++k) {
                 const uint32_t t = grabTris_[gm.firstTri + k];
@@ -606,9 +789,11 @@ void MicroStroke::grab(Mesh& m, const glm::vec3& delta) {
                 if (!any) continue;
                 int16_t* g = mm.disp.data() + size_t(t) * S;
                 const uint8_t* mk = mm.hasMask() ? mm.mask.data() + size_t(t) * S : nullptr;
+                const float* bf = baseFreedom(m, t, n, baseFree) ? baseFree.data() : nullptr;
                 int triMax = mm.triRange[t];
                 interpolateCoarse(coarse.data(), n, gm.stride, [&](uint32_t idx, float dd) {
                     if (mk) dd *= 1.0f - float(mk[idx]) * (1.0f / 255.0f);
+                    if (bf) dd *= bf[idx];
                     const int16_t q = quantizeUnits(float(g[idx]) + dd * invStep);
                     g[idx] = q;
                     triMax = std::max(triMax, q >= 0 ? int(q) : -int(q));

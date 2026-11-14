@@ -1,11 +1,14 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "app/UserGuide.h"
+#include "app/NativeDialog.h"
 
 #include "app/App.h"
+#include "app/I18n.h"
 #include "app/Theme.h"
 #include "app/Ui.h"
 #include "core/Image.h"
+#include "core/LegacyNames.h"
 #include "render/GL.h"
 
 #include <IconsLucide.h>
@@ -49,16 +52,22 @@ using guide::Spans;
 
 constexpr const char* kWebsite = "https://sculptforge.app/guide/";
 
-// Colours of the page (on the panel background).
-constexpr ImU32 kText = IM_COL32(0xd2, 0xd2, 0xd4, 0xff);
-constexpr ImU32 kStrong = IM_COL32(0xf0, 0xf0, 0xf0, 0xff);
-constexpr ImU32 kHeading = IM_COL32(0xf4, 0xf4, 0xf4, 0xff);
-constexpr ImU32 kDim = IM_COL32(0x8c, 0x8c, 0x90, 0xff);
-constexpr ImU32 kLink = IM_COL32(0xff, 0xa2, 0x55, 0xff);
-constexpr ImU32 kCode = IM_COL32(0xe9, 0xc0, 0x8f, 0xff);
-constexpr ImU32 kCodeBg = IM_COL32(0x1b, 0x1b, 0x1e, 0xff);
-constexpr ImU32 kInlineCodeBg = IM_COL32(0x33, 0x33, 0x38, 0xff);
-constexpr ImU32 kRule = IM_COL32(0x3a, 0x3a, 0x3f, 0xff);
+// Colours of the page (on the panel background), from the current look so light looks read too.
+ImVec4 mix(const ImVec4& a, const ImVec4& b, float t) {
+    return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
+}
+bool lightPage() { return theme::panelBg.x + theme::panelBg.y + theme::panelBg.z > 1.5f; }
+ImU32 kText() { return theme::u32(theme::text); }
+ImU32 kStrong() { return theme::u32(theme::textBright); }
+ImU32 kHeading() { return theme::u32(theme::textBright); }
+ImU32 kDim() { return theme::u32(theme::textDim); }
+ImU32 kLink() { return theme::u32(lightPage() ? theme::accentHover : mix(theme::accent, ImVec4(1, 1, 1, 1), 0.2f)); }
+ImU32 kCode() { return theme::u32(mix(theme::accent, theme::text, 0.45f)); }
+ImU32 kCodeBg() { return theme::u32(mix(theme::panelBg, lightPage() ? ImVec4(1, 1, 1, 1) : ImVec4(0, 0, 0, 1), 0.25f)); }
+ImU32 kInlineCodeBg() { return theme::u32(theme::frameHover); }
+ImU32 kRule() { return theme::u32(mix(theme::panelBg, theme::text, 0.14f)); }
+ImU32 kBox() { return theme::u32(mix(theme::panelBg, theme::text, 0.06f)); }     // callouts, cards
+ImU32 kBoxEdge() { return theme::u32(mix(theme::panelBg, theme::text, 0.16f)); } // their outline
 constexpr ImU32 kHighlight = IM_COL32(0xf0, 0x88, 0x2e, 0x5a);
 
 // --- Where the guide's files come from: embedded, or SCULPTFORGE_GUIDE_DIR while writing it ---
@@ -113,7 +122,7 @@ struct FlowStyle {
     ImFont* bold = nullptr;
     ImFont* mono = nullptr;
     ImFont* heading = nullptr; // headings: every non-code word in this font
-    ImU32 color = kText;
+    ImU32 color = kText();
     ImU32 labelColor = 0;      // callouts: colour of the leading bold label
     float lineHeight = 20.0f;
 };
@@ -124,6 +133,7 @@ struct Piece {
     ImFont* font = nullptr;
     float width = 0.0f;
     std::string linkText; // the whole link's text (button label for UI tests)
+    bool chevron = false;  // a menu path step followed by a ">" (drawn as a chevron)
 };
 
 struct Word {
@@ -177,6 +187,7 @@ private:
 
     float pieceWidth(const Span& sp, const std::string& text, ImFont* f) const {
         if (sp.kbd) return textWidth(st_.regular, text) + 10.0f * s_ + 4.0f * s_;
+        if (sp.path) return textWidth(st_.regular, text) + 14.0f * s_;
         const float w = textWidth(f, text);
         return sp.code ? w + 6.0f * s_ : w;
     }
@@ -222,6 +233,22 @@ private:
                 addPiece(sp.text);
                 continue;
             }
+            if (sp.path) { // each step a chip; a line may break after a chevron
+                for (size_t a = 0; a < sp.text.size();) {
+                    size_t b = sp.text.find(" > ", a);
+                    const bool more = b != std::string::npos;
+                    if (!more) b = sp.text.size();
+                    addPiece(sp.text.substr(a, b - a));
+                    if (more) {
+                        cur.pieces.back().chevron = true;
+                        cur.pieces.back().width += 16.0f * s_;
+                        cur.width += 16.0f * s_;
+                        endWord();
+                    }
+                    a = more ? b + 3 : b;
+                }
+                continue;
+            }
             std::string run;
             for (char c : sp.text) {
                 if (c == ' ' || c == '\n' || c == '\t') {
@@ -260,15 +287,30 @@ private:
             ImFont* kf = st_.regular;
             const float h = kf->FontSize + 4.0f * s_;
             const ImVec2 a(at.x + 2.0f * s_, at.y + (lh - h) * 0.5f), b(at.x + p.width - 2.0f * s_, a.y + h);
-            dl->AddRectFilled(a, b, IM_COL32(0x2c, 0x2c, 0x30, 0xff), 3.0f * s_);
-            dl->AddRect(a, b, IM_COL32(0x4a, 0x4a, 0x50, 0xff), 3.0f * s_);
+            dl->AddRectFilled(a, b, theme::u32(theme::frame), 3.0f * s_);
+            dl->AddRect(a, b, kBoxEdge(), 3.0f * s_);
             dl->AddText(kf, kf->FontSize, ImVec2(a.x + 5.0f * s_, a.y + 2.0f * s_), ui::color::accent, p.text.c_str());
+            return;
+        }
+        if (sp.path) {
+            ImFont* kf = st_.regular;
+            const float h = kf->FontSize + 6.0f * s_;
+            const float w = p.width - (p.chevron ? 16.0f * s_ : 0.0f) - 2.0f * s_;
+            const ImVec2 a(at.x + 1.0f * s_, at.y + (lh - h) * 0.5f), b(a.x + w, a.y + h);
+            dl->AddRectFilled(a, b, theme::u32(theme::frame), h * 0.5f);
+            dl->AddRect(a, b, kBoxEdge(), h * 0.5f);
+            dl->AddText(kf, kf->FontSize, ImVec2(a.x + 6.0f * s_, a.y + 3.0f * s_), kStrong(), p.text.c_str());
+            if (p.chevron) { // a small ">" between the steps
+                const float cx = b.x + 8.0f * s_, cy = at.y + lh * 0.5f, d = 3.0f * s_;
+                const ImVec2 pts[3] = {ImVec2(cx - d * 0.6f, cy - d), ImVec2(cx + d * 0.6f, cy), ImVec2(cx - d * 0.6f, cy + d)};
+                dl->AddPolyline(pts, 3, kDim(), 0, 1.4f * s_);
+            }
             return;
         }
         float tx = at.x;
         const float ty = at.y + (lh - f->FontSize) * 0.5f;
         if (sp.code) {
-            dl->AddRectFilled(ImVec2(at.x, ty - 1.0f * s_), ImVec2(at.x + p.width, ty + f->FontSize + 1.0f * s_), kInlineCodeBg,
+            dl->AddRectFilled(ImVec2(at.x, ty - 1.0f * s_), ImVec2(at.x + p.width, ty + f->FontSize + 1.0f * s_), kInlineCodeBg(),
                               3.0f * s_);
             tx += 3.0f * s_;
         }
@@ -283,12 +325,12 @@ private:
                 }
         }
         ImU32 col = st_.color;
-        if (sp.code) col = kCode;
-        else if (!sp.link.empty()) col = kLink;
+        if (sp.code) col = kCode();
+        else if (!sp.link.empty()) col = kLink();
         else if (sp.bold && st_.labelColor && &sp == firstSpan_) col = st_.labelColor;
-        else if (sp.bold && !st_.heading) col = kStrong;
+        else if (sp.bold && !st_.heading) col = kStrong();
         drawText(dl, f, ImVec2(tx, ty), col, p.text, sp.italic);
-        if (hovered) dl->AddLine(ImVec2(r0.x, ty + f->FontSize), ImVec2(r1.x, ty + f->FontSize), kLink, 1.0f * s_);
+        if (hovered) dl->AddLine(ImVec2(r0.x, ty + f->FontSize), ImVec2(r1.x, ty + f->FontSize), kLink(), 1.0f * s_);
     }
 
 public:
@@ -300,23 +342,35 @@ private:
     std::vector<Word> words_;
 };
 
+// The callouts' colours: the pop-up roles of the current look (Theme.h theme::Role, readable on it), the same
+// kinds as the website's (website/style.css): Tip teal, Note blue, Not yet and Warning amber, Important red, In short
+// orange; Experienced sculptor? violet. The label says the kind as well.
 struct CalloutLook {
     const char* label;
-    ImU32 color;
+    int role; // theme::Role, or -1: violet
 };
 constexpr CalloutLook kCallouts[] = {
-    {"Tip", IM_COL32(0x62, 0xc0, 0x7e, 0xff)},     {"Note", IM_COL32(0x6f, 0xa8, 0xe6, 0xff)},
-    {"ZBrush", IM_COL32(0xf0, 0x88, 0x2e, 0xff)},  {"Not yet", IM_COL32(0xa9, 0x90, 0xdc, 0xff)},
-    {"Warning", IM_COL32(0xe5, 0x60, 0x4a, 0xff)}, {"Important", IM_COL32(0xe5, 0x60, 0x4a, 0xff)},
+    {"Tip", int(theme::Role::Learn)},     {"Note", int(theme::Role::Info)},        {"Experienced sculptor?", -1},
+    {"Not yet", int(theme::Role::Warning)}, {"Warning", int(theme::Role::Warning)}, {"Important", int(theme::Role::Danger)},
+    {"In short", int(theme::Role::New)},  {"New", int(theme::Role::New)},
 };
 
-ImU32 calloutColor(const Block& b) {
-    if (b.spans.empty() || !b.spans[0].bold) return kRule;
+Spans parseTitle(const std::string& title) {
+    Span sp;
+    sp.text = title;
+    return {sp};
+}
+
+// The bar's colour, or with `ink` the label's (AA on the page).
+ImU32 calloutColor(const Block& b, bool ink = false) {
+    if (b.spans.empty() || !b.spans[0].bold) return kRule();
     std::string label = b.spans[0].text;
     while (!label.empty() && (label.back() == ':' || label.back() == ' ')) label.pop_back();
     for (const auto& c : kCallouts)
-        if (label == c.label) return c.color;
-    return IM_COL32(0x8c, 0x8c, 0x90, 0xff);
+        if (label == c.label)
+            return c.role < 0 ? (ink ? IM_COL32(0xc3, 0xb1, 0xf3, 0xff) : IM_COL32(0x9a, 0x7f, 0xe0, 0xff))
+                              : theme::u32(ink ? theme::ink(theme::Role(c.role)) : theme::edge(theme::Role(c.role)));
+    return kDim();
 }
 
 } // namespace
@@ -348,6 +402,7 @@ bool UserGuide::ensureLoaded() {
     if (loaded_) return loadError_.empty();
     loaded_ = true;
     if (!book_.load(loadPage, nullptr, loadError_) && loadError_.empty()) loadError_ = "The user guide could not be loaded.";
+    prepareWhatsNew();
     return loadError_.empty();
 }
 
@@ -369,6 +424,19 @@ std::string UserGuide::chapterTitle(const std::string& file) {
     return i >= 0 ? book_.chapters()[size_t(i)].title : std::string();
 }
 
+const guide::Document* UserGuide::document(const std::string& file) {
+    if (!ensureLoaded()) return nullptr;
+    const int i = book_.find(file);
+    return i >= 0 ? &book_.chapters()[size_t(i)].doc : nullptr;
+}
+
+ImTextureID UserGuide::image(const std::string& path, ImVec2* size) {
+    const Texture* t = texture(path);
+    if (!t) return ImTextureID(0);
+    if (size) *size = ImVec2(float(t->width), float(t->height));
+    return ImTextureID(uintptr_t(t->tex));
+}
+
 const guide::Document& UserGuide::page() const {
     if (place_.chapter >= 0 && place_.chapter < int(book_.chapters().size())) return book_.chapters()[size_t(place_.chapter)].doc;
     return book_.index();
@@ -386,14 +454,14 @@ void UserGuide::go(Place place, const std::string& anchor, bool record) {
     pendingBlock_ = -1;
     pendingScroll_ = -1.0f;
     pendingTop_ = anchor.empty() && !samePage;
-    if (!samePage) highlight_.clear();
+    if (!samePage) highlight_.clear(), openDetails_.clear();
 }
 
 void UserGuide::navigate(const std::string& target, bool record) {
     if (!ensureLoaded()) return;
     const guide::Target t = guide::splitTarget(target);
     if (t.external) {
-        SDL_OpenURL(t.file.c_str());
+        sf::dialogs::openUrl(t.file.c_str());
         return;
     }
     if (t.file.empty()) { // an anchor on this page
@@ -403,10 +471,10 @@ void UserGuide::navigate(const std::string& target, bool record) {
     std::string file = t.file;
     if (const size_t slash = file.rfind('/'); slash != std::string::npos) file = file.substr(slash + 1);
     // Chapters renamed to SculptForge's own names: old links still find them.
-    static const std::pair<const char*, const char*> kRenamed[] = {{"subtools.md", "parts.md"},
-                                                                   {"zspheres.md", "forge-spheres.md"},
-                                                                   {"polypaint.md", "vertex-paint.md"},
-                                                                   {"polygroups.md", "face-groups.md"}};
+    file = legacy::modernize(file);
+    static const std::pair<const char*, const char*> kRenamed[] = {{"forgespheres.md", "forge-spheres.md"},
+                                                                   {"vertexpaint.md", "vertex-paint.md"},
+                                                                   {"facegroups.md", "face-groups.md"}};
     for (const auto& [from, to] : kRenamed)
         if (file == from) file = to;
     if (file == "index.md") {
@@ -427,20 +495,23 @@ std::string UserGuide::websiteUrl() const {
 std::string UserGuide::chapterFor(const std::string& palette, const std::string& actionId) {
     auto starts = [&](const char* p) { return palette.rfind(p, 0) == 0; };
     auto idStarts = [&](const char* p) { return actionId.rfind(p, 0) == 0; };
-    // Palette paths by SculptForge's names, and the older ZBrush-style ones (stored layouts, scripts).
+    // Palette paths by SculptForge's names, and the older classic ones (stored layouts, scripts).
     if (starts("Tool > Geometry > Quad Remesh") || starts("Tool > Geometry > QRemesh") || starts("Tool > Parts > Project") ||
-        starts("Tool > SubTool > Project"))
+        starts("Tool > Part > Project"))
         return "retopology.md";
-    if (starts("Tool > Parts") || starts("Tool > SubTool")) return "parts.md";
-    if (starts("Tool > Forge Spheres") || starts("Tool > ZSpheres")) return "forge-spheres.md";
+    if (starts("Brush packs")) return "brush-packs.md";
+    if (starts("Tool > Parts") || starts("Tool > Part")) return "parts.md";
+    if (starts("Tool > Forge Spheres") || starts("Tool > Forge Spheres")) return "forge-spheres.md";
     if (starts("Tool > Layers")) return "layers.md";
     if (starts("Tool > Facial Shapes")) return "facial-shapes.md";
+    if (starts("Tool > Geometry > Edges")) return "edges.md";
     if (starts("Tool > Geometry") || starts("Tool > Remesh")) return "geometry.md";
     if (starts("Tool > Masking")) return "masking.md";
-    if (starts("Tool > Face Groups") || starts("Tool > Polygroups") || starts("Tool > Visibility")) return "face-groups.md";
+    if (starts("Tool > Face Groups") || starts("Tool > Face groups") || starts("Tool > Visibility")) return "face-groups.md";
     if (starts("Tool > Selection Sets")) return "selection-sets.md";
     if (starts("Tool > Export")) return "exporting.md";
-    if (starts("Tool > Display")) return "interface.md";
+    if (starts("Tool > Reshape")) return "sculpting.md";
+    if (starts("Tool > Viewport Look")) return "interface.md";
     if (starts("Tool")) return "parts.md";
     if (starts("Brush"))
         return actionId == "ui.brush_lab" || actionId == "ui.brush_gallery" || actionId == "brush.paste" ? "brush-lab.md"
@@ -451,7 +522,7 @@ std::string UserGuide::chapterFor(const std::string& palette, const std::string&
     if (starts("File > Maya")) return "maya.md";
     if (starts("File > Capture from phone") || actionId == "file.capture_phone") return "phone-capture.md";
     if (starts("File > Export") || idStarts("file.export") || actionId == "file.send_unreal" || actionId == "file.save_splats" ||
-        starts("File > Send to ZBrush") || starts("File > GoZ"))
+        starts("File > Bridge") || starts("File > Bridge files"))
         return "exporting.md";
     if (starts("File")) return "projects.md";
     if (starts("Generate")) return "generate-3d.md";
@@ -460,11 +531,12 @@ std::string UserGuide::chapterFor(const std::string& palette, const std::string&
     if (starts("Script")) return "scripting.md";
     if (starts("Library > Packs") || starts("Macros") || idStarts("pack.") || idStarts("macro.")) return "packs-and-macros.md";
     if (starts("Transform > Gizmo") || idStarts("gizmo.") || actionId == "tool.draw" || actionId == "tool.move" ||
-        actionId == "tool.scale" || actionId == "tool.rotate")
+        actionId == "tool.scale" || actionId == "tool.rotate" || actionId == "tool.gizmo_all")
         return "gizmo.md";
     if (starts("Transform")) return idStarts("transform.symmetry") ? "sculpting.md" : "navigation.md";
+    if (starts("Preferences > Integrations")) return "discord.md";
     if (starts("Render") || starts("Edit") || starts("Help") || starts("Palettes") || starts("Preferences") ||
-        starts("Library") || starts("LightBox"))
+        starts("Library"))
         return "interface.md";
     return {};
 }
@@ -513,7 +585,9 @@ void UserGuide::draw(App& app) {
     ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.5f, c.y + c.h * 0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSizeConstraints(ImVec2(520.0f * s, 320.0f * s), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f * s, 8.0f * s));
-    const bool visible = ImGui::Begin("User Guide", &open_, ImGuiWindowFlags_NoCollapse);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
+    app.fillPanelHost(flags); // in a window of its own: fills it (PanelWindows.cpp)
+    const bool visible = ImGui::Begin(tr("User Guide"), &open_, flags);
     ImGui::PopStyleVar();
     if (!visible) {
         ImGui::End();
@@ -611,18 +685,21 @@ void UserGuide::drawToolbar(App& app) {
     ui::HelpText("Contents", nullptr, "The guide's first page: every chapter.", "Help > User Guide");
     ui::DelayedTooltip("Contents");
     ImGui::SameLine();
-    const float webW = ImGui::CalcTextSize(ICON_LC_GLOBE "  Open in browser").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    // In the main window: a button that moves the guide to a window of its own (another monitor, PanelWindows.cpp).
+    const bool canDetach = !app.panelHost_;
+    const float detachW = canDetach ? btn.x + ImGui::GetStyle().ItemSpacing.x : 0.0f;
+    const float webW = ImGui::CalcTextSize(ICON_LC_GLOBE "  Open in browser").x + ImGui::GetStyle().FramePadding.x * 2.0f + detachW;
     ImGui::SetNextItemWidth(std::min(340.0f * s, ImGui::GetContentRegionAvail().x - webW - 12.0f * s));
     if (focusSearch_) {
         ImGui::SetKeyboardFocusHere();
         focusSearch_ = false;
     }
-    ImGui::InputTextWithHint("##guide_search", ICON_LC_SEARCH "  Search the guide (Ctrl+F)", query_, sizeof query_,
+    ImGui::InputTextWithHint("##guide_search", tr(ICON_LC_SEARCH "  Search the guide (Ctrl+F)"), query_, sizeof query_,
                              ImGuiInputTextFlags_EscapeClearsAll);
     ui::HelpText("Search", "Ctrl+F", "Find every place in the guide that mentions all of these words.", "Help > User Guide");
     if (query_[0]) {
         ImGui::SameLine(0, 2.0f * s);
-        if (ImGui::Button(ICON_LC_X "##guide_clear")) query_[0] = '\0';
+        if (ui::GlyphButton("##guide_clear", ICON_LC_X, ImVec2(ImGui::GetFrameHeight(), 0))) query_[0] = '\0';
         ui::DelayedTooltip("Clear the search");
     }
     if (lastQuery_ != query_) {
@@ -630,8 +707,16 @@ void UserGuide::drawToolbar(App& app) {
         hits_ = book_.search(query_);
     }
     ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - webW);
-    if (ImGui::Button(ICON_LC_GLOBE "  Open in browser##guide_web")) SDL_OpenURL(websiteUrl().c_str());
+    if (ImGui::Button(tr(ICON_LC_GLOBE "  Open in browser##guide_web"))) sf::dialogs::openUrl(websiteUrl().c_str());
     ui::HelpText("Open in browser", nullptr, "Read this page on the SculptForge website.", "Help > User Guide");
+    if (canDetach) {
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_LC_SQUARE_ARROW_OUT_UP_RIGHT "##guide_detach", btn)) app.detachPanel("guide");
+        ui::HelpText("Open in its own window", nullptr,
+                     "Move the guide to a window of its own, to keep on another monitor. It opens there next time too.",
+                     "Help > User Guide");
+        ui::DelayedTooltip("Open in its own window");
+    }
     ImGui::Dummy(ImVec2(0, 2.0f * s));
 }
 
@@ -640,7 +725,7 @@ void UserGuide::drawContents(App& app) {
     ImGui::Dummy(ImVec2(0, 4.0f * s));
     ImGui::Indent(6.0f * s);
     const float w = ImGui::GetContentRegionAvail().x - 6.0f * s;
-    if (ImGui::Selectable("Contents##guide.toc.index", place_.chapter < 0, 0, ImVec2(w, 0))) {
+    if (ImGui::Selectable(tr("Contents##guide.toc.index"), place_.chapter < 0, 0, ImVec2(w, 0))) {
         if (place_.chapter >= 0) navigate("index.md");
     }
     std::string group;
@@ -651,7 +736,7 @@ void UserGuide::drawContents(App& app) {
             group = ch.group;
             ImGui::Dummy(ImVec2(0, 6.0f * s));
             if (app.smallFont()) ImGui::PushFont(app.smallFont());
-            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kDim), "%s", group.c_str());
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kDim()), "%s", group.c_str());
             if (app.smallFont()) ImGui::PopFont();
         }
         const bool current = int(i) == place_.chapter;
@@ -663,11 +748,22 @@ void UserGuide::drawContents(App& app) {
         // The open chapter's sections.
         if (app.smallFont()) ImGui::PushFont(app.smallFont());
         ImGui::Indent(12.0f * s);
-        for (const auto& b : ch.doc.blocks) {
-            if (b.kind != BlockKind::Heading || b.level != 2) continue;
-            const std::string title = guide::plainText(b.spans);
-            if (ImGui::Selectable((title + "##guide.sec." + b.anchor).c_str(), false, 0, ImVec2(w - 12.0f * s, 0)))
-                navigate("#" + b.anchor);
+        if (ch.file == "whats-new.md") { // the versions in full, then the groups (core/WhatsNew.h)
+            for (int v = 0; v < whatsNew_.detailed; ++v) {
+                const auto& ver = whatsNew_.versions[size_t(v)];
+                if (ImGui::Selectable(("Version " + ver.version + "##guide.sec." + ver.anchor).c_str(), false, 0, ImVec2(w - 12.0f * s, 0)))
+                    navigate("#" + ver.anchor);
+            }
+            for (const auto& g : whatsNew_.groups)
+                if (ImGui::Selectable((g.label + "##guide.sec." + g.anchor).c_str(), false, 0, ImVec2(w - 12.0f * s, 0)))
+                    navigate("#" + g.anchor);
+        } else {
+            for (const auto& b : ch.doc.blocks) {
+                if (b.kind != BlockKind::Heading || b.level != 2) continue;
+                const std::string title = guide::plainText(b.spans);
+                if (ImGui::Selectable((title + "##guide.sec." + b.anchor).c_str(), false, 0, ImVec2(w - 12.0f * s, 0)))
+                    navigate("#" + b.anchor);
+            }
         }
         ImGui::Unindent(12.0f * s);
         if (app.smallFont()) ImGui::PopFont();
@@ -683,11 +779,11 @@ void UserGuide::drawSearchResults(App& app) {
     const float w = ImGui::GetContentRegionAvail().x - 6.0f * s;
     if (hits_.empty()) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kDim), "Nothing in the guide matches \"%s\".", query_);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kDim()), tr("Nothing in the guide matches \"%s\"."), query_);
         ImGui::PopTextWrapPos();
     } else {
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kDim), "%zu result%s%s", hits_.size(), hits_.size() == 1 ? "" : "s",
-                           hits_.size() >= 50 ? " (best 50)" : "");
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kDim()), tr(hits_.size() >= 50 ? "%zu results (best 50)" : hits_.size() == 1 ? "%zu result" : "%zu results"),
+                           hits_.size());
     }
     ImFont* small = app.smallFont() ? app.smallFont() : ImGui::GetFont();
     ImFont* bold = app.boldFont() ? app.boldFont() : ImGui::GetFont();
@@ -726,11 +822,11 @@ void UserGuide::drawSearchResults(App& app) {
         float ty = p.y + 5.0f * s;
         dl->AddText(small, small->FontSize, ImVec2(x, ty), theme::u32(theme::accent, 0.85f), ch.title.c_str());
         ty += small->FontSize + 2.0f * s;
-        dl->AddText(bold, bold->FontSize, ImVec2(x, ty), kStrong, where.c_str(), nullptr, textW);
+        dl->AddText(bold, bold->FontSize, ImVec2(x, ty), kStrong(), where.c_str(), nullptr, textW);
         ty += whereSize.y + 3.0f * s;
         // Snippet with the match marked: the highlight goes on the wrapped line the match falls on.
         const float sy = ty;
-        dl->AddText(small, small->FontSize, ImVec2(x, sy), kDim, h.snippet.c_str(), nullptr, textW);
+        dl->AddText(small, small->FontSize, ImVec2(x, sy), kDim(), h.snippet.c_str(), nullptr, textW);
         if (h.matchLength && h.matchStart + h.matchLength <= h.snippet.size()) {
             // Find the wrapped line and x of the match by measuring the snippet prefix with wrapping.
             const char* begin = h.snippet.c_str();
@@ -749,7 +845,7 @@ void UserGuide::drawSearchResults(App& app) {
                                                          begin + h.matchStart + h.matchLength)
                                          .x;
             dl->AddRectFilled(ImVec2(mx0 - 1, ly), ImVec2(mx1 + 1, ly + small->FontSize), kHighlight, 2.0f * s);
-            dl->AddText(small, small->FontSize, ImVec2(mx0, ly), kStrong, begin + h.matchStart,
+            dl->AddText(small, small->FontSize, ImVec2(mx0, ly), kStrong(), begin + h.matchStart,
                         begin + h.matchStart + h.matchLength);
         }
         dl->PopClipRect();
@@ -779,14 +875,14 @@ float UserGuide::drawBlock(App& app, const Block& b, int index, ImVec2 o, float 
     switch (b.kind) {
     case BlockKind::Heading: {
         FlowStyle hs = st;
-        hs.heading = b.level == 1 ? h1_ : b.level == 2 ? h2_ : h3_;
+        hs.heading = b.level == 1 ? h1_ : b.level == 2 ? h2_ : demoteHeadings_ ? bodyBold_ : h3_; // (What's New's groups)
         if (!hs.heading) hs.heading = st.bold;
-        hs.color = kHeading;
+        hs.color = kHeading();
         hs.lineHeight = std::round(hs.heading->FontSize * 1.3f);
         const float top = index == 0 ? 0.0f : (b.level == 1 ? 8.0f : b.level == 2 ? 22.0f : 14.0f) * s;
         h = top + flow(b.spans, ImVec2(o.x, o.y + top), width, hs);
         if (b.level <= 2) {
-            if (dl) dl->AddLine(ImVec2(o.x, o.y + h + 3.0f * s), ImVec2(o.x + width, o.y + h + 3.0f * s), kRule, 1.0f);
+            if (dl) dl->AddLine(ImVec2(o.x, o.y + h + 3.0f * s), ImVec2(o.x + width, o.y + h + 3.0f * s), kRule(), 1.0f);
             h += 8.0f * s;
         }
         break;
@@ -799,13 +895,13 @@ float UserGuide::drawBlock(App& app, const Block& b, int index, ImVec2 o, float 
             if (b.kind == BlockKind::Bullet) {
                 const float r = (b.level ? 2.2f : 2.6f) * s;
                 const ImVec2 c(o.x + indent - 11.0f * s, o.y + st.lineHeight * 0.5f + 0.5f * s);
-                if (b.level) dl->AddCircle(c, r, kDim, 12, 1.2f * s);
-                else dl->AddCircleFilled(c, r, kDim, 12);
+                if (b.level) dl->AddCircle(c, r, kDim(), 12, 1.2f * s);
+                else dl->AddCircleFilled(c, r, kDim(), 12);
             } else {
                 const std::string n = std::to_string(b.number) + ".";
                 const float nw = textWidth(regular, n);
                 dl->AddText(regular, regular->FontSize,
-                            ImVec2(o.x + indent - 7.0f * s - nw, o.y + (st.lineHeight - regular->FontSize) * 0.5f), kDim,
+                            ImVec2(o.x + indent - 7.0f * s - nw, o.y + (st.lineHeight - regular->FontSize) * 0.5f), kDim(),
                             n.c_str());
             }
         }
@@ -816,15 +912,31 @@ float UserGuide::drawBlock(App& app, const Block& b, int index, ImVec2 o, float 
         const float pad = 10.0f * s, bar = 3.0f * s;
         const ImU32 col = calloutColor(b);
         FlowStyle cs = st;
-        cs.labelColor = col;
+        cs.labelColor = calloutColor(b, true);
         const Span* label = !b.spans.empty() && b.spans[0].bold ? &b.spans[0] : nullptr;
         const float textW = width - pad * 2.0f - bar;
         const float th = Flow(cs, s).run(b.spans, o, textW, nullptr, nullptr, nullptr, linkCounter_);
-        h = th + pad * 1.6f;
+        // Its bullets ("In short"), under the label.
+        const float indent = 18.0f * s, itemGap = 3.0f * s;
+        std::vector<float> itemH;
+        float ih = 0.0f;
+        for (const auto& item : b.items) {
+            itemH.push_back(Flow(st, s).run(item, o, textW - indent, nullptr, nullptr, nullptr, linkCounter_));
+            ih += itemH.back() + itemGap;
+        }
+        h = th + (b.items.empty() ? 0.0f : 4.0f * s + ih) + pad * 1.6f;
         if (dl) {
-            dl->AddRectFilled(o, ImVec2(o.x + width, o.y + h), IM_COL32(0x2d, 0x2d, 0x31, 0xff), 4.0f * s);
-            dl->AddRectFilled(o, ImVec2(o.x + bar, o.y + h), col, 4.0f * s, ImDrawFlags_RoundCornersLeft);
-            flow(b.spans, ImVec2(o.x + bar + pad, o.y + pad * 0.8f), textW, cs, label);
+            const ImU32 bg = theme::u32(mix(theme::panelBg, ImGui::ColorConvertU32ToFloat4(col), b.items.empty() ? 0.08f : 0.10f));
+            dl->AddRectFilled(o, ImVec2(o.x + width, o.y + h), bg, 6.0f * s);
+            dl->AddRectFilled(o, ImVec2(o.x + bar, o.y + h), col, 6.0f * s, ImDrawFlags_RoundCornersLeft);
+            float y = o.y + pad * 0.8f;
+            if (th > 0.0f) flow(b.spans, ImVec2(o.x + bar + pad, y), textW, cs, label);
+            y += th + 4.0f * s;
+            for (size_t k = 0; k < b.items.size(); ++k) {
+                dl->AddCircleFilled(ImVec2(o.x + bar + pad + 5.0f * s, y + st.lineHeight * 0.5f + 0.5f * s), 2.6f * s, col, 12);
+                flow(b.items[k], ImVec2(o.x + bar + pad + indent, y), textW - indent, st);
+                y += itemH[k] + itemGap;
+            }
         }
         break;
     }
@@ -849,11 +961,11 @@ float UserGuide::drawBlock(App& app, const Block& b, int index, ImVec2 o, float 
         h = float(lines.size()) * lh + pad * 2.0f;
         if (dl) {
             const ImVec2 b1(o.x + width, o.y + h);
-            dl->AddRectFilled(o, b1, kCodeBg, 4.0f * s);
-            dl->AddRect(o, b1, IM_COL32(0x34, 0x34, 0x38, 0xff), 4.0f * s);
+            dl->AddRectFilled(o, b1, kCodeBg(), 4.0f * s);
+            dl->AddRect(o, b1, kBoxEdge(), 4.0f * s);
             for (size_t i = 0; i < lines.size(); ++i)
                 dl->AddText(mono, mono->FontSize, ImVec2(o.x + pad, o.y + pad + float(i) * lh + (lh - mono->FontSize) * 0.5f),
-                            IM_COL32(0xd8, 0xd8, 0xd0, 0xff), lines[i].c_str());
+                            kText(), lines[i].c_str());
             // A Copy button while the pointer is over the block.
             if (ImGui::IsMouseHoveringRect(o, b1) && ImGui::IsWindowHovered()) {
                 const char* label = ICON_LC_COPY " Copy";
@@ -873,7 +985,7 @@ float UserGuide::drawBlock(App& app, const Block& b, int index, ImVec2 o, float 
         const float padX = 8.0f * s, padY = 5.0f * s;
         FlowStyle header = st;
         header.regular = st.bold;
-        header.color = kStrong;
+        header.color = kStrong();
         // Natural (one line) and minimum (longest word) width of each column, then share the width.
         std::vector<float> natural(cols, 0.0f), minimum(cols, 0.0f);
         for (size_t r = 0; r < b.rows.size(); ++r)
@@ -882,7 +994,7 @@ float UserGuide::drawBlock(App& app, const Block& b, int index, ImVec2 o, float 
                 float lineW = 0.0f;
                 for (const auto& sp : cell) {
                     ImFont* f = (sp.bold || r == 0) && !sp.code ? st.bold : regular;
-                    lineW += textWidth(f, sp.text) + (sp.code ? 6.0f * s : sp.kbd ? 14.0f * s : 0.0f);
+                    lineW += textWidth(f, sp.text) + (sp.code ? 6.0f * s : sp.kbd ? 14.0f * s : sp.path ? 30.0f * s : 0.0f);
                     std::string word;
                     for (char ch : sp.text + " ") {
                         if (ch == ' ') {
@@ -920,8 +1032,7 @@ float UserGuide::drawBlock(App& app, const Block& b, int index, ImVec2 o, float 
             rowH = std::max(rowH, st.lineHeight) + padY * 2.0f;
             if (dl) {
                 const ImVec2 a(o.x, o.y + y), z(o.x + tableW, o.y + y + rowH);
-                dl->AddRectFilled(a, z, r == 0 ? IM_COL32(0x33, 0x33, 0x37, 0xff)
-                                               : r % 2 ? IM_COL32(0x29, 0x29, 0x2c, 0xff) : IM_COL32(0x25, 0x25, 0x28, 0xff));
+                dl->AddRectFilled(a, z, r == 0 ? theme::u32(theme::header) : r % 2 ? kBox() : theme::u32(theme::panelBg));
                 float x = o.x;
                 for (size_t c = 0; c < cols; ++c) {
                     flow(b.rows[r][c], ImVec2(x + padX, o.y + y + padY), colW[c] - padX * 2.0f, cs);
@@ -930,7 +1041,7 @@ float UserGuide::drawBlock(App& app, const Block& b, int index, ImVec2 o, float 
             }
             y += rowH;
         }
-        if (dl) dl->AddRect(o, ImVec2(o.x + tableW, o.y + y), IM_COL32(0x3a, 0x3a, 0x3f, 0xff), 2.0f * s);
+        if (dl) dl->AddRect(o, ImVec2(o.x + tableW, o.y + y), kBoxEdge(), 2.0f * s);
         h = y;
         break;
     }
@@ -942,27 +1053,358 @@ float UserGuide::drawBlock(App& app, const Block& b, int index, ImVec2 o, float 
             if (dl) dl->AddText(o, ui::color::danger, ("[missing image " + b.text + "]").c_str());
             break;
         }
-        const float w = std::min(width, float(t->width) * s);
+        // The hero spans the page (no caption: its alt text is for search and screen readers).
+        const float w = b.hero ? std::min(width, float(t->width) * s * 2.0f) : std::min(width, float(t->width) * s);
         const float ih = w * float(t->height) / float(std::max(1, t->width));
         const float x = o.x + (width - w) * 0.5f;
+        const bool caption = !b.alt.empty() && !b.hero;
         const ImVec2 capSize = small->CalcTextSizeA(small->FontSize, FLT_MAX, width * 0.9f, b.alt.c_str());
-        h = ih + (b.alt.empty() ? 0.0f : capSize.y + 8.0f * s);
+        h = ih + (caption ? capSize.y + 8.0f * s : 0.0f);
+        const float r = (b.hero ? 10.0f : 4.0f) * s;
         if (dl) {
             dl->AddImageRounded(ImTextureID(uintptr_t(t->tex)), ImVec2(x, o.y), ImVec2(x + w, o.y + ih), ImVec2(0, 0),
-                                ImVec2(1, 1), IM_COL32_WHITE, 4.0f * s);
-            dl->AddRect(ImVec2(x, o.y), ImVec2(x + w, o.y + ih), IM_COL32(0x3a, 0x3a, 0x3f, 0xff), 4.0f * s);
-            if (!b.alt.empty())
-                drawText(dl, small, ImVec2(o.x + (width - capSize.x) * 0.5f, o.y + ih + 6.0f * s), kDim, b.alt, false);
+                                ImVec2(1, 1), IM_COL32_WHITE, r);
+            dl->AddRect(ImVec2(x, o.y), ImVec2(x + w, o.y + ih), kBoxEdge(), r);
+            if (caption)
+                drawText(dl, small, ImVec2(o.x + (width - capSize.x) * 0.5f, o.y + ih + 6.0f * s), kDim(), b.alt, false);
         }
         break;
     }
+    case BlockKind::Cards: { // a grid: picture, title, one line; a click opens the chapter
+        const float gap = 12.0f * s, pad = 10.0f * s;
+        const int cols = std::clamp(int((width + gap) / (230.0f * s + gap)), 1, 3);
+        const float cw = (width - gap * float(cols - 1)) / float(cols);
+        const float picH = std::round(cw * 9.0f / 16.0f);
+        FlowStyle ts = st, bs = st;
+        ts.regular = ts.bold;
+        ts.color = kStrong();
+        bs.color = kDim();
+        float y = 0.0f;
+        for (size_t row = 0; row * size_t(cols) < b.cards.size(); ++row) {
+            float rowH = 0.0f;
+            for (int c = 0; c < cols && row * size_t(cols) + size_t(c) < b.cards.size(); ++c) {
+                const guide::Card& card = b.cards[row * size_t(cols) + size_t(c)];
+                const float th = Flow(ts, s).run(parseTitle(card.title), o, cw - pad * 2.0f, nullptr, nullptr, nullptr, linkCounter_);
+                const float bh = Flow(bs, s).run(card.blurb, o, cw - pad * 2.0f, nullptr, nullptr, nullptr, linkCounter_);
+                rowH = std::max(rowH, picH + pad + th + bh + pad);
+            }
+            for (int c = 0; dl && c < cols && row * size_t(cols) + size_t(c) < b.cards.size(); ++c) {
+                const size_t k = row * size_t(cols) + size_t(c);
+                const guide::Card& card = b.cards[k];
+                const ImVec2 p0(o.x + float(c) * (cw + gap), o.y + y), p1(p0.x + cw, p0.y + rowH);
+                ImGui::SetCursorScreenPos(p0);
+                const bool clicked = ImGui::InvisibleButton(("##guidecard" + std::to_string(index) + "_" + std::to_string(k)).c_str(),
+                                                            ImVec2(cw, rowH));
+                const bool hot = ImGui::IsItemHovered();
+                if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (clicked && !card.target.empty()) click.target = card.target;
+                const float r = 8.0f * s;
+                dl->AddRectFilled(p0, p1, kBox(), r);
+                if (const Texture* t = texture(card.image); t && t->width > 0) { // cover the 16:9 top
+                    const float aspect = float(t->width) / float(std::max(1, t->height)), want = cw / picH;
+                    ImVec2 uv0(0, 0), uv1(1, 1);
+                    if (aspect > want) uv0.x = (1.0f - want / aspect) * 0.5f, uv1.x = 1.0f - uv0.x;
+                    else uv0.y = (1.0f - aspect / want) * 0.5f, uv1.y = 1.0f - uv0.y;
+                    dl->AddImageRounded(ImTextureID(uintptr_t(t->tex)), p0, ImVec2(p1.x, p0.y + picH), uv0, uv1, IM_COL32_WHITE, r,
+                                        ImDrawFlags_RoundCornersTop);
+                }
+                dl->AddRect(p0, p1, hot ? theme::u32(theme::accent, 0.8f) : kBoxEdge(), r, 0, hot ? 1.5f * s : 1.0f);
+                const float th = flow(parseTitle(card.title), ImVec2(p0.x + pad, p0.y + picH + pad), cw - pad * 2.0f, ts);
+                flow(card.blurb, ImVec2(p0.x + pad, p0.y + picH + pad + th), cw - pad * 2.0f, bs);
+            }
+            y += rowH + gap;
+        }
+        h = std::max(0.0f, y - gap);
+        break;
+    }
+    case BlockKind::Details: { // a folded section: a chevron and its summary; a click opens or closes it
+        const bool isOpen = openDetails_.count(index) > 0;
+        FlowStyle ds = st;
+        ds.regular = ds.bold;
+        ds.color = kStrong();
+        const float pad = 8.0f * s, indent = 22.0f * s;
+        h = Flow(ds, s).run(b.spans, o, width - indent - pad, nullptr, nullptr, nullptr, linkCounter_) + pad * 2.0f;
+        if (dl) {
+            ImGui::SetCursorScreenPos(o);
+            if (ImGui::InvisibleButton(("##guidedetails" + std::to_string(index)).c_str(), ImVec2(width, h))) {
+                if (isOpen) openDetails_.erase(index);
+                else openDetails_.insert(index);
+                blockH_.assign(blockH_.size(), -1.0f); // the page below moves
+            }
+            const bool hot = ImGui::IsItemHovered();
+            if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            dl->AddRectFilled(o, ImVec2(o.x + width, o.y + h), hot ? theme::u32(theme::header) : kBox(), 6.0f * s);
+            const float cx = o.x + pad + 6.0f * s, cy = o.y + h * 0.5f, d = 4.0f * s;
+            const ImVec2 closed[3] = {ImVec2(cx - d * 0.5f, cy - d), ImVec2(cx + d * 0.5f, cy), ImVec2(cx - d * 0.5f, cy + d)};
+            const ImVec2 opened[3] = {ImVec2(cx - d, cy - d * 0.5f), ImVec2(cx, cy + d * 0.5f), ImVec2(cx + d, cy - d * 0.5f)};
+            dl->AddPolyline(isOpen ? opened : closed, 3, theme::u32(theme::accent), 0, 1.8f * s);
+            flow(b.spans, ImVec2(o.x + indent + pad, o.y + pad), width - indent - pad, ds);
+        }
+        break;
+    }
+    case BlockKind::DetailsEnd: break;
     case BlockKind::Rule:
         h = 14.0f * s;
-        if (dl) dl->AddLine(ImVec2(o.x, o.y + h * 0.5f), ImVec2(o.x + width, o.y + h * 0.5f), kRule, 1.0f);
+        if (dl) dl->AddLine(ImVec2(o.x, o.y + h * 0.5f), ImVec2(o.x + width, o.y + h * 0.5f), kRule(), 1.0f);
         break;
     }
     if (!click.target.empty()) navigate(click.target);
     return h;
+}
+
+float UserGuide::layoutBlocks(App& app, int first, int end, ImVec2 origin, float width, float y) {
+    const float s = app.uiScale_;
+    const guide::Document& doc = page();
+    const int page = place_.chapter;
+    for (int i = first; i < end; ++i) {
+        const Block& b = doc.blocks[size_t(i)];
+        blockY_[size_t(i)] = y;
+        if (b.kind == BlockKind::Heading) anchorY_[b.anchor] = y;
+        if (b.kind == BlockKind::Details && b.end > i && !openDetails_.count(i)) {
+            // Closed: its blocks take no room (a search hit or a link into it opens it first).
+            const int hit = pendingBlock_;
+            bool wanted = hit > i && hit < b.end;
+            for (int k = i + 1; k < b.end && !pendingAnchor_.empty(); ++k)
+                wanted = wanted || doc.blocks[size_t(k)].anchor == pendingAnchor_;
+            if (wanted) openDetails_.insert(i), blockH_.assign(blockH_.size(), -1.0f);
+        }
+        const ImVec2 at(origin.x, origin.y + y);
+        float h = blockH_[size_t(i)];
+        const bool visible = h < 0.0f || ImGui::IsRectVisible(at, ImVec2(at.x + width, at.y + h));
+        if (visible) h = drawBlock(app, b, i, at, width, true);
+        if (place_.chapter != page) return y; // a link was followed: the rest is the next page's
+        blockH_[size_t(i)] = h;
+        // Spacing after the block: list items sit close together, the last one of a list leaves a gap.
+        const bool listItem = b.kind == BlockKind::Bullet || b.kind == BlockKind::Numbered;
+        const bool nextList = i + 1 < end && (doc.blocks[size_t(i) + 1].kind == BlockKind::Bullet ||
+                                              doc.blocks[size_t(i) + 1].kind == BlockKind::Numbered);
+        float gap = 12.0f * s;
+        if (b.kind == BlockKind::Heading) gap = b.level == 3 ? 4.0f * s : 8.0f * s;
+        else if (listItem && nextList) gap = 3.0f * s;
+        else if (b.kind == BlockKind::Image || b.kind == BlockKind::Table || b.kind == BlockKind::Code ||
+                 b.kind == BlockKind::Cards)
+            gap = 16.0f * s;
+        else if (b.kind == BlockKind::DetailsEnd) gap = 0.0f;
+        y += h + gap;
+        if (b.kind == BlockKind::Details && b.end > i && !openDetails_.count(i)) {
+            for (int k = i + 1; k < std::min(b.end, end); ++k) blockY_[size_t(k)] = y, blockH_[size_t(k)] = 0.0f;
+            i = std::min(b.end, end) - 1;
+        }
+    }
+    return y;
+}
+
+// ---------------------------------------------------------------------------
+// What's New (whats-new.md): the newest versions in full (a band, the feature cards, "All changes"), then the older
+// ones folded into groups with their highlights (core/WhatsNew.h; the website does the same in build_site.py).
+// ---------------------------------------------------------------------------
+
+void UserGuide::prepareWhatsNew() {
+    const int i = book_.find("whats-new.md");
+    if (i < 0) return;
+    // SF_GUIDE_VERSION shows the chapter as of another version (ui_whats_new pins the newest section it checks).
+    const char* as = std::getenv("SF_GUIDE_VERSION");
+    whatsNew_ = whatsnew::build(book_.chapters()[size_t(i)].doc, as && *as ? as : SCULPTFORGE_VERSION);
+    expanded_.clear();
+    if (!whatsNew_.versions.empty()) expanded_[whatsNew_.versions[0].anchor] = true; // the newest one is open
+}
+
+std::vector<std::string> UserGuide::whatsNewContents() const {
+    std::vector<std::string> out;
+    for (int v = 0; v < whatsNew_.detailed; ++v) out.push_back("Version " + whatsNew_.versions[size_t(v)].version);
+    for (const auto& g : whatsNew_.groups) out.push_back(g.label);
+    return out;
+}
+
+int UserGuide::whatsNewExpanded() const {
+    return int(std::count_if(expanded_.begin(), expanded_.end(), [](const auto& e) { return e.second; }));
+}
+
+float UserGuide::drawWhatsNewBand(App& app, ImVec2 at, float width, const std::string& title, const std::string& right,
+                                  const std::string& line, bool large) {
+    const float s = app.uiScale_;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* head = (large ? h2_ : h3_) ? (large ? h2_ : h3_) : ImGui::GetFont();
+    ImFont* small = app.smallFont() ? app.smallFont() : ImGui::GetFont();
+    ImFont* regular = body_ ? body_ : ImGui::GetFont();
+    // A short accent rule, the title with the date on the right, and one line under it.
+    dl->AddRectFilled(at, ImVec2(at.x + 40.0f * s, at.y + 3.0f * s), theme::u32(theme::accent), 1.5f * s);
+    float y = at.y + 14.0f * s;
+    dl->AddText(head, head->FontSize, ImVec2(at.x, y), theme::u32(theme::textBright), title.c_str());
+    ImGui::LogText("%s\n", title.c_str());
+    if (!right.empty()) {
+        const float rw = small->CalcTextSizeA(small->FontSize, FLT_MAX, 0.0f, right.c_str()).x;
+        dl->AddText(small, small->FontSize, ImVec2(at.x + width - rw, y + head->FontSize - small->FontSize - 2.0f * s),
+                    theme::u32(theme::textDim), right.c_str());
+    }
+    y += std::round(head->FontSize * 1.3f);
+    if (!line.empty()) {
+        const float lw = std::min(width, 680.0f * s);
+        const ImVec2 ls = regular->CalcTextSizeA(regular->FontSize, FLT_MAX, lw, line.c_str());
+        dl->AddText(regular, regular->FontSize, ImVec2(at.x, y + 2.0f * s), theme::u32(theme::textDim), line.c_str(), nullptr, lw);
+        ImGui::LogText("%s\n", line.c_str());
+        y += ls.y + 4.0f * s;
+    }
+    return y - at.y;
+}
+
+float UserGuide::drawWhatsNewCards(App& app, const whatsnew::Version& v, ImVec2 at, float width) {
+    const float s = app.uiScale_;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* bold = bodyBold_ ? bodyBold_ : ImGui::GetFont();
+    ImFont* regular = app.fontCardBody_ ? app.fontCardBody_ : body_ ? body_ : ImGui::GetFont();
+    const float lineSize = std::round(15.0f * s);
+    const float gap = 14.0f * s, pad = 14.0f * s;
+    const int n = int(v.cards.size());
+    const int cols = std::clamp(int((width + gap) / (230.0f * s + gap)), 1, std::min(3, n));
+    const float cw = (width - gap * float(cols - 1)) / float(cols), ph = std::round(cw * 340.0f / 600.0f);
+    float y = 0.0f;
+    for (int row = 0; row * cols < n; ++row) {
+        float rowH = 0.0f;
+        for (int c = 0; c < cols && row * cols + c < n; ++c) { // the row's height: its tallest words
+            const auto& card = v.cards[size_t(row * cols + c)];
+            rowH = std::max(rowH, ph + pad + bold->CalcTextSizeA(bold->FontSize, FLT_MAX, cw - pad * 2.0f, card.title.c_str()).y +
+                                      4.0f * s + regular->CalcTextSizeA(lineSize, FLT_MAX, cw - pad * 2.0f, card.line.c_str()).y +
+                                      12.0f * s + ImGui::GetFrameHeight() + pad);
+        }
+        for (int c = 0; c < cols && row * cols + c < n; ++c) {
+            const int i = row * cols + c;
+            const auto& card = v.cards[size_t(i)];
+            const ImVec2 p0(at.x + float(c) * (cw + gap), at.y + y), p1(p0.x + cw, p0.y + rowH);
+            if (!ImGui::IsRectVisible(p0, p1)) continue;
+            const float r = 10.0f * s;
+            const bool hot = ImGui::IsMouseHoveringRect(p0, p1) && ImGui::IsWindowHovered();
+            dl->AddRectFilled(p0, p1, theme::u32(theme::header), r);
+            if (const Texture* tex = card.image.empty() ? nullptr : texture(card.image)) {
+                // Covers the top of the card (centred crop to 600 x 340).
+                const float ia = float(tex->width) / float(std::max(1, tex->height)), ba = cw / ph;
+                ImVec2 uv0(0, 0), uv1(1, 1);
+                if (ia > ba) uv0.x = 0.5f - ba / ia * 0.5f, uv1.x = 0.5f + ba / ia * 0.5f;
+                else uv0.y = 0.5f - ia / ba * 0.5f, uv1.y = 0.5f + ia / ba * 0.5f;
+                dl->AddImageRounded(ImTextureID(uintptr_t(tex->tex)), p0, ImVec2(p1.x, p0.y + ph), uv0, uv1, IM_COL32_WHITE, r,
+                                    ImDrawFlags_RoundCornersTop);
+            }
+            dl->AddRect(p0, p1, theme::u32(hot ? theme::accent : theme::text, hot ? 0.55f : 0.10f), r, 0, 1.0f);
+            float ty = p0.y + ph + pad;
+            const float tw = cw - pad * 2.0f;
+            dl->AddText(bold, bold->FontSize, ImVec2(p0.x + pad, ty), theme::u32(theme::textBright), card.title.c_str(), nullptr, tw);
+            ImGui::LogText("%s\n", card.title.c_str());
+            ty += bold->CalcTextSizeA(bold->FontSize, FLT_MAX, tw, card.title.c_str()).y + 4.0f * s;
+            dl->AddText(regular, lineSize, ImVec2(p0.x + pad, ty), theme::u32(theme::textDim), card.line.c_str(), nullptr, tw);
+            ImGui::LogText("%s\n", card.line.c_str());
+            const bool guideLink = card.action.rfind("guide:", 0) == 0;
+            ImGui::SetCursorScreenPos(ImVec2(p0.x + pad, p1.y - pad - ImGui::GetFrameHeight()));
+            const std::string label = std::string(guideLink ? "Read more " : "Try it ") + ICON_LC_ARROW_RIGHT + "##wn." + v.anchor + "." +
+                                      std::to_string(i);
+            if (ImGui::Button(label.c_str())) app.runWhatsNewAction(card.action);
+        }
+        y += rowH + gap;
+    }
+    return y - gap;
+}
+
+bool UserGuide::drawWhatsNewToggle(App& app, ImVec2 at, float width, const std::string& id, bool open, float& h) {
+    const float s = app.uiScale_;
+    ImFont* bold = bodyBold_ ? bodyBold_ : ImGui::GetFont();
+    h = bold->FontSize + 14.0f * s;
+    ImGui::SetCursorScreenPos(at);
+    const bool clicked = ImGui::InvisibleButton(("All changes##wn." + id).c_str(), ImVec2(width, h));
+    const bool hot = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 c = theme::u32(hot ? theme::accent : theme::text);
+    dl->AddLine(ImVec2(at.x, at.y), ImVec2(at.x + width, at.y), theme::u32(theme::sectionRule));
+    // A chevron (drawn: the reading font has no icons), right when folded, down when open.
+    const ImVec2 m(at.x + 6.0f * s, at.y + 7.0f * s + bold->FontSize * 0.5f);
+    const float r = 4.0f * s;
+    const ImVec2 pts[3] = {open ? ImVec2(m.x - r, m.y - r * 0.5f) : ImVec2(m.x - r * 0.5f, m.y - r),
+                           open ? ImVec2(m.x, m.y + r * 0.5f) : ImVec2(m.x + r * 0.5f, m.y),
+                           open ? ImVec2(m.x + r, m.y - r * 0.5f) : ImVec2(m.x - r * 0.5f, m.y + r)};
+    dl->AddPolyline(pts, 3, theme::u32(theme::accent), 0, 1.8f * s);
+    dl->AddText(bold, bold->FontSize, ImVec2(at.x + 20.0f * s, at.y + 7.0f * s), c, "All changes");
+    ImGui::LogText("All changes\n");
+    return clicked;
+}
+
+float UserGuide::drawWhatsNew(App& app, ImVec2 origin, float width) {
+    const float s = app.uiScale_;
+    const guide::Document& doc = page();
+    const whatsnew::Page& wn = whatsNew_;
+    const float prose = std::min(width, 680.0f * s); // about 70 characters a line
+    // Going to a heading or a search hit inside a folded section opens it.
+    int target = pendingBlock_ >= 0 ? pendingBlock_ : -1;
+    if (!pendingAnchor_.empty())
+        for (size_t i = 0; i < doc.blocks.size(); ++i)
+            if (doc.blocks[i].kind == BlockKind::Heading && doc.blocks[i].anchor == pendingAnchor_) target = int(i);
+    if (target >= 0) {
+        for (int v = 0; v < int(wn.versions.size()); ++v) {
+            const auto& ver = wn.versions[size_t(v)];
+            if (target < ver.first || target >= ver.end) continue;
+            if (v < wn.detailed) expanded_[ver.anchor] = true;
+            for (const auto& g : wn.groups)
+                if (std::find(g.versions.begin(), g.versions.end(), v) != g.versions.end()) expanded_[g.anchor] = true;
+        }
+    }
+
+    float y = layoutBlocks(app, 0, wn.introEnd, origin, prose, 0.0f) + 18.0f * s;
+    const int page = place_.chapter;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (int vi = 0; vi < wn.detailed && place_.chapter == page; ++vi) {
+        const whatsnew::Version& v = wn.versions[size_t(vi)];
+        anchorY_[v.anchor] = y;
+        blockY_[size_t(v.heading)] = y;
+        const std::string date = v.date == "unreleased" ? std::string("Not released yet") : v.date;
+        y += drawWhatsNewBand(app, ImVec2(origin.x, origin.y + y), width, "Version " + v.version, date, v.tagline, true) + 16.0f * s;
+        if (!v.cards.empty()) y += drawWhatsNewCards(app, v, ImVec2(origin.x, origin.y + y), width) + 16.0f * s;
+        const bool open = expanded_[v.anchor];
+        float th = 0.0f;
+        if (drawWhatsNewToggle(app, ImVec2(origin.x, origin.y + y), width, v.anchor, open, th)) expanded_[v.anchor] = !open;
+        y += th;
+        if (open) y = layoutBlocks(app, v.first, v.end, origin, prose, y + 8.0f * s);
+        y += 40.0f * s;
+    }
+    if (!wn.groups.empty() && place_.chapter == page) {
+        ImFont* small = app.boldFont() ? app.boldFont() : ImGui::GetFont();
+        dl->AddText(small, small->FontSize, ImVec2(origin.x, origin.y + y), theme::u32(theme::textDim), "EARLIER VERSIONS");
+        y += small->FontSize + 18.0f * s;
+    }
+    for (const whatsnew::Group& g : wn.groups) {
+        if (place_.chapter != page) break;
+        anchorY_[g.anchor] = y;
+        y += drawWhatsNewBand(app, ImVec2(origin.x, origin.y + y), width, g.label, "", "", true) + 4.0f * s;
+        // The highlights, as a list ("Title: line" with the title in bold).
+        for (const std::string& h : g.highlights) {
+            const auto [title, rest] = whatsnew::splitHighlight(h);
+            Block b;
+            b.kind = BlockKind::Bullet;
+            if (!title.empty()) b.spans.push_back({title, true});
+            b.spans.push_back({title.empty() ? rest : ": " + rest});
+            y += drawBlock(app, b, -1, ImVec2(origin.x, origin.y + y), prose, true) + 3.0f * s;
+        }
+        y += 10.0f * s;
+        const bool open = expanded_[g.anchor];
+        float th = 0.0f;
+        if (drawWhatsNewToggle(app, ImVec2(origin.x, origin.y + y), width, g.anchor, open, th)) expanded_[g.anchor] = !open;
+        y += th;
+        if (open) {
+            for (int vi : g.versions) {
+                const whatsnew::Version& v = wn.versions[size_t(vi)];
+                y += 14.0f * s;
+                anchorY_[v.anchor] = y;
+                blockY_[size_t(v.heading)] = y;
+                ImFont* head = h3_ ? h3_ : ImGui::GetFont();
+                const std::string title = "Version " + v.version;
+                dl->AddText(head, head->FontSize, ImVec2(origin.x, origin.y + y), theme::u32(theme::accent), title.c_str());
+                ImGui::LogText("%s\n", title.c_str());
+                y += std::round(head->FontSize * 1.4f);
+                demoteHeadings_ = true; // its "###" sit under the version's title
+                y = layoutBlocks(app, v.first, v.end, origin, prose, y);
+                demoteHeadings_ = false;
+                if (place_.chapter != page) break;
+            }
+        }
+        y += 34.0f * s;
+    }
+    return y;
 }
 
 void UserGuide::drawPage(App& app) {
@@ -986,27 +1428,9 @@ void UserGuide::drawPage(App& app) {
     anchorY_.clear();
     linkCounter_ = 0;
     const int page = place_.chapter;
-    float y = 0.0f;
-    for (size_t i = 0; i < n; ++i) {
-        const Block& b = doc.blocks[i];
-        blockY_[i] = y;
-        if (b.kind == BlockKind::Heading) anchorY_[b.anchor] = y;
-        const ImVec2 at(origin.x, origin.y + y);
-        float h = blockH_[i];
-        const bool visible = h < 0.0f || ImGui::IsRectVisible(at, ImVec2(at.x + width, at.y + h));
-        if (visible) h = drawBlock(app, b, int(i), at, width, true);
-        if (place_.chapter != page) break; // a link was followed: the rest is the next page's
-        blockH_[i] = h;
-        // Spacing after the block: list items sit close together, the last one of a list leaves a gap.
-        const bool listItem = b.kind == BlockKind::Bullet || b.kind == BlockKind::Numbered;
-        const bool nextList = i + 1 < n && (doc.blocks[i + 1].kind == BlockKind::Bullet || doc.blocks[i + 1].kind == BlockKind::Numbered);
-        float gap = 12.0f * s;
-        if (b.kind == BlockKind::Heading) gap = b.level == 3 ? 4.0f * s : 8.0f * s;
-        else if (listItem && nextList) gap = 3.0f * s;
-        else if (b.kind == BlockKind::Image || b.kind == BlockKind::Table || b.kind == BlockKind::Code) gap = 16.0f * s;
-        y += h + gap;
-    }
-    if (place_.chapter == page && currentFile() == "whats-new.md") {
+    const bool whatsNew = currentFile() == "whats-new.md";
+    float y = whatsNew ? drawWhatsNew(app, origin, width) : layoutBlocks(app, 0, int(n), origin, width, 0.0f);
+    if (place_.chapter == page && whatsNew) {
         // The end of What's New: a quiet line about supporting SculptForge (it only opens the website's page).
         const float y0 = origin.y + y + 8.0f * s;
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1014,13 +1438,13 @@ void UserGuide::drawPage(App& app) {
         ImGui::SetCursorScreenPos(ImVec2(origin.x, y0 + 14.0f * s));
         if (bodyFont()) ImGui::PushFont(bodyFont());
         ImGui::PushTextWrapPos(origin.x + width);
-        ImGui::TextUnformatted("SculptForge is free and open source, and stays that way. If it helps your work, "
-                               "you can support its development.");
+        ImGui::TextUnformatted(tr("SculptForge is free and open source, and stays that way. If it helps your work, "
+                                  "you can support its development."));
         ImGui::PopTextWrapPos();
         if (bodyFont()) ImGui::PopFont();
         ImGui::Spacing();
         ImGui::SetCursorScreenPos(ImVec2(origin.x, ImGui::GetCursorScreenPos().y));
-        if (ImGui::Button("Support SculptForge##whats_new")) app.openSupportPage();
+        if (ImGui::Button(tr("Support SculptForge##whats_new"))) app.openSupportPage();
         y = ImGui::GetCursorScreenPos().y - origin.y;
     }
     ImGui::SetCursorScreenPos(start);

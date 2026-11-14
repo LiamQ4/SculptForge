@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <string>
+#include <vector>
 
 using namespace sf;
 
@@ -116,6 +117,41 @@ TEST(pen_pressure_tracker_guards_stroke_start) {
     CHECK(near(t.raw(), 1.0f));
 }
 
+TEST(stamp_pressure_keeps_the_drag_strength_at_the_lift) {
+    // #146: Drag Stamp / Slide Stamp re-press the stamp at every move with the pressure then. The samples a pen
+    // sends as it lifts fall to 0, and the stamp went weak or vanished at release. Each feed, as the app gets it
+    // (pressure samples through PenPressureTracker, then the curve, then StampPressure::hold):
+    const PressureCurve curve = PressureCurve::soft();
+    auto drag = [&](const std::vector<float>& samples, bool touchUpFirst) {
+        PenPressureTracker t;
+        StampPressure held;
+        held.reset();
+        t.touchDown();
+        float last = 0.0f;
+        for (size_t i = 0; i < samples.size(); ++i) {
+            if (touchUpFirst && i + 1 == samples.size()) t.touchUp(); // Wintab: the packet with the tip up carries 0
+            t.sample(samples[i]);
+            t.motion();
+            last = held.hold(curve.apply(t.pressure()));
+        }
+        return last;
+    };
+    const float firm = curve.apply(0.8f);
+    // Windows Ink (SDL pen events): the pressure ramps down over the last samples, then PEN_UP.
+    CHECK(near(drag({0.2f, 0.6f, 0.8f, 0.8f, 0.8f, 0.5f, 0.2f, 0.05f, 0.0f}, false), firm));
+    // Wintab: the driver's last packet has the tip up and pressure 0, and the mouse moves with it.
+    CHECK(near(drag({0.8f, 0.8f, 0.8f, 0.3f, 0.0f}, true), firm));
+    // Linux (libinput / X11 via SDL): the pressure axis reports 0 before the tip-up event.
+    CHECK(near(drag({0.8f, 0.8f, 0.01f, 0.0f}, false), firm));
+    // A drag that presses harder as it goes gets stronger (the stamp follows the pen up, never down).
+    CHECK(near(drag({0.1f, 0.4f, 0.9f}, false), curve.apply(0.9f)));
+    // A new drag starts afresh.
+    StampPressure held;
+    CHECK(near(held.hold(0.9f), 0.9f));
+    held.reset();
+    CHECK(near(held.hold(0.3f), 0.3f));
+}
+
 TEST(pen_cursor_mouse_mode_moves_relatively) {
     // Pen mode: the cursor is where the pen is.
     PenCursor c;
@@ -168,37 +204,38 @@ TEST(pen_cursor_mouse_mode_moves_relatively) {
     CHECK(near(x, 25.0f) && near(y, 10.0f));
 }
 
-TEST(pen_cursor_mouse_mode_follows_the_system_cursor) {
-    // #72: in mouse mode the driver moves the system cursor; when the system says where it is, that is the cursor
-    // for every pen position (no cursor of our own to drift from it).
+TEST(pen_cursor_mouse_mode_is_relative_with_an_absolute_driver) {
+    // #72, drag-d's sequence (0.10.8: "no difference between default and mouse mode"): the tablet driver in pen
+    // (absolute) mode reports the pen's place on the tablet. Mouse mode must still move the cursor by the pen's
+    // movement only: hover, lift, put down elsewhere, hover again.
     PenCursor c;
     c.mouseMode = true;
-    c.cursorAt(400.0f, 300.0f);
+    c.cursorAt(400.0f, 300.0f); // where the mouse left the cursor
     c.proximity();
-    float x = 100.0f, y = 50.0f;
-    c.systemCursor(400.0f, 300.0f);
+    float x = 100.0f, y = 100.0f; // the pen comes into range at the tablet's top left
     c.map(x, y, 1000);
-    CHECK(near(x, 400.0f) && near(y, 300.0f));
-    // The pen lifted, put down at another point, the driver's cursor moved elsewhere meanwhile: the system's.
+    CHECK(near(x, 400.0f) && near(y, 300.0f)); // no jump to the pen's place
+    for (int i = 1; i <= 10; ++i) { // it moves 100 px right and 50 px down
+        x = 100.0f + 10.0f * float(i), y = 100.0f + 5.0f * float(i);
+        c.map(x, y, 1000 + uint64_t(i) * 8000000);
+    }
+    CHECK(near(x, 500.0f) && near(y, 350.0f));
+    // Lifted away and put down at the tablet's bottom right: the cursor stays, then moves on by the pen's motion.
     c.proximity();
-    x = 900.0f, y = 700.0f;
-    c.systemCursor(250.0f, 120.0f);
-    c.map(x, y, 2000);
-    CHECK(near(x, 250.0f) && near(y, 120.0f));
-    // The driver moves its cursor less (or more) than the pen moved on the tablet: still the system's.
-    x = 950.0f, y = 700.0f;
-    c.systemCursor(260.0f, 121.0f);
-    c.map(x, y, 3000);
-    CHECK(near(x, 260.0f) && near(y, 121.0f));
-    // One reading per position: without a new one the pen carries on from the last (a system that can't say).
-    x = 960.0f, y = 705.0f;
-    c.map(x, y, 4000);
-    CHECK(near(x, 270.0f) && near(y, 126.0f));
-    // Pen mode ignores the system cursor (#54's case: the driver's mouse events land slightly off the pen).
+    x = 1800.0f, y = 1000.0f;
+    c.map(x, y, 200000000);
+    CHECK(near(x, 500.0f) && near(y, 350.0f));
+    x = 1780.0f, y = 990.0f;
+    c.map(x, y, 208000000);
+    CHECK(near(x, 480.0f) && near(y, 340.0f));
+    // Lifted without the driver saying so (silent for longer than kLiftedNs), put down elsewhere: no jump either.
+    x = 300.0f, y = 200.0f;
+    c.map(x, y, 208000000 + PenCursor::kLiftedNs + 1);
+    CHECK(near(x, 480.0f) && near(y, 340.0f));
+    // Pen mode: the pen's own place.
     c.mouseMode = false;
     x = 50.0f, y = 60.0f;
-    c.systemCursor(300.0f, 300.0f);
-    c.map(x, y, 5000);
+    c.map(x, y, 900000000);
     CHECK(near(x, 50.0f) && near(y, 60.0f));
 }
 
@@ -215,4 +252,151 @@ TEST(tablet_settings_mouse_mode_round_trip) {
     TabletSettings d;
     fromJson(j, d);
     CHECK(!d.mouseMode);
+}
+
+TEST(tablet_settings_view_speed_round_trip) {
+    TabletSettings t;
+    CHECK(near(t.viewSpeed, 1.0f)); // the pen navigates as the mouse until turned down
+    t.viewSpeed = 0.4f;
+    TabletSettings back;
+    fromJson(toJson(t), back);
+    CHECK(near(back.viewSpeed, 0.4f));
+    Json j;
+    std::string err;
+    CHECK(Json::parse(R"({"viewSpeed":0})", j, err)); // out of range: clamped, the view still moves
+    TabletSettings d;
+    fromJson(j, d);
+    CHECK(near(d.viewSpeed, 0.1f));
+}
+
+TEST(tablet_settings_classic_pen_timing_round_trip) {
+    TabletSettings t;
+    CHECK(!t.classicTiming); // the new timing by default
+    t.classicTiming = true;
+    TabletSettings back;
+    fromJson(toJson(t), back);
+    CHECK(back.classicTiming);
+    TabletSettings old; // ui.json from before the setting: off
+    fromJson(Json::object(), old);
+    CHECK(!old.classicTiming);
+}
+
+TEST(tablet_settings_palm_rejection_round_trip) {
+    TabletSettings t;
+    t.palmRejection = !t.palmRejection; // (on for Android, off elsewhere: either way it follows the file)
+    TabletSettings back;
+    fromJson(toJson(t), back);
+    CHECK(back.palmRejection == t.palmRejection);
+    TabletSettings old; // ui.json from before the setting: the platform's default
+    const bool def = old.palmRejection;
+    fromJson(Json::object(), old);
+    CHECK(old.palmRejection == def);
+}
+
+// A pen without a pressure axis (Windows Ink off) sends 0 while touching: after a few motions it draws at full
+// pressure instead of never starting the stroke; a pen with pressure never does.
+TEST(pen_pressure_tracker_no_pressure_axis) {
+    PenPressureTracker t;
+    t.touchDown();
+    t.sample(0.0f);
+    for (int i = 0; i + 1 < PenPressureTracker::kSilentMotions; ++i) t.motion();
+    CHECK(!t.readyForFirstDab());
+    CHECK(!t.noPressure());
+    t.motion();
+    CHECK(t.noPressure());
+    CHECK(t.readyForFirstDab());
+    CHECK(near(t.pressure(), 1.0f));
+    t.reset(); // another pen: its own
+    CHECK(!t.noPressure() && !t.hasPressure());
+
+    PenPressureTracker p;
+    p.touchDown();
+    p.sample(0.4f);
+    for (int i = 0; i < 3 * PenPressureTracker::kSilentMotions; ++i) p.motion();
+    p.touchUp();
+    p.touchDown();
+    p.sample(0.0f);
+    for (int i = 0; i < 3 * PenPressureTracker::kSilentMotions; ++i) p.motion();
+    CHECK(p.hasPressure());
+    CHECK(!p.noPressure()); // a light touch on a pen with pressure stays light
+    CHECK(near(p.pressure(), 0.0f));
+    PenPressureTracker hover;
+    for (int i = 0; i < 3 * PenPressureTracker::kSilentMotions; ++i) hover.motion();
+    CHECK(!hover.noPressure()); // hovering never counts
+}
+
+// A sample that lost its value keeps the last pressure: never NaN or infinity; with holdLostZero (Linux: SDL's X11
+// valuators left out, its Wayland hover distance) not a 0 while the tip still presses. Lifting still reaches 0.
+TEST(pen_pressure_tracker_keeps_lost_samples) {
+    PenPressureTracker t;
+    t.holdLostZero = true;
+    t.touchDown();
+    CHECK(t.sample(0.0f)); // touching, not pressing yet: a real 0
+    CHECK(t.sample(0.4f));
+    CHECK(!t.sample(0.0f)); // the stroke already pressed: the X11 / Wayland gap
+    CHECK(near(t.raw(), 0.4f));
+    CHECK(!t.sample(-0.0001f));
+    CHECK(!t.sample(std::nanf("")));
+    CHECK(!t.sample(INFINITY));
+    CHECK(near(t.raw(), 0.4f));
+    CHECK(t.sample(0.01f)); // a light touch is pressure, not a gap
+    CHECK(near(t.raw(), 0.01f));
+    t.touchUp();
+    CHECK(t.sample(0.0f)); // lifted: 0 is real
+    CHECK(near(t.raw(), 0.0f));
+    t.reset();
+    CHECK(t.holdLostZero); // (the platform's, not the pen's)
+
+    PenPressureTracker w; // Windows and macOS: a 0 while touching is the pen's (the lift's last samples, #146)
+    w.touchDown();
+    w.sample(0.5f);
+    CHECK(w.sample(0.0f));
+    CHECK(near(w.raw(), 0.0f));
+    CHECK(!w.sample(INFINITY));
+}
+
+TEST(pen_diagnostics_report) {
+    PenDiagnostics d;
+    std::string r = penReport({{"SDL", "3.4.18"}, {"Video driver", "wayland"}}, d);
+    CHECK(r.find("SDL: 3.4.18\n") == 0);
+    CHECK(r.find("Video driver: wayland") != std::string::npos);
+    CHECK(r.find("Last pressure: none yet") != std::string::npos);
+    d.motion = 12;
+    d.lostSamples = 3;
+    d.touchDown();
+    d.sampled(0.25f, true);
+    d.sampled(0.75f, true);
+    d.sampled(0.0f, false); // hovering: not the stroke's
+    r = penReport({}, d);
+    CHECK(r.find("motion 12,") != std::string::npos);
+    CHECK(r.find("Lost pressure samples: 3") != std::string::npos);
+    CHECK(r.find("Last pressure: 0.000") != std::string::npos);
+    CHECK(r.find("Last stroke's pressure: 0.250 to 0.750") != std::string::npos);
+}
+
+TEST(tablet_hotplug_notes) {
+    CHECK(looksLikeTablet("Wacom Intuos3 6x8 Pen"));
+    CHECK(looksLikeTablet("Intuos3 6x8"));
+    CHECK(looksLikeTablet("HUION Kamvas 13"));
+    CHECK(!looksLikeTablet("Logitech USB Optical Mouse"));
+    CHECK(!looksLikeTablet("HID-compliant mouse"));
+    CHECK(!looksLikeTablet("Openwheel")); // "pen" only as a word
+
+    using N = TabletHotplug::Note;
+    TabletHotplug h;
+    CHECK(h.penIn(7) == N::NewPen); // the tablet plugged in before launch: no note
+    CHECK(h.penIn(7) == N::None);
+    CHECK(h.mouseRemoved(3) == N::None); // a mouse, not the tablet
+
+    // Named tablet: connected at once, its pen needs no second note, unplugging says so.
+    CHECK(h.mouseAdded(10, "Wacom Intuos3 6x8 Pen") == N::Connected);
+    CHECK(h.penIn(7) == N::NewPen); // the same id after a replug is a new pen
+    CHECK(h.mouseRemoved(10) == N::Disconnected);
+
+    // Generic name (Windows): connected once its pen shows up; unplugging that device is the tablet leaving.
+    CHECK(h.mouseAdded(11, "HID-compliant mouse") == N::None);
+    CHECK(h.penIn(8) == N::Connected);
+    CHECK(h.penIn(9) == N::NewPen); // the eraser end, on systems where it is a pen of its own
+    CHECK(h.mouseRemoved(11) == N::Disconnected);
+    CHECK(h.mouseRemoved(11) == N::None);
 }

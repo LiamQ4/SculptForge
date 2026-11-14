@@ -32,6 +32,7 @@ GhostStroke ghostOf(BrushType type, const Sculptor::DabFrame& f, const DabParams
         d.normal = f.normal * mirrors[m];
         d.strength = p.strength * p.pressure;
         d.areaCenter = f.areaCenter * mirrors[m];
+        d.up = p.alphaUp * mirrors[m]; // (the square tip of Clay Block)
         d.mirror = m;
         g.dabs.push_back(d);
     }
@@ -71,7 +72,7 @@ TEST(ghost_matches_standard_dab_on_a_plane) {
     const Error e = compare(BrushType::Standard, plane, p, Symmetry{false, false, false});
     CHECK(e.moved > 0.01f);
     CHECK(e.worst < e.moved * 1e-3f);
-    // Inverted, focal shift, X symmetry: still exact.
+    // Inverted, falloff, X symmetry: still exact.
     p.invert = true;
     p.focal = 0.4f;
     p.center.x = 0.3f;
@@ -84,7 +85,7 @@ TEST(ghost_follows_other_kernels_on_a_plane) {
     // Kernels that use only the area frame and the falloff match on a plane up to float noise; Clay and Flatten
     // pull towards a plane through the area centre, which the frame carries.
     Mesh plane = makePlane(120);
-    for (BrushType t : {BrushType::Inflate, BrushType::Crease, BrushType::Pinch, BrushType::DamStandard, BrushType::Clay,
+    for (BrushType t : {BrushType::Inflate, BrushType::Crease, BrushType::Pinch, BrushType::SharpCrease, BrushType::Clay,
                         BrushType::Flatten, BrushType::Trim}) {
         DabParams p;
         p.center = glm::vec3(0.05f, 0.0f, 0.0f);
@@ -111,10 +112,98 @@ TEST(ghost_estimates_a_curved_surface_closely) {
     CHECK(e.worst < e.moved * 0.1f);
 }
 
+TEST(ghost_matches_solver_per_vertex_at_every_intensity) {
+    // GEOMETRIC INVARIANT (11-12): for every brush the preview models, the vertex the ghost draws is the vertex the
+    // solver places, at Intensity 0.1 / 0.35 / 1.0, with and without pen pressure, on a bumpy seeded sphere (a bump
+    // puts surface on both sides of every plane brush's plane). Clay and Clay Block drew 1.43x too much at 0.35
+    // (the preview skipped clayPull). Clay Block's square tip is measured in the brush's frame, as the solver does.
+    Mesh bumpy = makeIcosphere(6);
+    for (size_t v = 0; v < bumpy.positions.size(); ++v) {
+        const glm::vec3 q = bumpy.positions[v];
+        bumpy.positions[v] *= 1.0f + 0.03f * std::sin(9.0f * q.x + 2.0f * q.y) * std::cos(7.0f * q.z - q.x);
+    }
+    bumpy.recomputeAllNormals();
+    struct Case { BrushType type; const char* name; };
+    const Case cases[] = {{BrushType::Standard, "Standard"}, {BrushType::Inflate, "Inflate"}, {BrushType::Clay, "Clay"},
+                          {BrushType::ClayBlock, "Clay Block"}, {BrushType::Flatten, "Flatten"},
+                          {BrushType::Crease, "Crease"}, {BrushType::Pinch, "Pinch"},
+                          {BrushType::SharpCrease, "Sharp Crease"}, {BrushType::Trim, "Trim"}};
+    for (const Case& c : cases) {
+        for (float intensity : {0.1f, 0.35f, 1.0f}) {
+            for (float pressure : {1.0f, 0.6f}) {
+                DabParams p;
+                p.center = glm::normalize(glm::vec3(0.25f, 0.35f, 1.0f)) * 1.01f;
+                p.radius = 0.35f;
+                p.strength = intensity;
+                p.pressure = pressure;
+                p.viewDir = glm::vec3(0.0f, 0.0f, -1.0f);
+                p.alphaUp = glm::normalize(glm::vec3(0.6f, 0.8f, 0.1f)); // (a turned square tip: Clay Block)
+                Document doc = makeDoc(bumpy);
+                const std::vector<glm::vec3> before = doc.mesh.positions, normals = doc.mesh.normals;
+                doc.sculptor.beginStroke(doc.mesh, "test");
+                doc.sculptor.dab(doc.mesh, doc.bvh, c.type, p, Symmetry{false, false, false});
+                const GhostStroke g = ghostOf(c.type, doc.sculptor.lastFrame, p, Symmetry{false, false, false});
+                doc.sculptor.endStroke();
+                float worst = 0.0f, moved = 0.0f;
+                for (size_t v = 0; v < before.size(); ++v) {
+                    const float dv = glm::distance(ghostMove(g, before[v], normals[v]), doc.mesh.positions[v]);
+                    worst = std::max(worst, dv);
+                    moved = std::max(moved, glm::distance(before[v], doc.mesh.positions[v]));
+                }
+                const bool ok = worst <= std::max(moved * 0.01f, 1e-6f);
+                if (!ok)
+                    std::printf("ghost vs solver: %s intensity %.2f pressure %.1f: worst %.6f of a move up to %.6f\n", c.name,
+                                intensity, pressure, worst, moved);
+                CHECK(ok);
+            }
+        }
+    }
+}
+
+TEST(ghost_matches_a_stroke_of_overlapping_dabs) {
+    // The preview of several dabs the solver hasn't placed yet (each with the frame it will use) is the solver's result
+    // for them in turn: the composition holds for the plane brushes, Clay Block's slabs among them.
+    Mesh bumpy = makeIcosphere(6);
+    for (size_t v = 0; v < bumpy.positions.size(); ++v) {
+        const glm::vec3 q = bumpy.positions[v];
+        bumpy.positions[v] *= 1.0f + 0.03f * std::sin(9.0f * q.x + 2.0f * q.y) * std::cos(7.0f * q.z - q.x);
+    }
+    bumpy.recomputeAllNormals();
+    for (BrushType t : {BrushType::Clay, BrushType::ClayBlock}) {
+        Document doc = makeDoc(bumpy);
+        const std::vector<glm::vec3> before = doc.mesh.positions, normals = doc.mesh.normals;
+        GhostStroke g;
+        g.kind = ghostKindForBrush(int(t));
+        doc.sculptor.beginStroke(doc.mesh, "test");
+        for (int i = 0; i < 8; ++i) {
+            DabParams p;
+            const float a = 0.5f + 0.12f * float(i);
+            p.center = glm::vec3(std::sin(a), 0.2f, std::cos(a)) * 1.01f;
+            p.center = glm::normalize(p.center) * 1.01f;
+            p.radius = 0.3f;
+            p.strength = 0.35f;
+            p.viewDir = -glm::normalize(p.center);
+            p.alphaUp = glm::vec3(0.0f, 1.0f, 0.0f);
+            doc.sculptor.dab(doc.mesh, doc.bvh, t, p, Symmetry{false, false, false});
+            const GhostStroke one = ghostOf(t, doc.sculptor.lastFrame, p, Symmetry{false, false, false});
+            g.dabs.push_back(one.dabs[0]);
+        }
+        doc.sculptor.endStroke();
+        float worst = 0.0f, moved = 0.0f;
+        for (size_t v = 0; v < before.size(); ++v) {
+            worst = std::max(worst, glm::distance(ghostMove(g, before[v], normals[v]), doc.mesh.positions[v]));
+            moved = std::max(moved, glm::distance(before[v], doc.mesh.positions[v]));
+        }
+        std::printf("ghost stroke vs solver: brush %d worst %.6f of a move up to %.6f\n", int(t), worst, moved);
+        CHECK(moved > 0.005f);
+        CHECK(worst <= moved * 0.02f);
+    }
+}
+
 TEST(ghost_kinds_cover_the_displacement_brushes) {
     CHECK(ghostKindForBrush(int(BrushType::Standard)) == GhostKind::Standard);
     CHECK(ghostKindForBrush(int(BrushType::Clay)) == GhostKind::Clay);
-    CHECK(ghostKindForBrush(int(BrushType::ClayBuildup)) == GhostKind::ClayBuildup);
+    CHECK(ghostKindForBrush(int(BrushType::ClayBlock)) == GhostKind::ClayBlock);
     CHECK(ghostKindForBrush(int(BrushType::Trim)) == GhostKind::Trim);
     CHECK(ghostKindForBrush(int(BrushType::Smooth)) == GhostKind::None);
     CHECK(ghostKindForBrush(int(BrushType::Layer)) == GhostKind::None);
@@ -209,4 +298,55 @@ TEST(pen_predictor_tracks_a_circle_better_than_holding_still) {
         ++n;
     }
     CHECK(predicted / n < held / n * 0.25);
+}
+
+TEST(live_move_matches_the_grab) {
+    // Live Move (SF_LIVE_MOVE, research prototype): the preview of a whole Move drag (GhostKind::Move, from the
+    // grab's start positions) is where the grab puts every vertex, and one grab with the whole move lands where a
+    // grab per frame does (up to float rounding), with X symmetry.
+    Mesh sphere = makeIcosphere(6);
+    DabParams p;
+    p.center = glm::normalize(glm::vec3(0.3f, 0.2f, 1.0f));
+    p.radius = 0.45f;
+    p.strength = 0.4f;
+    p.focal = 0.3f;
+    p.viewDir = -p.center;
+    const Symmetry sym{true, false, false};
+    const std::vector<glm::vec3> steps = {{0.01f, 0.02f, 0.0f}, {0.03f, -0.01f, 0.02f}, {0.02f, 0.02f, 0.01f}};
+    glm::vec3 total(0.0f);
+    for (const glm::vec3& s : steps) total += s;
+
+    Document framed = makeDoc(sphere), once = makeDoc(sphere);
+    const std::vector<glm::vec3> before = framed.mesh.positions, normals = framed.mesh.normals;
+    framed.sculptor.beginStroke(framed.mesh, "test");
+    framed.sculptor.beginGrab(framed.mesh, framed.bvh, p, sym);
+    for (const glm::vec3& s : steps) framed.sculptor.grab(framed.mesh, framed.bvh, s);
+    framed.sculptor.endStroke();
+    once.sculptor.beginStroke(once.mesh, "test");
+    once.sculptor.beginGrab(once.mesh, once.bvh, p, sym);
+    once.sculptor.grab(once.mesh, once.bvh, total);
+    once.sculptor.endStroke();
+
+    GhostStroke g;
+    g.kind = GhostKind::Move;
+    g.focal = p.focal;
+    const std::vector<SymCopy> copies = Sculptor::copies(sym);
+    for (uint32_t m = 0; m < copies.size(); ++m) {
+        GhostDab d;
+        d.center = copies[m].point(p.center);
+        d.radius = p.radius;
+        d.normal = copies[m].m * total;
+        d.strength = std::clamp(p.strength * 2.0f, 0.0f, 1.0f);
+        d.mirror = m;
+        g.dabs.push_back(d);
+    }
+    float moved = 0.0f, single = 0.0f, ghost = 0.0f;
+    for (size_t v = 0; v < before.size(); ++v) {
+        moved = std::max(moved, glm::distance(before[v], framed.mesh.positions[v]));
+        single = std::max(single, glm::distance(once.mesh.positions[v], framed.mesh.positions[v]));
+        ghost = std::max(ghost, glm::distance(ghostMove(g, before[v], normals[v]), framed.mesh.positions[v]));
+    }
+    CHECK(moved > 0.02f);
+    CHECK(single < 1e-6f);
+    CHECK(ghost < 1e-5f);
 }

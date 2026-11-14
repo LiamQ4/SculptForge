@@ -1,25 +1,31 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Geometry > QRemesh and SubTool > Project: ZBrush's ZRemesher and ProjectAll. QRemesh (core/QRemesh.h) runs
-// on a worker thread with a progress bar and Cancel, then replaces the SubTool as one undo step (optionally
-// keeping the original as a hidden SubTool below it). ProjectAll (core/Projection.h) is quick, so it runs
-// as the project_all command. The console shows both as script lines. The QRemesh Guides brush (ZBrush's
-// ZRemesher Guides, core/QRemeshGuides.h) draws the curves QRemesh follows.
+// Geometry > QRemesh and Part > Project: the classic QRemesh and ProjectAll. QRemesh (core/QRemesh.h) runs
+// on a worker thread with a progress bar and Cancel, then replaces the Part as one undo step (optionally
+// keeping the original as a hidden Part below it). ProjectAll (core/Projection.h) is quick, so it runs
+// as the project_all command. The console shows both as script lines. The QRemesh Guides brush (the classic
+// QRemesh Guides, core/QRemeshGuides.h) draws the curves QRemesh follows.
 #include "app/App.h"
 #include "app/Demo.h"
 #include "app/Palettes.h"
 #include "app/Ui.h"
 #include "app/I18n.h"
+#include "app/Theme.h"
 
+#include "core/HardwareProfile.h"
 #include "core/KeepMasked.h"
+#include "core/MemoryGuard.h"
+#include "core/QuickRemesh.h"
 #include "core/TextureTransfer.h"
 #include "core/Voxel.h"
 
 #include <IconsLucide.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <thread>
 
@@ -61,9 +67,9 @@ void App::registerRetopoUiActions() {
     };
     add("geometry.qremesh", "Quad Remesh", kQRemeshPath, [this] { startQRemesh(); },
         [this] { return !qremesh_ && doc_.mesh.triangleCount() > 0; },
-        "Automatic quad retopology, like ZBrush's ZRemesher: rebuilds the Part as clean, all-quad topology whose "
-        "edge loops follow the forms, close to Target Polygons. Runs in the background (Cancel stops it); undoable. "
-        "Then divide it and use Part > Project > Project All to bring the detail back.",
+        "Automatic quad retopology: rebuilds the Part as clean, all-quad topology whose "
+        "edge loops follow the forms, close to Target Quads. Runs in the background (Cancel stops it); undoable. "
+        "Then divide it and use Part > Project > Project Detail to bring the detail back.",
         "qremesh");
     {
         Action a;
@@ -73,7 +79,7 @@ void App::registerRetopoUiActions() {
         a.palette = kQRemeshPath;
         a.run = [this] { setGuidesMode(!guidesMode_); };
         a.checked = [this] { return guidesMode_; };
-        a.description = "The Quad Remesh Guides brush (ZBrush's ZRemesher Guides): drag on the model to draw a curve for "
+        a.description = "The Quad Remesh Guides brush: drag on the model to draw a curve for "
                         "Quad Remesh's edge loops to follow, around an eye, the mouth or a joint. A curve that ends where "
                         "it started becomes a loop. Symmetry mirrors it; Alt+click a curve to delete it. Pick any "
                         "brush to sculpt again.";
@@ -85,19 +91,19 @@ void App::registerRetopoUiActions() {
     add("geometry.qremesh_guides_clear", "Clear", kQRemeshPath, [this] { runCommand("qremesh_guides_clear"); },
         [this] { return !doc_.qremeshGuides.empty(); }, "Delete every Quad Remesh guide curve of this Part.",
         "qremesh_guides_clear");
-    add("subtool.project_all", "Project All", kProjectPath, [this] {
+    add("part.project_all", "Project Detail", kProjectPath, [this] {
             runCommand("project_all", {{"distance", double(retopo_.projectDist)}, {"mean", retopo_.projectMean},
                                        {"blur", double(retopo_.projectBlur)}, {"geometry", retopo_.projectGeometry},
-                                       {"polypaint", retopo_.projectPolypaint}});
+                                       {"vertexpaint", retopo_.projectVertexPaint}});
         },
         [this] {
-            for (int i = 0; i < doc_.subtoolCount(); ++i)
-                if (i != doc_.activeSubtool && doc_.subtools[size_t(i)].visible) return true;
+            for (int i = 0; i < doc_.partCount(); ++i)
+                if (i != doc_.activePart && doc_.parts[size_t(i)].visible) return true;
             return false;
         },
         "Project the shape and vertex paint of every other visible Part onto this one: each vertex moves along its "
         "normal to the nearest surface within Dist. The mask holds vertices back. Typical use: Quad Remesh a copy, divide "
-        "it a few times, show the original, Project All.",
+        "it a few times, show the original, Project Detail.",
         "project_all");
 }
 
@@ -117,6 +123,8 @@ std::vector<uint8_t> keptForRemesh(const Mesh& mesh, bool keepMasked, bool& allM
 
 void App::startQRemesh() {
     if (qremesh_ || doc_.mesh.triangleCount() == 0) return;
+    if (!unhideAllows("Quad Remesh", [this] { startQRemesh(); })) return; // #163
+    if (!levelsAllow("Quad Remesh", [this] { startQRemesh(); })) return;  // #173
     if (doc_.sculptor.strokeActive()) endStroke();
     bool allMasked = false;
     std::vector<uint8_t> keep = keptForRemesh(doc_.mesh, retopo_.keepMasked, allMasked);
@@ -130,7 +138,7 @@ void App::startQRemesh() {
     o.adaptive = retopo_.adaptive;
     o.keepGroups = retopo_.keepGroups;
     o.detectEdges = retopo_.detectEdges;
-    o.usePolypaint = retopo_.usePolypaint;
+    o.useVertexPaint = retopo_.useVertexPaint;
     o.symmetryAxis = retopo_.symmetry ? symmetryAxis(symmetry_) : -1;
     o.guides = doc_.qremeshGuides;
     o.guideStrength = std::clamp(curvesStrength_, 0.0f, 100.0f) / 100.0f;
@@ -141,14 +149,14 @@ void App::startQRemesh() {
     job->result = std::make_shared<Mesh>();
     job->stats = std::make_shared<QRemeshStats>();
     job->error = std::make_shared<std::string>();
-    job->subtool = doc_.activeSubtoolInfo().id;
+    job->part = doc_.activePartInfo().id;
     job->triangles = doc_.mesh.triangleCount();
     job->keepOriginal = retopo_.keepOriginal;
     job->args = {{"target", double(o.targetQuads)}, {"adaptive", double(o.adaptive)}};
     if (o.method == QRemeshMethod::Legacy) job->args["method"] = std::string("legacy");
     if (o.keepGroups) job->args["keep_groups"] = true;
     if (!o.detectEdges) job->args["detect_edges"] = false;
-    if (o.usePolypaint) job->args["use_polypaint"] = true;
+    if (o.useVertexPaint) job->args["use_vertexpaint"] = true;
     if (o.symmetryAxis >= 0) job->args["symmetry"] = std::string(1, char('x' + o.symmetryAxis));
     if (job->keepOriginal) job->args["keep_original"] = true;
     if (!keep.empty()) job->args["keep_masked"] = true;
@@ -190,26 +198,207 @@ void App::startQRemesh() {
               " quads...";
 }
 
-void App::startVoxelRemesh() {
-    if (voxelRemesh_) return;
-    Args args{{"resolution", double(voxelResolution_)}};
-    if (voxelKeepMasked_) args["keep_masked"] = true;
-    if (!hasTexture(doc_.mesh) || !keepTexture_) {
-        if (hasTexture(doc_.mesh)) args["keep_texture"] = false; // Keep Texture off
-        runCommand("remesh", args);
+const VoxelRemeshEstimate& App::voxelEstimate() {
+    VoxelEstimateCache& c = voxelEstimate_;
+    const uint32_t part = doc_.activePartInfo().id;
+    const uint64_t revision = doc_.undo.revision();
+    const size_t triangles = doc_.mesh.triangleCount();
+    // The area once per change of the Part (not per dab while a dynamic-topology stroke adds triangles).
+    const bool stale = c.part != part || c.revision != revision || c.triangles != triangles;
+    if (stale && !(doc_.sculptor.strokeActive() && c.part == part)) {
+        c.part = part, c.revision = revision, c.triangles = triangles;
+        c.area = surfaceArea(doc_.mesh);
+        c.resolution = 0;
+    }
+    if (c.resolution != voxelResolution_) {
+        c.resolution = voxelResolution_;
+        c.estimate = estimateVoxelRemesh(doc_.mesh, voxelResolution_, c.area);
+    }
+    return c.estimate;
+}
+
+// Customize Shelves, Ctrl+Alt: a slider is drawn inert (beginShelfGrab) and a button over it takes the press (endShelfGrab), so
+// it can be dragged onto a shelf as `item` instead of moving its value or the palette under it. The press is taken by hand
+// (as Shell.cpp's grab): over the inert slider it would otherwise fall through to the palette's window move, and the drag
+// source (which needs an active item) never began.
+bool App::beginShelfGrab() {
+    const bool grab = layout_.customize && ui::CtrlHeld() && ui::AltHeld();
+    if (grab) ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+    return grab;
+}
+
+void App::endShelfGrab(const char* buttonId, const char* item, const char* title) {
+    ImGui::PopItemFlag();
+    const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+    ImGui::SetCursorScreenPos(lo);
+    ImGui::InvisibleButton(buttonId, ImVec2(std::max(hi.x - lo.x, 1.0f), std::max(hi.y - lo.y, 1.0f)));
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    if (ImGui::IsMouseClicked(0) && ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(lo, hi) && g.ActiveId == 0) {
+        ImGui::SetActiveID(ImGui::GetItemID(), ImGui::GetCurrentWindow());
+        g.ActiveIdMouseButton = 0;
+    }
+    ui::UiItemDragSource(*this, item, title);
+}
+
+void App::drawGuideStrength(bool compact) {
+    if (!compact) ImGui::SetNextItemWidth(-1);
+    const bool grab = !compact && beginShelfGrab();
+    ui::SliderInside(compact ? "##qcurves.shelf" : "##qcurves", &curvesStrength_, 0.0f, 100.0f, "Guide Strength %.0f");
+    if (grab) endShelfGrab("##qcurvesgrab", "widget.guide_strength", "Guide Strength");
+}
+
+void App::drawTargetQuads(bool compact) {
+    if (!compact) ImGui::SetNextItemWidth(-1);
+    const bool grab = !compact && beginShelfGrab();
+    tray::SliderInt(compact ? "##qtarget.shelf" : "##qtarget", &retopo_.target, 100, 200000, "Target Quads %d", ImGuiSliderFlags_Logarithmic);
+    if (grab) endShelfGrab("##qtargetgrab", "widget.target_quads", "Target Quads");
+}
+
+void App::drawVoxelResolution(bool compact) {
+    voxelResolution_ = std::clamp(voxelResolution_, kVoxelResolutionMin, kVoxelResolutionMax);
+    // Two thirds of the travel for 32-512 (the everyday range keeps its precision), a sixth each for 528-2048 and
+    // 2112-4096. Ctrl+click types a number.
+    if (!compact) ImGui::SetNextItemWidth(-1);
+    const bool grab = !compact && beginShelfGrab();
+    float t = voxelSliderFromResolution(voxelResolution_);
+    std::string label = tr("Resolution %d");
+    if (const size_t at = label.find("%d"); at != std::string::npos) label.replace(at, 2, std::to_string(voxelResolution_));
+    const int before = voxelResolution_;
+    if (ui::SliderInside("##voxres", &t, 0.0f, 1.0f, label.c_str(), ImGuiSliderFlags_NoInput)) voxelResolution_ = voxelResolutionFromSlider(t);
+    if (grab) {
+        endShelfGrab("##voxresgrab", "widget.voxel_resolution", "Voxel Resolution");
+    } else if (ImGui::IsItemHovered() && ui::CtrlHeld() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        voxelResolution_ = before; // (the click doesn't move it)
+        ImGui::ClearActiveID();
+        voxelResolutionTyped_ = before;
+        ImGui::OpenPopup("##voxrestype");
+    }
+    ui::HelpText("Resolution", nullptr,
+                 "Voxels across the model, 32 to 4096: higher keeps more detail and makes more triangles (about 4x "
+                 "for each doubling). The line under it estimates the result. Above 512 a remesh can make tens of "
+                 "millions of triangles and take minutes; it asks once first, and won't start if it can't fit in "
+                 "the free memory. Ctrl+click to type a value.",
+                 "Tool > Remesh");
+    if (ImGui::BeginPopup("##voxrestype")) {
+        ImGui::SetNextItemWidth(120.0f * uiScale_);
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        ImGui::InputInt(tr("Resolution##voxrestype"), &voxelResolutionTyped_, 0, 0);
+        if (ImGui::IsItemDeactivatedAfterEdit() || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+            voxelResolution_ = std::clamp(voxelResolutionTyped_, kVoxelResolutionMin, kVoxelResolutionMax);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if (voxelResolution_ <= kVoxelDenseMax) voxelHighResOk_ = false; // (asks again on the next trip above 512)
+    if (compact || doc_.mesh.triangleCount() == 0) return;
+    const VoxelRemeshEstimate& e = voxelEstimate();
+    const std::string tris = formatTriangles(e.triangles);
+    char line[256];
+    bool fits = true;
+    if (voxelResolution_ <= kVoxelDenseMax) {
+        std::snprintf(line, sizeof line, tr("About %s triangles"), tris.c_str());
+    } else {
+        const MemoryCheck c = checkMemory(e.bytes);
+        fits = c.enough;
+        if (fits) std::snprintf(line, sizeof line, tr("About %s triangles, ~%s of memory"), tris.c_str(), memoryText(e.bytes).c_str());
+        else
+            std::snprintf(line, sizeof line, tr("About %s triangles, needs ~%s, %s free"), tris.c_str(), memoryText(e.bytes).c_str(),
+                          memoryText(c.availableBytes).c_str());
+    }
+    if (smallFont()) ImGui::PushFont(smallFont());
+    ImGui::TextColored(fits ? theme::textDim : theme::danger, "%s", line);
+    if (smallFont()) ImGui::PopFont();
+    ui::HelpText("Estimate", nullptr,
+                 "About how many triangles Voxel Remesh makes at this Resolution, from the Part's surface area (fine "
+                 "detail smaller than a voxel counts, so a dense scan comes out lower). Above 512 also the memory the "
+                 "remesh needs; in red when that is more than is free now.",
+                 "Tool > Remesh");
+}
+
+void App::drawVoxelHighResConfirm() {
+    if (!voxelHighResConfirm_.open) return;
+    const float s = uiScale_;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    bool open = true;
+    if (!ImGui::Begin(tr("High resolution remesh"), &open,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::End();
+        if (!open) voxelHighResConfirm_ = {};
         return;
     }
-    // Keeping a texture adds Auto UV of the result, which takes seconds to minutes: run it all in the background.
+    const VoxelRemeshEstimate& e = voxelEstimate();
+    const MemoryCheck c = checkMemory(e.bytes);
+    ImGui::PushTextWrapPos(460 * s);
+    char what[512];
+    std::snprintf(what, sizeof what, tr("Voxel Remesh at resolution %d makes about %s triangles and needs about %s of memory (%s free)."),
+                  voxelResolution_, formatTriangles(e.triangles).c_str(), memoryText(e.bytes).c_str(), memoryText(c.availableBytes).c_str());
+    ImGui::Text("%s", what);
+    ImGui::TextWrapped("%s", tr("It can take a few minutes; Cancel in Tool > Remesh stops it and the Part stays as it is. "
+                                "This won't ask again until the Resolution goes back to 512 or less."));
+    // Only for a heavy result: tens of millions of triangles, or most of the free memory.
+    if (e.triangles > 10'000'000 || (c.availableBytes > 0 && e.bytes > c.availableBytes / 2))
+        ImGui::TextWrapped("%s", tr("Sculpting that many triangles needs a fast computer: Decimate or a lower Resolution makes it lighter."));
+    ImGui::PopTextWrapPos();
+    bool go = false;
+    if (ImGui::Button(tr("Remesh##voxelhighres"), ImVec2(140 * s, 0))) go = true;
+    ImGui::SameLine();
+    if (ImGui::Button(tr("Cancel##voxelhighres"), ImVec2(120 * s, 0))) open = false;
+    ImGui::End();
+    if (go) {
+        const RemeshTrigger trigger = voxelHighResConfirm_.trigger;
+        voxelHighResConfirm_ = {};
+        voxelHighResOk_ = true;
+        startVoxelRemesh(trigger);
+    } else if (!open) {
+        voxelHighResConfirm_ = {};
+        status_ = "Voxel Remesh cancelled";
+    }
+}
+
+void App::startVoxelRemesh(RemeshTrigger trigger) {
+    if (voxelRemesh_) return;
+    // #163: the button asks on a partly hidden Part (Quick Remesh and Remesh after each stroke just go).
+    if (!unhideAllows("Voxel Remesh", [this, trigger] { startVoxelRemesh(trigger); }, trigger != RemeshTrigger::Button))
+        return;
+    voxelResolution_ = std::clamp(voxelResolution_, kVoxelResolutionMin, kVoxelResolutionMax);
+    if (!levelsAllow("Voxel Remesh", [this, trigger] { startVoxelRemesh(trigger); }, trigger != RemeshTrigger::Button)) return;
+    Args args{{"resolution", double(voxelResolution_)}};
+    if (voxelKeepMasked_) args["keep_masked"] = true;
+    if (voxelResolution_ > kVoxelDenseMax) {
+        // Never past the free memory up there (it would take the whole computer down); asked once per trip above 512.
+        const VoxelRemeshEstimate& e = voxelEstimate();
+        if (const MemoryCheck c = checkMemory(e.bytes); !c.enough) {
+            status_ = "Voxel Remesh at " + std::to_string(voxelResolution_) + " needs ~" + memoryText(e.bytes) + " free, " +
+                      memoryText(c.availableBytes) + " available. Lower the Resolution or close other apps"; // (as the panel)
+            lastCommandOk_ = false;
+            return;
+        }
+        if (!voxelHighResOk_) {
+            voxelHighResConfirm_ = {true, trigger};
+            status_ = "Voxel Remesh at " + std::to_string(voxelResolution_) + ": about " + formatTriangles(e.triangles) +
+                      " triangles. Remesh or cancel in the dialog";
+            return;
+        }
+    } else {
+        voxelHighResOk_ = false;
+        if (!memoryAllows("remesh", args, [this, trigger] { startVoxelRemesh(trigger); })) return;
+    }
+    // Always in the background with progress, so the UI never freezes (keeping a texture adds Auto UV of the
+    // result, seconds to minutes); the result lands as the remesh command's would (pollVoxelRemesh).
     if (doc_.sculptor.strokeActive()) endStroke();
     auto job = std::make_unique<VoxelRemeshJob>();
+    job->trigger = trigger;
+    job->revision = doc_.undo.revision();
     job->progress = std::make_shared<std::atomic<float>>(0.0f);
     job->cancel = std::make_shared<std::atomic<bool>>(false);
     job->result = std::make_shared<Mesh>();
     job->error = std::make_shared<std::string>();
     job->note = std::make_shared<std::string>();
-    job->subtool = doc_.activeSubtoolInfo().id;
+    job->part = doc_.activePartInfo().id;
     job->triangles = doc_.mesh.triangleCount();
-    job->resolution = std::clamp(voxelResolution_, 32, 512);
+    job->resolution = voxelResolution_;
     bool allMasked = false;
     std::vector<uint8_t> keep = keptForRemesh(doc_.mesh, voxelKeepMasked_, allMasked);
     if (allMasked) {
@@ -217,57 +406,90 @@ void App::startVoxelRemesh() {
         return;
     }
     job->keepMasked = !keep.empty();
+    job->keepTexture = keepTexture_;
+    const bool texture = hasTexture(doc_.mesh) && keepTexture_;
     std::promise<bool> promise;
     job->done = promise.get_future();
     std::thread([promise = std::move(promise), source = std::make_shared<Mesh>(doc_.mesh), res = job->resolution,
                  progress = job->progress, cancel = job->cancel, result = job->result, error = job->error,
-                 note = job->note, keep = std::move(keep)]() mutable {
+                 note = job->note, keep = std::move(keep), texture, keepTexture = keepTexture_]() mutable {
         progress->store(0.02f);
-        *result = voxelRemesh(*source, res, error.get());
+        const float remeshShare = texture ? 0.13f : 0.9f; // the rest: Keep Masked, then the texture's Auto UV
+        *result = voxelRemesh(*source, res, error.get(), [&](float f) {
+            progress->store(0.02f + remeshShare * f);
+            return !cancel->load();
+        });
         bool ok = result->triangleCount() > 0;
         if (ok && !keep.empty()) { // Keep Masked: the masked part goes back in, joined to the new surface
             Mesh stitched;
-            ok = stitchKeptTriangles(*source, keep, *result, stitched, *error);
+            std::string keepNote;
+            ok = stitchKeptTriangles(*source, keep, *result, stitched, *error, &keepNote);
             if (ok) *result = std::move(stitched);
             else *error = "Remesh (Keep Masked): " + *error;
+            if (ok && !keepNote.empty()) *note = "; Keep masked: " + keepNote;
         }
-        progress->store(0.15f);
-        if (ok) *note = carryTextureNote(*source, *result, true, [&](float f) {
+        progress->store(texture ? 0.15f : 0.98f);
+        if (ok) *note = carryTextureNote(*source, *result, keepTexture, [&](float f) {
             progress->store(0.15f + 0.85f * f);
             return !cancel->load();
-        });
+        }) + *note;
         if (ok && cancel->load()) {
             ok = false;
             *error = "Voxel Remesh cancelled";
         }
         promise.set_value(ok);
     }).detach();
+    const int res = job->resolution;
+    autoRemeshDue_ = false; // (this remesh covers every stroke so far)
     voxelRemesh_ = std::move(job);
-    status_ = "Voxel Remesh: remeshing and keeping the texture...";
+    status_ = trigger == RemeshTrigger::AfterStroke ? "Remesh after stroke: the stroke stretched the surface, remeshing at " +
+                                                          std::to_string(res) + "..."
+              : trigger == RemeshTrigger::Quick ? "Quick Remesh: remeshing at resolution " + std::to_string(res) + "..."
+              : texture                          ? "Voxel Remesh: remeshing and keeping the texture..."
+                                                 : "Voxel Remesh: remeshing...";
 }
 
 void App::pollVoxelRemesh() {
+    // Remesh after each stroke: a stretching stroke asks; the remesh starts once no stroke or job is in the way.
+    if (autoRemeshDue_ && !voxelRemesh_ && !jobWaitsForStroke()) {
+        autoRemeshDue_ = false;
+        quickRemesh(RemeshTrigger::AfterStroke);
+    }
     if (!voxelRemesh_) return;
+    const char* name = voxelRemesh_->trigger == RemeshTrigger::Quick         ? "Quick Remesh: "
+                       : voxelRemesh_->trigger == RemeshTrigger::AfterStroke ? "Remesh after stroke: "
+                                                                             : "Voxel Remesh: ";
     if (voxelRemesh_->done.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-        status_ = "Voxel Remesh (keeping the texture): " + std::to_string(int(voxelRemesh_->progress->load() * 100.0f)) + "%";
+        status_ = name + std::to_string(int(voxelRemesh_->progress->load() * 100.0f)) + "%";
         return;
     }
+    if (jobWaitsForStroke()) return; // (the result lands when the stroke ends)
     const std::unique_ptr<VoxelRemeshJob> job = std::move(voxelRemesh_);
     if (!job->done.get()) {
         status_ = *job->error;
         return;
     }
+    if (job->trigger != RemeshTrigger::Button && doc_.undo.revision() != job->revision) {
+        // Sculpted (or undone) while it ran: landing would throw that work away, so it remeshes the Part as it is now.
+        status_ = std::string(name) + "the Part changed while it was remeshed, remeshing again...";
+        startVoxelRemesh(job->trigger);
+        return;
+    }
     int index = -1;
-    for (int i = 0; i < doc_.subtoolCount(); ++i)
-        if (doc_.subtools[size_t(i)].id == job->subtool) index = i;
-    if (index < 0 || doc_.subtoolMesh(index).triangleCount() != job->triangles) {
+    for (int i = 0; i < doc_.partCount(); ++i)
+        if (doc_.parts[size_t(i)].id == job->part) index = i;
+    if (index < 0 || doc_.partMesh(index).triangleCount() != job->triangles) {
         status_ = "Voxel Remesh skipped: the Part changed while it was being remeshed";
         return;
     }
-    if (index != doc_.activeSubtool) doc_.selectSubtool(index);
-    if (doc_.sculptor.strokeActive()) endStroke();
-    doc_.replaceMeshUndoable(std::move(*job->result), "Remesh"); // as the remesh command
-    CommandResult r{true, "Remeshed to " + std::to_string(doc_.mesh.triangleCount()) + " triangles" + *job->note};
+    const JobPart part(*this, index);
+    doc_.replaceMeshUndoable(std::move(*job->result), "Remesh", true); // as the remesh command
+    CommandResult r{true, std::string(job->trigger == RemeshTrigger::Quick         ? "Quick Remesh: remeshed"
+                                      : job->trigger == RemeshTrigger::AfterStroke ? "Remeshed after the stroke"
+                                                                                   : "Remeshed") +
+                              " to " + std::to_string(doc_.mesh.triangleCount()) + " triangles" + *job->note};
+    if (job->trigger != RemeshTrigger::Button) r.message += " (resolution " + std::to_string(job->resolution) + "; " +
+                                                          actions_.shortcutText("edit.undo") + " undoes it)";
     if (const std::string notice = doc_.takeNotice(); !notice.empty()) r.message += ". " + notice; // levels dropped
     status_ = r.message;
     lastCommandOk_ = true;
@@ -277,7 +499,84 @@ void App::pollVoxelRemesh() {
     updateTitle();
     Args echo{{"resolution", double(job->resolution)}};
     if (job->keepMasked) echo["keep_masked"] = true;
+    if (!job->keepTexture && job->note->find("texture") != std::string::npos) echo["keep_texture"] = false;
     consoleEcho("remesh", echo, r);
+}
+
+// ---------------------------------------------------------------------------
+// Quick Remesh and Remesh after each stroke (#121)
+// ---------------------------------------------------------------------------
+
+void App::quickRemesh(RemeshTrigger trigger) {
+    const char* name = trigger == RemeshTrigger::AfterStroke ? "Remesh after stroke: " : "Quick Remesh: ";
+    if (voxelRemesh_) {
+        if (trigger == RemeshTrigger::Quick) status_ = std::string(name) + "already remeshing (Tool > Remesh > Cancel stops it)";
+        return; // (a stroke made meanwhile: the running quick remesh starts again when it finishes)
+    }
+    if (doc_.mesh.triangleCount() == 0) {
+        status_ = std::string(name) + "the active Part has no surface to remesh";
+        return;
+    }
+    if (!doc_.activePartInfo().visible) {
+        status_ = std::string(name) + "the active Part is hidden";
+        return;
+    }
+    startVoxelRemesh(trigger);
+}
+
+void App::strokeEndedForRemesh(const UndoRecord& stroke) {
+    lastStrokeStretched_ = 0;
+    if (!uiPrefs_.remeshAfterStroke || stroke.positions.empty() || stroke.layer >= 0 || stroke.topology || stroke.mesh ||
+        stroke.micro || stroke.subdiv)
+        return;
+    // Not where a remesh would throw work away unasked: subdivision levels, sculpt layers, a painted texture.
+    if (doc_.mesh.multires || !doc_.mesh.layers.empty() || (hasTexture(doc_.mesh) && keepTexture_)) return;
+    const StrokeStretch s = strokeStretch(doc_.mesh, stroke.positions.indices, stroke.positions.values);
+    lastStrokeStretched_ = s.stretched;
+    if (stretchWantsRemesh(s)) autoRemeshDue_ = true; // pollVoxelRemesh starts it once nothing is in the way
+}
+
+void App::quickRemeshKey(SDL_Keycode key, SDL_Keymod mods, bool down) {
+    if (!down) {
+        if (key == quickRemeshDragKey_) quickRemeshDragKey_ = SDLK_UNKNOWN;
+        return;
+    }
+    const Action* a = actions_.actionForChord(chordFromEvent(key, mods));
+    if (a && a->id == "geometry.quick_remesh_drag" && uiPrefs_.quickRemesh) quickRemeshDragKey_ = key;
+}
+
+// With the drag key held (N by default, Preferences > Hotkeys), a press on the background (no surface under it)
+// remeshes when it's let go. On the model the press stays a stroke. The key is unbound in every input style, so
+// no empty-canvas drag of any style (turn, pan, zoom, mask and hide shapes) changes.
+bool App::quickRemeshDragDown(float x, float y) {
+    if (quickRemeshDragKey_ == SDLK_UNKNOWN || !uiPrefs_.quickRemesh) return false;
+    RayHit hit;
+    if (previewLod_ < 0 && pick(x, y, hit)) return false;
+    drag_ = Drag::QuickRemesh;
+    status_ = "Quick Remesh: let go to remesh the active Part";
+    return true;
+}
+
+void App::drawQuickRemeshContents() {
+    tray::GroupLabel(*this, "Quick Remesh");
+    bool quick = uiPrefs_.quickRemesh;
+    if (ImGui::Checkbox(tr("Quick Remesh##remesh.quick"), &quick)) uiPrefs_.quickRemesh = quick;
+    const std::string key = actions_.shortcutText("geometry.quick_remesh");
+    const std::string drag = actions_.shortcutText("geometry.quick_remesh_drag");
+    const std::string help =
+        "When on, " + (key.empty() ? std::string("the Quick Remesh key (Preferences > Hotkeys)") : key) +
+        " remeshes the active Part at the Resolution above, in the background (progress and Cancel here)" +
+        (drag.empty() ? std::string(".") : "; so does holding " + drag + " and clicking or dragging on the background.") +
+        " Keep Masked and Keep Texture apply. Both keys change in Preferences > Hotkeys.";
+    ui::HelpText("Quick Remesh", nullptr, help.c_str(), "Tool > Remesh");
+    bool after = uiPrefs_.remeshAfterStroke;
+    if (ImGui::Checkbox(tr("Remesh after each stroke##remesh.after_stroke"), &after)) uiPrefs_.remeshAfterStroke = after;
+    ui::HelpText("Remesh after each stroke", nullptr,
+                 "After a stroke that stretched the surface (edges pulled to more than 1.6 times their length), the "
+                 "active Part is remeshed at the Resolution above in the background. Sculpting never waits: a stroke "
+                 "made meanwhile remeshes again. Each remesh is one undo step. Not on a Part with subdivision levels, "
+                 "sculpt layers or a painted texture.",
+                 "Tool > Remesh");
 }
 
 void App::pollQRemesh() {
@@ -287,25 +586,25 @@ void App::pollQRemesh() {
         status_ = "Quad Remesh: " + std::to_string(int(qremesh_->progress->load() * 100.0f)) + "%";
         return;
     }
+    if (jobWaitsForStroke()) return; // (the result lands when the stroke ends)
     const std::unique_ptr<QRemeshJob> job = std::move(qremesh_);
     if (!job->done.get()) {
         status_ = *job->error;
         return;
     }
-    // The SubTool may be inactive now, or changed topology meanwhile.
+    // The Part may be inactive now, or changed topology meanwhile.
     int index = -1;
-    for (int i = 0; i < doc_.subtoolCount(); ++i)
-        if (doc_.subtools[size_t(i)].id == job->subtool) index = i;
-    if (index < 0 || doc_.subtoolMesh(index).triangleCount() != job->triangles) {
+    for (int i = 0; i < doc_.partCount(); ++i)
+        if (doc_.parts[size_t(i)].id == job->part) index = i;
+    if (index < 0 || doc_.partMesh(index).triangleCount() != job->triangles) {
         status_ = "Quad Remesh skipped: the Part changed while it was being remeshed";
         return;
     }
-    if (index != doc_.activeSubtool) doc_.selectSubtool(index);
-    if (doc_.sculptor.strokeActive()) endStroke();
+    const JobPart part(*this, index);
     lastQRemeshStats_ = *job->stats;
     haveQRemeshStats_ = true;
     CommandResult r{true, applyQRemesh(doc_, std::move(*job->result), job->keepOriginal, *job->stats) + *job->textureNote};
-    lastQRemeshSubtool_ = doc_.activeSubtoolInfo().id;
+    lastQRemeshPart_ = doc_.activePartInfo().id;
     if (const std::string notice = doc_.takeNotice(); !notice.empty()) r.message += ". " + notice; // levels dropped
     status_ = r.message;
     lastCommandOk_ = true;
@@ -324,7 +623,7 @@ void App::drawQRemeshContents() {
     const float third = (full - 2.0f * style.ItemSpacing.x) / 3.0f;
 
     if (qremesh_) {
-        ImGui::ProgressBar(qremesh_->progress->load(), ImVec2(half, 0), "Remeshing...");
+        ImGui::ProgressBar(qremesh_->progress->load(), ImVec2(half, 0), tr("Remeshing..."));
         ui::HelpText("Quad Remesh", nullptr, "Remeshing in the background. The result replaces the Part when it's done.",
                      kQRemeshPath);
         ImGui::SameLine();
@@ -338,7 +637,7 @@ void App::drawQRemeshContents() {
     }
 
     {
-        static const char* methods[] = {"Quad Remesh 2", "Legacy"};
+        const char* methods[] = {tr("Quad Remesh 2"), tr("Legacy")};
         ImGui::SetNextItemWidth(-1);
         ImGui::Combo("##qmethod", &retopo_.method, methods, 2);
         ui::HelpText("Method", nullptr,
@@ -347,42 +646,44 @@ void App::drawQRemeshContents() {
                      "become exact edge loops. Legacy: the method of SculptForge 0.9 (more poles, a split look).",
                      kQRemeshPath);
     }
-    ImGui::SetNextItemWidth(-1);
-    tray::SliderInt("##qtarget", &retopo_.target, 100, 200000, "Target Polygons %d", ImGuiSliderFlags_Logarithmic);
-    ui::HelpText("Target Polygons", nullptr,
-                 "About how many quads Quad Remesh makes (Ctrl+click to type a number). Half / Same / Double set it from "
+    drawTargetQuads();
+    ui::HelpText("Target Quads", nullptr,
+                 "About how many quads Quad Remesh makes (Ctrl+click to type a number). 50% / 100% / 200% set it from "
                  "the Part's current polygon count.",
                  kQRemeshPath);
     const size_t faces = faceCount(doc_.mesh);
     auto setTarget = [&](double k) { retopo_.target = int(std::clamp(double(faces) * k, 100.0, 2'000'000.0)); };
-    if (ImGui::Button(tr("Half"), ImVec2(third, 0))) setTarget(0.5);
-    ui::HelpText("Half", nullptr, "Target half the Part's current polygon count.", kQRemeshPath);
+    if (ImGui::Button(tr("50%"), ImVec2(third, 0))) setTarget(0.5);
+    ui::HelpText("50%", nullptr, "Target half the Part's current polygon count.", kQRemeshPath);
     ImGui::SameLine();
-    if (ImGui::Button(tr("Same"), ImVec2(third, 0))) setTarget(1.0);
-    ui::HelpText("Same", nullptr, "Target the Part's current polygon count (to clean up topology without changing its density).",
+    if (ImGui::Button(tr("100%"), ImVec2(third, 0))) setTarget(1.0);
+    ui::HelpText("100%", nullptr, "Target the Part's current polygon count (to clean up topology without changing its density).",
                  kQRemeshPath);
     ImGui::SameLine();
-    if (ImGui::Button(tr("Double"), ImVec2(-1, 0))) setTarget(2.0);
-    ui::HelpText("Double", nullptr, "Target twice the Part's current polygon count.", kQRemeshPath);
+    if (ImGui::Button(tr("200%"), ImVec2(-1, 0))) setTarget(2.0);
+    ui::HelpText("200%", nullptr, "Target twice the Part's current polygon count.", kQRemeshPath);
 
     ImGui::SetNextItemWidth(-1);
-    ui::SliderInside("##qadaptive", &retopo_.adaptive, 0.0f, 1.0f, "Adaptive Size %.2f");
-    ui::HelpText("Adaptive Size", nullptr,
+    ui::SliderInside("##qadaptive", &retopo_.adaptive, 0.0f, 1.0f, "Size Variation %.2f");
+    ui::HelpText("Size Variation", nullptr,
                  "0: quads all about the same size. Higher: smaller quads where the surface curves, bigger ones on "
                  "flat areas (the count stays near the target).",
                  kQRemeshPath);
 
-    ImGui::Checkbox(tr("Keep Groups"), &retopo_.keepGroups);
-    ui::HelpText("Keep Groups", nullptr,
+    ImGui::Checkbox(tr("Follow Face Groups"), &retopo_.keepGroups);
+    ui::HelpText("Follow Face Groups", nullptr,
                  "Edge loops follow the face group borders exactly and the result keeps the face groups. Paint groups "
                  "where you want loops (around the eyes, the mouth) to guide the flow.",
                  kQRemeshPath);
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(x0 + half + style.ItemSpacing.x); // the right column, inside the section indent
-    ImGui::Checkbox(tr("Detect Edges"), &retopo_.detectEdges);
-    ui::HelpText("Detect Edges", nullptr, "Hard edges get an edge loop, so they stay sharp (Quad Remesh 2: faces meeting at more than about 60 degrees along a line at least a few quads long; legacy: more than 50 degrees).",
+    // The right column, inside the section indent, when the left label leaves room (else its own row).
+    if (ImGui::GetItemRectMax().x + style.ItemSpacing.x <= ImGui::GetWindowPos().x + x0 + half + style.ItemSpacing.x) {
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(x0 + half + style.ItemSpacing.x);
+    }
+    ImGui::Checkbox(tr("Keep Hard Edges"), &retopo_.detectEdges);
+    ui::HelpText("Keep Hard Edges", nullptr, "Hard edges get an edge loop, so they stay sharp (Quad Remesh 2: faces meeting at more than about 60 degrees along a line at least a few quads long; legacy: more than 50 degrees).",
                  kQRemeshPath);
-    ImGui::Checkbox(tr("Use Vertex Paint"), &retopo_.usePolypaint);
+    ImGui::Checkbox(tr("Use Vertex Paint"), &retopo_.useVertexPaint);
     ui::HelpText("Use Vertex Paint", nullptr,
                  "Paint where you want density: red areas get up to 4 times the quads, blue areas down to a quarter, "
                  "white is unchanged.",
@@ -399,20 +700,20 @@ void App::drawQRemeshContents() {
     ImGui::Checkbox(tr("Keep Original"), &retopo_.keepOriginal);
     ui::HelpText("Keep Original", nullptr,
                  "Keep the Part as it was, hidden, right below the new one (\"<name> Original\"), ready to "
-                 "Project All its detail back. Off: replace it, as ZBrush does (undo brings it back).",
+                 "Project Detail its detail back. Off: replace it (undo brings it back).",
                  kQRemeshPath);
     ImGui::SameLine();
     ImGui::SetCursorPosX(x0 + half + style.ItemSpacing.x); // the right column, inside the section indent
     ImGui::Checkbox(tr("Keep Masked##qremesh"), &retopo_.keepMasked);
     ui::HelpText("Keep Masked", nullptr, kKeepMaskedHelp, kQRemeshPath);
-    if (hasTexture(doc_.mesh)) // only matters for a painted SubTool
+    if (hasTexture(doc_.mesh)) // only matters for a painted Part
         drawKeepTextureCheckbox("Keep Texture##qremesh", kQRemeshPath);
     drawQRemeshGuideControls();
     drawQRemeshReport();
 }
 
 void App::drawQRemeshReport() {
-    if (!haveQRemeshStats_ || lastQRemeshSubtool_ != doc_.activeSubtoolInfo().id) return;
+    if (!haveQRemeshStats_ || lastQRemeshPart_ != doc_.activePartInfo().id) return;
     const QRemeshStats& st = lastQRemeshStats_;
     const QuadQuality& q = st.quality;
     if (q.quads == 0) return;
@@ -429,7 +730,7 @@ void App::drawQRemeshReport() {
     ui::HelpText("Quality Report", nullptr,
                  "How clean the new topology is: poles are vertices with other than four edges (fewer is cleaner), "
                  "corners off square measure how far quad corners are from 90 degrees, and the distance is how far the "
-                 "new surface strays from the sculpt (in % of its size; Project All brings fine detail back).",
+                 "new surface strays from the sculpt (as a percentage of its size; Project Detail brings fine detail back).",
                  kQRemeshPath);
 }
 
@@ -453,11 +754,19 @@ void App::drawQRemeshGuideControls() {
     ImGui::SameLine();
     ui::ActionButton(*this, "geometry.qremesh_guides_clear", ImVec2(-1, 0));
     ImGui::SetNextItemWidth(-1);
-    ui::SliderInside("##qcurves", &curvesStrength_, 0.0f, 100.0f, "Curves Strength %.0f");
-    ui::HelpText("Curves Strength", nullptr,
+    drawGuideStrength();
+    ui::HelpText("Guide Strength", nullptr,
                  "How far around each guide curve the edge flow follows it: 0 = only the edge loop on the curve, 100 = "
-                 "about six quads to each side (ZBrush's Curves Strength). The loop on the curve is always made.",
+                 "about six quads to each side. The loop on the curve is always made.",
                  kQRemeshPath);
+}
+
+// Esc, Draw / Move / Scale / Rotate and any other brush leave the QRemesh Guides brush, with the status saying so (mode matrix).
+std::string App::leaveGuides() {
+    if (!guidesMode_) return "";
+    guidesMode_ = false;
+    guidePath_.clear();
+    return "Quad Remesh Guides";
 }
 
 void App::setGuidesMode(bool on) {
@@ -475,7 +784,7 @@ void App::setGuidesMode(bool on) {
 }
 
 void App::syncGuidesMode() {
-    // Picking a brush (picker, shelf, keys, LightBox), Paint or the Gizmo leaves the guides brush.
+    // Picking a brush (picker, shelf, keys, Library), Paint or the Gizmo leaves the guides brush.
     if (guidesMode_ && drag_ != Drag::Guide &&
         (brush_ != guidesFrom_.brush || doc_.activeBrush != guidesFrom_.recipe || paintMode_ != guidesFrom_.paint ||
          gizmoActive()))
@@ -493,7 +802,7 @@ int App::guideAt(float x, float y) const {
         for (size_t i = 0; i <= n; ++i) {
             if (i == n && !guide.closed) break;
             ImVec2 p;
-            if (!gizmoProject(guide.points[i % n], p)) {
+            if (!partProject(guide.points[i % n], p)) {
                 havePrev = false;
                 continue;
             }
@@ -531,13 +840,49 @@ bool App::guideMouseDown(float x, float y, SDL_Keymod mod) {
 }
 
 void App::guideDragTo(float x, float y) {
-    if (std::hypot(x - guidePathLast_[0], y - guidePathLast_[1]) < 2.0f * uiScale_) return;
+    // Stroke smoothing: the curve follows the pointer at a distance (a lazy mouse), so a hand's or a pen's jitter
+    // doesn't make it wobble; points every 4 px.
+    const float dx = x - guidePathLast_[0], dy = y - guidePathLast_[1], d = std::hypot(dx, dy);
+    const float lag = 6.0f * uiScale_;
+    if (d < lag + 4.0f * uiScale_) return;
+    const float k = (d - lag) / d;
+    const float sx = guidePathLast_[0] + dx * k, sy = guidePathLast_[1] + dy * k;
     RayHit hit;
-    if (!pick(x, y, hit)) return; // off the model: the curve continues where it comes back
+    if (!pick(sx, sy, hit)) return; // off the model: the curve continues where it comes back
     guidePath_.push_back(hit.position);
-    guidePathLast_[0] = x;
-    guidePathLast_[1] = y;
+    guidePathLast_[0] = sx;
+    guidePathLast_[1] = sy;
 }
+
+namespace {
+
+// Corner cutting (Chaikin), twice: the screen polyline of a guide drawn as a smooth curve, not 2 px segments.
+void smoothPolyline(std::vector<ImVec2>& pts, bool closed) {
+    for (int pass = 0; pass < 2 && pts.size() >= 3; ++pass) {
+        std::vector<ImVec2> out;
+        out.reserve(pts.size() * 2 + 2);
+        const size_t n = pts.size(), segs = closed ? n : n - 1;
+        if (!closed) out.push_back(pts[0]);
+        for (size_t i = 0; i < segs; ++i) {
+            const ImVec2 a = pts[i], b = pts[(i + 1) % n];
+            out.push_back(ImVec2(a.x * 0.75f + b.x * 0.25f, a.y * 0.75f + b.y * 0.25f));
+            out.push_back(ImVec2(a.x * 0.25f + b.x * 0.75f, a.y * 0.25f + b.y * 0.75f));
+        }
+        if (!closed) out.push_back(pts[n - 1]);
+        pts.swap(out);
+    }
+}
+
+// A guide line: a dark outline under the colour, so it reads on light and dark models alike.
+void guideLine(ImDrawList* dl, std::vector<ImVec2>& pts, bool closed, ImU32 col, float width, bool outline) {
+    if (pts.size() < 2) return;
+    smoothPolyline(pts, closed);
+    const ImDrawFlags flags = closed ? ImDrawFlags_Closed : ImDrawFlags_None;
+    if (outline) dl->AddPolyline(pts.data(), int(pts.size()), IM_COL32(12, 12, 16, (col >> IM_COL32_A_SHIFT) * 3 / 4), flags, width + 2.0f);
+    dl->AddPolyline(pts.data(), int(pts.size()), col, flags, width);
+}
+
+} // namespace
 
 void App::guideRelease() {
     std::vector<glm::vec3> path = std::move(guidePath_);
@@ -557,7 +902,7 @@ void App::guideRelease() {
 void App::drawQRemeshGuides() {
     syncGuidesMode();
     const std::vector<QRemeshGuide>& guides = doc_.qremeshGuides;
-    if ((guides.empty() && guidePath_.empty()) || !doc_.activeSubtoolInfo().visible) return;
+    if ((guides.empty() && guidePath_.empty()) || !doc_.activePartInfo().visible) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList(); // under the panels, over the model
     const CanvasRect cr = canvasRect();
     dl->PushClipRect(ImVec2(cr.x, cr.y), ImVec2(cr.x + cr.w, cr.y + cr.h), true);
@@ -566,7 +911,7 @@ void App::drawQRemeshGuides() {
     // Which points the model hides: a ray from the eye to each one (refreshed when the view or the guides change;
     // at most ~2000 rays a frame, the points between them follow their neighbours).
     {
-        const glm::mat4 vp = camera_.projection() * camera_.view();
+        const glm::mat4 vp = partCamera().projection() * partCamera().view();
         uint64_t key = 1469598103934665603ull;
         auto mix = [&](const void* data, size_t bytes) {
             const auto* b = static_cast<const unsigned char*>(data);
@@ -574,7 +919,7 @@ void App::drawQRemeshGuides() {
         };
         mix(&vp, sizeof vp);
         mix(&cr, sizeof cr);
-        const uint64_t rev = doc_.undo.revision(), sub = doc_.activeSubtoolInfo().id;
+        const uint64_t rev = doc_.undo.revision(), sub = doc_.activePartInfo().id;
         mix(&rev, sizeof rev);
         mix(&sub, sizeof sub);
         size_t points = 0;
@@ -595,12 +940,12 @@ void App::drawQRemeshGuides() {
                 vis.assign(pts.size(), 1);
                 for (size_t i = 0; i < pts.size(); i += stride) {
                     ImVec2 sp;
-                    if (!gizmoProject(pts[i], sp)) {
+                    if (!partProject(pts[i], sp)) {
                         vis[i] = 0;
                         continue;
                     }
                     glm::vec3 origin, dir;
-                    canvasRay(sp.x, sp.y, origin, dir);
+                    partRay(sp.x, sp.y, origin, dir);
                     const float t = glm::dot(pts[i] - origin, dir) / std::max(glm::dot(dir, dir), 1e-20f);
                     RayHit hit;
                     vis[i] = !doc_.bvh.raycast(doc_.mesh, origin, dir, hit) || hit.t > t - eps / std::sqrt(glm::dot(dir, dir));
@@ -623,35 +968,52 @@ void App::drawQRemeshGuides() {
         // Solid while the brush is picked; thin and faint otherwise, so the edge loop QRemesh put there shows.
         const ImU32 front = dead ? IM_COL32(255, 90, 80, 255) : IM_COL32(255, 196, 64, guidesMode_ ? 255 : 110);
         const ImU32 back = dead ? IM_COL32(255, 90, 80, 70) : IM_COL32(255, 196, 64, guidesMode_ ? 55 : 30);
-        const float width = guidesMode_ ? 2.5f : 1.25f;
-        ImVec2 prev;
-        bool havePrev = false, prevVis = false;
-        for (size_t i = 0; i <= n; ++i) {
-            if (i == n && !guide.closed) break;
+        const float width = (guidesMode_ ? 2.5f : 1.6f) * s;
+        // Runs of points with the same visibility, each drawn as one smooth polyline.
+        std::vector<ImVec2> run;
+        bool runVis = false;
+        auto flush = [&](bool closed) {
+            if (runVis) guideLine(dl, run, closed, front, width, true);
+            else guideLine(dl, run, closed, back, 1.25f * s, false);
+            run.clear();
+        };
+        bool whole = guide.closed;
+        for (size_t i = 0; i < n; ++i) {
             ImVec2 p;
-            if (!gizmoProject(guide.points[i % n], p)) {
-                havePrev = false;
-                continue;
+            const bool on = partProject(guide.points[i], p);
+            const bool vis = on && guideVisible_[g][i] != 0;
+            if (!on || (!run.empty() && vis != runVis)) {
+                whole = false;
+                if (!run.empty() && on) {
+                    const ImVec2 keep = run.back();
+                    flush(false);
+                    run.push_back(keep); // the next run starts where this one ended
+                } else {
+                    flush(false);
+                }
             }
-            const bool vis = guideVisible_[g][i % n] != 0;
-            if (havePrev) {
-                const bool both = vis && prevVis;
-                dl->AddLine(prev, p, both ? front : back, (both ? width : 1.25f) * s);
-            }
-            prev = p;
-            prevVis = vis;
-            havePrev = true;
+            if (!on) continue;
+            runVis = vis;
+            run.push_back(p);
         }
+        if (guide.closed && !whole && !run.empty() && n > 0) { // close the loop back to the first point
+            ImVec2 p0;
+            if (partProject(guide.points[0], p0)) run.push_back(p0);
+        }
+        flush(whole);
     }
     // The curve being drawn, with its mirror images.
     if (drag_ == Drag::Guide && guidePath_.size() >= 2)
         for (const glm::vec3& m : Sculptor::mirrors(symmetry_)) {
             const bool own = m == glm::vec3(1.0f);
-            for (size_t i = 1; i < guidePath_.size(); ++i) {
-                ImVec2 a, b;
-                if (gizmoProject(guidePath_[i - 1] * m, a) && gizmoProject(guidePath_[i] * m, b))
-                    dl->AddLine(a, b, own ? IM_COL32(255, 230, 140, 255) : IM_COL32(255, 230, 140, 120), (own ? 2.5f : 1.5f) * s);
+            std::vector<ImVec2> pts;
+            for (const glm::vec3& q : guidePath_) {
+                ImVec2 a;
+                if (partProject(q * m, a)) pts.push_back(a);
             }
+            if (drag_ == Drag::Guide && own) pts.push_back(ImVec2(mouseX_, mouseY_)); // up to the pointer (the lazy lag)
+            guideLine(dl, pts, false, own ? IM_COL32(255, 230, 140, 255) : IM_COL32(255, 230, 140, 140), (own ? 2.5f : 1.5f) * s,
+                      own);
         }
     // The guides brush's cursor: a small ring with a dot.
     if (guidesMode_ && !ImGui::GetIO().WantCaptureMouse && cr.contains(mouse.x, mouse.y)) {
@@ -666,28 +1028,34 @@ void App::drawProjectContents() {
     const float x0 = ImGui::GetCursorPosX(); // line start, inside the section indent
     tray::GroupLabel(*this, "Project");
     const float half = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
-    ui::ActionButton(*this, "subtool.project_all", ImVec2(half, 0));
-    ImGui::SameLine();
+    // Each pair shares a row when both labels fit half of it, else each takes its own row (no words cut off).
+    const bool detailPair = ui::ButtonWidth("Project Detail") <= half && ui::SliderWidth("Dist %.3f", 0.2) <= half;
+    ui::ActionButton(*this, "part.project_all", ImVec2(detailPair ? half : -1.0f, 0));
+    if (detailPair) ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
     ui::SliderInside("##pdist", &retopo_.projectDist, 0.001f, 0.2f, "Dist %.3f", ImGuiSliderFlags_Logarithmic);
     ui::HelpText("Dist", nullptr,
                  "How far each vertex looks for the source surface, along its normal, as a fraction of the Part's "
                  "size. Raise it if parts don't pick up the detail; lower it where surfaces are close together.",
                  kProjectPath);
-    ImGui::SetNextItemWidth(half);
-    tray::SliderInt("##pblur", &retopo_.projectBlur, 0, 10, "PA Blur %d");
-    ui::HelpText("PA Blur", nullptr, "Smooth the projected result this many times (softens noise from the source).",
+    const bool blurPair = ui::SliderWidth("Blur %d", 10) <= half && ui::CheckboxWidth("Mean") <= half;
+    ImGui::SetNextItemWidth(blurPair ? half : -1.0f);
+    tray::SliderInt("##pblur", &retopo_.projectBlur, 0, 10, "Blur %d");
+    ui::HelpText("Blur", nullptr, "Smooth the projected result this many times (softens noise from the source).",
                  kProjectPath);
-    ImGui::SameLine();
-    ImGui::Checkbox(tr("Mean"), &retopo_.projectMean);
+    if (blurPair) ImGui::SameLine();
+    ui::Checkbox("Mean", &retopo_.projectMean);
     ui::HelpText("Mean", nullptr,
                  "Where the source is found on both sides of a vertex, settle halfway between instead of on the nearest.",
                  kProjectPath);
-    ImGui::Checkbox(tr("Geometry"), &retopo_.projectGeometry);
+    const bool whatPair = ui::CheckboxWidth("Geometry") <= half && ui::CheckboxWidth("Vertex Paint") <= half;
+    ui::Checkbox("Geometry", &retopo_.projectGeometry);
     ui::HelpText("Geometry", nullptr, "Project the shape (into the active sculpt layer).", kProjectPath);
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(x0 + half + style.ItemSpacing.x); // the right column, inside the section indent
-    ImGui::Checkbox(tr("Vertex Paint"), &retopo_.projectPolypaint);
+    if (whatPair) {
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(x0 + half + style.ItemSpacing.x); // the right column, inside the section indent
+    }
+    ui::Checkbox("Vertex Paint", &retopo_.projectVertexPaint);
     ui::HelpText("Vertex Paint", nullptr, "Project the vertex paint (into the active paint layer) when a source has any.",
                  kProjectPath);
 }

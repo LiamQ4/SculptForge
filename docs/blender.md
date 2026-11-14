@@ -1,24 +1,24 @@
 # The Blender bridge
 
 SculptForge and the **SculptForge Bridge** add-on for Blender (`addons/blender/sculptforge_bridge`) exchange
-meshes the way GoZ apps do with ZBrush: through files in a shared folder, with each side polling the other's
+meshes the way the Bridge does: through files in a shared folder, with each side polling the other's
 list. User documentation: [docs/guide/blender.md](guide/blender.md).
 
 Code: `src/io/BlenderBridge.h/.cpp` (folder, manifest, send/receive), `src/io/BlenderCommands.cpp`
 (`blender_send`, `blender_receive`), `src/app/PanelBlender.cpp` (File > Blender, polling, heartbeat),
-`addons/blender/sculptforge_bridge/exchange.py` (the add-on's bpy-free side: folder, manifest, .GoZ, faces) and
-`__init__.py` (Blender UI, mesh <-> arrays). Tests: `tests/test_blender_bridge.cpp`,
+`addons/blender/sculptforge_bridge/exchange.py` (the add-on's bpy-free side: folder, manifest, Bridge file, faces) and
+`__init__.py` (Blender UI, mesh <-> arrays). Tests: `tests/test_blender_bridge.cpp` (also `blender_splats_round_trip`),
 `tests/blender/test_exchange.py` (numpy, against `sculptforge-cli`), `tests/blender/test_in_blender.py` (a real
 Blender or the `bpy` wheel; CI), `tests/ui/blender_bridge.sfui`.
 
-The add-on borrows ideas and the .GoZ conventions from [GoB](https://github.com/JoseConseco/GoB) (GPL), the
-Blender GoZ add-on by Daniel Grauer, JoseConseco and contributors; no GoB code is copied.
+The add-on borrows ideas and the Bridge file conventions from [GoB](https://github.com/JoseConseco/GoB) (GPL), the
+Blender exchange add-on by Daniel Grauer, JoseConseco and contributors; no GoB code is copied.
 
-## Why files and .GoZ
+## Why files and Bridge files
 
 - **No sockets**: nothing to configure, nothing listening, works in sandboxes that allow files, and a crash on one
   side leaves the other unaffected. Polling is a `stat` of one file a second.
-- **.GoZ** (docs/goz.md) already carries everything both sides keep per mesh: positions, triangles and quads,
+- **Bridge files** (docs/bridge-format.md) already carry everything both sides keep per mesh: positions, triangles and quads,
   per-corner UVs, per-vertex vertex paint and mask, per-face face groups. SculptForge reads and writes it, and it is
   simple to write from Python with numpy. A second mesh format was not needed.
 
@@ -31,12 +31,12 @@ override it in its preferences).
 
 | Path | Written by | Contents |
 |---|---|---|
-| `to_sculptforge/manifest.json` + `r<rev>_<k>.GoZ` | the add-on | what Blender sent |
-| `to_blender/manifest.json` + `r<rev>_<k>.GoZ` | SculptForge | what SculptForge sent |
+| `to_sculptforge/manifest.json` + `r<rev>_<k>.<ext>` | the add-on | what Blender sent |
+| `to_blender/manifest.json` + `r<rev>_<k>.<ext>` | SculptForge | what SculptForge sent |
 | `app.json` | SculptForge, at start | `{"path": executable, "version": ...}`: the AppImage (`$APPIMAGE`), the `.app` bundle, or the binary |
 | `alive.json` | SculptForge, every 2 s once `to_sculptforge/` exists | `{"pid": ..., "time": unix seconds}`; removed on exit |
 
-Writers write the .GoZ files first, then the manifest through a temporary file and a rename, so a reader never
+Writers write the Bridge files first, then the manifest through a temporary file and a rename, so a reader never
 sees a half-written list. File names carry the revision, so a send never overwrites a file the other side may
 still be reading; after writing the manifest the writer deletes its earlier files (ignoring files still open on
 Windows).
@@ -52,7 +52,7 @@ Windows).
   "sender_version": "4.2.3",
   "time": 1761300000.5,
   "objects": [
-    {"name": "Suzanne.001", "file": "r12_000.GoZ",
+    {"name": "Suzanne.001", "file": "r12_000.<ext>",
      "matrix_world": [[1, 0, 0, 0.5], [0, 1, 0, 0], [0, 0, 1, 2], [0, 0, 0, 1]]}
   ]
 }
@@ -61,24 +61,32 @@ Windows).
 - `revision` is the previous manifest's plus one. A reader loads a manifest whose revision differs from the one
   it loaded last (not "greater": a deleted folder restarts at 1). It reads the revision once a
   second rather than trusting file times (Windows copies keep them; FAT and network drives store them coarsely).
-- `name` is the exact Blender object name (UTF-8); the .GoZ's own name is GoB's ASCII escape of it. In SculptForge
-  it is the Part's `gozName` (shared with GoZ; saved in projects), so the next send updates the same object.
+- `name` is the exact Blender object name (UTF-8); the Bridge file's own name is GoB's ASCII escape of it. In SculptForge
+  it is the Part's `bridgeName` (shared with the Bridge; saved in projects), so the next send updates the same object.
 - `file` must be a plain file name in the same folder (`..`, `/`, `\` and `:` are refused).
-- `matrix_world` (Blender -> SculptForge only): the object's matrix, rows as Blender prints them, Z-up. The .GoZ
+- `matrix_world` (Blender -> SculptForge only): the object's matrix, rows as Blender prints them, Z-up. The Bridge file
   holds the mesh in object space. SculptForge places it with `A * M * A^-1` where `A` maps Blender
   `(x, y, z)` to SculptForge `(x, z, -y)` (metres both). SculptForge -> Blender sends world space without a
   matrix; the add-on applies the inverse of the object's current `matrix_world`.
-- `shapes` (SculptForge -> Blender only, optional): a file beside the .GoZ with the object's sculpt layers, which
+- `shapes` (SculptForge -> Blender only, optional): a file beside the Bridge file with the object's sculpt layers, which
   the add-on turns into shape keys (a Basis, then one key per layer with its name and weight; the 52 ARKit facial
-  shapes keep their names). The .GoZ then holds the base shape (every layer at zero). Layout (little endian):
+  shapes keep their names). The Bridge file then holds the base shape (every layer at zero). Layout (little endian):
   `"SFSHAPES"`, u32 version 1, u32 vertex count, u32 shape count, then per shape u32 name length, the UTF-8 name,
   f32 weight, u32 count N, u32[N] vertex indices, f32[3N] offsets in Blender's axes (world space, metres).
   Older add-ons ignore the field (and then get the base shape without the keys).
 - Version: readers refuse a manifest with a higher `version` and say which side to update.
 
+- `splats` (optional, beside `objects`; older readers skip the key, so the version stays 1): Gaussian splat objects, each
+  `{name, file, matrix_world}` with a standard 3DGS PLY (`f_dc_*`, `f_rest_*` channel-major, logit `opacity`, log
+  `scale_*`, `rot_*` as w, x, y, z; SH up to degree 3). The PLY holds the splats **as they are in the object**, in
+  both directions: nothing is rotated or baked, so view-dependent colour (spherical harmonics) keeps pointing the
+  right way. SculptForge keeps one capture: the first entry is loaded, with `SplatCloud::transform` set to
+  `A * matrix_world` (`splatPlacementFromBlender`: scale made uniform, rotation orthonormal), and it sends its capture
+  back with `A^-1 * transform` as the matrix. So Flip / Turn 90 / Fit in SculptForge move the Blender object, not the data.
+
 ## Faces, winding and in-place updates
 
-The add-on writes each Blender polygon as one GoZ face: triangles and quads as they are, n-gons as the fan
+The add-on writes each Blender polygon as one Bridge file face: triangles and quads as they are, n-gons as the fan
 `(0, i, i+1)`. For an object whose matrix has a negative determinant (mirrored), every polygon is written reversed,
 so the faces point out once SculptForge applies the matrix; nothing on the SculptForge side knows about it.
 
@@ -94,12 +102,33 @@ quads, reversed back for a mirrored object.
 
 ## Attributes
 
-| Blender | GoZ / SculptForge |
+| Blender | Bridge file / SculptForge |
 |---|---|
 | active UV map (per loop) | UVs per face corner (V flipped in the file, as GoB does) |
 | active colour attribute, point or corner domain (`color_srgb`) | vertex paint (sRGB bytes; corner colours are averaged per vertex) |
 | `.sculpt_mask` (float, point) | mask (1 = masked). A send without a mask section removes `.sculpt_mask` |
 | `.sculpt_face_set` (int, face) | face group = face set - 1 (16-bit, renumbered if out of range) |
+
+## Gaussian splats (Blender 5.3+)
+
+Blender 5.3 (`projects.blender.org` PR 163102, design issue 159470) stores splats as a point cloud whose `type` is
+`'GAUSSIAN_SPLAT'`, with the attributes `scale` (linear: the PLY's log already exponentiated), `rotation` (quaternion),
+`radiance:base` (a float4: the band-0 coefficient `f_dc` and the linear opacity) and `radiance:sh_<k>` (a float3 per
+further coefficient, in PLY order: the k-th of `f_rest` for red, green and blue). It imports PLY (the importer
+recognises splats by `f_dc_*`, `opacity`, `scale_*`, `rot_*` and no faces), SPZ, glTF and USD, also on a viewport
+drop, and has **no export**. The add-on therefore
+
+- **receives** through `bpy.ops.wm.ply_import` (Blender's own decoding; identity axes, the matrix is set from the manifest)
+  and swaps the data into an object of the same name, so its collections, materials and modifiers stay;
+- **sends** by reading the attributes with `foreach_get` and writing the PLY itself (`splats.py`, numpy only);
+- adds **File > Export > Gaussian Splats (.ply)** (world space by default: `splats.baked`; a turned splat keeps band 0
+  only, like `SplatCloud::bakeTransform`) and a `FileHandler` for the compact `.splat` format on viewport drops;
+- refuses cleanly on older Blenders (`splats_supported()` looks for the enum value): a message, no change.
+
+Apply Transform on a splat object is wrong in Blender 5.3 (it does not update rotation and SH), which is one more
+reason the placement travels as a matrix. Blender assumes sRGB splats. Tests: `test_exchange.py` (PLY, `.splat`, baking,
+a round trip through `sculptforge-cli`), `test_in_blender.py` `test_splats` (import, attributes against the PLY, the
+round trip through SculptForge, export, `.splat`), run against bpy 5.3.0 in CI; 4.2 and 5.2 check the refusal.
 
 ## Starting SculptForge
 
@@ -121,9 +150,9 @@ folder for **Add-ons > Install from Disk**), with fixed timestamps. CMake: `--ta
 `blender_addon_package` runs the checks. The release workflow attaches both, plus `sculptforge_bridge.zip`
 (version-less, for the website's link).
 
-## ZBrush-style keys in Sculpt Mode
+## Classic sculpting keys in Sculpt Mode
 
-`addons/blender/sculptforge_bridge/zbrush_keys.py`: the add-on preference `zbrush_keys` adds items to the add-on
+`addons/blender/sculptforge_bridge/classic_keys.py`: the add-on preference `classic_keys` adds items to the add-on
 keyconfig's "Sculpt" keymap (`key_table()`) and removes exactly those again (`disable()`, also on unregister).
 Add-on keymap items take priority over Blender's own while they exist. Things that differ between versions,
 found by running real Blender 4.2.23 and 5.2.3 headless:
@@ -141,7 +170,7 @@ found by running real Blender 4.2.23 and 5.2.3 headless:
   checks that operator's poll.
 
 `tests/blender/test_in_blender.py` checks every item's operator and settings, the data paths in Sculpt Mode, the
-brush picks, SDiv/Divide and that turning the preference off or disabling the add-on leaves Blender's keymap as it
+brush picks, level step / Add Level and that turning the preference off or disabling the add-on leaves Blender's keymap as it
 was. It also checks vector displacement maps both ways (see core/Vdm.h): SculptForge's exported EXR read by
 Blender equals its .sfvdm row for row (Blender's pixels start at the bottom), and Blender's 32-bit ZIP / PIZ and
 16-bit EXRs load in SculptForge unchanged.

@@ -478,15 +478,15 @@ void registerMapExportCommands(CommandRegistry& reg) {
                      return {true, s};
                  }
                  if (!hasTexture(doc.mesh))
-                     return {false, "The Part has no texture: create one first (Tool > Texture Map > New, or texture_create)"};
+                     return {false, "The Part has no texture: create one first (Tool > Texture Image > New, or texture_create)"};
                  const std::string folder = argString(a, "folder");
                  if (folder.empty()) return {false, "Give a folder"};
                  ExportPreset preset;
                  std::string err;
                  if (!findExportPreset(argString(a, "preset", "gltf"), preset, err)) return {false, err};
                  std::string name = argString(a, "name");
-                 if (name.empty() && doc.activeSubtool >= 0 && doc.activeSubtool < doc.subtoolCount())
-                     name = doc.subtools[size_t(doc.activeSubtool)].name;
+                 if (name.empty() && doc.activePart >= 0 && doc.activePart < doc.partCount())
+                     name = doc.parts[size_t(doc.activePart)].name;
                  if (name.empty()) name = "Sculpt";
                  std::vector<ExportedMap> written;
                  if (!exportMaps(*doc.mesh.texture, preset, folder, name, written, err)) return {false, err};

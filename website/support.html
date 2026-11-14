@@ -4,57 +4,74 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Membership</title>
-  <meta name="description" content="SculptForge memberships from $5 a month: your name in the credits, a monthly pack and a vote on what gets built; Insider daily drops and preview builds; Studio custom builds for the whole company. Every release stays free for everyone.">
+  <meta name="description" content="SculptForge membership: $5 a month or $48 a year for betas and early builds, the monthly feature vote, Member Requests, #members and your name in the credits. Studio: a flat $300 a month for the whole studio, any number of artists, with its own isolated build. Every release stays free for everyone.">
   <meta name="theme-color" content="#111114" media="(prefers-color-scheme: dark)">
   <meta name="theme-color" content="#f6f5f3" media="(prefers-color-scheme: light)">
   <meta name="color-scheme" content="dark light">
-  <link rel="icon" type="image/svg+xml" href="img/favicon.svg?v=2">
-  <link rel="icon" type="image/png" href="img/favicon-64.png?v=2">
-  <link rel="apple-touch-icon" href="img/icon-256.png?v=2">
+  <link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png?v=7">
+  <link rel="icon" type="image/png" sizes="64x64" href="img/favicon-64.png?v=7">
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png?v=7">
   <meta property="og:type" content="website">
   <meta property="og:title" content="SculptForge Membership">
-  <meta property="og:description" content="Memberships from $5 a month: credits, a monthly pack, the feature vote, Insider daily drops and preview builds, and Studio custom builds.">
-  <meta property="og:image" content="https://sculptforge.app/img/social-preview.png?v=3">
+  <meta property="og:description" content="Member: $5 a month or $48 a year for betas and early builds, the feature vote, Member Requests and credits; the first 100 are Founding Members. Studio: a flat $300 a month for the whole studio, any number of artists, with its own isolated build.">
+  <meta property="og:image" content="https://sculptforge.app/img/social-preview.png?v=5">
   <meta property="og:url" content="https://sculptforge.app/support.html">
   <link rel="canonical" href="https://sculptforge.app/support.html">
   <meta name="twitter:card" content="summary_large_image">
-  <link rel="stylesheet" href="style.css?v=18">
-  <link rel="preload" as="image" type="image/webp" fetchpriority="high" media="(min-width: 621px)"
-        imagesrcset="media/support-hero-1280.webp 1280w, media/support-hero-1920.webp 1920w" imagesizes="100vw">
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="style.css?v=40">
   <style>
-    /* The first screen: a stage with a bronze sculpt rendered in SculptForge, and the memberships rising onto it.
-       The stage is always dark (it's a render); the rest of the page follows the system's light or dark setting. */
+    /* The first screen: a calm stage (words, a warm glow, a faint grid) with the memberships rising onto it.
+       It follows the system's light or dark setting like the rest of the page. */
     .support-page { --tier-bg: rgba(19, 19, 23, 0.88); --tier-border: rgba(255, 255, 255, 0.09); --tier-text: #a9a9b2;
                    --tier-title: #fff; --tier-shadow: 0 24px 60px rgba(0, 0, 0, 0.55); }
-    .stage { position: relative; isolation: isolate; overflow: hidden; background: #0c0c0f; color: #ececf1;
-             min-height: min(66vh, 640px); display: flex; align-items: flex-start; padding: 56px 0 190px; }
+    .stage { --grid: rgba(255, 255, 255, 0.035); position: relative; isolation: isolate; overflow: hidden; background: #0c0c0f; color: #ececf1;
+             min-height: min(66vh, 640px); display: flex; align-items: flex-start; padding: 56px 0 214px; }
     .stage-art { position: absolute; inset: -3%; z-index: -2; transform: translate3d(var(--px, 0px), var(--py, 0px), 0) scale(1.03);
                  transition: transform 0.6s cubic-bezier(.2, .7, .2, 1); animation: stage-in 1.6s cubic-bezier(.2, .7, .2, 1) both; }
-    .stage-art img { width: 100%; height: 100%; object-fit: cover; object-position: 72% 30%; }
+    .stage-art { background: radial-gradient(46% 62% at 50% 0%, rgba(242, 140, 60, 0.20), transparent 72%),
+                             radial-gradient(30% 40% at 12% 100%, rgba(255, 176, 106, 0.05), transparent 70%),
+                             radial-gradient(30% 40% at 88% 100%, rgba(255, 176, 106, 0.05), transparent 70%); }
     @keyframes stage-in { from { opacity: 0; scale: 1.05; } to { opacity: 1; scale: 1; } }
-    /* Darkening for the words on the left and the cards below. */
+    /* Fade into the page under the cards. */
     .stage::before { content: ""; position: absolute; inset: 0; z-index: -1;
-                     background: linear-gradient(90deg, rgba(12, 12, 15, 0.94) 0%, rgba(12, 12, 15, 0.72) 38%, rgba(12, 12, 15, 0) 66%),
-                                 linear-gradient(180deg, rgba(15, 15, 18, 0) 52%, #0f0f12 100%); }
-    /* A light passing over the sculpt now and then. */
-    .stage::after { content: ""; position: absolute; inset: -20% -40%; z-index: -1; pointer-events: none;
-                    background: linear-gradient(105deg, transparent 42%, rgba(255, 243, 226, 0.09) 50%, transparent 58%);
-                    transform: translateX(-60%); animation: sweep 7s cubic-bezier(.45, 0, .25, 1) 0.9s infinite; }
-    @keyframes sweep { 0% { transform: translateX(-60%); } 28%, 100% { transform: translateX(60%); } }
+                     background: linear-gradient(180deg, rgba(15, 15, 18, 0) 55%, var(--bg) 100%); }
+    /* A faint drafting grid, strongest under the glow. */
+    .stage::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+                    background: linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 56px 56px,
+                                linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 56px 56px;
+                    -webkit-mask-image: radial-gradient(62% 80% at 50% 0%, #000, transparent 78%);
+                    mask-image: radial-gradient(62% 80% at 50% 0%, #000, transparent 78%); }
     .stage .wrap { width: 100%; }
-    .stage-copy { max-width: 560px; animation: rise 0.8s cubic-bezier(.2, .7, .2, 1) both; }
+    .stage-copy { max-width: 780px; margin: 0 auto; text-align: center; animation: rise 0.8s cubic-bezier(.2, .7, .2, 1) both; }
     .stage .eyebrow { letter-spacing: 0.22em; font-size: 0.78rem; color: #ffb06a; }
-    .stage h1 { font-size: clamp(2.4rem, 5vw, 3.9rem); line-height: 1.05; margin: 0.35em 0 0.45em; color: #fff; }
+    .stage h1 { font-size: clamp(2.4rem, 5vw, 3.9rem); line-height: 1.05; margin: 0.35em 0 0.45em; color: #fff; text-wrap: balance; }
     .stage h1 .accent { display: block; }
-    .stage .lede { color: #cfcfd6; margin-bottom: 18px; }
-    .promise { display: flex; gap: 12px; align-items: flex-start; color: #f2e6da; font-size: 1.05rem; margin: 0; max-width: 34em; }
-    .promise::before { content: ""; flex: none; width: 9px; height: 9px; margin-top: 0.55em; border-radius: 50%; background: #ff9a45;
+    .stage .lede { color: #cfcfd6; margin: 0 auto 22px; max-width: 36em; }
+    .promise { display: inline-flex; gap: 12px; align-items: center; color: #f2e6da; font-size: 0.98rem; margin: 0; max-width: 40em;
+               padding: 10px 18px; border: 1px solid rgba(242, 140, 60, 0.32); border-radius: 14px; background: rgba(242, 140, 60, 0.07);
+               text-align: left; }
+    .promise::before { content: ""; flex: none; width: 9px; height: 9px; border-radius: 50%; background: #ff9a45;
                        box-shadow: 0 0 0 5px rgba(255, 154, 69, 0.18); }
     .stage .thanks { background: rgba(242, 140, 60, 0.12); border: 1px solid rgba(242, 140, 60, 0.4); border-radius: 12px;
                      padding: 12px 16px; color: #f2e6da; }
 
+    main > section[hidden] { display: none; }
+    .thanks-view { padding: 64px 0 80px; }
+    .thanks-view .copy { max-width: 760px; }
+    .thanks-view .mission p { color: var(--muted); font-size: 1.05rem; line-height: 1.7; }
+    .thanks-view .mission .big { color: #d4d4dc; font-size: 1.2rem; }
+    .next-step { margin: 32px 0; padding: clamp(20px, 4vw, 32px); border: 1px solid rgba(242, 140, 60, 0.5); border-radius: 16px;
+                 background: rgba(242, 140, 60, 0.09); }
+    .next-step h2 { font-size: 1.4rem; margin-bottom: 12px; }
+    .next-step ol { margin: 0 0 12px; padding-left: 1.3em; }
+    .next-step li { margin-bottom: 8px; }
+    .next-step pre { margin: 0 0 12px; padding: 12px 16px; background: #24242b; border-radius: 10px; overflow-x: auto; font: 0.95rem/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .next-step p { margin: 0 0 10px; }
+    .thanks-links { display: flex; flex-wrap: wrap; gap: 12px; }
+
     .tiers-wrap { position: relative; z-index: 1; margin-top: -170px; padding-bottom: 24px; }
-    .tiers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; align-items: stretch; }
+    .tiers { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; align-items: stretch; max-width: 860px; margin: 0 auto; }
     .tier { position: relative; display: flex; flex-direction: column; gap: 12px; padding: 28px 26px 26px; border-radius: 18px;
             background: var(--tier-bg); border: 1px solid var(--tier-border); box-shadow: var(--tier-shadow);
             -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
@@ -70,18 +87,6 @@
     .tier .perks li { position: relative; margin: 0 0 8px; padding-left: 22px; }
     .tier .perks li::before { content: "✓"; position: absolute; left: 0; color: #ff9a45; font-weight: 700; }
     .tier.featured .perks { color: #d9d0c6; }
-    .tier .price s { color: var(--tier-text); font-size: 1.1rem; font-weight: 500; letter-spacing: 0; margin-left: 10px; }
-    .tier .price .now { color: var(--tier-title); font-size: inherit; font-weight: inherit; letter-spacing: inherit; margin: 0; }
-    .tier .badge.founding { background: var(--panel, #141417); color: #ffb06a !important; border: 1.5px solid #f6994d;
-                            text-transform: none; letter-spacing: 0; font-size: 0.78rem !important; white-space: normal;
-                            width: max-content; max-width: calc(100% - 28px); text-align: center; line-height: 1.35; }
-    .tier.studio { padding-top: 46px; }
-    .compare-wrap { margin-top: 26px; }
-    .tiers-compare td, .tiers-compare th { white-space: normal; }
-    .tiers-compare td { text-align: center; color: var(--text); }
-    .tiers-compare th:nth-child(2), .tiers-compare td:nth-child(2) { background: none; }
-    .tiers-compare th:nth-child(3), .tiers-compare td:nth-child(3) { background: rgba(242, 140, 60, 0.07); }
-    .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .tier .cta { margin-top: auto; padding-top: 10px; }
     .tier .btn { display: block; text-align: center; padding: 13px 20px; background: rgba(255, 255, 255, 0.05);
                  border-color: rgba(255, 255, 255, 0.2); color: var(--tier-title); transition: background 0.2s, border-color 0.2s; }
@@ -100,41 +105,48 @@
     .badge { position: absolute; top: -13px; left: 50%; transform: translateX(-50%); margin: 0; padding: 4px 13px;
              border-radius: 999px; background: #f6994d; color: #1a0d04 !important; font-size: 0.7rem !important; font-weight: 700;
              letter-spacing: 0.16em; text-transform: uppercase; white-space: nowrap; box-shadow: 0 0 18px rgba(240, 136, 46, 0.5); }
-    .tier .btn:focus-visible, .one-time .btn:focus-visible { outline: 2px solid #ffb06a; outline-offset: 3px; }
-    .one-time { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; margin: 26px 0 0;
-            padding: 18px 22px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel);
-            animation: rise 0.7s cubic-bezier(.2, .7, .2, 1) 0.5s both; }
-    .one-time p { margin: 0; color: var(--muted); }
-    .one-time strong { color: var(--text); }
-    .support-fine { margin-top: 18px; }
+    .tier .btn:focus-visible, .billing button:focus-visible { outline: 2px solid #ffb06a; outline-offset: 3px; }
+    .support-fine { margin-top: 18px; max-width: 860px; margin-left: auto; margin-right: auto; }
+    .tier .price .now { color: var(--tier-title); font-size: inherit; font-weight: inherit; letter-spacing: inherit; margin: 0; }
+    .tier .per-year { margin-top: -4px; font-size: 0.9rem; }
+    /* Founding Member: the first 100 members (members-live.json, else founding.json). Hidden once they are taken. */
+    .founding { margin: 4px 0 18px; padding: 10px 14px; border-radius: 12px; font-size: 0.9rem; line-height: 1.45;
+                border: 1px solid rgba(246, 153, 77, 0.45); background: rgba(246, 153, 77, 0.08); color: var(--tier-text); }
+    .tier .founding strong { color: #f6994d; }
+    .founding [data-founding-left] { display: block; margin-top: 2px; font-weight: 600; color: var(--tier-title); }
+    .founding[hidden], .founding [data-founding-left][hidden] { display: none; }
+    .founding-thanks { margin: -8px 0 18px; font-size: 0.85rem; color: var(--muted, inherit); }
+    /* Monthly or yearly (Member): shown once the yearly checkout exists. */
+    .billing { display: flex; justify-content: center; margin: 0 0 30px; }
+    .billing[hidden] { display: none; }
+    .billing div { display: inline-flex; padding: 4px; border-radius: 999px; background: var(--tier-bg); border: 1px solid var(--tier-border); }
+    .billing button { font: inherit; font-size: 0.92rem; font-weight: 600; padding: 8px 18px; border: 0; border-radius: 999px;
+                      background: none; color: var(--tier-text); cursor: pointer; }
+    .billing button[aria-pressed="true"] { background: #f6994d; color: #1a0d04; }
+    .billing .save { font-weight: 500; opacity: 0.8; margin-left: 6px; }
     @keyframes rise { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
     @keyframes breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 
     @media (max-width: 900px) {
       .stage { min-height: 0; padding: 48px 0 150px; }
-      .stage::before { background: linear-gradient(90deg, rgba(12, 12, 15, 0.94) 0%, rgba(12, 12, 15, 0.62) 72%, rgba(12, 12, 15, 0.3) 100%),
-                                   linear-gradient(180deg, rgba(12, 12, 15, 0) 50%, rgba(12, 12, 15, 1) 100%); }
       .tiers-wrap { margin-top: -110px; }
-      .tiers { grid-template-columns: 1fr; gap: 26px; max-width: 520px; margin: 0 auto; }
+      .tiers { grid-template-columns: 1fr; gap: 26px; max-width: 520px; }
       .tier.featured { order: -1; margin: 0; }
     }
     @media (max-width: 620px) {
-      .stage { padding: 0 0 36px; }
+      .stage { padding: 40px 0 36px; }
       .tiers-wrap { margin-top: 0; padding-top: 22px; }
-      .stage-art { inset: 0; height: 108vw; }
-      .stage-art img { object-position: 50% 0; }
-      .stage-copy { padding-top: 78vw; } /* the lion first, the words under it */
-      .stage::before { background: linear-gradient(180deg, rgba(12, 12, 15, 0) 40vw, rgba(12, 12, 15, 0.85) 82vw, #0c0c0f 106vw); }
       .stage h1 { font-size: 2.3rem; }
-      .one-time { padding: 16px; }
-      .one-time .btn { width: 100%; text-align: center; }
+      .stage-copy { text-align: left; }
+      .stage .lede { display: block; font-size: 1rem; }
+      .promise { align-items: flex-start; }
+      .promise::before { margin-top: 0.5em; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .stage-art, .stage-copy, .tier, .one-time, .tier.featured::after { animation: none; }
-      .stage::after { display: none; }
+      .stage-art, .stage-copy, .tier, .tier.featured::after { animation: none; }
       .stage-art, .tier, .tier .btn { transition: none; }
     }
-    /* Light: the stage stays a dark render; the cards and the page around them turn light. */
+    /* Light: the stage, the cards and the page around them turn light. */
     @media (prefers-color-scheme: light) {
       :root { color-scheme: light; }
       .support-page { --bg: #f6f5f3; --bg-alt: #efede9; --panel: #ffffff; --border: #e2dfda; --text: #1c1c21; --muted: #5d5d66;
@@ -147,7 +159,15 @@
       .support-page .nav nav a.nav-support:hover { color: #fff; background: #c8621f; }
       .support-page .nav-toggle span { background: var(--text); }
       .support-page a { color: #a84d14; }
-      .support-page .stage a { color: #ffb06a; }
+      .support-page .stage a { color: #a84d14; }
+      .stage { --grid: rgba(60, 40, 20, 0.06); background: #f6f5f3; color: var(--text); }
+      .stage-art { background: radial-gradient(46% 62% at 50% 0%, rgba(242, 140, 60, 0.20), transparent 72%); }
+      .stage .accent { color: #c8621f; text-shadow: none; }
+      .stage h1 { color: #16161a; }
+      .stage .eyebrow { color: #b8561a; }
+      .stage .lede { color: #4d4d56; }
+      .promise { color: #3d3229; background: #fff4ea; border-color: rgba(200, 98, 31, 0.3); }
+      .stage .thanks { color: #3d3229; }
       .support-page code { background: #ebe8e3; }
       .tier .btn { background: #f4f2ef; border-color: #d8d4ce; }
       .tier .btn:hover { background: #ebe7e1; border-color: #bdb7ae; }
@@ -157,53 +177,74 @@
       .tier.featured::after { box-shadow: 0 0 50px rgba(240, 136, 46, 0.25); }
       .tier.featured p, .tier.featured .perks { color: #4d4239; }
       .tier.featured .price { color: var(--tier-title); }
-      .one-time .btn { background: #f4f2ef; border-color: #d8d4ce; color: var(--text); }
       .support-page .footer { background: var(--bg-alt); }
     }
   </style>
-  <script src="motion.js?v=11" defer></script>
-  <script src="studio-offer.js?v=1" defer></script>
+  <script src="motion.js?v=15" defer></script>
+  <script src="testimonials.js?v=2" defer></script>
   <script data-goatcounter="https://sculptforge.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
   </head>
 <body class="support-page">
   <div class="scroll-progress" aria-hidden="true"></div>
   <header class="nav">
     <div class="wrap nav-inner">
-      <a class="brand" href="index.html"><img src="img/logo.svg?v=2" alt="" width="34" height="34"><span>SculptForge</span></a>
+      <a class="brand" href="index.html"><img class="brand-wordmark" src="img/logo-wordmark-dark.svg" width="137" height="32" alt="SculptForge"><img class="brand-cube" src="img/logo-cube.svg" width="38" height="40" alt="SculptForge"></a>
       <nav aria-label="Main">
         <a href="index.html#features">Features</a>
         <a href="index.html#demos">Demos</a>
         <a href="brushes.html">Brushes</a>
         <a href="guide/index.html">Guide</a>
-        <a href="studios.html">Studios</a>
+        <a href="studios.html">For studios</a>
+        <a href="why.html">About</a>
+        <a href="https://sculptforge-shop.fourthwall.com/?utm_source=site&amp;utm_medium=nav" rel="noopener">Shop</a>
+        <span class="nav-social"><a class="gh" href="https://discord.gg/gWrYkEmQhH" rel="noopener" aria-label="Discord" title="Discord"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#discord"/></svg></a><a class="gh" href="https://github.com/islandmed/SculptForge" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#github"/></svg></a><a class="gh" href="https://x.com/SculptForgeApp?utm_source=site&amp;utm_medium=nav" rel="noopener" aria-label="X" title="X"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#x"/></svg></a><a class="gh" href="https://bsky.app/profile/sculptforge.bsky.social?utm_source=site&amp;utm_medium=nav" rel="noopener" aria-label="Bluesky" title="Bluesky"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#bluesky"/></svg></a><a class="gh" href="https://www.instagram.com/sculptforge.app?utm_source=site&amp;utm_medium=nav" rel="noopener" aria-label="Instagram" title="Instagram"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#instagram"/></svg></a><a class="gh" href="https://www.facebook.com/profile.php?id=61596196961617&amp;utm_source=site&amp;utm_medium=nav" rel="noopener" aria-label="Facebook" title="Facebook"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#facebook"/></svg></a></span>
         <a class="nav-support" href="support.html">Support</a>
         <a class="nav-dl" href="index.html#download">Download</a>
-        <a class="gh" href="https://discord.gg/gWrYkEmQhH">Discord</a>
-        <a class="gh" href="https://github.com/islandmed/SculptForge">GitHub</a>
+        <button class="nav-toggle" type="button" aria-controls="site-menu" aria-expanded="false" aria-label="Menu"><span></span><span></span><span></span></button>
       </nav>
     </div>
   </header>
 
   <main id="top">
-    <section class="stage" aria-labelledby="support-title">
-      <div class="stage-art" aria-hidden="true">
-        <picture>
-          <source type="image/webp" media="(max-width: 620px)" srcset="media/support-hero-mobile.webp">
-          <source media="(max-width: 620px)" srcset="media/support-hero-mobile.jpg">
-          <source type="image/webp" srcset="media/support-hero-1280.webp 1280w, media/support-hero-1920.webp 1920w" sizes="100vw">
-          <img src="media/support-hero-1920.jpg" srcset="media/support-hero-1280.jpg 1280w, media/support-hero-1920.jpg 1920w"
-               sizes="100vw" width="1920" height="1080" alt="" fetchpriority="high">
-        </picture>
+    <section class="thanks-view" id="thanks-view" aria-labelledby="thanks-title" hidden>
+      <div class="wrap copy">
+        <p class="eyebrow">Membership</p>
+        <h1 id="thanks-title">Thank you. You just helped keep this free and open.</h1>
+        <div class="mission">
+          <p class="big">I'm a technologist at heart, but I work with artists every day, and I hear how much this AI moment worries them. I had to do something. SculptForge was born from that.</p>
+          <p>We're here to change how software is built: we build the orchestration layer, and our agents build the software, openly, with the people who use it. New versions ship every few days, and bug fixes sooner.</p>
+          <p>No machine will ever replace your genius, your talent and your taste. The eye that decides where a shadow falls, the hand that feels when a form comes alive: that stays yours, and that's exactly what we want to protect.</p>
+        </div>
+        <div class="next-step">
+          <h2>Next step: tell us who you are</h2>
+          <ol>
+            <li>Check your inbox for the welcome email from <strong data-mail-text>our address</strong> (look in spam too).</li>
+            <li>Reply from the <strong>same address</strong> you paid with, with these lines:</li>
+          </ol>
+          <pre>Discord: your-username
+GitHub: your-username
+Credit: the name for the credits</pre>
+          <p>This unlocks your Discord roles. No Discord? Skip that line and email your requests instead. The Credit line is the name we put in the credits.</p>
+          <p class="fine">The invite to the members' build repository goes out within a couple of days of your reply.</p>
+        </div>
+        <div class="thanks-links">
+          <a class="btn primary" href="https://discord.gg/gWrYkEmQhH">Join the Discord</a>
+          <a class="btn" href="queue.html">Feature queue</a>
+          <a class="btn" href="#requests">How requests work</a>
+          <a class="btn" href="why.html">Why we build this</a>
+        </div>
       </div>
+    </section>
+
+    <section class="stage" aria-labelledby="support-title">
+      <div class="stage-art" aria-hidden="true"></div>
       <div class="wrap">
         <div class="stage-copy">
           <p class="eyebrow">SculptForge Membership</p>
           <h1 id="support-title">Membership: <span class="accent">more for the artists who use it.</span></h1>
-          <p class="thanks" id="thanks" hidden><strong>Welcome aboard!</strong> Your membership is active. Check your
-            email for the receipt; Insider invites go out within a couple of days.</p>
           <p class="lede">SculptForge itself stays free, with no ads, no accounts and no telemetry, and nothing in the
-            app is ever paywalled. Members pay for time and influence: your name in the credits, a say in what gets
-            built, daily drops, preview builds and, for studios, a SculptForge built for your team.</p>
+            app is ever paywalled. Members get the next version first, a say in what gets built, their requests
+            built first, and their name in the credits.</p>
           <p class="promise">Every release stays free for everyone; bug-fix and security releases go out to everyone the same day.</p>
         </div>
       </div>
@@ -211,81 +252,95 @@
 
     <section class="tiers-wrap" aria-label="Memberships">
       <div class="wrap">
+        <div class="billing" id="billing" hidden>
+          <div role="group" aria-label="Billing">
+            <button type="button" data-billing="month" aria-pressed="true">Monthly</button>
+            <button type="button" data-billing="year" aria-pressed="false">Yearly<span class="save">save 20%</span></button>
+          </div>
+        </div>
         <div class="tiers">
-          <article class="tier" style="--i: 0">
-            <h2>Supporter</h2><p class="price">$5<span>/ month</span></p>
+          <article class="tier featured" style="--i: 0">
+            <h2>Member</h2>
+            <p class="price"><span data-price class="now">$5</span><span data-per>/ month</span></p>
+            <p class="per-year" data-alt hidden>or $48 a year</p>
             <ul class="perks">
-              <li>Your name in the <strong>credits</strong>, in the app and on the <a href="supporters.html">website</a></li>
+              <li><strong>Betas and early builds</strong>: the next version before everyone else (from SculptForge
+                2027, each release about two weeks early)</li>
+              <li>The <strong>monthly feature vote</strong>: pick what we build next</li>
+              <li><strong>Member Requests</strong>: one guaranteed request a month, built first and credited to you
+                (<a href="#requests">how requests work</a>)</li>
+              <li>A personal <strong>20% code for the <a href="https://sculptforge-shop.fourthwall.com/?utm_source=site&amp;utm_medium=members" rel="noopener">shop</a></strong>, sent to you by Discord DM</li>
               <li>The <strong>#members</strong> channel on Discord</li>
-              <li>A vote in the <strong>monthly feature vote</strong></li>
-              <li>The <strong>monthly pack</strong> at month end</li>
+              <li>Your <strong>name in the credits</strong>, in the app and on the <a href="supporters.html">website</a></li>
             </ul>
-            <p class="cta"><a class="btn" href="https://buy.stripe.com/aFacN5h1t6L8cP14ad4F201" rel="noopener">Join as a Supporter</a></p>
+            <p class="founding" data-founding><strong>Founding Member:</strong> the first 100 members keep the Founder
+              role on Discord for good, their name in the credits and their price locked for as long as they stay.
+              <span data-founding-left hidden></span></p>
+            <p class="founding-thanks">Thank you to our first Founding Members: <a href="supporters.html#founding">Richard Throgmorton (MakIt3D), Hameron, macklorange, Hong&#x27;s Art Lab (hmh426), Artizmo, Lex, Derrick J Archuleta and fenix_felicia</a>.</p>
+            <p class="cta"><a class="btn" data-member-link href="https://buy.stripe.com/aFacN5h1t6L8cP14ad4F201" data-yearly="https://buy.stripe.com/aFa5kD4eHfhE2an6il4F206" rel="noopener">Become a member</a></p>
           </article>
-          <article class="tier featured" style="--i: 1">
-            <p class="badge">Recommended</p>
-            <h2>Insider</h2><p class="price">$20<span>/ month</span></p>
+          <article class="tier" style="--i: 1">
+            <h2>Studio</h2>
+            <p class="price">$300<span>/ month</span></p>
+            <p class="per-year">flat, for the whole studio: any number of artists</p>
             <ul class="perks">
-              <li>Everything in Supporter</li>
-              <li><strong>Propose options</strong> for the vote</li>
-              <li>A <strong>daily drop</strong>: a brush, alpha or VDM almost every day</li>
-              <li><strong>Preview builds</strong> of the next release, about a week early</li>
-              <li>The <strong>monthly dev Q&amp;A</strong></li>
+              <li><strong>Your own build</strong>: your brushes, alphas, Lit Spheres, keymaps and logo built in</li>
+              <li><strong>Your own private repository</strong>: a branch with your features and fixes, rebased onto every release</li>
+              <li><strong>Isolated</strong>: a private release channel, no outside connections by default</li>
+              <li><strong>Pinned version</strong> with security fixes; an offline signed installer for IT</li>
+              <li><strong>First response within 2 business days</strong>, up to 3 custom items a month, a private Discord space for your team</li>
             </ul>
-            <p class="cta"><a class="btn" href="https://buy.stripe.com/dRmdR94eH4D06qD9ux4F202" rel="noopener">Become an Insider</a></p>
-          </article>
-          <article class="tier studio" style="--i: 2">
-            <p class="badge founding" data-founding>Founding Studio: first 10 studios lock in $150/month for good</p>
-            <h2>Studio</h2><p class="price"><span class="now" data-studio-price>$150</span><s data-founding>$300</s><span>/ month</span></p>
-            <ul class="perks">
-              <li><strong>Insider for every artist</strong> in your company, no seat count</li>
-              <li>A <strong>custom studio build</strong> with your presets, keymaps, packs, shelves and pipeline defaults</li>
-              <li><strong>Custom content</strong>: brushes, alphas and VDMs from your own references, macros and presets</li>
-              <li><strong>Guided development</strong>: your requests go first, with a monthly call or async review</li>
-              <li><strong>Priority triage</strong>, a private team channel and your logo on the website and README</li>
-            </ul>
-            <p class="fine">Up to 5 custom items a month (brushes, alphas, macros or presets); larger features are quoted
-              separately. Your assets stay private to your studio and are never used for anything else.
-              <a href="studios.html#membership">For studios</a>.</p>
-            <p class="cta"><a class="btn" data-studio-link href="https://buy.stripe.com/3cI00j12v5H4g1dgWZ4F204" rel="noopener">Studio membership</a></p>
+            <p class="cta"><a class="btn" href="https://buy.stripe.com/9B66oH8uXd9w16j2254F205" rel="noopener">Studio: $300 / month</a></p>
+            <p class="per-year"><a href="studios.html#membership">What a studio gets</a></p>
+            <p class="per-year">Founding Studio: <a href="https://buy.stripe.com/3cI00j12v5H4g1dgWZ4F204" rel="noopener">$150 / month</a> flat, locked, for the first 5 studios</p>
           </article>
         </div>
-        <div class="table-wrap compare-wrap">
-          <table class="compare tiers-compare">
-            <caption class="visually-hidden">What each membership includes</caption>
-            <thead><tr><th scope="col">Included</th><th scope="col">Supporter $5</th><th scope="col">Insider $20</th><th scope="col">Studio <span data-studio-price>$150</span></th></tr></thead>
-            <tbody>
-              <tr><th scope="row">Name in the credits (app and website)</th><td>✓</td><td>✓</td><td>✓ (your logo too)</td></tr>
-              <tr><th scope="row">#members on Discord</th><td>✓</td><td>✓</td><td>✓ and a private team channel</td></tr>
-              <tr><th scope="row">Vote in the monthly feature vote</th><td>✓</td><td>✓</td><td>✓</td></tr>
-              <tr><th scope="row">Monthly pack at month end</th><td>✓</td><td>✓</td><td>✓</td></tr>
-              <tr><th scope="row">Propose options for the vote</th><td></td><td>✓</td><td>✓</td></tr>
-              <tr><th scope="row">Daily drop (brush, alpha or VDM)</th><td></td><td>✓</td><td>✓</td></tr>
-              <tr><th scope="row">Preview builds, about a week early</th><td></td><td>✓</td><td>✓</td></tr>
-              <tr><th scope="row">Monthly dev Q&amp;A</th><td></td><td>✓</td><td>✓</td></tr>
-              <tr><th scope="row">Artists covered</th><td>1</td><td>1</td><td>Your whole company</td></tr>
-              <tr><th scope="row">Custom studio build and custom content</th><td></td><td></td><td>✓ (up to 5 items a month)</td></tr>
-              <tr><th scope="row">Guided development</th><td></td><td></td><td>✓</td></tr>
-              <tr><th scope="row">Priority triage (reviewed within 2 business days; no fix-time guarantee)</th><td></td><td></td><td>✓</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="one-time">
-          <p><strong>One-time Supporter:</strong> your name in the credits, no subscription. Pay what you want, $5
-            minimum.</p>
-          <a class="btn" href="https://buy.stripe.com/4gM7sL8uXc5s4iv5eh4F200" rel="noopener">One-time Supporter</a>
-        </div>
-        <p class="fine support-fine">Members get private channels on Discord:
-          <a href="https://discord.gg/gWrYkEmQhH" rel="noopener">join the SculptForge community</a> and tell us your
-          membership after checkout.</p>
-        <p class="fine support-fine">Insider preview builds and Studio builds are shared through a private GitHub repository: give your
-          GitHub username at checkout and you'll get an invite to the private repository. Every release stays free
-          for everyone; bug-fix and security releases go out to everyone the same day.
-          <a href="https://billing.stripe.com/p/login/4gM7sL8uXc5s4iv5eh4F200" rel="noopener">Manage or cancel your
-          membership</a>.</p>
-        <p class="fine">Payments are handled by Stripe (cards, Apple Pay, Google Pay); SculptForge never sees your
+        <!-- What artists say: testimonials.json (consent on record, exact wording); testimonials.js redraws from it. -->
+        <aside class="tiers-voices" aria-labelledby="voices-title">
+          <p class="voices-title" id="voices-title">What artists say</p>
+          <div class="voices-list voices-many" data-testimonials="2">
+          <figure class="voice">
+            <blockquote><p>I am an environment artist creating high and low poly assets for several projects including the game Wayward Realms. After fighting several other apps and spending too much money SculptForge fits like a hand-made glove. While there is much to love about this software I am glad I found something that actually makes sense.</p></blockquote>
+            <figcaption><span class="voice-name">Richard Throgmorton (MakIt3D)</span><span class="voice-role">environment artist</span></figcaption>
+          </figure>
+          <figure class="voice">
+            <blockquote><p>You add it so quick !!? On Saturday !? Wow !</p></blockquote>
+            <p class="voice-context">About the Tube drawing tool</p>
+            <figcaption><span class="voice-name">GABO - Gabriel Abdala</span><span class="voice-role">Sculptor</span></figcaption>
+          </figure>
+          </div>
+        </aside>
+        <p class="fine support-fine">Betas and early builds come from a private GitHub repository: send us your GitHub username (at checkout, by
+          email reply or in #members) and you'll get an invite. Join the <a href="https://discord.gg/gWrYkEmQhH" rel="noopener">SculptForge Discord</a>
+          and tell us your membership for #members. <a href="studios.html">For studios</a>.</p>
+        <p class="fine support-fine">Studio builds are GPL-3.0 like every SculptForge build: the source is yours to share,
+          and there are no exclusive or secret features. What stays private is your studio's assets, settings and
+          network. <a href="studios.html#faq">Studio questions</a>.</p>
+        <p class="fine support-fine" id="refunds">Payments are handled by Stripe (cards, Apple Pay, Google Pay); SculptForge never sees your
           card details. Memberships are subscriptions to SculptForge benefits; cancel anytime in the
-          <a href="https://billing.stripe.com/p/login/4gM7sL8uXc5s4iv5eh4F200" rel="noopener">customer portal</a>.</p>
+          <a href="https://billing.stripe.com/p/login/4gM7sL8uXc5s4iv5eh4F200" rel="noopener">customer portal</a>.
+          <a href="terms.html#refunds">Membership terms and refunds</a>.</p>
+      </div>
+    </section>
+
+    <section class="section" id="requests" aria-labelledby="requests-title">
+      <div class="wrap">
+        <h2 id="requests-title">How requests work</h2>
+        <ul>
+          <li><strong>Bugs are always free.</strong> Anyone can report one, and fixes go out to everyone.</li>
+          <li><strong>Every idea goes in a public queue</strong>, whoever asks: you can see what's queued, being built
+            and shipped in the <a href="queue.html">feature queue</a>.</li>
+          <li><strong>Members' requests are built first.</strong> Each member gets one guaranteed request a month
+            (Member Requests): post it in the members-only <strong>#member-requests</strong> forum on Discord, and we
+            build it and credit you.</li>
+          <li><strong>Founding Members and Studio members go first.</strong></li>
+          <li><strong>A monthly member vote</strong> sets the order for the rest of the queue.</li>
+          <li><strong>Popular ideas from everyone still get built.</strong> Nothing in the app is ever paywalled.</li>
+        </ul>
+        <h3>Built for members</h3>
+        <ul>
+          <li>Detachable panels, for Richard Throgmorton (MakIt3D): in progress</li>
+        </ul>
       </div>
     </section>
 
@@ -317,30 +372,69 @@
   <footer class="footer">
     <div class="wrap footer-grid">
       <div>
-        <a class="brand" href="index.html"><img src="img/logo.svg?v=2" alt="" width="28" height="28"><span>SculptForge</span></a>
+        <a class="brand" href="index.html"><img class="brand-wordmark" src="img/logo-wordmark-dark.svg" width="103" height="24" alt="SculptForge"><img class="brand-cube" src="img/logo-cube.svg" width="30" height="32" alt="SculptForge"></a>
         <p class="fine">Copyright © 2026 The SculptForge contributors. SculptForge is licensed under the
           <a href="https://github.com/islandmed/SculptForge/blob/main/LICENSE">GNU GPL v3.0 or later</a>.</p>
       </div>
       <div class="links">
+        <a href="performance/">Performance</a>
         <a href="guide/index.html">User Guide</a>
         <a href="brushes.html">Community brushes</a>
-        <a href="zbrush-alternative.html">For ZBrush users</a>
-        <a href="mudbox-alternative.html">For Mudbox users</a>
-        <a href="zbrush-linux.html">Sculpting on Linux</a>
         <a href="benchmarks/">Benchmarks: 15M and 33M</a>
+        <a href="queue.html">Feature queue</a>
         <a href="press.html">Press kit</a>
         <a href="support.html">Membership</a>
-        <a href="supporters.html">Supporters</a>
+        <a href="https://sculptforge-shop.fourthwall.com/?utm_source=site&amp;utm_medium=footer" rel="noopener">Shop</a>
+        <a href="supporters.html">Members</a>
+        <a href="terms.html">Terms</a>
+        <a href="jobs.html">Jobs</a>
         <a href="https://github.com/islandmed/SculptForge">Source code</a>
         <a href="https://discord.gg/gWrYkEmQhH">Community Discord</a>
+        <div class="social" role="group" aria-label="Follow SculptForge"><a class="gh" href="https://discord.gg/gWrYkEmQhH" rel="noopener" aria-label="Discord" title="Discord"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#discord"/></svg></a><a class="gh" href="https://github.com/islandmed/SculptForge" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#github"/></svg></a><a class="gh" href="https://x.com/SculptForgeApp?utm_source=site&amp;utm_medium=footer" rel="noopener" aria-label="X" title="X"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#x"/></svg></a><a class="gh" href="https://bsky.app/profile/sculptforge.bsky.social?utm_source=site&amp;utm_medium=footer" rel="noopener" aria-label="Bluesky" title="Bluesky"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#bluesky"/></svg></a><a class="gh" href="https://www.instagram.com/sculptforge.app?utm_source=site&amp;utm_medium=footer" rel="noopener" aria-label="Instagram" title="Instagram"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#instagram"/></svg></a><a class="gh" href="https://www.facebook.com/profile.php?id=61596196961617&amp;utm_source=site&amp;utm_medium=footer" rel="noopener" aria-label="Facebook" title="Facebook"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#facebook"/></svg></a></div>
       </div>
-      <p class="fine trademarks">SculptForge is an independent project, not affiliated with or endorsed by Autodesk or
-        Maxon. Mudbox and Maya are trademarks of Autodesk; ZBrush, GoZ, MatCap, FiberMesh, LightCap and other ZBrush feature names are trademarks of Maxon Computer GmbH. The site uses no cookies.
-        Visits are counted anonymously with <a href="https://www.goatcounter.com/">GoatCounter</a>.</p>
+      <p class="fine trademarks">SculptForge is an independent project. Product names are trademarks of their respective owners. The site uses no cookies. Visits are counted anonymously with <a href="https://www.goatcounter.com/">GoatCounter</a>.</p>
     </div>
   </footer>
   <script>
-    if (new URLSearchParams(location.search).has('thanks')) document.getElementById('thanks').hidden = false;
+    // After paying (?thanks=1): the post-payment page replaces the pitch. The address is assembled here, never in the source (spam scrapers).
+    if (new URLSearchParams(location.search).has('thanks')) {
+      const v = document.getElementById('thanks-view'), addr = 'hello' + '@' + 'sculptforge.app';
+      document.querySelectorAll('main > section').forEach((el) => { if (el !== v && el.id !== 'requests') el.hidden = true; });
+      v.hidden = false;
+      document.querySelectorAll('[data-mail-text]').forEach((el) => { el.textContent = addr; });
+      document.title = 'Thank you - SculptForge';
+    }
+    // Monthly or yearly: the Member card's price and checkout. Shown only once the yearly checkout exists (data-yearly).
+    (() => {
+      const link = document.querySelector('[data-member-link]'), billing = document.getElementById('billing');
+      if (!link || !billing || !link.dataset.yearly) return;
+      const monthly = link.href, price = document.querySelector('[data-price]'), per = document.querySelector('[data-per]'),
+            alt = document.querySelector('[data-alt]');
+      billing.hidden = false;
+      alt.hidden = false;
+      billing.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+        const year = b.dataset.billing === 'year';
+        billing.querySelectorAll('button').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+        link.href = year ? link.dataset.yearly : monthly;
+        price.textContent = year ? '$48' : '$5';
+        per.textContent = year ? '/ year' : '/ month';
+        alt.textContent = year ? '$4 a month, billed yearly' : 'or $48 a year';
+      }));
+    })();
+    // Founding Member places left, from members-live.json (onboarding writes it minutes after a payment; else the
+    // release's founding.json): the note goes once all 100 are taken.
+    (() => {
+      const note = document.querySelector('[data-founding]'), left = document.querySelector('[data-founding-left]');
+      if (!note || !left) return;
+      const get = (u) => fetch(u, { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : Promise.reject(r.status)));
+      get('members-live.json').catch(() => get('founding.json')).then((f) => {
+        if (!f || !Number.isFinite(f.limit) || !Number.isFinite(f.taken)) return;
+        const n = Math.max(0, Math.round(f.limit - f.taken));
+        if (n === 0) { note.hidden = true; return; }
+        left.textContent = `${n} of ${Math.round(f.limit)} left`;
+        left.hidden = false;
+      }).catch(() => {});
+    })();
     // The sculpt drifts a little with the pointer (not with "reduce motion", not on touch screens).
     (() => {
       const stage = document.querySelector('.stage'), art = document.querySelector('.stage-art');

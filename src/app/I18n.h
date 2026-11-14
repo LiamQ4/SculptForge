@@ -1,15 +1,16 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The interface language (#44): English, the default, and Spanish. A small,
-// dependency-free layer: the English text is the key, the translations are a
-// table compiled into the binary (I18nSpanish.cpp), and anything without an
+// The interface language (#44): English, the default, Spanish, Traditional Chinese
+// (#114), Simplified Chinese and Japanese. A small, dependency-free layer: the English text is
+// the key, the translations are tables compiled into the binary (I18nSpanish.cpp,
+// I18nTraditionalChinese.cpp, I18nSimplifiedChinese.cpp, I18nJapanese.cpp), and anything without an
 // entry stays in English, so a missing line never breaks a label.
 //
 //   ImGui::Button(tr("Decimate"))             "Diezmar" in Spanish
 //   ImGui::Checkbox(tr("Keep Masked##remesh")) only "Keep Masked" is translated; "##remesh" is kept as it is
 //   tr(ICON_LC_SAVE " Save")                    the icon prefix is kept, the words translated
-//   tr("Draw Size %.0f")                        an exact entry first, else "Draw Size" and " %.0f" kept
+//   tr("Size %.0f")                        an exact entry first, else "Size" and " %.0f" kept
 //   tr("Save As...")                            an exact entry first, else "Save As" + "..."
 //
 // tr() never changes anything in English (it returns its argument), so UI tests
@@ -23,21 +24,31 @@
 
 namespace sf {
 
-enum class Language { English, Spanish };
-inline constexpr int kLanguageCount = 2;
+enum class Language { English, Spanish, TraditionalChinese, SimplifiedChinese, Japanese };
+inline constexpr int kLanguageCount = 5;
 
 // The language tr() translates into (process-wide; Preferences > Interface sets it).
 void setLanguage(Language language);
 Language language();
-const char* languageCode(Language language);    // "en", "es" (ui.json)
+const char* languageCode(Language language);    // "en", "es", "zh-TW", "zh-CN", "ja" (ui.json)
 Language languageFromCode(std::string_view code); // unknown codes are English
-const char* languageName(Language language);    // in that language: "English", "Español"
+const char* languageName(Language language);    // in that language: "English", "Español", "繁體中文", "简体中文", "日本語"
+// The shipped language for an operating system's locale tag: "es-MX", "es_ES.UTF-8", "zh-Hant-TW", "zh_CN.UTF-8@x", any
+// case. Spanish; Traditional Chinese for zh-TW / zh-HK / zh-MO / zh-Hant; Simplified for the other zh; Japanese for ja; everything else
+// (pt-BR, "C", "POSIX", "") is English. For the first start (App::offerFirstRunLanguage), not for ui.json (languageFromCode).
+Language languageFromOsLocale(std::string_view tag);
+// The language tag the OS interface is in (Windows GetUserDefaultUILanguage, macOS CFLocaleCopyPreferredLanguages, else
+// LC_ALL / LC_MESSAGES / LANG), "" when it can't tell. SF_OS_LANGUAGE overrides it (QA). Calibration.cpp.
+std::string osLanguageTag();
+// True for a language whose text needs the CJK font merged into the UI fonts (App::buildUiFonts).
+bool languageNeedsCjkFont(Language language);
 
 // The text in the current language. The pointer is the argument itself (English, or no translation), a table
 // entry, or a string kept for the life of the program: safe to keep across frames.
 const char* tr(const char* english);
 std::string tr(const std::string& english);
-// An action's label: brushes keep their names (Clay Block, Move, Smooth...), everything else is translated.
+// An action's label: brushes keep their names (Clay Block, Move, Smooth...), everything else is translated (brush
+// settings such as brush.pen_size_on too).
 const char* trAction(std::string_view actionId, const std::string& label);
 // A palette path with each step translated: "Tool > Geometry" -> "Herramienta > Geometría".
 std::string trPath(std::string_view path);
@@ -47,8 +58,12 @@ struct Entry {
     const char* english;
     const char* translated;
 };
-// The compiled-in Spanish table (I18nSpanish.cpp), for tests.
+// The compiled-in tables (I18nSpanish.cpp, I18nTraditionalChinese.cpp, I18nSimplifiedChinese.cpp, I18nJapanese.cpp), for tests.
 std::span<const Entry> spanishTable();
+std::span<const Entry> traditionalChineseTable();
+std::span<const Entry> simplifiedChineseTable();
+std::span<const Entry> japaneseTable();
+std::span<const Entry> table(Language language); // empty for English
 // The exact entry for `english` in that language's table, or nullptr (English has no table).
 const char* lookup(Language language, std::string_view english);
 } // namespace i18n

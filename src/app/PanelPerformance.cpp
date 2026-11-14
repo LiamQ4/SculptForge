@@ -1,7 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Preferences > Performance (ZBrush: Preferences > Performance and Mem): how the 3D view draws (Antialiasing,
+// Preferences > Performance (Preferences > Performance and Mem): how the 3D view draws (Antialiasing,
 // Fast Navigation), Multithreading, what the last stroke cost per dab, and the memory the scene holds. The
 // numbers come from the same instruments as the benchmark (core/Benchmark.h, docs/performance.md).
 #include "app/App.h"
@@ -9,9 +9,13 @@
 #include "app/I18n.h"
 
 #include "core/Benchmark.h"
+#include "core/Micro.h"
 #include "core/HardwareProfile.h"
 #include "core/ThreadPool.h"
 
+#include <imgui.h>
+
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -99,6 +103,34 @@ void App::registerPerformanceUiActions() {
         "the dabs still being worked out as a preview on the surface, with the cursor and the stroke's head drawn "
         "where the pen is about to be. On a heavy mesh the surface moves under the pen at once and lifting the pen "
         "is instant. The finished sculpt is exactly the same either way.");
+    add("perf.live_move", "Live Move (Experimental)",
+        [this] {
+            uiPrefs_.liveMove = !uiPrefs_.liveMove;
+            status_ = uiPrefs_.liveMove ? "Live Move on" : "Live Move off";
+        },
+        [this] { return uiPrefs_.liveMove; },
+        "Experimental. The Move brush's drag is drawn by the graphics card from where the surface started, so it "
+        "follows the pen at the view's frame rate whatever the mesh size; the move itself is applied once, exactly, "
+        "when you lift the pen. Not with masks, hidden parts, sculpt layers, micro levels, Connected Only or View "
+        "falloff (Move works as before there).");
+    add("perf.background_preview", "Background Preview (Experimental)",
+        [this] {
+            uiPrefs_.backgroundPreview = !uiPrefs_.backgroundPreview;
+            status_ = uiPrefs_.backgroundPreview ? "Background preview on" : "Background preview off";
+        },
+        [this] { return uiPrefs_.backgroundPreview; },
+        "Experimental. On meshes of 2 million vertices or more, big brushes are worked out on their own thread; "
+        "with this on, the dabs still being worked out are shown as a preview on the surface (as Predictive "
+        "Strokes does), so the stroke stays under the pen. The finished sculpt is exactly the same either way.");
+    add("perf.fast_upload", "Fast Upload (Experimental)",
+        [this] {
+            uiPrefs_.fastUpload = !uiPrefs_.fastUpload;
+            status_ = uiPrefs_.fastUpload ? "Fast upload on" : "Fast upload off";
+        },
+        [this] { return uiPrefs_.fastUpload; },
+        "Experimental. While you sculpt, the changed part of the mesh goes to the graphics card through memory both "
+        "can see, and the card copies it into place itself, instead of the driver copying it during the frame. The "
+        "sculpt and the view are exactly the same either way; needs a driver with buffer storage (OpenGL 4.4).");
     add("perf.draft_strokes", "Draft Strokes",
         [this] {
             uiPrefs_.draftStrokes = !uiPrefs_.draftStrokes;
@@ -110,7 +142,40 @@ void App::registerPerformanceUiActions() {
         "Lighter on laptops and on battery: the hardware profile turns it on there by itself (its Draft brushes "
         "setting); this turns it on everywhere. Brushes that follow the surface's direction (Inflate, the plane "
         "brushes) use its direction from the stroke's start, so the result can differ slightly from a full stroke.");
+    add("perf.fast_big_brushes", "Fast Big Brushes (Experimental)",
+        [this] {
+            uiPrefs_.fastBigBrushes = !uiPrefs_.fastBigBrushes;
+            status_ = uiPrefs_.fastBigBrushes ? "Fast big brushes on" : "Fast big brushes off";
+        },
+        [this] { return uiPrefs_.fastBigBrushes; },
+        "Experimental. Big brushes on dense meshes: a dab that reaches more than 150,000 vertices finds its plane "
+        "from a sample of them and turns the shading along with the move it makes, and the dabs waiting for a frame "
+        "are placed together in one pass. Every vertex still moves by the brush itself; the exact shading follows "
+        "behind the brush and when you lift the pen. Small brushes, Smooth, Layer, Inflate, Nudge, Clay Block, "
+        "alphas and masked areas are placed dab by dab as before. Try it on a heavy mesh and tell us how it feels.");
     registerPerformanceProfileUiActions(); // Re-calibrate, the frame governor (PanelPerformanceProfile.cpp)
+}
+
+size_t App::sceneTrianglesWithMicro() const {
+    size_t triangles = 0;
+    for (int i = 0; i < doc_.partCount(); ++i)
+        if (doc_.parts[size_t(i)].visible) {
+            const Mesh& m = doc_.partMesh(i);
+            const size_t micro = microTriangleCount(m);
+            triangles += micro ? micro : m.triangleCount();
+        }
+    return triangles;
+}
+
+void App::openPerformancePrefs() {
+    auto& open = layout_.openSubpalettes;
+    if (uiPrefs_.oneSubpalette) // as a click on its header would: the other Preferences sections close
+        open.erase(std::remove_if(open.begin(), open.end(), [](const std::string& o) { return o.rfind("preferences.", 0) == 0; }),
+                   open.end());
+    if (std::find(open.begin(), open.end(), "preferences.performance") == open.end()) open.push_back("preferences.performance");
+    flashSubpalette_ = "preferences.performance";
+    flashSubpaletteStart_ = ImGui::GetTime();
+    if (const Action* a = actions_.find("ui.palette.preferences"); a && a->run) a->run();
 }
 
 void App::applyPerformancePrefs() { ThreadPool::shared().setSerial(!uiPrefs_.multithreading); }
@@ -122,29 +187,43 @@ int App::viewSamples() {
     if (view != perf_.lastView) {
         perf_.lastView = view;
         perf_.framesStill = 0;
+        perf_.stillSince = ImGui::GetTime(); // (the frame clock: scripted time in tests)
     } else if (perf_.framesStill < 1000) {
         ++perf_.framesStill;
     }
     const bool moving = drag_ == Drag::Orbit || drag_ == Drag::Pan || drag_ == Drag::Zoom || perf_.framesStill < 8;
     size_t triangles = 0;
-    for (int i = 0; i < doc_.subtoolCount(); ++i)
-        if (doc_.subtools[size_t(i)].visible) triangles += doc_.subtoolMesh(i).triangleCount();
+    for (int i = 0; i < doc_.partCount(); ++i)
+        if (doc_.parts[size_t(i)].visible) triangles += doc_.partMesh(i).triangleCount();
     perf_.movingNow = moving;
     perf_.sceneTriangles = triangles;
-    perf_.proxyNow = uiPrefs_.fastNavigation && moving && triangles >= fastNavigationTriangles(hardwareProfileGoverns());
-    perf_.fastNow = aa > 1 && perf_.proxyNow;
+    // Turbo (View > Turbo): the lighter proxy from half the threshold, and no antialiasing while the view moves or a
+    // stroke runs, whatever the scene's size; still frames are drawn as set.
+    const size_t proxyFrom = fastNavigationTriangles(hardwareProfileGoverns());
+    perf_.proxyNow = (uiPrefs_.fastNavigation || turbo_) && moving && triangles >= (turbo_ ? proxyFrom / 2 : proxyFrom);
+    const bool working = moving || doc_.sculptor.strokeActive() || !dabQueue_.empty();
+    perf_.fastNow = aa > 1 && (perf_.proxyNow || (turbo_ && working));
     perf_.samplesWanted = perf_.fastNow ? 1 : aa;
     return perf_.samplesWanted;
 }
 
+// How long the view has been still and whether a stroke runs: coarse levels give way to full detail at rest
+// (Renderer::coarsePreviewOnly).
+void App::noteStillness() {
+    renderSettings_.stillSeconds = perf_.movingNow ? 0.0 : ImGui::GetTime() - perf_.stillSince;
+    renderSettings_.stroking = doc_.sculptor.strokeActive() || strokeFinishing_ || !dabQueue_.empty();
+    renderer_.setStroking(renderSettings_.stroking);
+}
+
 void App::notePerformanceFrame(double syncMs) {
+    perf_.lastSyncMs = syncMs;
     if (doc_.sculptor.strokeActive()) {
         perf_.strokeSyncMs += syncMs;
         ++perf_.strokeFrames;
     }
-    // A SubTool too big for the GPU's memory isn't drawn: say so once.
+    // A Part too big for the GPU's memory isn't drawn: say so once.
     bool oom = false;
-    for (const SubTool& s : doc_.subtools) oom = oom || (s.visible && renderer_.outOfMemory(s.id));
+    for (int i = 0; i < doc_.partCount(); ++i) oom = oom || (doc_.parts[size_t(i)].visible && renderer_.outOfMemory(doc_.meshKey(i)));
     if (oom && !perf_.gpuOutOfMemory)
         status_ = "Not enough GPU memory to show every Part: hide some, or step down a subdivision level "
                   "(Preferences > Performance)";
@@ -158,6 +237,12 @@ void App::drawPerformanceSection() {
     ui::HelpText("Antialiasing", nullptr,
                  "Samples per pixel in the 3D view: more smooths edges, fewer is faster on huge meshes.", kPath);
     ui::Segmented(*this, {"perf.aa_1", "perf.aa_2", "perf.aa_4", "perf.aa_8"});
+    ImGui::TextUnformatted(tr("View resolution"));
+    ui::HelpText("View resolution", nullptr,
+                 "Draw the 3D view at a share of the window's resolution and scale it up: 75% draws about half the "
+                 "pixels, 50% a quarter. For slow or integrated GPUs and big screens; Save Render stays sharp (#80).",
+                 kPath);
+    ui::Segmented(*this, {"perf.res_100", "perf.res_75", "perf.res_50"});
     bool fast = uiPrefs_.fastNavigation;
     if (ImGui::Checkbox(tr("Fast Navigation"), &fast)) actions_.find("perf.fast_navigation")->run();
     ui::HelpAction(*this, "perf.fast_navigation");
@@ -171,6 +256,18 @@ void App::drawPerformanceSection() {
     bool draft = uiPrefs_.draftStrokes;
     if (ImGui::Checkbox(tr("Draft Strokes"), &draft)) actions_.find("perf.draft_strokes")->run();
     ui::HelpAction(*this, "perf.draft_strokes");
+    bool liveMove = uiPrefs_.liveMove;
+    if (ImGui::Checkbox(tr("Live Move (Experimental)"), &liveMove)) actions_.find("perf.live_move")->run();
+    ui::HelpAction(*this, "perf.live_move");
+    bool bgPreview = uiPrefs_.backgroundPreview;
+    if (ImGui::Checkbox(tr("Background Preview (Experimental)"), &bgPreview)) actions_.find("perf.background_preview")->run();
+    ui::HelpAction(*this, "perf.background_preview");
+    bool fastUpload = uiPrefs_.fastUpload;
+    if (ImGui::Checkbox(tr("Fast Upload (Experimental)"), &fastUpload)) actions_.find("perf.fast_upload")->run();
+    ui::HelpAction(*this, "perf.fast_upload");
+    bool fastBig = uiPrefs_.fastBigBrushes;
+    if (ImGui::Checkbox(tr("Fast Big Brushes (Experimental)"), &fastBig)) actions_.find("perf.fast_big_brushes")->run();
+    ui::HelpAction(*this, "perf.fast_big_brushes");
 
     // --- Threads ---
     bool threads = !ThreadPool::shared().serial();
@@ -189,7 +286,7 @@ void App::drawPerformanceSection() {
                  kPath);
     const SculptTimings& t = perf_.lastStroke;
     if (t.dabs == 0) {
-        dimText("Sculpt a stroke to see what it costs.");
+        dimText(tr("Sculpt a stroke to see what it costs."));
     } else {
         const double d = double(t.dabs);
         const double upload = perf_.lastStrokeFrames ? perf_.lastStrokeSyncMs / perf_.lastStrokeFrames : 0.0;
@@ -206,13 +303,13 @@ void App::drawPerformanceSection() {
     ImGui::TextUnformatted(tr("Memory"));
     ui::HelpText("Memory", nullptr,
                  "What the scene holds: the meshes with their topology, the BVHs, the subdivision levels kept for "
-                 "stepping between them, the undo history (Edit keeps up to 1 GB, dropping the oldest steps), painted textures "
+                 "stepping between them, the undo history (Edit keeps as much as free memory allows, dropping the oldest steps), painted textures "
                  "with their layers and material channels (only painted 64x64 tiles of a channel use memory), and the "
                  "GPU buffers of the visible Parts.",
                  kPath);
     const MemoryUse m = documentMemory(doc_);
     const std::string mem = "Meshes " + megabytes(m.mesh) + "  BVH " + megabytes(m.bvh) + "\nSubdivision levels " +
-                            megabytes(m.levels) + "\nUndo " + megabytes(m.undo) + " of " + megabytes(doc_.undo.byteBudget) +
+                            megabytes(m.levels) + "\nUndo " + megabytes(m.undo) + " of " + megabytes(doc_.undo.budget()) +
                             "\nTextures " + megabytes(m.textures) + " (material channels " + megabytes(m.channels) + ")" +
                             (m.paintCaches ? "\nTexture painting caches " + megabytes(m.paintCaches) : std::string()) +
                             "\nGPU buffers about " + megabytes(m.gpu);

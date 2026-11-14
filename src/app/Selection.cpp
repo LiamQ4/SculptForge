@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Screen selections: the rectangle and lasso drags shared by visibility
-// (Ctrl+Shift, see PanelPolygroups.cpp) and masking (Ctrl with MaskLasso or
+// (Ctrl+Shift, see PanelFace groups.cpp) and masking (Ctrl with MaskLasso or
 // MaskRect, see PanelMasking.cpp). This file tracks and draws the shape; the
 // panels decide what a click or a finished drag does. The selection itself
 // runs as hide_rect / hide_lasso / mask_rect / mask_lasso commands with the
@@ -67,14 +67,16 @@ void App::selectionMove(float x, float y) {
     const ImVec2 start = selectPath_.front();
     if (!selectMoved_ && std::abs(x - start.x) < kClickSlopPx && std::abs(y - start.y) < kClickSlopPx) return;
     selectMoved_ = true;
-    if (selectShape_ != SelectShape::Lasso) return; // a rectangle only needs the cursor
+    if (selectShape_ != SelectShape::Lasso && selectShape_ != SelectShape::CutLasso) return; // a rectangle or line only needs the cursor
     const ImVec2 last = selectPath_.back();
     if (std::hypot(x - last.x, y - last.y) >= kLassoSpacingPx) selectPath_.push_back(ImVec2(x, y));
 }
 
 void App::selectionMouseUp() {
-    if (selectTarget_ == SelectTarget::Hide)
-        polygroupMouseUp();
+    if (isCutShape(selectShape_))
+        cutMouseUp(); // PanelCut.cpp
+    else if (selectTarget_ == SelectTarget::Hide)
+        facegroupMouseUp();
     else
         maskSelectMouseUp();
     selectPath_.clear();
@@ -85,7 +87,7 @@ bool App::runSelection(const char* rectCommand, const char* lassoCommand, Args a
     if (c.w <= 0.0f || c.h <= 0.0f || selectPath_.empty()) return false;
     // Window pixels -> normalised device coordinates (y up).
     auto ndc = [&](ImVec2 p) { return glm::vec2((p.x - c.x) / c.w * 2.0f - 1.0f, 1.0f - (p.y - c.y) / c.h * 2.0f); };
-    args["view_proj"] = matrixString(camera_.projection() * camera_.view());
+    args["view_proj"] = matrixString(partCamera().projection() * partCamera().view());
     if (selectShape_ == SelectShape::Lasso) {
         std::vector<ImVec2> path = selectPath_;
         path.push_back(ImVec2(mouseX_, mouseY_));
@@ -111,7 +113,8 @@ bool App::runSelection(const char* rectCommand, const char* lassoCommand, Args a
 }
 
 void App::drawSelectionOverlay() {
-    if (drag_ != Drag::Select || !selectMoved_ || selectPath_.empty()) return;
+    drawCutOverlay(); // the Cut shapes draw their own (PanelCut.cpp)
+    if (drag_ != Drag::Select || !selectMoved_ || selectPath_.empty() || isCutShape(selectShape_)) return;
     // Visibility: green keeps the inside, red hides it (Alt). Mask: a dark veil masks, blue unmasks (Alt).
     const bool alt = (inputMods() & SDL_KMOD_ALT) != 0;
     ImU32 line, fill;

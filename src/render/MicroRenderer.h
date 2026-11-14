@@ -17,14 +17,19 @@
 //   shading grid, so lighting keeps every micro detail even where the geometry is coarser.
 // - Brushes mark base triangles dirty; their displacement tiles are re-sent at once, their shading (and that of
 //   their neighbours) within a per-frame budget of grid points (the rest follows on the next frames).
+// - A level that streams from a detail file (Focus Detail) keeps a small record per tile and full grids only for
+//   the tiles drawn finer than its coarse level (render/MicroFocus.h).
 // GL 3.3 core: texture buffers, instancing, no tessellation or compute shaders (macOS stops at GL 4.1).
 #pragma once
 
 #include "core/Micro.h"
 #include "render/Clusters.h"
+#include "render/MicroFocus.h"
 #include "render/GL.h"
 
 #include <cstdint>
+#include <memory>
+#include <span>
 #include <vector>
 
 namespace sf {
@@ -44,19 +49,28 @@ public:
     size_t gpuBytes() const;
     bool closed() const { return closed_; }
     // Grid points whose shading still waits for a frame (budget), for tests and the benchmark.
-    size_t pendingShading() const { return pendingCount_; }
+    size_t pendingShading() const { return pendingCount_ + staleCount_; }
     // Grid points of shading recomputed per sync at most (0 = no limit).
     size_t shadeBudget = size_t(3) << 20;
+    // The view moves (set by the Renderer before sync: Fast Navigation's proxy frames): shading gets a time cap.
+    bool viewMoving = false;
     // The last draw: the level used by each visible cluster (-1 = culled), and the target it settled on.
     float lastTargetPx = 0.0f;
+    // Focus Detail's per-tile GPU levels (null for a level in memory), for tests and the benchmark.
+    const MicroFocus* focus() const { return focus_.get(); }
+    MicroFocus* focus() { return focus_.get(); }
 
 private:
+    friend class MicroFocus;
     void buildLayout(const Mesh& mesh);
     void uploadBase(const Mesh& mesh);
     void updateClusterBounds(const Mesh& mesh, const std::vector<uint32_t>& clusters);
+    // The same after only displacement changed (the base didn't move): the clusters' displacement range only.
+    void updateClusterRanges(const Mesh& mesh, const std::vector<uint32_t>& clusters);
     void ensurePatches(int level);
     void uploadDispTiles(const Mesh& mesh, std::vector<uint32_t>& slots, bool all);
     void shadePending(const Mesh& mesh, bool all);
+    size_t shadeSeeds(const Mesh& mesh, std::span<const uint32_t> seeds, std::vector<uint32_t>* outer);
 
     uint64_t serial_ = 0;
     uint32_t baseTriangles_ = 0, baseVertices_ = 0;
@@ -69,6 +83,9 @@ private:
     uint32_t clusterShift_ = 8;
     std::vector<ClusterBounds> bounds_;
     std::vector<float> clusterEdge_; // average base edge per cluster
+    // Per cluster, from the base alone: the sphere's radius and the normal cone's angle before the displacement's
+    // share (updateClusterRanges: a micro edit only changes that share).
+    std::vector<float> clusterRadius_, clusterAngle_;
     AABB box_;
     struct Chunk {
         uint32_t firstSlot = 0, slots = 0;
@@ -88,8 +105,16 @@ private:
     size_t bytes_ = 0;
     MicroShader shader_;
     std::vector<uint64_t> pending_; // per base triangle: shading out of date
+    std::vector<uint64_t> stale_;   // ... only where a neighbour changed (shared edges and corners: shadePending)
+    size_t staleCount_ = 0;
+    bool deferStale = false;        // a stroke runs: stale_ waits for its end
+    std::vector<uint32_t> outer_;
+    double shadeNsPerPoint_ = 0.0;  // what shading a grid point (and sending it) took lately (TierConfig::strokeShadeMs)
     size_t pendingCount_ = 0;
     std::vector<uint32_t> scratch_, written_, stageIndex_;
+    std::vector<uint8_t> clusterSeen_;
+    std::vector<uint64_t> slotBits_, baseBits_;
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> baseRuns_; // per block of moved vertices: [first, end) runs
     std::vector<uint8_t> staging_;
     std::vector<uint32_t> levels_;
     std::vector<int8_t> want_;
@@ -98,6 +123,7 @@ private:
         GLint slotBase = -1, chunkSlot = -1, level = -1, n = -1, samples = -1, clusterShift = -1, step = -1, unrolled = -1,
               corners = -1;
     } u_;
+    std::unique_ptr<MicroFocus> focus_;
 };
 
 // The micro mesh shader's vertex stage (with the mesh fragment shader under MICRO).

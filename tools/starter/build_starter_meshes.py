@@ -1,0 +1,1113 @@
+#!/usr/bin/env python3
+# SculptForge - open source digital sculpting
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Builds the starter meshes (Library > Tool > Starter meshes, File > New from starter mesh) as OBJ base cages.
+# Everything is either made here from scratch (the eye, the stylised and creature heads' extra Parts, the
+# bevelled primitives) or cut from the MakeHuman hm08 base mesh, which MakeHuman released under CC0 1.0
+# (docs/starter-meshes.md has the provenance). The Human (male) is that base mesh reshaped with MakeHuman's CC0
+# shape targets (a 180 cm athletic man, tools/starter/makehuman-targets.sha256) and our own forearm swing, with
+# its UVs. Deterministic: the same input gives the same bytes.
+#
+# Usage: build_starter_meshes.py <makehuman base.obj> <out dir> [<targets dir>]
+# tools/starter/build.sh runs this, then sculptforge-cli (OBJ -> .sfproj) and compresses the projects. Without
+# the targets dir (the .target files, flat) the Human (male) is skipped.
+#
+# Units are centimetres, Y up, looking down +Z, the character's left is +X; every mesh is centred on X and Z
+# and stands on the ground (lowest point at Y = 0). All faces are quads.
+
+import json
+import math
+import os
+import sys
+from collections import Counter, defaultdict
+
+# ---------------------------------------------------------------------------
+# Small vector helpers
+# ---------------------------------------------------------------------------
+
+
+def add(a, b): return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+def sub(a, b): return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+def mul(a, s): return (a[0] * s, a[1] * s, a[2] * s)
+def dot(a, b): return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+def cross(a, b): return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+def length(a): return math.sqrt(dot(a, a))
+def norm(a):
+    l = length(a)
+    return mul(a, 1.0 / l) if l > 1e-12 else (0.0, 0.0, 0.0)
+def lerp(a, b, t): return a + (b - a) * t
+def smoothstep(e0, e1, x):
+    t = min(1.0, max(0.0, (x - e0) / (e1 - e0)))
+    return t * t * (3 - 2 * t)
+
+
+class Mesh:
+    """Quads only: verts [(x,y,z)], faces [(a,b,c,d)], CCW seen from outside. Optional UVs: uvs [(u,v)] and
+    uv_faces [(a,b,c,d)] indexing them, one per face (the OBJ gets `vt` lines and v/vt corners)."""
+
+    def __init__(self, verts=None, faces=None, uvs=None, uv_faces=None):
+        self.verts = list(verts or [])
+        self.faces = list(faces or [])
+        self.uvs = list(uvs or [])
+        self.uv_faces = list(uv_faces or [])
+
+    def transformed(self, fn):
+        return Mesh([fn(v) for v in self.verts], self.faces, self.uvs, self.uv_faces)
+
+
+def bounds(meshes):
+    lo = [1e30] * 3
+    hi = [-1e30] * 3
+    for m in meshes:
+        for v in m.verts:
+            for k in range(3):
+                lo[k] = min(lo[k], v[k])
+                hi[k] = max(hi[k], v[k])
+    return lo, hi
+
+
+def place_on_ground(parts):
+    """Centres the Parts together on X and Z and puts the lowest point at Y = 0."""
+    lo, hi = bounds(parts)
+    off = (-(lo[0] + hi[0]) / 2, -lo[1], -(lo[2] + hi[2]) / 2)
+    return [m.transformed(lambda v: add(v, off)) for m in parts]
+
+
+# ---------------------------------------------------------------------------
+# Cube topology: six quad grids sharing their edges (no poles, every vertex valence 4 except the 8 corners)
+# ---------------------------------------------------------------------------
+
+
+def cube_grid(gx, gy, gz):
+    """gx, gy, gz: sorted coordinates along each axis (first = -extent, last = +extent).
+    Returns the surface of the box as a quad mesh whose vertices are (x, y, z) taken from the grids, plus each
+    vertex's index triple (to tell faces / edges apart)."""
+    grids = (gx, gy, gz)
+    index = {}
+    verts = []
+    keys = []
+
+    def vid(ijk):
+        if ijk not in index:
+            index[ijk] = len(verts)
+            verts.append(tuple(grids[k][ijk[k]] for k in range(3)))
+            keys.append(ijk)
+        return index[ijk]
+
+    faces = []
+    for axis in range(3):
+        b, c = (axis + 1) % 3, (axis + 2) % 3
+        for side in (0, len(grids[axis]) - 1):
+            sign = 1.0 if side else -1.0
+            for i in range(len(grids[b]) - 1):
+                for j in range(len(grids[c]) - 1):
+                    def at(di, dj):
+                        ijk = [0, 0, 0]
+                        ijk[axis] = side
+                        ijk[b] = i + di
+                        ijk[c] = j + dj
+                        return vid(tuple(ijk))
+                    q = [at(0, 0), at(1, 0), at(1, 1), at(0, 1)]
+                    # b x c points along +axis: CCW from outside on the + side, reversed on the - side.
+                    if sign < 0:
+                        q.reverse()
+                    faces.append(tuple(q))
+    return verts, faces, keys
+
+
+def uniform(n, extent=1.0):
+    return [-extent + 2.0 * extent * i / n for i in range(n + 1)]
+
+
+def rounded_box(hx, hy, hz, r, cell):
+    """Box with half extents (hx, hy, hz) and every edge rounded with radius r; quads about `cell` across."""
+    def axis_grid(h):
+        flat = 2 * (h - r)
+        m = max(1, round(flat / cell))
+        bev = max(2, round((math.pi / 4) * r / cell))  # each face covers half of the quarter-round
+        g = []
+        for k in range(bev, 0, -1):
+            g.append(-(h - r) - r * math.tan(k / bev * math.pi / 4))
+        for k in range(m + 1):
+            g.append(-(h - r) + flat * k / m)
+        for k in range(1, bev + 1):
+            g.append((h - r) + r * math.tan(k / bev * math.pi / 4))
+        return g
+
+    gx, gy, gz = axis_grid(hx), axis_grid(hy), axis_grid(hz)
+    verts, faces, _ = cube_grid(gx, gy, gz)
+    inner = (hx - r, hy - r, hz - r)
+    h = (hx, hy, hz)
+    out = []
+    for q in verts:
+        # q is on the box surface; snap it onto the rounded box (flat faces stay flat).
+        qq = tuple(max(-h[k], min(h[k], q[k])) for k in range(3))
+        c = tuple(max(-inner[k], min(inner[k], qq[k])) for k in range(3))
+        out.append(add(c, mul(norm(sub(qq, c)), r)))
+    return Mesh(out, faces)
+
+
+def profile_sampler(points):
+    """points: a polyline (radius, height) from the bottom pole (radius 0) to the top pole (radius 0).
+    Returns f(t) -> (radius, height), t in [0, 1] by arc length."""
+    cum = [0.0]
+    for a, b in zip(points, points[1:]):
+        cum.append(cum[-1] + math.hypot(b[0] - a[0], b[1] - a[1]))
+    total = cum[-1]
+
+    def f(t):
+        s = t * total
+        lo, hi = 0, len(cum) - 1
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if cum[mid] <= s:
+                lo = mid
+            else:
+                hi = mid
+        seg = cum[hi] - cum[lo]
+        u = 0.0 if seg <= 0 else (s - cum[lo]) / seg
+        a, b = points[lo], points[hi]
+        return (lerp(a[0], b[0], u), lerp(a[1], b[1], u))
+
+    return f, total
+
+
+def arc(cx, cy, r, a0, a1, n):
+    return [(cx + r * math.cos(lerp(a0, a1, k / n)), cy + r * math.sin(lerp(a0, a1, k / n))) for k in range(n + 1)]
+
+
+def revolve(points, n):
+    """Surface of revolution about +Y on cube topology: the cube's top and bottom faces become the caps (rings
+    of quads round the poles, no triangle fans), its sides the band. n = quads along a cube edge (even);
+    4n quads go round, 2n from pole to pole."""
+    f, _ = profile_sampler(points)
+    g = uniform(n)
+    verts, faces, keys = cube_grid(g, g, g)
+    out = []
+    for (ix, iy, iz) in keys:
+        ux, uy, uz = g[ix], g[iy], g[iz]
+        if iy == 0 or iy == n:
+            ring = max(abs(ux), abs(uz))  # 0 at the pole, 1 at the cube edge
+            m = ring * (n / 2) if iy == 0 else 2 * n - ring * (n / 2)
+        else:
+            m = n / 2 + (uy + 1) / 2 * n
+        r, h = f(m / (2 * n))
+        d = norm((math.tan(ux * math.pi / 4), 0.0, math.tan(uz * math.pi / 4)))
+        out.append((r * d[0], h, r * d[2]))
+    return Mesh(out, faces)
+
+
+def torus(points, n_major, major):
+    """Ring about +Y: the closed profile `points` (radius offset, height), CCW, swept round a circle of radius
+    `major`, sampled by arc length with as many quads as keep them about square."""
+    closed = points + [points[0]]
+    f, total = profile_sampler(closed)
+    n_minor = max(8, round(total / (2 * math.pi * major / n_major)))
+    n_minor += n_minor % 2
+    verts = []
+    for i in range(n_major):
+        a = 2 * math.pi * i / n_major
+        for j in range(n_minor):
+            dr, h = f(j / n_minor)
+            verts.append(((major + dr) * math.cos(a), h, (major + dr) * math.sin(a)))
+    faces = []
+    for i in range(n_major):
+        for j in range(n_minor):
+            a = i * n_minor + j
+            b = ((i + 1) % n_major) * n_minor + j
+            c = ((i + 1) % n_major) * n_minor + (j + 1) % n_minor
+            d = i * n_minor + (j + 1) % n_minor
+            faces.append((a, d, c, b))
+    return orient_outward(Mesh(verts, faces))
+
+
+def ellipsoid_box(hx, hy, hz, cell, n=2.0):
+    """An ellipsoid with semi-axes (hx, hy, hz) made by projecting a box grid (cells about `cell` across)
+    radially onto it: quads stay close to even even when the axes differ a lot. n > 2 makes it boxier
+    (a superellipsoid, |x|^n + |y|^n + |z|^n = 1)."""
+    gx = uniform(max(2, 2 * round(hx / cell)), 1.0)
+    gy = uniform(max(2, 2 * round(hy / cell)), 1.0)
+    gz = uniform(max(2, 2 * round(hz / cell)), 1.0)
+    verts, faces, _ = cube_grid(gx, gy, gz)
+    out = []
+    for (x, y, z) in verts:
+        # Equal-angle warp per axis keeps the projected quads square-ish.
+        p = (math.tan(x * math.pi / 4), math.tan(y * math.pi / 4), math.tan(z * math.pi / 4))
+        d = mul(p, 1.0 / (sum(abs(c) ** n for c in p) ** (1.0 / n)))
+        out.append((d[0] * hx, d[1] * hy, d[2] * hz))
+    return Mesh(out, faces)
+
+
+def orient_outward(m):
+    """Flips every face if the mesh's signed volume is negative (closed meshes)."""
+    vol = 0.0
+    for f in m.faces:
+        a = m.verts[f[0]]
+        for k in range(1, len(f) - 1):
+            vol += dot(a, cross(m.verts[f[k]], m.verts[f[k + 1]]))
+    if vol < 0:
+        m.faces = [tuple(reversed(f)) for f in m.faces]
+    return m
+
+
+# ---------------------------------------------------------------------------
+# MakeHuman hm08 (CC0): the "body" group, in decimetres -> centimetres
+# ---------------------------------------------------------------------------
+
+
+def load_makehuman_raw(path):
+    """The whole base.obj in centimetres: verts, texture coordinates, and every group's faces as (vertex,
+    texcoord) corner pairs (texcoord -1 when a face has none)."""
+    verts, texcoords, groups, g = [], [], {}, None
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith("v "):
+                verts.append(tuple(float(t) * 10.0 for t in line.split()[1:4]))
+            elif line.startswith("vt "):
+                texcoords.append(tuple(float(t) for t in line.split()[1:3]))
+            elif line.startswith("g "):
+                g = line.split()[1]
+                groups.setdefault(g, [])
+            elif line.startswith("f "):
+                corners = []
+                for t in line.split()[1:]:
+                    parts = t.split("/")
+                    corners.append((int(parts[0]) - 1, int(parts[1]) - 1 if len(parts) > 1 and parts[1] else -1))
+                groups[g].append(tuple(corners))
+    return verts, texcoords, groups
+
+
+def joint_centres(verts, groups):
+    """Each joint-* helper group's centroid, by name without the prefix."""
+    joints = {}
+    for name, fs in groups.items():
+        if name.startswith("joint-"):
+            ids = {i for f in fs for i, _ in f}
+            joints[name[6:]] = mul(
+                tuple(sum(verts[i][k] for i in ids) for k in range(3)), 1.0 / len(ids))
+    return joints
+
+
+def load_makehuman(path):
+    verts, _, raw = load_makehuman_raw(path)
+    groups = {name: [tuple(i for i, _ in f) for f in fs] for name, fs in raw.items()}
+    body = groups["body"]
+    if any(len(f) != 4 for f in body):
+        sys.exit("expected an all-quad body group")
+    joints = joint_centres(verts, raw)
+    ground = joints["ground"][1]
+    verts = [(v[0], v[1] - ground, v[2]) for v in verts]
+    joints = {k: (v[0], v[1] - ground, v[2]) for k, v in joints.items()}
+    used = sorted({i for f in body for i in f})
+    remap = {old: new for new, old in enumerate(used)}
+    return Mesh([verts[i] for i in used], [tuple(remap[i] for i in f) for f in body]), joints
+
+
+def centroid(m, f):
+    return mul(tuple(sum(m.verts[i][k] for i in f) for k in range(3)), 1.0 / len(f))
+
+
+def keep_faces(m, pred):
+    """The faces whose centroid passes `pred`, then the largest connected piece, then faces hanging on by
+    fewer than two edges peeled off (the cut stays a clean edge loop). Reindexed."""
+    faces = [f for f in m.faces if pred(centroid(m, f))]
+    while True:
+        edges = Counter()
+        for f in faces:
+            for a, b in zip(f, f[1:] + f[:1]):
+                edges[(min(a, b), max(a, b))] += 1
+        keep = []
+        for f in faces:
+            shared = sum(1 for a, b in zip(f, f[1:] + f[:1]) if edges[(min(a, b), max(a, b))] == 2)
+            if shared >= 2:
+                keep.append(f)
+        if len(keep) == len(faces):
+            break
+        faces = keep
+    # Largest piece by shared edges.
+    by_edge = defaultdict(list)
+    for fi, f in enumerate(faces):
+        for a, b in zip(f, f[1:] + f[:1]):
+            by_edge[(min(a, b), max(a, b))].append(fi)
+    seen = [False] * len(faces)
+    best = []
+    for s in range(len(faces)):
+        if seen[s]:
+            continue
+        stack, piece = [s], []
+        seen[s] = True
+        while stack:
+            fi = stack.pop()
+            piece.append(fi)
+            f = faces[fi]
+            for a, b in zip(f, f[1:] + f[:1]):
+                for o in by_edge[(min(a, b), max(a, b))]:
+                    if not seen[o]:
+                        seen[o] = True
+                        stack.append(o)
+        if len(piece) > len(best):
+            best = piece
+    faces = snap_to_edge_loops(m, [faces[i] for i in sorted(best)])
+    used = sorted({i for f in faces for i in f})
+    remap = {old: new for new, old in enumerate(used)}
+    return Mesh([m.verts[i] for i in used], [tuple(remap[i] for i in f) for f in faces])
+
+
+def edge_key(a, b): return (min(a, b), max(a, b))
+
+
+def snap_to_edge_loops(m, faces):
+    """A cut by face centroids steps between two rings of the mesh where the rings tilt across it, and every
+    step is a corner on the open rim that subdivision pulls into a spike. Each open rim moves to the closed edge
+    loop of `m` (through regular four-face vertices) that shares the most edges with it, and the piece is
+    re-grown up to the new rims; a rim with no such loop (the ear's patch) stays as cut."""
+    by_edge = defaultdict(list)
+    for fi, f in enumerate(m.faces):
+        for a, b in zip(f, f[1:] + f[:1]):
+            by_edge[edge_key(a, b)].append(fi)
+    nbrs = defaultdict(set)
+    for a, b in by_edge:
+        nbrs[a].add(b)
+        nbrs[b].add(a)
+    valence = Counter(v for f in m.faces for v in f)
+
+    def walk(a, b):
+        loop = [a, b]
+        while True:
+            p, c = loop[-2], loop[-1]
+            if len(nbrs[c]) != 4 or valence[c] != 4:
+                return None
+            sides = set(by_edge[edge_key(p, c)])
+            ahead = [n for n in nbrs[c] if n != p and not sides & set(by_edge[edge_key(c, n)])]
+            if len(ahead) != 1:
+                return None
+            if ahead[0] == loop[0]:
+                return loop
+            if ahead[0] in loop:
+                return None
+            loop.append(ahead[0])
+
+    edges = Counter()
+    for f in faces:
+        for a, b in zip(f, f[1:] + f[:1]):
+            edges[edge_key(a, b)] += 1
+    rim = {e for e, c in edges.items() if c == 1}
+    next_of = defaultdict(list)
+    for a, b in rim:
+        next_of[a].append(b)
+        next_of[b].append(a)
+    inside = {tuple(f) for f in faces}
+    index = {tuple(f): fi for fi, f in enumerate(m.faces)}
+
+    def grow(walls):
+        """From the cut piece's faces across every edge that is not a wall; the side that holds most of it."""
+        seen = [False] * len(m.faces)
+        best, best_overlap = [], -1
+        for start in sorted(index[f] for f in inside):
+            if seen[start]:
+                continue
+            stack, piece = [start], []
+            seen[start] = True
+            while stack:
+                fi = stack.pop()
+                piece.append(fi)
+                f = m.faces[fi]
+                for a, b in zip(f, f[1:] + f[:1]):
+                    k = edge_key(a, b)
+                    if k in walls:
+                        continue
+                    for o in by_edge[k]:
+                        if not seen[o]:
+                            seen[o] = True
+                            stack.append(o)
+            overlap = sum(1 for fi in piece if tuple(m.faces[fi]) in inside)
+            if overlap > best_overlap:
+                best, best_overlap = piece, overlap
+        return [m.faces[fi] for fi in sorted(best)]
+
+    def bounds_of(fs):
+        vs = [m.verts[v] for f in fs for v in f]
+        return length(sub(tuple(max(p[k] for p in vs) for k in range(3)), tuple(min(p[k] for p in vs) for k in range(3))))
+
+    size = bounds_of(faces)
+    walls, tried = set(rim), set()
+    for e in sorted(rim):
+        if e in tried:
+            continue
+        # This rim's edges (walking the open boundary from e).
+        part, stack = {e}, [e[0], e[1]]
+        seen_v = set(stack)
+        while stack:
+            v = stack.pop()
+            for n in next_of[v]:
+                part.add(edge_key(v, n))
+                if n not in seen_v:
+                    seen_v.add(n)
+                    stack.append(n)
+        tried |= part
+        # Candidate loops of about the rim's length, closest to it on average first, within two of its edges.
+        rim_verts = [m.verts[v] for v in seen_v]
+        lens = sorted(length(sub(m.verts[a], m.verts[b])) for a, b in part)
+        reach = 2.0 * lens[len(lens) // 2]
+        candidates = {}
+        for a, b in sorted(part):
+            loop = walk(a, b)
+            if loop is None or len(loop) * 4 < len(part) * 3 or frozenset(loop) in candidates:
+                continue
+            dist = sum(min(length(sub(m.verts[v], r)) for r in rim_verts) for v in loop) / len(loop)
+            if dist < reach:
+                candidates[frozenset(loop)] = (dist, {edge_key(x, y) for x, y in zip(loop, loop[1:] + loop[:1])})
+        # The first that, in place of the rim, still closes the piece off at about its size.
+        for dist, loop_edges in sorted(candidates.values(), key=lambda c: (c[0], sorted(c[1]))):
+            trial = (walls - part) | loop_edges
+            piece = grow(trial)
+            if abs(len(piece) - len(faces)) * 5 < len(faces) and abs(bounds_of(piece) - size) * 10 < size:
+                walls = trial
+                break
+    return grow(walls)
+
+
+def relax_rim(m, iterations=6, rings=2):
+    """Smooths a patch's open rim where no edge loop runs round it (the ear's skin): each pass moves every rim
+    vertex halfway to the mean of its two rim neighbours, and every vertex up to `rings` in from it halfway to
+    the mean of its neighbours. What lies further in keeps its shape."""
+    edges = Counter(edge_key(a, b) for f in m.faces for a, b in zip(f, f[1:] + f[:1]))
+    nbrs, rim_nbrs = defaultdict(list), defaultdict(list)
+    for (a, b), c in sorted(edges.items()):
+        nbrs[a].append(b)
+        nbrs[b].append(a)
+        if c == 1:
+            rim_nbrs[a].append(b)
+            rim_nbrs[b].append(a)
+    depth = {v: 0 for v in rim_nbrs}
+    front = sorted(rim_nbrs)
+    for r in range(1, rings + 1):
+        front = sorted({n for v in front for n in nbrs[v] if n not in depth})
+        depth.update((n, r) for n in front)
+    verts = list(m.verts)
+    for _ in range(iterations):
+        moved = list(verts)
+        for v, d in depth.items():
+            ns = rim_nbrs[v] if d == 0 else nbrs[v]
+            mean = mul(tuple(sum(verts[n][k] for n in ns) for k in range(3)), 1.0 / len(ns))
+            moved[v] = tuple(lerp(verts[v][k], mean[k], 0.5) for k in range(3))
+        verts = moved
+    return Mesh(verts, m.faces)
+
+
+def plane_side(point, normal):
+    n = norm(normal)
+    return lambda p: dot(sub(p, point), n) > 0
+
+
+def mirror_x(p): return (-p[0], p[1], p[2])
+
+
+# ---------------------------------------------------------------------------
+# The set
+# ---------------------------------------------------------------------------
+
+
+def seg_dist(p, a, b):
+    ab = sub(b, a)
+    t = max(0.0, min(1.0, dot(sub(p, a), ab) / dot(ab, ab)))
+    return length(sub(p, add(a, mul(ab, t))))
+
+
+def human_parts(body, j):
+    out = {}
+    neck_y = j["neck"][1] + 2.0
+    out["human-head"] = [keep_faces(body, lambda p: p[1] > neck_y)]
+
+    # The left arm (mirrored with |x| for the right): past a plane across the upper arm and near the bones.
+    sh, el, wr = j["l-shoulder"], j["l-elbow"], j["l-hand"]
+    tip = j["l-finger-3-4"]
+    arm_dir = sub(el, sh)
+
+    def arm(p, along, radius):
+        q = (abs(p[0]), p[1], p[2])
+        if dot(sub(q, add(sh, mul(arm_dir, along))), norm(arm_dir)) <= 0:
+            return False
+        return min(seg_dist(q, sh, el), seg_dist(q, el, wr), seg_dist(q, wr, tip)) < radius
+
+    # Bust: head, neck, shoulders and upper chest; the arms cut a third of the way down the upper arm.
+    chest_y = j["spine-1"][1] - 4.0
+    out["bust"] = [keep_faces(body, lambda p: p[1] > chest_y and not arm(p, 0.33, 9.0))]
+
+    # Torso: neck to upper thighs (one clean ring round each), arms cut near the top of the upper arm.
+    top_y = j["neck"][1] - 1.0
+    hip_y = j["l-upper-leg"][1] - 12.0
+    out["torso"] = [keep_faces(body, lambda p: hip_y < p[1] < top_y and not arm(p, 0.3, 8.0))]
+
+    out["full-body"] = [body]
+
+    # Hand (left): past the wrist, then stood up: wrist down, fingers up, palm to the front.
+    wrist, fore = j["l-hand"], sub(j["l-hand"], j["l-elbow"])
+    cut = add(wrist, mul(norm(fore), -1.0))
+    hand = keep_faces(body, plane_side(cut, fore))
+    up = norm(sub(j["l-finger-3-1"], wrist))
+    thumb = sub(j["l-finger-1-3"], wrist)
+    side = norm(sub(thumb, mul(up, dot(thumb, up))))  # thumb direction, across the hand
+    front = cross(side, up)
+    # Rows of the rotation: thumb -> -X (a raised left hand, palm forward), fingers -> +Y.
+    xa, ya, za = mul(side, -1.0), up, mul(front, -1.0)
+    if dot(cross(xa, ya), za) < 0:
+        za = mul(za, -1.0)
+    out["hand"] = [hand.transformed(lambda v: (dot(sub(v, wrist), xa), dot(sub(v, wrist), ya), dot(sub(v, wrist), za)))]
+
+    ankle = j["l-ankle"]
+    out["foot"] = [keep_faces(body, lambda p: p[0] > 2.0 and p[1] < ankle[1] + 9.0)]
+
+    # Ear (left): centred on the vertices that stand out furthest from the side of the head.
+    side = [v for v in body.verts if abs(v[1] - (j["l-eye"][1] - 2.0)) < 6.0 and v[2] < j["l-eye"][2] - 4.0
+            and v[0] > 0.0]
+    xmax = max(v[0] for v in side)
+    tips = [v for v in side if v[0] > xmax - 1.2]
+    ear_c = mul(tuple(sum(v[k] for v in tips) for k in range(3)), 1.0 / len(tips))
+    ear_c = (ear_c[0] - 1.0, ear_c[1], ear_c[2])
+
+    def ear_pred(p):
+        d = sub(p, ear_c)
+        return p[0] > ear_c[0] - 1.2 and (d[1] / 4.0) ** 2 + (d[2] / 2.9) ** 2 < 1.0
+
+    # The skin round it is an ellipse across the head's grid, so its rim steps: relaxed into an even curve.
+    ear = relax_rim(keep_faces(body, ear_pred))
+    # Ear lying open to the viewer: rotate the outward (+X) side to face +Z.
+    out["ear"] = [ear.transformed(lambda v: (-(v[2] - ear_c[2]), v[1], v[0] - ear_c[0]))]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Human (male, A-pose): the MakeHuman base reshaped by its CC0 shape targets, plus our forearm swing
+# ---------------------------------------------------------------------------
+
+HUMAN_MALE_HEIGHT = 180.0
+HUMAN_MALE_LANDMARKS = {}  # filled by human_male(): joints in the mesh's space, for the sculpt pass
+HUMAN_MALE_LEG_SHEAR = 0.076  # cm each leg point slides toward the midline per cm below the hip joint: legs straight, under the hips
+HUMAN_MALE_ARM_ANGLE = math.radians(52.92)  # the arm's line, shoulder to wrist, below horizontal (the reference's)
+HUMAN_MALE_FINGER_CLOSE = (math.radians(11.0), math.radians(10.0), math.radians(19.0))  # index, ring, little finger toward the middle: one paddle
+HUMAN_MALE_THUMB_IN = math.radians(12.0)  # the thumb turned toward the index finger at its root, a relaxed hand
+HUMAN_MALE_PALM_TWIST = math.radians(90.0)
+HUMAN_MALE_FINGER_CURL = (math.radians(18.0), math.radians(12.0), math.radians(6.0))  # per knuckle, root to tip: a relaxed hand
+HUMAN_MALE_CURL_SIGN = 1.0  # +1 curls toward the palm with the base mesh's hand orientation  # forearm pronation, left arm (mirrored for the right)
+
+# MakeHuman target weights. The macro part: gender 1, age young, the three ethnic shapes mixed evenly, the
+# "maxmuscle" universal targets for a lean athletic build, a touch of "ideal proportions". The rest were solved
+# (silhouette landmarks of the owner's front reference: 27 of them, every weight capped at 0.5 so the surface
+# stays smooth, 22 within 1% of height and none over 1.7%) over
+# MakeHuman's measure, torso, hip, neck, head and limb targets, with the pose constants below. Everything is listed
+# in tools/starter/makehuman-targets.sha256 (the build downloads and checks them).
+HUMAN_MALE_TARGETS = [
+    ("caucasian-male-young", 0.333),
+    ("asian-male-young", 0.333),
+    ("african-male-young", 0.333),
+    ("universal-male-young-maxmuscle-averageweight", 0.75),
+    ("universal-male-young-maxmuscle-minweight", 0.2),
+    ("male-young-maxmuscle-averageweight-idealproportions", 0.2),
+    ("male-young-averagemuscle-averageweight-idealproportions", 0.1),
+    ("torso-muscle-dorsi-incr", 0.1),
+    ("stomach-tone-incr", 1.0),
+    ("pelvis-tone-incr", 0.4),
+    ("measure-underbust-circ-decr", 0.2),
+    ("l-upperarm-muscle-incr", 0.5),
+    ("l-lowerarm-muscle-incr", 0.4),
+    ("l-upperleg-muscle-incr", 0.5),
+    ("l-lowerleg-muscle-incr", 0.5),
+    ("l-hand-fingers-distance-decr", 1.0),
+    ("l-foot-scale-depth-incr", 0.4),
+    ("l-foot-scale-horiz-incr", 0.3),
+    ("r-upperarm-muscle-incr", 0.5),
+    ("r-lowerarm-muscle-incr", 0.4),
+    ("r-upperleg-muscle-incr", 0.5),
+    ("r-lowerleg-muscle-incr", 0.5),
+    ("r-hand-fingers-distance-decr", 1.0),
+    ("r-foot-scale-depth-incr", 0.4),
+    ("r-foot-scale-horiz-incr", 0.3),
+    ("torso-muscle-pectoral-incr", 0.6),
+    ("torso-vshape-incr", 0.25),
+    ("l-upperarm-shoulder-muscle-incr", 0.35),
+    ("r-upperarm-shoulder-muscle-incr", 0.35),
+    ("measure-shoulder-dist-decr", 0.235),
+    ("hip-scale-horiz-incr", 0.33),
+    ("measure-hips-circ-incr", 0.105),
+    ("measure-waist-circ-incr", 0.084),
+    ("torso-scale-horiz-decr", 0.074),
+    ("measure-thigh-circ-incr", 0.078),
+    ("measure-knee-circ-incr", 0.044),
+    ("measure-calf-circ-incr", 0.048),
+    ("measure-ankle-circ-incr", 0.084),
+    ("torso-scale-vert-incr", 0.292),
+    ("upperlegs-height-decr", 0.209),
+    ("lowerlegs-height-decr", 0.051),
+    ("neck-scale-vert-incr", 0.485),
+    ("neck-scale-horiz-incr", 0.035),
+    ("head-scale-vert-incr", 0.334),
+    ("head-scale-horiz-incr", 0.234),
+    ("measure-upperarm-length-decr", 0.399),
+    ("measure-lowerarm-length-decr", 0.548),
+    ("measure-upperarm-circ-incr", 0.031),
+    ("measure-waisttohip-dist-incr", 0.455),
+    ("measure-napetowaist-dist-incr", 0.368),
+    ("stomach-navel-up", 0.081),
+    ("hip-scale-vert-incr", 0.309),
+    ("breast-trans-down", 0.133),
+]
+
+
+def load_target(path):
+    """A MakeHuman .target: (vertex index, offset) pairs, decimetres in the file, centimetres here."""
+    out = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith("#") or not line.strip():
+                continue
+            t = line.split()
+            out.append((int(t[0]), (float(t[1]) * 10.0, float(t[2]) * 10.0, float(t[3]) * 10.0)))
+    return out
+
+
+def rotate_about(p, centre, axis, angle):
+    """Rodrigues' rotation of p about the unit `axis` through `centre`."""
+    x = sub(p, centre)
+    c, s_ = math.cos(angle), math.sin(angle)
+    return add(centre, add(add(mul(x, c), mul(cross(axis, x), s_)), mul(axis, dot(axis, x) * (1.0 - c))))
+
+
+def human_male(base_path, targets_dir):
+    verts, texcoords, groups = load_makehuman_raw(base_path)
+    base_verts = list(verts)
+    verts = [list(v) for v in verts]
+    for name, w in HUMAN_MALE_TARGETS:
+        for i, d in load_target(os.path.join(targets_dir, name + ".target")):
+            verts[i][0] += w * d[0]
+            verts[i][1] += w * d[1]
+            verts[i][2] += w * d[2]
+    verts = [tuple(v) for v in verts]
+    body_ids = sorted({i for f in groups["body"] for i, _ in f})
+    all_ids = range(len(verts))  # the pose changes move the joint helpers too, so the next stage reads them moved
+
+    # Arm angle: the whole arm turns about its shoulder joint in the frontal plane to HUMAN_MALE_ARM_ANGLE below
+    # horizontal (shoulder to wrist, a straight line once the forearm swing below has put the forearm in line),
+    # blended in over the deltoid; the relax pass further down smooths what that does to the armpit.
+    joints = joint_centres(verts, groups)
+    for side, sign in (("l", 1.0), ("r", -1.0)):
+        shoulder, elbow, hand = joints[side + "-shoulder"], joints[side + "-elbow"], joints[side + "-hand"]
+        up = norm(sub(elbow, shoulder))
+        have = math.atan2(-(elbow[1] - shoulder[1]), abs(elbow[0] - shoulder[0]))  # upper arm, below horizontal
+        turn = HUMAN_MALE_ARM_ANGLE - have  # positive = lower the arm
+        tip = add(hand, mul(norm(sub(hand, elbow)), 22.0))
+        for i in all_ids:
+            p = verts[i]
+            if p[0] * sign < shoulder[0] * sign - 6.0:
+                continue
+            if min(seg_dist(p, shoulder, elbow), seg_dist(p, elbow, hand), seg_dist(p, hand, tip)) > 16.0:
+                continue
+            w = smoothstep(-2.0, 9.0, dot(sub(p, shoulder), up))
+            if w > 0.0:
+                verts[i] = rotate_about(p, shoulder, (0.0, 0.0, 1.0), -sign * turn * w)
+
+    # Forearm swing: the base mesh's forearms point forward and down from the elbow; ours continue the upper
+    # arm in the frontal plane (the hands beside the thighs seen from the side, as a figure in A-pose stands),
+    # turned about the elbow and blended in over a few centimetres round it.
+    joints = joint_centres(verts, groups)
+    for side, sign in (("l", 1.0), ("r", -1.0)):
+        elbow, hand = joints[side + "-elbow"], joints[side + "-hand"]
+        fore = sub(hand, elbow)
+        flat = norm((fore[0], fore[1], 0.0))
+        axis = norm(cross(fore, flat))
+        angle = math.acos(max(-1.0, min(1.0, dot(norm(fore), flat))))
+        along = norm(fore)
+        tip = add(hand, mul(along, 20.0))
+        for i in all_ids:
+            p = verts[i]
+            if p[0] * sign < elbow[0] * sign - 10.0 or seg_dist(p, elbow, tip) > 14.0:
+                continue
+            w = smoothstep(-4.0, 6.0, dot(sub(p, elbow), along))
+            if w > 0.0:
+                verts[i] = rotate_about(p, elbow, axis, angle * w)
+    joints = joint_centres(verts, groups)
+
+    # Legs under the hips: the base mesh's legs splay out in a straight line from the hip joint (its centre line
+    # 8.5 cm off the midline at the hip, 16 at the knee, 21 at the ankle). Each leg is sheared toward the midline by
+    # HUMAN_MALE_LEG_SHEAR cm per cm below the hip joint, eased in over the first 16 cm so the crotch keeps its
+    # gap; the knee and foot ride along, so the leg stays straight and the soles flat.
+    for side, sign in (("l", 1.0), ("r", -1.0)):
+        hip, knee, ankle, toe = (joints[side + k] for k in ("-upper-leg", "-knee", "-ankle", "-toe-1-1"))
+        for i in all_ids:
+            p = verts[i]
+            if p[0] * sign < 0.0 or p[1] > hip[1] + 4.0:
+                continue
+            if min(seg_dist(p, hip, knee), seg_dist(p, knee, ankle), seg_dist(p, ankle, toe)) > 17.0:
+                continue
+            below = hip[1] - p[1]
+            shift = HUMAN_MALE_LEG_SHEAR * below * smoothstep(0.0, 16.0, below)
+            verts[i] = (p[0] - sign * shift, p[1], p[2])
+    joints = joint_centres(verts, groups)
+
+    # Palms to the thighs: the base mesh's palms face back; the forearm twists about its own axis from the elbow
+    # (none) to the wrist (the full turn), the hand turning with it.
+    for side, sign in (("l", 1.0), ("r", -1.0)):
+        elbow, hand = joints[side + "-elbow"], joints[side + "-hand"]
+        along = norm(sub(hand, elbow))
+        reach = length(sub(hand, elbow))
+        tip = add(hand, mul(along, 22.0))
+        for i in all_ids:
+            p = verts[i]
+            if p[0] * sign < elbow[0] * sign - 10.0 or seg_dist(p, elbow, tip) > 14.0:
+                continue
+            w = smoothstep(0.0, reach, dot(sub(p, elbow), along))
+            if w > 0.0:
+                verts[i] = rotate_about(p, elbow, along, sign * HUMAN_MALE_PALM_TWIST * w)
+
+    # Relaxed hands: each finger (not the thumb) curls gently toward the palm, knuckle by knuckle, about the axis
+    # across its knuckles; a vertex curls with the finger whose bone line it is nearest, so the webbing splits cleanly.
+    joints = joint_centres(verts, groups)
+    for side in ("l", "r"):
+        fingers = {}
+        for f in (2, 3, 4, 5):
+            chain = [joints[f"{side}-finger-{f}-{k}"] for k in (1, 2, 3, 4)]
+            chain.append(add(chain[3], mul(norm(sub(chain[3], chain[2])), 4.0)))  # the last joint to past the fingertip
+            fingers[f] = chain
+        row = norm(sub(joints[f"{side}-finger-5-1"], joints[f"{side}-finger-2-1"]))
+        members = {f: [] for f in fingers}
+        wrist = joints[side + "-hand"]
+        for i in all_ids:
+            p = verts[i]
+            if length(sub(p, wrist)) > 28.0:
+                continue
+            best, best_d = None, 2.0
+            for f, chain in fingers.items():
+                d = min(seg_dist(p, chain[k], chain[k + 1]) for k in range(4))
+                if d < best_d:
+                    best, best_d = f, d
+            if best is not None:
+                members[best].append(i)
+        for f, chain in fingers.items():
+            fdir = norm(sub(chain[3], chain[0]))
+            axis = norm(sub(row, mul(fdir, dot(row, fdir))))  # across the knuckles, in the palm's plane
+            for k in range(3):
+                angle = HUMAN_MALE_FINGER_CURL[k] * HUMAN_MALE_CURL_SIGN * (1.0 if side == "l" else -1.0)
+                along = norm(sub(chain[k + 1], chain[k]))
+                for i in members[f]:
+                    w = smoothstep(-0.5, 0.7, dot(sub(verts[i], chain[k]), along))
+                    if w > 0.0:
+                        verts[i] = rotate_about(verts[i], chain[k], axis, angle * w)
+                for m in range(k + 1, 5):
+                    chain[m] = rotate_about(chain[m], chain[k], axis, angle)
+        # Fingers together: the index, ring and little finger turn toward the middle finger about their root, in the
+        # palm's plane (the turn direction is whichever brings the fingertip nearer the middle fingertip).
+        mid_tip = fingers[3][3]
+        for f, ang in ((2, HUMAN_MALE_FINGER_CLOSE[0]), (4, HUMAN_MALE_FINGER_CLOSE[1]), (5, HUMAN_MALE_FINGER_CLOSE[2])):
+            chain = fingers[f]
+            fdir = norm(sub(chain[3], chain[0]))
+            n_axis = norm(cross(fdir, row))  # the palm's normal
+            best = None
+            for sgn in (1.0, -1.0):
+                tip = rotate_about(chain[3], chain[0], n_axis, sgn * ang)
+                d = length(sub(tip, mid_tip))
+                if best is None or d < best[0]:
+                    best = (d, sgn)
+            along = norm(sub(chain[1], chain[0]))
+            for i in members[f]:
+                w = smoothstep(-0.8, 0.8, dot(sub(verts[i], chain[0]), along))
+                if w > 0.0:
+                    verts[i] = rotate_about(verts[i], chain[0], n_axis, best[1] * ang * w)
+        # The thumb turns in toward the index finger about its root joint.
+        thumb = [joints[f"{side}-finger-1-{k}"] for k in (1, 2, 3, 4)]
+        thumb.append(add(thumb[3], mul(norm(sub(thumb[3], thumb[2])), 4.0)))
+        t_dir = norm(sub(thumb[3], thumb[0]))
+        i_dir = norm(sub(fingers[2][3], thumb[0]))
+        t_axis = norm(cross(t_dir, i_dir))  # a positive turn about it takes the thumb toward the index finger
+        t_along = norm(sub(thumb[1], thumb[0]))
+        for i in all_ids:
+            p = verts[i]
+            if length(sub(p, wrist)) > 28.0 or min(seg_dist(p, thumb[k], thumb[k + 1]) for k in range(4)) > 2.4:
+                continue
+            w = smoothstep(-0.5, 1.5, dot(sub(p, thumb[0]), t_along))
+            if w > 0.0:
+                verts[i] = rotate_about(p, thumb[0], t_axis, HUMAN_MALE_THUMB_IN * w)
+
+    # Relax pass (a smoothing brush, in the build): where the targets and the pose turns pile up, the surface
+    # is smoothed toward the mean of its neighbours, strongest at each region's centre and fading to nothing at
+    # its radius. Regions (left side; the right is the mirror): the armpit, the hip and outer thigh, the inner thigh.
+    nbrs = defaultdict(set)
+    for f in groups["body"]:
+        ids = [i for i, _ in f]
+        for a, b_ in zip(ids, ids[1:] + ids[:1]):
+            nbrs[a].add(b_); nbrs[b_].add(a)
+    sh, hip, knee = joints["l-shoulder"], joints["l-upper-leg"], joints["l-knee"]
+    regions = [  # (centre, radius, iterations, strength)
+        ((sh[0] + 1.0, sh[1] - 13.0, sh[2] - 1.0), 13.0, 14, 0.6),                 # armpit
+        ((hip[0] + 7.0, hip[1] - 10.0, hip[2]), 18.0, 6, 0.4),                     # hip and outer thigh
+        (((hip[0] + knee[0]) / 2 - 6.0, (hip[1] + knee[1]) / 2, hip[2]), 14.0, 6, 0.4),  # inner thigh
+    ]
+    for centre, radius, iterations, strength in regions:
+        weights = {}
+        for i in body_ids:
+            if verts[i][0] < -1.0:
+                continue
+            d = length(sub(verts[i], centre))
+            if d < radius:
+                weights[i] = strength * (1.0 - smoothstep(radius * 0.4, radius, d))
+        for _ in range(iterations):
+            moved = {}
+            for i, w in weights.items():
+                ns = nbrs[i]
+                mean = mul(tuple(sum(verts[n][k] for n in ns) for k in range(3)), 1.0 / len(ns))
+                moved[i] = tuple(lerp(verts[i][k], mean[k], w) for k in range(3))
+            verts = [moved.get(i, v) for i, v in enumerate(verts)]
+
+    # The body, to 180 cm, made exactly mirror-symmetric: MakeHuman's base is, its targets only nearly, so the
+    # character's left side (base x > 0) is kept and the right is its exact mirror (pairs by the base positions).
+    remap = {old: new for new, old in enumerate(body_ids)}
+    lo, hi = bounds([Mesh([verts[i] for i in body_ids])])
+    scale = HUMAN_MALE_HEIGHT / (hi[1] - lo[1])
+    scaled = [mul(verts[i], scale) for i in body_ids]
+    key = lambda p: (round(p[0], 2), round(p[1], 2), round(p[2], 2))
+    by_key = {key(base_verts[i]): n for n, i in enumerate(body_ids)}
+    out = []
+    for n, i in enumerate(body_ids):
+        m = by_key.get(key(mirror_x(base_verts[i])))
+        if m is None:
+            sys.exit(f"human-male: no mirror partner for vertex {i}")
+        if m == n:
+            out.append((0.0, scaled[n][1], scaled[n][2]))
+        elif base_verts[i][0] > 0.0:
+            out.append(scaled[n])
+        else:
+            out.append(mirror_x(scaled[m]))
+    faces = [tuple(remap[i] for i, _ in f) for f in groups["body"]]
+    # Landmarks for the sculpt pass (tools/starter/human_male_sculpt.py): the left side's joints, scaled like the
+    # mesh (main() shifts them with place_on_ground's offset and writes human-male.landmarks.json).
+    global HUMAN_MALE_LANDMARKS
+    HUMAN_MALE_LANDMARKS = {k: mul(v, scale) for k, v in joints.items()
+                            if k.startswith("l-") or k in ("neck", "head", "jaw", "pelvis", "spine-1", "spine-2", "spine-3", "spine-4")}
+    uv_ids = sorted({t for f in groups["body"] for _, t in f})
+    if uv_ids[0] < 0:
+        sys.exit("human-male: a body face has no texture coordinates")
+    uv_remap = {old: new for new, old in enumerate(uv_ids)}
+    uv_faces = [tuple(uv_remap[t] for _, t in f) for f in groups["body"]]
+    return Mesh(out, faces, [texcoords[t] for t in uv_ids], uv_faces)
+
+
+def stylised_head(head, j):
+    """The human head pushed toward a cartoon: bigger cranium and eyes, smaller nose, mouth and jaw."""
+    eyes = [j["l-eye"], mirror_x(j["l-eye"])]
+    brow_y = j["l-eye"][1] + 1.0
+    jaw_y = j["jaw"][1]
+    nose = (0.0, j["l-eye"][1] - 3.0, j["l-eye"][2] + 2.0)
+    centre = (0.0, j["head"][1] + 2.0, j["head"][2])
+
+    def warp(v):
+        p = v
+        # Cranium: everything above the brows grows by up to 22 % about the head's centre.
+        s = 1.0 + 0.22 * smoothstep(brow_y - 3.0, brow_y + 6.0, p[1])
+        p = add(centre, mul(sub(p, centre), s))
+        # Eyes: a magnifying warp round each eye.
+        for e in eyes:
+            d = sub(v, e)
+            r = length(d)
+            w = 1.0 - smoothstep(0.0, 4.2, r)
+            p = add(p, mul(d, 0.55 * w))
+        # Nose: shrink toward the face.
+        d = sub(v, nose)
+        w = 1.0 - smoothstep(0.0, 3.5, length(d))
+        p = add(p, mul((d[0], d[1], d[2] - 1.0), -0.35 * w))
+        # Jaw and chin: narrower and shorter.
+        t = 1.0 - smoothstep(jaw_y - 6.0, jaw_y + 3.0, v[1])
+        p = (p[0] * (1.0 - 0.22 * t), p[1] + t * 0.18 * (jaw_y + 3.0 - v[1]), p[2] - 0.12 * t * (p[2] - centre[2]))
+        return p
+
+    return head.transformed(warp)
+
+
+def eye():
+    """Eyeball, 24 mm across, with the cornea bulging 2.6 mm at the front; rings of quads round the pupil."""
+    R = 1.2
+    pts = []
+    n = 96
+    for k in range(n + 1):
+        a = -math.pi / 2 + math.pi * k / n  # back pole -> front pole, as (radius, height along the view axis)
+        r, h = R * math.cos(a), R * math.sin(a)
+        ang = math.pi / 2 - a  # angle from the front pole
+        if ang < 0.62:
+            h += 0.26 * (1.0 - (ang / 0.62) ** 2) ** 2
+        pts.append((max(0.0, r), h))
+    m = revolve(pts, 16)
+    # The revolve axis (Y) becomes the view axis (+Z).
+    return m.transformed(lambda v: (v[0], -v[2], v[1]))
+
+
+def creature_head():
+    """Dragon / creature head blockout: a skull with a long, blunt snout, brow ridges over the eye sockets, cheek
+    bones and nostrils, a lower jaw tucked under it and two horns sweeping back (four Parts). About 37 cm long."""
+    skull = ellipsoid_box(1.0, 0.85, 2.0, 0.17, 2.6)
+
+    def bump(v, c, rad, amt):
+        out = (0.0, 0.0, 0.0)
+        for sx in ((1, -1) if c[0] else (1,)):
+            w = 1.0 - smoothstep(0.0, rad, length(sub(v, (c[0] * sx, c[1], c[2]))))
+            out = add(out, mul(norm(v), amt * w * w * (3 - 2 * w)))
+        return out
+
+    def shape(v):
+        x, y, z = v
+        t = smoothstep(-0.3, 2.0, z)  # 0 at the back of the skull, 1 at the snout tip
+        p = (x * lerp(1.0, 0.55, t), y * lerp(1.0, 0.5, t) - 0.25 * t, z)
+        for (c, rad, amt) in (((0.5, 0.55, 0.55), 0.5, 0.30),     # brow ridges
+                              ((0.62, 0.22, 0.8), 0.32, -0.14),   # eye sockets under them
+                              ((0.85, -0.25, 0.1), 0.5, 0.12),    # cheek bones
+                              ((0.25, 0.3, 1.85), 0.25, 0.08),    # nostrils
+                              ((0.0, 0.8, -0.4), 0.6, 0.10)):     # crest over the cranium
+            p = add(p, bump(v, c, rad, amt))
+        return mul(p, 9.0)
+
+    skull = skull.transformed(shape)
+    jaw = ellipsoid_box(0.7, 0.22, 1.7, 0.14, 2.4)
+
+    def jaw_shape(v):
+        x, y, z = v
+        t = smoothstep(-0.7, 1.7, z)
+        return mul((x * lerp(1.0, 0.5, t), y * lerp(1.0, 0.8, t) + lerp(-0.72, -0.62, t), z + 0.15), 9.0)
+
+    jaw = jaw.transformed(jaw_shape)
+    # Horn: a tapering tube along +Y, bent back as it grows, then pitched back, turned out and set on the skull.
+    L, R = 13.0, 1.5
+    pts = [(0.0, 0.0), (R, 0.0)] + [(R * (1.0 - (k / 40) ** 1.3) + 0.03, L * k / 40) for k in range(1, 41)] + \
+        [(0.0, L + 0.05)]
+    horn0 = revolve(pts, 8)
+    bend_angle, pitch, roll = 1.0, 0.55, 0.35
+
+    def place(v, sx):
+        x, y, z = v
+        a = bend_angle * y / L
+        rr = L / bend_angle
+        nrm = (0.0, -math.sin(a), -math.cos(a))  # across the bent axis, toward the back
+        p = add((x, rr * math.sin(a), -(rr - rr * math.cos(a))), mul(nrm, -z))
+        p = (p[0], p[1] * math.cos(pitch) + p[2] * math.sin(pitch), -p[1] * math.sin(pitch) + p[2] * math.cos(pitch))
+        p = (p[0] * math.cos(roll) + p[1] * math.sin(roll), -p[0] * math.sin(roll) + p[1] * math.cos(roll), p[2])
+        return (sx * (p[0] + 4.3), p[1] + 4.6, p[2] - 5.5)
+
+    horns = []
+    for sx in (1, -1):
+        h = horn0.transformed(lambda v, sx=sx: place(v, sx))
+        if sx < 0:
+            h.faces = [tuple(reversed(f)) for f in h.faces]
+        horns.append(h)
+    return [skull, jaw] + horns
+
+
+def primitives():
+    out = {}
+    out["rounded-box"] = [rounded_box(10.0, 10.0, 10.0, 1.5, 1.0)]
+    R, H, b = 10.0, 20.0, 1.5
+    pts = [(0.0, 0.0), (R - b, 0.0)] + arc(R - b, b, b, -math.pi / 2, 0.0, 12) + [(R, H - b)] + \
+        arc(R - b, H - b, b, 0.0, math.pi / 2, 12) + [(0.0, H)]
+    out["cylinder"] = [revolve(pts, 16)]
+    R, L = 7.5, 15.0
+    pts = arc(0.0, R, R, -math.pi / 2, 0.0, 24) + arc(0.0, R + L, R, 0.0, math.pi / 2, 24)
+    out["capsule"] = [revolve(pts, 16)]
+    w, h, b = 3.0, 2.4, 0.6  # cross-section: 3 cm wide, 2.4 cm tall, 6 mm bevels
+    sec = []
+    for (cx, cy, a0) in ((w / 2 - b, -h / 2 + b, -math.pi / 2), (w / 2 - b, h / 2 - b, 0.0),
+                         (-w / 2 + b, h / 2 - b, math.pi / 2), (-w / 2 + b, -h / 2 + b, math.pi)):
+        sec += arc(cx, cy, b, a0, a0 + math.pi / 2, 8)
+    out["ring"] = [torus(sec, 64, 9.0)]
+    return out
+
+
+# (id, name, Part names, symmetric, closed, Divide levels at load)
+SET = [
+    ("human-head", "Human Head", ["Head"], True, False, 2),
+    ("bust", "Bust", ["Bust"], True, False, 2),
+    ("full-body", "Full Body (A-pose)", ["Body"], True, True, 1),
+    ("human-male", "Human (male, A-pose)", ["Body"], True, True, 1),  # + the sculpt layer's level in the project
+    ("hand", "Hand", ["Hand"], False, False, 2),
+    ("foot", "Foot", ["Foot"], False, False, 2),
+    ("ear", "Ear", ["Ear"], False, False, 2),
+    ("eye", "Eye", ["Eye"], True, True, 2),
+    ("stylised-head", "Stylised Head", ["Head"], True, False, 2),
+    ("creature-head", "Creature Head", ["Skull", "Jaw", "Horn L", "Horn R"], True, True, 2),
+    ("torso", "Torso", ["Torso"], True, False, 2),
+    ("rounded-box", "Rounded Box", ["Rounded Box"], True, True, 2),
+    ("cylinder", "Cylinder", ["Cylinder"], True, True, 2),
+    ("capsule", "Capsule", ["Capsule"], True, True, 2),
+    ("ring", "Ring", ["Ring"], True, True, 2),
+]
+
+
+def check(mid, parts, closed):
+    nv = sum(len(m.verts) for m in parts)
+    nf = sum(len(m.faces) for m in parts)
+    lens = []
+    boundary = 0
+    for m in parts:
+        e = Counter()
+        for f in m.faces:
+            for a, b in zip(f, f[1:] + f[:1]):
+                e[(min(a, b), max(a, b))] += 1
+                lens.append(length(sub(m.verts[a], m.verts[b])))
+        if any(c > 2 for c in e.values()):
+            sys.exit(f"{mid}: non-manifold edge")
+        boundary += sum(1 for c in e.values() if c == 1)
+    if closed and boundary:
+        sys.exit(f"{mid}: expected closed, {boundary} boundary edges")
+    mean = sum(lens) / len(lens)
+    cv = math.sqrt(sum((l - mean) ** 2 for l in lens) / len(lens)) / mean
+    lo, hi = bounds(parts)
+    print(f"{mid:15s} {nv:6d} verts {nf:6d} quads  edge cv {cv:.2f}  boundary {boundary:4d}  "
+          f"size {hi[0]-lo[0]:.1f} x {hi[1]-lo[1]:.1f} x {hi[2]-lo[2]:.1f} cm")
+
+
+def write_obj(path, names, parts):
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("# SculptForge starter mesh (tools/starter/build_starter_meshes.py); docs/starter-meshes.md\n")
+        base, uv_base = 1, 1
+        for name, m in zip(names, parts):
+            fh.write(f"o {name}\n")
+            for v in m.verts:
+                fh.write("v %.4f %.4f %.4f\n" % tuple(0.0 if abs(c) < 5e-5 else c for c in v))
+            for uv in m.uvs:
+                fh.write("vt %.5f %.5f\n" % uv)
+            if m.uvs:
+                for f, t in zip(m.faces, m.uv_faces):
+                    fh.write("f " + " ".join(f"{i + base}/{k + uv_base}" for i, k in zip(f, t)) + "\n")
+            else:
+                for f in m.faces:
+                    fh.write("f " + " ".join(str(i + base) for i in f) + "\n")
+            base += len(m.verts)
+            uv_base += len(m.uvs)
+
+
+def main():
+    if len(sys.argv) not in (3, 4):
+        sys.exit("usage: build_starter_meshes.py <makehuman base.obj> <out dir> [<targets dir>]")
+    body, joints = load_makehuman(sys.argv[1])
+    out_dir = sys.argv[2]
+    os.makedirs(out_dir, exist_ok=True)
+    meshes = human_parts(body, joints)
+    if len(sys.argv) == 4:
+        meshes["human-male"] = [human_male(sys.argv[1], sys.argv[3])]
+    else:
+        print("human-male skipped (no targets dir)")
+    meshes["stylised-head"] = [stylised_head(meshes["human-head"][0], joints)]
+    meshes["eye"] = [eye()]
+    meshes["creature-head"] = creature_head()
+    meshes.update(primitives())
+    for (mid, name, part_names, symmetric, closed, levels) in SET:
+        if mid not in meshes:
+            continue
+        parts = place_on_ground(meshes[mid])
+        check(mid, parts, closed)
+        write_obj(os.path.join(out_dir, mid + ".obj"), part_names, parts)
+        if mid == "human-male":
+            lo, hi = bounds(meshes[mid])
+            off = (-(lo[0] + hi[0]) / 2, -lo[1], -(lo[2] + hi[2]) / 2)
+            lm = {k: [round(c, 3) for c in add(v, off)] for k, v in sorted(HUMAN_MALE_LANDMARKS.items())}
+            with open(os.path.join(out_dir, "human-male.landmarks.json"), "w", encoding="utf-8", newline="\n") as fh:
+                json.dump(lm, fh, indent=1, sort_keys=True)
+
+
+if __name__ == "__main__":
+    main()

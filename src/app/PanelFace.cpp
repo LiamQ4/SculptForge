@@ -5,6 +5,7 @@
 // canvas to guide the fit, the Face test (expression presets and a slider per shape), and recorded takes (play,
 // bake for export).
 #include "app/App.h"
+#include "app/NativeDialog.h"
 #include "app/Demo.h"
 #include "app/Palettes.h"
 #include "app/Ui.h"
@@ -136,7 +137,7 @@ void App::registerFaceUiActions() {
         },
         [this] { return faceLandmarks_.count() > 0; }, "Remove the landmarks: Generate then finds the face by itself.", "");
     add("face.take_load", "Load Take...", ICON_LC_FOLDER_OPEN,
-        [this] { SDL_ShowOpenFileDialog(onFaceTakeChosen, this, window_, kTakeFilters, 2, nullptr, false); }, nullptr,
+        [this] { sf::dialogs::openFile(onFaceTakeChosen, this, window_, kTakeFilters, 2, nullptr, false); }, nullptr,
         "Play a recorded face take on the facial shapes: the JSON frames the phone link records ({\"type\":\"face\", "
         "\"t\":ms, \"weights\":{...}} as an array, {\"frames\":[...]} or JSON Lines).",
         "face_take_play");
@@ -190,7 +191,7 @@ void App::generateFaceShapesUi() {
     Args args;
     if (faceLandmarks_.count() >= 3) args["landmarks"] = faceLandmarks_.toJson().dump();
     args["symmetry"] = std::string(faceSymmetry_ == 1 ? "on" : faceSymmetry_ == 2 ? "off" : "auto");
-    args["subtools"] = faceSubtools_;
+    args["parts"] = faceParts_;
     facePlacing_ = false;
     runCommand("face_shapes_generate", args);
 }
@@ -225,7 +226,7 @@ bool App::faceMouseDown(float x, float y, SDL_Keymod mod) {
     const float grab = 10.0f * uiScale_;
     for (int i = 0; i < kFaceLandmarkCount; ++i) {
         ImVec2 sp;
-        if (faceLandmarks_.set[size_t(i)] && i != facePlaceIndex_ && gizmoProject(faceLandmarks_.position[size_t(i)], sp) &&
+        if (faceLandmarks_.set[size_t(i)] && i != facePlaceIndex_ && partProject(faceLandmarks_.position[size_t(i)], sp) &&
             std::hypot(sp.x - x, sp.y - y) < grab) {
             facePlaceIndex_ = i;
             status_ = std::string("Click the new place for the ") + faceLandmarkLabel(i);
@@ -261,7 +262,7 @@ void App::drawFaceOverlay() {
     for (int i = 0; i < kFaceLandmarkCount; ++i) {
         if (!faceLandmarks_.set[size_t(i)]) continue;
         ImVec2 p;
-        if (!gizmoProject(faceLandmarks_.position[size_t(i)], p)) continue;
+        if (!partProject(faceLandmarks_.position[size_t(i)], p)) continue;
         const bool current = facePlacing_ && i == facePlaceIndex_;
         dl->AddCircleFilled(p, 5.0f * s, current ? IM_COL32(255, 196, 64, 255) : IM_COL32(80, 200, 255, 255));
         dl->AddCircle(p, 5.0f * s, IM_COL32(0, 0, 0, 200), 0, 1.5f * s);
@@ -274,27 +275,23 @@ void App::drawFaceOverlay() {
         std::snprintf(banner, sizeof banner, "Landmark %d/8: click the %s  (the character's own side; its right is on "
                                              "your left from the front)",
                       facePlaceIndex_ + 1, faceLandmarkLabel(facePlaceIndex_));
-        const ImVec2 size = ImGui::CalcTextSize(banner);
-        const ImVec2 at(cr.x + (cr.w - size.x) * 0.5f, cr.y + timelineTopInset_ + 12.0f * s);
-        dl->AddRectFilled(ImVec2(at.x - 8 * s, at.y - 4 * s), ImVec2(at.x + size.x + 8 * s, at.y + size.y + 4 * s),
-                          IM_COL32(20, 20, 24, 210), 4.0f * s);
-        dl->AddText(at, IM_COL32(255, 196, 64, 255), banner);
+        drawViewportHint("face_landmarks", banner, IM_COL32(255, 196, 64, 255), cr.y + timelineTopInset_ + 8.0f * s);
     }
     dl->PopClipRect();
 }
 
 void App::drawFaceContents() {
     const float s = uiScale_;
-    dimText("The 52 Apple ARKit blend shapes for rigs and live face capture, fitted to this head.");
+    dimText(tr("The 52 Apple ARKit blend shapes for rigs and live face capture, fitted to this head."));
     actionButton(*this, "face.generate");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
-    const char* symmetry[] = {"Auto", "On", "Off"};
-    ImGui::Combo("Symmetry##face", &faceSymmetry_, symmetry, 3);
+    const char* symmetry[] = {tr("Auto"), tr("On"), tr("Off")};
+    ImGui::Combo(tr("Symmetry##face"), &faceSymmetry_, symmetry, 3);
     ui::HelpText("Symmetry", nullptr,
                  "Auto: Left and Right shapes are made exact mirror images when the sculpt is symmetric about X = 0. "
                  "On: always (asymmetric spots take the average). Off: each side as fitted.",
                  kFacePath);
-    ImGui::Checkbox("Parts too##face", &faceSubtools_);
+    ImGui::Checkbox(tr("Parts too##face"), &faceParts_);
     ui::HelpText("Parts too", nullptr,
                  "Eyes (Parts named Eye...) turn for the eyeLook shapes, Teeth / Tongue follow the jaw below the "
                  "bite (and tongueOut), and other Parts on the face (brows, lashes, a beard) follow the skin.",
@@ -312,14 +309,14 @@ void App::drawFaceContents() {
     ImGui::TextDisabled("%s", placed);
     if (faceLandmarks_.count()) {
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - 40 * s);
-        if (ImGui::SmallButton("Clear##facelm")) runAction(actions_, "face.landmarks_clear");
+        if (ImGui::SmallButton(tr("Clear##facelm"))) runAction(actions_, "face.landmarks_clear");
         ui::HelpAction(*this, "face.landmarks_clear");
     }
 
     // Face test.
     tray::GroupLabel(*this, "Face test");
     const bool shapes = hasFaceShapes();
-    if (!shapes) dimText("Generate the shapes first.");
+    if (!shapes) dimText(tr("Generate the shapes first."));
     ImGui::BeginDisabled(!shapes);
     const auto& presets = facePresets();
     const float cell = (ImGui::GetContentRegionAvail().x - 3 * ImGui::GetStyle().ItemSpacing.x) / 4.0f;
@@ -361,16 +358,16 @@ void App::drawFaceContents() {
     actionButton(*this, "face.take_load");
     if (!faceTake_.empty()) {
         ImGui::TextDisabled("%s: %.1f / %.1f s", faceTake_.name.c_str(), double(faceTakeTime_), double(faceTake_.duration()));
-        if (ImGui::Button(faceTakePlaying_ ? "Pause##facetake" : "Play##facetake", ImVec2(half, 0))) runAction(actions_, "face.take_play");
+        if (ImGui::Button(tr(faceTakePlaying_ ? "Pause##facetake" : "Play##facetake"), ImVec2(half, 0))) runAction(actions_, "face.take_play");
         ui::HelpAction(*this, "face.take_play");
         ImGui::SameLine();
-        ImGui::Checkbox("Loop##facetake", &faceTakeLoop_);
+        ImGui::Checkbox(tr("Loop##facetake"), &faceTakeLoop_);
         ui::HelpText("Loop", nullptr, "Play the take again from the start when it ends.", kFacePath);
         actionButton(*this, "face.take_bake");
     }
     MorphAnimation baked;
     if (bakedFaceAnimation(doc_, baked)) {
-        ImGui::TextDisabled("Baked: %s (%.1f s, exports with GLB / USD)", baked.name.c_str(), double(baked.duration()));
+        ImGui::TextDisabled(tr("Baked: %s (%.1f s, exports with GLB / USD)"), baked.name.c_str(), double(baked.duration()));
         actionButton(*this, "face.take_clear");
     }
 }

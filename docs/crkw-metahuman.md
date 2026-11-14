@@ -12,7 +12,7 @@ Templates and maps are external assets, not distributed in this repository or
 portable app. Use assets you are entitled to use.
 
 Choose **Full Body**, **Head + Body**, or **Head Only**, then **Create MetaHuman**.
-Creation appends native SubTools and keeps existing scene objects. **Start
+Creation appends native Parts and keeps existing scene objects. **Start
 Sculpting** selects the Standard brush and disables Dyntopo. Sculpt proportions
 while preserving indexed base topology. Avoid remesh, vertex reordering, and
 deleting or applying subdivision levels that replace the base.
@@ -26,32 +26,32 @@ it cannot reconstruct a remeshed template.
 ## Guide preview
 
 **Show UV Textures** offers Base Color, UV Guides and Annotated Guides. Body
-annotation uses the available body guide map. Preview affects MetaHuman SubTools
+annotation uses the available body guide map. Preview affects MetaHuman Parts
 in the scene and uses separate display textures/UVs; turning it off reveals the
 original painted texture. Full Body uses a display atlas for body and head maps.
 Real UVs and exported textures remain unchanged. Display maps are limited to
 2048 pixels per part. Projects remember the preview mode; external maps must
 remain accessible to restore it.
 
-In **Tool > Texture Map**, hover the texture box and press **Ctrl+V** to paste
+In **Tool > Texture Image**, hover the texture box and press **Ctrl+V** to paste
 an image from the clipboard (or a copied image-file path). Click the box to
-browse for an image. This replaces the selected SubTool's paint texture and
+browse for an image. This replaces the selected Part's paint texture and
 layers, using its existing UVs; **Ctrl+Z** restores the previous texture. Pasting
-or importing turns off that SubTool's guide preview and enables texture display
+or importing turns off that Part's guide preview and enables texture display
 so the result is visible immediately. Paste head and body maps onto their
-matching SubTools. Guide previews remain available from MetaHuman Sculpt.
+matching Parts. Guide previews remain available from MetaHuman Sculpt.
 
 **Texture Manager** opens a compact floating panel from MetaHuman Sculpt,
-CrokedWillo, or Tool > Texture Map. Each SubTool has a large preview card,
+CrokedWillo, or Tool > Texture Image. Each Part has a large preview card,
 labelled **Guide** for a display map or **Texture** for an editable map. Hover a
 card and press Ctrl+V, use **Paste**, or click **Swap image...** to replace that
-SubTool's map. The target becomes selected, so Ctrl+Z restores its previous
-texture independently of the other SubTools. Meshes without UVs need UVs before
-importing. Previews include inactive and hidden SubTools.
+Part's map. The target becomes selected, so Ctrl+Z restores its previous
+texture independently of the other Parts. Meshes without UVs need UVs before
+importing. Previews include inactive and hidden Parts.
 
 ## Export
 
-Select a MetaHuman SubTool and choose **Export for MetaHuman**. The active
+Select a MetaHuman Part and choose **Export for MetaHuman**. The active
 character is exported as separate `head.fbx`, `body.fbx` (when present),
 `eyeLeft.fbx`, `eyeRight.fbx` and `teeth.fbx`. Full Body is split using its saved
 body/head material partition. Matching filenames are replaced; unrelated files
@@ -78,16 +78,21 @@ FBX export alone does not establish compatibility with every MetaHuman version.
 `CRKW_METAHUMAN_ASSETS` supplies the folder when `assets` is omitted. Portable
 tests generate synthetic assets and do not redistribute MetaHuman templates.
 
-## Local validation
+## Historical local validation (before v0.12.16)
 
 The Windows Release build passed 43,460 core checks, including 65 MetaHuman
 checks, and the native panel test. All three layouts were also exercised with
 the local templates: guide display, full-body splitting, subdivision base export,
 UV repair, and project save/reopen. The installed portable app passed its panel
-test. The full CTest suite passed 46/48 tests; the existing `ui_lightbox`
-QuickSave help-text and `ui_zbrush_feel` negative Focal Shift failures remain.
+test. The full CTest suite passed 46/48 tests; the existing the retired library UI test
+QuickSave help-text and the retired classic-input UI test negative brush focus failures remain.
 Logs and local asset validation output are under ignored `out/`.
 
 CRKW installs to `out/crkw-app` only (see CKW_WORKFLOW.md); since 2026-10-26
 `out/crkw-metahuman-app` is a junction to it, so older shortcuts and taskbar pins
 open the same latest build.
+
+
+## Source maintenance — 2026-11-14
+
+Reviewed for upstream v0.12.16. CRKW uses the upstream Parts/PartData model; existing `crkw_metahuman` and `crkw_mask_manager` project payloads retain their format. CRKW material indices remain stable. Current build, installation and validation status is recorded in [the CRKW workflow](../CKW_WORKFLOW.md). Earlier validation counts above are historical.

@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The palettes of the palette bar (docs/ui-design.md §3.2), listed
-// alphabetically like ZBrush's. Each body is one function, drawn the same way
-// in a drop-down and in a tray. ZBrush's Tool palette holds the SubTool,
-// Layers, Geometry, Remesh, Masking, Polygroups, Visibility, Export and
+// alphabetically. Each body is one function, drawn the same way
+// in a drop-down and in a tray. the classic Tool palette holds the Part,
+// Layers, Geometry, Remesh, Masking, Face groups, Visibility, Export and
 // Display sub-palettes.
 #include "app/App.h"
+#include "app/NativeDialog.h"
 
 #include "app/Config.h"
 #include "app/Demo.h"
@@ -15,9 +16,13 @@
 #include "app/Theme.h"
 #include "app/Ui.h"
 #include "app/I18n.h"
-#include "core/Matcap.h"
+#include "core/LitSphere.h"
+#include "core/StarterMeshes.h"
+#include "core/Units.h"
 
 #include <IconsLucide.h>
+
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cfloat>
@@ -25,6 +30,7 @@
 #include <cstdio>
 #include <iterator>
 #include <string>
+#include <utility>
 
 namespace sf {
 
@@ -41,6 +47,7 @@ const PaletteDef* palettes(int& count) {
         {"generate", "Generate", ICON_LC_WAND_SPARKLES, nullptr, &App::drawPalette_Generate},
         {"help", "Help", ICON_LC_CIRCLE_HELP, nullptr, &App::drawPalette_Help},
         {"material", "Material", ICON_LC_SUN, "Vertex Paint & Materials", &App::drawPalette_Material},
+        {"mypanel", "My Panel", ICON_LC_STAR, nullptr, &App::drawPalette_MyPanel},
         {"preferences", "Preferences", ICON_LC_SETTINGS, nullptr, &App::drawPalette_Preferences},
         {"render", "Render", ICON_LC_EYE, nullptr, &App::drawPalette_Render},
         {"script", "Script", ICON_LC_SQUARE_TERMINAL, nullptr, &App::drawPalette_Script},
@@ -66,7 +73,7 @@ const TaskMenuDef* taskMenus(int& count) {
     // is shaded (Lit Sphere materials, PBR) and the Gaussian splats.
     static const TaskMenuDef kMenus[] = {
         {"file", "File", {"file", "script", nullptr}, {nullptr, nullptr}},
-        {"edit", "Edit", {"edit", "preferences", nullptr}, {nullptr, nullptr}},
+        {"edit", "Edit", {"edit", "mypanel", "preferences", nullptr}, {nullptr, nullptr, nullptr}},
         {"sculpt", "Sculpt", {"brush", "draw", "stroke", "alpha", "transform", nullptr}, {nullptr, "Draw & Tablet", nullptr, nullptr, "Symmetry & Gizmo"}},
         {"paint", "Paint", {"color", nullptr}, {"Vertex Paint & Color"}},
         {"mesh", "Mesh", {"tool", "generate", "ckw", nullptr}, {"Parts & Geometry", "Generate 3D", "CrokedWillo"}},
@@ -85,6 +92,23 @@ int taskMenuOf(std::string_view paletteId) {
         for (int k = 0; k < 6 && menus[i].sections[k]; ++k)
             if (paletteId == menus[i].sections[k]) return i;
     return -1;
+}
+
+const char* paletteTitle(const PaletteDef& p) {
+    return std::string_view(p.id) == "generate" && !ai::aiEnabled() ? "From Image" : p.name;
+}
+
+const char* taskSectionTitle(const TaskMenuDef& menu, int k) {
+    if (std::string_view(menu.sections[k]) == "generate" && !ai::aiEnabled()) return "From Image";
+    if (menu.titles[k]) return menu.titles[k];
+    const PaletteDef* p = findPalette(menu.sections[k]);
+    return p ? p->name : menu.sections[k];
+}
+
+const char* taskSectionIcon(const TaskMenuDef& menu, int k) {
+    if (std::string_view(menu.sections[k]) == "generate" && !ai::aiEnabled()) return ICON_LC_IMAGE;
+    const PaletteDef* p = findPalette(menu.sections[k]);
+    return p ? p->icon : "";
 }
 
 namespace {
@@ -160,16 +184,24 @@ void drawOptionRow(App& app, std::initializer_list<const char*> ids) {
     ImGui::PopStyleColor(3);
 }
 
+// App::drawMyPanelSection runs a palette body with its items skipped and lets one section through: that section's
+// Section object (constructed right after subpalette() says yes) ends the pass.
+bool g_captureNext = false;
+
 } // namespace
 
 namespace tray {
 
-Section::Section() { ImGui::Indent(kSectionInset * ImGui::GetFontSize() / 15.0f); }
+Section::Section() {
+    ImGui::Indent(kSectionInset * ImGui::GetFontSize() / 15.0f);
+    capture_ = std::exchange(g_captureNext, false);
+}
 
 Section::~Section() {
     const float s = ImGui::GetFontSize() / 15.0f;
     ImGui::Unindent(kSectionInset * s);
     ImGui::Dummy(ImVec2(0, 4.0f * s));
+    if (capture_) ImGui::GetCurrentWindow()->SkipItems = true; // the rest of the palette body is not wanted
 }
 
 Style::Style() { ImGui::PushStyleColor(ImGuiCol_CheckMark, checkMark()); }
@@ -221,6 +253,17 @@ bool SliderInt(const char* id, int* v, int lo, int hi, const char* format, ImGui
 } // namespace tray
 
 bool App::subpalette(const char* id, const char* englishTitle) {
+    if (!myPanelSection_.empty()) { // My Panel draws this section's body and nothing else of the palette
+        const bool mine = myPanelSection_ == id;
+        if (mine) {
+            auto& title = myPanelTitles_[id];
+            if (title != englishTitle) title = englishTitle;
+        }
+        const bool draw = mine && !myPanelProbe_;
+        ImGui::GetCurrentWindow()->SkipItems = !draw;
+        g_captureNext = draw;
+        return draw;
+    }
     const char* title = tr(englishTitle); // the interface language (I18n.h); the id keeps the item's identity
     auto& open = layout_.openSubpalettes;
     bool isOpen = std::find(open.begin(), open.end(), id) != open.end();
@@ -228,8 +271,10 @@ bool App::subpalette(const char* id, const char* englishTitle) {
     const float h = kSectionHeaderH * s;
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float w = ImGui::GetContentRegionAvail().x;
-    const bool clicked = ImGui::InvisibleButton((std::string(title) + "##" + id).c_str(), ImVec2(w, h));
+    bool clicked = ImGui::InvisibleButton((std::string(title) + "##" + id).c_str(), ImVec2(w, h));
     const bool hovered = ImGui::IsItemHovered();
+    ui::MyPanelDragSource(id, true, title);
+    if (clicked && ui::MyPanelDragged()) clicked = false; // the end of an Alt-drag into My Panel, not a click
     // A quiet section header in the palette header's grammar: title at the left, chevron at the right. No fill until
     // hovered or open, a hairline under it. The title lines up with the section's content (tray::Section). The accent
     // is kept for the current tool (docs/ui-design.md §10), so an open section shows by its fill and text only.
@@ -275,6 +320,15 @@ bool App::subpalette(const char* id, const char* englishTitle) {
                  "Interface).",
                  "Tool");
     }
+    if (flashSubpalette_ == id) { // the quick tour's "Show me" (QuickTour.cpp): scrolled into view and flashed
+        const double t = ImGui::GetTime() - flashSubpaletteStart_;
+        if (t < 0.1) ImGui::SetScrollHereY(0.1f);
+        if (t < 1.5)
+            dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), theme::u32(theme::accent, float(0.5 * (1.0 - t / 1.5))),
+                              theme::rounding(2.0f * s));
+        else
+            flashSubpalette_.clear();
+    }
     if (clicked) {
         if (isOpen) {
             open.erase(std::remove(open.begin(), open.end(), id), open.end());
@@ -299,16 +353,29 @@ void App::drawPalette_Alpha() { drawAlphaSection(); }
 
 void App::drawPalette_Brush() {
     const tray::Style style; // quiet check marks
+    if (frontFacesOnly_) { // (on: Smooth and every brush skip the inner side of a thin Part; easy to forget it is on)
+        ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.51f, 1.0f), "%s", tr("Front faces only is ON"));
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", tr("Brushes skip surfaces that face away from you: the hidden inside of a thin or Extract-made "
+                                        "Part, and its far side. Smooth cannot reach spikes there. Untick Front faces only below to "
+                                        "reach them."));
+        ImGui::SameLine();
+        if (ImGui::SmallButton(tr("Turn off##front_faces_off"))) frontFacesOnly_ = false;
+    }
     // Your brushes first (PanelBrushLibrary.cpp: tags, and the right-click menu to share, rename or delete),
     // then every brush as thumbnails (Pickers.cpp, the same grid as the B picker).
     actionRow(*this, {"ui.brush_lab", "ui.brush_gallery"});
     actionRow(*this, {"brush.paste"});
+    actionRow(*this, {"brush.save_settings"}); // this brush's own settings (#78); one per row so the labels fit
+    actionRow(*this, {"brush.reset_settings"});
+    drawBrushSetRow(); // named bottom shelves with their keys (PanelBrushSets.cpp, #143)
     drawCustomBrushes();
+    drawPenPressureSwitches("brush_pen"); // this brush's own (#122)
     ImGui::Checkbox(tr("Front faces only"), &frontFacesOnly_);
     ui::HelpAction(*this, "draw.front_faces");
     ImGui::SameLine();
     ImGui::Checkbox(tr("Invert (Alt)"), &invertToggle_);
-    ui::HelpText("Invert", "Alt", "Brushes subtract instead of add (ZBrush Zsub). Holding Alt flips it for one stroke.", "Brush");
+    ui::HelpText("Invert", "Alt", "Brushes subtract instead of add. Holding Alt flips it for one stroke.", "Brush");
     ui::Checkbox("Connected only##draw.connected_only", &uiPrefs_.connectedOnly);
     ui::HelpAction(*this, "draw.connected_only");
     ImGui::SameLine();
@@ -318,7 +385,13 @@ void App::drawPalette_Brush() {
     ui::HelpText("Smooth keeps volume", nullptr,
                  "The Smooth brush (and Shift) removes bumps without shrinking the form, instead of the plain smooth "
                  "that also flattens it. Either way, let go of Shift while still pressing a Shift-smooth stroke to "
-                 "switch to the other smooth for the rest of the stroke (ZBrush's alternate smooth).",
+                 "switch to the other smooth for the rest of the stroke.",
+                 "Brush");
+    ImGui::Checkbox(tr("Smooth face group borders only##smooth_group_borders"), &smoothGroupBorders_);
+    ui::HelpText("Smooth face group borders only", nullptr,
+                 "The Smooth brush (and Shift) straightens the borders between face groups and leaves everything "
+                 "else alone: a jagged clothing edge, a cuff or a panel line becomes a clean line along the surface. "
+                 "Corners where three groups meet stay where they are.",
                  "Brush");
     if (BrushRecipe* recipe = doc_.activeBrush >= 0 && doc_.activeBrush < int(doc_.brushes.size())
                                   ? &doc_.brushes[size_t(doc_.activeBrush)]
@@ -331,6 +404,10 @@ void App::drawPalette_Brush() {
                 pendingRename_.clear();
             }
         }
+    }
+    if (subpalette("brush.cloth_options", "Cloth")) {
+        tray::Section section;
+        drawClothSection(); // PanelCloth.cpp
     }
     if (subpalette("brush.kelvinlet", "Kelvinlet & Capture")) {
         tray::Section section;
@@ -346,14 +423,18 @@ void App::drawPalette_Brush() {
 void App::drawPalette_Draw() {
     const tray::Style style; // quiet check marks
     ImGui::SetNextItemWidth(-1);
-    ui::SliderInside("##drawsize", &radiusPx_, 2.0f, 800.0f, "Draw Size %.0f", ImGuiSliderFlags_Logarithmic);
-    ui::HelpText("Draw Size", "S", "Brush radius in screen pixels. [ and ] change it by 10%.", "Draw");
+    drawSizeSlider("##drawsize", "Draw",
+                   "Brush radius in screen pixels (0.5 to 800), and in mm on the surface under the cursor. [ and ] change "
+                   "it by 10%, Shift+[ and Shift+] by 1 px; Ctrl+Shift+right-drag scrubs it finely.");
+    ui::ActionButton(*this, "brush.world_size", ImVec2(-1, 0));
     ImGui::SetNextItemWidth(-1);
     drawZIntensitySlider("##strength");
-    ImGui::SetNextItemWidth(-1);
-    float rgb = rgbIntensity_ * 100.0f;
-    if (ui::SliderInside("##rgbintensity", &rgb, 1.0f, 100.0f, "RGB Intensity %.0f")) rgbIntensity_ = rgb / 100.0f;
-    ui::HelpText("RGB Intensity", "I", "How strongly painting colours the surface (1-100); Ctrl+click to type.", "Draw");
+    if (!paintMode_) { // (in Paint mode the Intensity above is the Colour intensity, #164)
+        ImGui::SetNextItemWidth(-1);
+        float rgb = rgbIntensity_ * 100.0f;
+        if (ui::SliderInside("##rgbintensity", &rgb, 1.0f, 100.0f, "Colour intensity %.0f")) rgbIntensity_ = rgb / 100.0f;
+        ui::HelpText("Colour intensity", "I", "How strongly painting colours the surface (1-100); Ctrl+click to type.", "Draw");
+    }
     ImGui::SetNextItemWidth(-1);
     float focal = focalShift_ * 100.0f;
     if (ui::SliderInside("##focalshift", &focal, -100.0f, 100.0f, "Falloff %.0f")) focalShift_ = focal / 100.0f;
@@ -361,11 +442,11 @@ void App::drawPalette_Draw() {
                  "The brush falloff: below 0 a broad, hard tip, above 0 a soft point. The brush cursor's inner ring shows "
                  "where the brush works at half strength.",
                  "Draw");
-    // The same looks as the top shelf: Sculpt | Paint is a mode (the accent), Zadd | Zsub a choice (raised grey),
+    // The same looks as the top shelf: Sculpt | Paint is a mode (the accent), Raise | Lower a choice (raised grey),
     // the rest options (dark chips, an underline when on). Sliders stay neutral, so the accent marks one thing.
     ImGui::Dummy(ImVec2(0, 2.0f * uiScale_));
     segmented(*this, {"draw.sculpt", "draw.paint"});
-    segmented(*this, {"draw.zadd", "draw.zsub"});
+    segmented(*this, {"draw.raise", "draw.lower"});
     drawOptionRow(*this, {"draw.rgb", "draw.front_faces"});
     tray::GroupLabel(*this, "Dynamic topology");
     drawOptionRow(*this, {"draw.dynamic"});
@@ -375,7 +456,7 @@ void App::drawPalette_Draw() {
         doc_.sculptor.dyntopo.constantDetail = uiPrefs_.dyntopoConstantDetail;
     ui::HelpText("Constant detail", nullptr,
                  "Off (the default): the triangle size follows the brush size on screen, as in Dynamic Topology. On: one "
-                 "size for the whole mesh, set by Detail. A preference (Store Config keeps it).",
+                 "size for the whole mesh, set by Detail. A preference (saved automatically).",
                  "Draw > Dynamic topology");
     {
         float remesh = doc_.sculptor.dyntopo.smoothRemesh * 100.0f;
@@ -388,7 +469,7 @@ void App::drawPalette_Draw() {
         ui::HelpText("Smooth remesh", nullptr,
                      "How much Smooth (Shift) changes the topology while Dynamic is on. 100 (the default): it also "
                      "simplifies, merging triangles toward twice the size. Lower: it remeshes less. 0: Smooth only "
-                     "smooths and the triangles stay as they are. A preference (Store Config keeps it).",
+                     "smooths and the triangles stay as they are. A preference (saved automatically).",
                      "Draw > Dynamic topology");
         const float third = (ImGui::GetContentRegionAvail().x - 2.0f * ImGui::GetStyle().ItemSpacing.x) / 3.0f;
         const struct {
@@ -403,9 +484,11 @@ void App::drawPalette_Draw() {
             }
         }
     }
-    if (doc_.sculptor.dyntopo.enabled && !dyntopoBlocker(doc_.mesh).empty())
-        hint(*this, "This Part has subdivision levels, so strokes don't remesh it: delete the lower (or higher) levels "
-             "first.");
+    if (doc_.sculptor.dyntopo.enabled && !dyntopoBlocker(doc_.mesh).empty() && doc_.mesh.multires) {
+        hint(*this, "This Part has subdivision levels, so strokes don't remesh it. Freeze Levels keeps the level shown "
+             "as one plain mesh (Ctrl+Z brings the levels back).");
+        actionRow(*this, {"draw.dynamic_freeze"});
+    }
     // Focal length (#26): the perspective view's lens in mm on a 36 x 24 mm frame (vertical field of view);
     // saved with the project as the camera's fov_y.
     tray::GroupLabel(*this, "Camera");
@@ -430,6 +513,14 @@ void App::drawPalette_Draw() {
         }
         ui::Checkbox("Axes##draw.axes", &uiPrefs_.showAxes);
         ui::HelpText("Axes", nullptr, "Show the X / Y / Z directions in the corner of the canvas.", "Draw > Camera");
+        ImGui::SameLine();
+        ui::Checkbox("View Figure##draw.view_figure", &uiPrefs_.showViewFigure);
+        ui::HelpText("View Figure", nullptr,
+                     "Show a small shaded head in the corner of the canvas that turns with the view. Click it to look "
+                     "from the nearest side (front, back, left, right, top or bottom).",
+                     "Draw > Camera");
+        hint(*this, "Gizmo size");
+        segmented(*this, {"view.gizmo_small", "view.gizmo_medium", "view.gizmo_large"});
     }
     // Tablet: the same Pressure > Strength / Size toggles as the top shelf (not checkboxes), and the pen state as
     // a hint line.
@@ -456,15 +547,75 @@ void App::drawPalette_Edit() {
     ImGui::EndDisabled();
     ui::HelpAction(*this, "edit.redo");
     menuAction(*this, "brush.paste");
+    // The Classic layout has Preferences as its own palette; Edit is where people look first (#144).
+    if (!sculptForgeLayout()) {
+        ImGui::Separator();
+        const std::string shortcut = actions().shortcutText("ui.palette.preferences");
+        const std::string label = std::string(tr("Preferences")) + "...##edit.preferences";
+        const Action* a = actions().find("ui.palette.preferences");
+        if (ImGui::MenuItem(label.c_str(), shortcut.empty() ? nullptr : shortcut.c_str()) && a && a->run) {
+            actions().touch(a->id);
+            a->run();
+        }
+        ui::HelpAction(*this, "ui.palette.preferences");
+        // My Panel is on the bar only once it holds something or sits in a tray; Edit is where it is found.
+        const std::string myLabel = std::string(tr("My Panel")) + "...##edit.mypanel";
+        const std::string myKey = actions().shortcutText("ui.my_panel");
+        if (ImGui::MenuItem(myLabel.c_str(), myKey.empty() ? nullptr : myKey.c_str())) {
+            dropdown_ = "mypanel";
+            openDropdown_ = true;
+        }
+        ui::HelpAction(*this, "ui.my_panel");
+    }
+}
+
+const App::SizeBounds& App::sizeBounds() {
+    if (doc_.sculptor.strokeActive() || solverBusy()) return sizeBounds_; // (holds still during a stroke)
+    uint64_t key = doc_.undo.revision() * 0x9E3779B97F4A7C15ull ^ (uint64_t(doc_.activePart) << 40) ^
+                   uint64_t(doc_.mesh.vertexCount()) ^ (uint64_t(doc_.parts.size()) << 56);
+    for (size_t i = 0; i < doc_.parts.size(); ++i)
+        if (!doc_.parts[i].visible) key ^= 0xC2B2AE3D27D4EB4Full * (i + 1);
+    if (key != sizeBounds_.key) sizeBounds_ = {key, doc_.mesh.bounds(), doc_.visibleBounds()};
+    return sizeBounds_;
+}
+
+// File > Import / Export (#148): the size the exports write, in the Units preference, and the unit STL, OBJ and PLY
+// numbers are written in (the unit-less file the scene was opened from, else each format's convention).
+void App::drawExportSizeLine() {
+    const AABB b = sizeBounds().visible;
+    if (!b.valid()) return;
+    ImGui::TextDisabled("%s", (std::string(tr("Export size")) + ": " + formatSize(b.extent(), lengthUnit())).c_str());
+    const LengthUnit* stl = unitForScale(doc_.unitlessExportScale("stl"));
+    const LengthUnit* obj = unitForScale(doc_.unitlessExportScale("obj"));
+    const std::string from = doc_.unitlessFormat.empty() ? std::string()
+                                                         : " (as the " + doc_.unitlessFormat + " it was opened from)";
+    const std::string help = "The visible Parts' width x height x depth. Every export keeps this size: STL writes " +
+                             std::string(stl ? stl->id : "custom units") + ", OBJ and PLY write " +
+                             std::string(obj ? obj->id : "custom units") + from +
+                             ", glTF and USD metres, FBX centimetres. Units: Preferences > Interface.";
+    ui::HelpText("Export size", nullptr, help.c_str(), "File");
 }
 
 void App::drawPalette_File() {
     menuAction(*this, "file.new_sphere");
     menuAction(*this, "file.new_plane");
+    if (ImGui::BeginMenu(tr("New from Starter Mesh"))) {
+        for (const StarterMesh& m : starterMeshes()) {
+            if (ImGui::MenuItem((std::string(m.name) + "##starter." + m.id).c_str())) {
+                const std::string id = m.id;
+                confirmDiscard([this, id] { runCommand("new_starter_mesh", {{"name", id}}); });
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", m.description);
+        }
+        ImGui::Separator();
+        menuAction(*this, "file.new_starter");
+        ImGui::EndMenu();
+    }
     ImGui::Separator();
     menuAction(*this, "file.open");
     drawFileMenuProjectItems(); // Open Recent, Save, Save As, autosave
     tray::GroupLabel(*this, "Import / Export");
+    drawExportSizeLine();
     menuAction(*this, "file.import");
     menuAction(*this, "file.export_obj");
     menuAction(*this, "file.export_stl");
@@ -476,7 +627,7 @@ void App::drawPalette_File() {
     menuAction(*this, "file.save_splats");
     menuAction(*this, "pack.install"); // a review screen first (PanelPacks.cpp)
     ImGui::Separator();
-    drawGozMenu();
+    drawBridgeMenu();
     drawBlenderMenu(); // the Blender bridge (PanelBlender.cpp)
     drawMayaMenu(); // the Maya bridge (PanelMaya.cpp)
     menuAction(*this, "file.capture_phone"); // the phone link (PanelPhone.cpp)
@@ -486,13 +637,17 @@ void App::drawPalette_File() {
 
 void App::drawPalette_Generate() {
     const tray::Style style; // quiet check marks
-    actionRow(*this, {"ui.generate3d"});
-    hint(*this, "Image or text to a sculptable 3D model: Hugging Face (free), fal.ai, Meshy, your ComfyUI server, your own "
-         "command, or an offline blockout.");
+    if (ai::aiEnabled()) {
+        actionRow(*this, {"ui.generate3d"});
+        hint(*this, "Image or text to a sculptable 3D model: Hugging Face (free), fal.ai, Meshy, your ComfyUI server, your own "
+             "command, or an offline blockout.");
+    } else {
+        hint(*this, "AI features are off (Preferences > AI): Relief, Inflate and Stamp work offline.");
+    }
     tray::GroupLabel(*this, "From an image");
-    if (ImGui::Button(refImage_.empty() ? "Choose image...##generate" : "Change image...##generate", ImVec2(-1, 0))) {
+    if (ImGui::Button(tr(refImage_.empty() ? "Choose image...##generate" : "Change image...##generate"), ImVec2(-1, 0))) {
         static const SDL_DialogFileFilter filters[] = {{"Images", "png;jpg;jpeg;bmp;tga;psd;gif"}, {"All files", "*"}};
-        SDL_ShowOpenFileDialog(
+        sf::dialogs::openFile(
             [](void* user, const char* const* files, int) {
                 if (files && files[0]) static_cast<App*>(user)->queueFile(FileAction::OpenImage, files[0]);
             },
@@ -518,7 +673,7 @@ void App::drawPalette_Generate() {
     if (ImGui::Button(tr("Stamp"), ImVec2(third, 0))) projectImageFromView();
     ui::HelpText("Stamp", nullptr, "Projects the image onto the model from this view as surface detail.", "Generate");
     ImGui::EndDisabled();
-    if (subpalette("generate.ai", "AI brush provider")) {
+    if (ai::aiEnabled() && subpalette("generate.ai", "AI brush provider")) {
         tray::Section section;
         drawAiSettings();
     }
@@ -527,13 +682,18 @@ void App::drawPalette_Generate() {
 void App::drawPalette_Help() {
     menuAction(*this, "help.controls");
     menuAction(*this, "help.guide");
+    menuAction(*this, "help.first_sculpt");
+    menuAction(*this, "help.quick_tour");
     menuAction(*this, "help.whats_new");
     menuAction(*this, "help.check_updates");
     menuAction(*this, "ui.command_palette");
+    menuAction(*this, "help.connect_ai"); // only while AI is on (PanelAi.cpp registers it)
     menuAction(*this, "help.website");
     menuAction(*this, "help.discord");
     menuAction(*this, "help.report");
     menuAction(*this, "help.log");
+    menuAction(*this, "help.log_copy"); // (Android keeps the folder out of the Files app: testers paste the log instead)
+    menuAction(*this, "help.perf_trace");
     menuAction(*this, "help.feedback");
     menuAction(*this, "help.benchmark");
     ImGui::Separator();
@@ -543,8 +703,8 @@ void App::drawPalette_Help() {
 
 void App::drawPalette_Preferences() {
     const tray::Style style; // quiet check marks
-    // The sub-palettes come from Config.cpp (Store / Restore UI, interface preferences, hotkeys, LightBox).
-    if (subpalette("preferences.config", "Config")) {
+    // The sub-palettes come from Config.cpp (Store / Restore UI, interface preferences, hotkeys, Library).
+    if (subpalette("preferences.config", "Saving & Layouts")) {
         tray::Section section;
         config::drawConfigSection(*this);
         ImGui::TextDisabled("%s", tr("Layout"));
@@ -561,6 +721,14 @@ void App::drawPalette_Preferences() {
         tray::Section section;
         drawInputSection();
     }
+    if (subpalette("preferences.cursor", "Cursor")) {
+        tray::Section section;
+        drawCursorSection();
+    }
+    if (subpalette("preferences.hints", "Hints")) {
+        tray::Section section;
+        drawHintsSection();
+    }
     if (subpalette("preferences.hotkeys", "Hotkeys")) {
         tray::Section section;
         config::drawHotkeysSection(*this);
@@ -569,21 +737,38 @@ void App::drawPalette_Preferences() {
         tray::Section section;
         drawBackgroundControls("prefs");
     }
-    if (subpalette("preferences.lightbox", "Library")) {
+    if (subpalette("preferences.library", "Library")) {
         tray::Section section;
-        config::drawLightBoxSection(*this);
+        config::drawLibraryBrowserSection(*this);
     }
     if (subpalette("preferences.tablet", "Tablet")) {
         tray::Section section;
+        Demo::pushScope("Tablet"); // (UI tests: past_right:Tablet)
         drawTabletSection();
+        Demo::popScope();
     }
     if (subpalette("preferences.performance", "Performance")) {
         tray::Section section;
         drawPerformanceSection();
     }
+    if (subpalette("preferences.ai", "AI")) {
+        tray::Section section;
+        drawAiPrefs(); // the switch (PanelAi.cpp)
+        drawAiStudioPrefs(); // what the studio's policy manages, the studio sign-in, the audit log (PanelAi.cpp)
+        if (ai::aiEnabled()) {
+            ImGui::SeparatorText(tr("Provider"));
+            drawAiSettings(); // the brush provider: presets, endpoint, key (keychain)
+            ImGui::Spacing();
+            drawAiPrefsSection(); // the Hugging Face token
+        }
+    }
     if (subpalette("preferences.updates", "Updates")) {
         tray::Section section;
         drawUpdatesSection();
+    }
+    if (discordPresenceAvailable() && subpalette("preferences.integrations", "Integrations")) {
+        tray::Section section;
+        drawIntegrationsPrefs(); // Show SculptForge on Discord (PanelIntegrations.cpp)
     }
     if (subpalette("preferences.support", "Support")) {
         tray::Section section;
@@ -605,19 +790,69 @@ void App::drawPalette_Render() {
     ui::HelpAction(*this, "view.wireframe");
     ImGui::Checkbox(tr("Show Mesh"), &renderSettings_.showMesh);
     ui::HelpAction(*this, "view.mesh");
-    ImGui::Checkbox(tr("Show Vertex Paint"), &renderSettings_.showPolypaint);
-    ui::HelpAction(*this, "view.polypaint");
+    ImGui::Checkbox(tr("Show Vertex Paint"), &renderSettings_.showVertexPaint);
+    ui::HelpAction(*this, "view.vertexpaint");
     ImGui::Checkbox(tr("Show Mask"), &renderSettings_.showMask);
     ui::HelpAction(*this, "view.mask");
-    ImGui::Checkbox(tr("Show Face Groups##render"), &renderSettings_.showPolygroups);
-    ui::HelpAction(*this, "view.polygroups");
+    ImGui::Checkbox(tr("Show Face Groups##render"), &renderSettings_.showFaceGroups);
+    ui::HelpAction(*this, "view.facegroups");
+    if (ImGui::Checkbox(tr("Floor grid##render"), &renderSettings_.floorGrid))
+        uiPrefs_.floorGrid = renderSettings_.floorGrid; // (a preference: on in every session until turned off)
+    ui::HelpAction(*this, "view.floor_grid");
+    bool xray = renderSettings_.xray;
+    if (ui::Checkbox("X-Ray##render", &xray)) runCommand("xray", {{"on", xray}});
+    ui::HelpAction(*this, "view.xray");
     ImGui::BeginDisabled(doc_.splats.empty());
     ImGui::Checkbox(tr("Show Splats"), &renderSettings_.showSplats);
     ImGui::EndDisabled();
     ui::HelpAction(*this, "view.splats");
+    bool lockCamera = uiPrefs_.airStrokes; // #62: drags on the background start strokes (Shift+L)
+    if (ui::Checkbox("Lock camera##view.lock_camera", &lockCamera)) uiPrefs_.airStrokes = lockCamera;
+    ui::HelpAction(*this, "input.toggle_air_strokes");
+    ImGui::TextDisabled("%s", tr("Orbit lock"));
+    ui::Segmented(*this, {"view.orbit_lock_free", "view.orbit_lock_y", "view.orbit_lock_x", "view.orbit_lock_z"});
     drawBackgroundControls("render");
+    ImGui::TextDisabled("%s", tr("View resolution"));
+    ui::Segmented(*this, {"perf.res_100", "perf.res_75", "perf.res_50"});
+    drawViewsSection();
+    drawReferencesSection(); // View > Reference images (ReferenceImages.cpp)
     actionRow(*this, {"view.frame", "view.fullscreen"});
-    actionRow(*this, {"ui.lightbox", "ui.console"}); // (the SculptForge layout's View menu: they left the shelf)
+    actionRow(*this, {"ui.library", "ui.console"}); // (the SculptForge layout's View menu: they left the shelf)
+}
+
+void App::drawViewsSection() {
+    tray::GroupLabel(*this, "Views");
+    Demo::pushScope("Views");
+    segmented(*this, {"view.front", "view.back", "view.left", "view.right", "view.top", "view.bottom"});
+    const float saveW = ImGui::CalcTextSize(tr("Save View")).x + 2.0f * ImGui::GetStyle().FramePadding.x;
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - saveW - ImGui::GetStyle().ItemSpacing.x);
+    const bool enter = ImGui::InputTextWithHint("##viewname", tr("name (optional)"), savedViewName_, sizeof savedViewName_,
+                                                ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if (ui::ActionButton(*this, "view.save_view", ImVec2(-1, 0)) || enter) {
+        if (enter) saveView(savedViewName_);
+    }
+    int remove = -1;
+    for (size_t i = 0; i < savedViews_.size(); ++i) {
+        ImGui::PushID(int(i));
+        const float x = ImGui::GetFrameHeight();
+        const bool last = int(i) == lastSavedView_;
+        if (last) ImGui::PushStyleColor(ImGuiCol_Button, theme::toggleOn);
+        if (ImGui::Button(savedViews_[i].name.c_str(), ImVec2(ImGui::GetContentRegionAvail().x - x - 2.0f, 0))) restoreView(int(i));
+        if (last) ImGui::PopStyleColor();
+        ui::HelpText("Saved view", nullptr, "Go to this saved view (Numpad 0 goes to the last one used).", "View > Views");
+        ImGui::SameLine(0.0f, 2.0f);
+        if (ImGui::Button("x##del", ImVec2(-1, 0))) remove = int(i);
+        ui::HelpText("Delete view", nullptr, "Forget this saved view.", "View > Views");
+        ImGui::PopID();
+    }
+    if (remove >= 0) {
+        savedViews_.erase(savedViews_.begin() + remove);
+        if (lastSavedView_ == remove) lastSavedView_ = -1;
+        else if (lastSavedView_ > remove) --lastSavedView_;
+        doc_.modified = true;
+    }
+    Demo::popScope();
 }
 
 void App::drawPalette_Script() {
@@ -639,9 +874,9 @@ void App::drawPalette_Stroke() {
 void App::drawPalette_Tool() {
     const tray::Style style; // quiet check marks
     const float s = uiScale_;
-    // Header: the active SubTool and its size, then Open / Save / Import.
+    // Header: the active Part and its size, then Open / Save / Import.
     {
-        const SubTool& st = doc_.activeSubtoolInfo();
+        const Part& st = doc_.activePartInfo();
         if (fontBold_) ImGui::PushFont(fontBold_);
         ImGui::TextUnformatted(st.name.c_str());
         if (fontBold_) ImGui::PopFont();
@@ -649,24 +884,101 @@ void App::drawPalette_Tool() {
         std::snprintf(tris, sizeof tris, "%zu tris", doc_.mesh.triangleCount());
         ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize(tris).x);
         ImGui::TextDisabled("%s", tris);
+        // The Part's size, width x height x depth, in the Units preference (#148).
+        if (const AABB b = sizeBounds().part; b.valid()) {
+            ImGui::TextDisabled("%s", formatSize(b.extent(), lengthUnit()).c_str());
+            ui::HelpText("Part size", nullptr,
+                         "The active Part's width x height x depth (X, Y, Z). The unit is set in Preferences > Interface > "
+                         "Units; STL exports write it in millimetres.",
+                         "Tool");
+        }
         actionRow(*this, {"file.open", "file.save", "file.import"});
         ImGui::Dummy(ImVec2(0, 2.0f * s));
     }
-    if (subpalette("tool.subtool", "Parts")) {
+    // By what you do (fix/ip-palettes): make the Parts, shape them (levels, remesh, reshape, cut, layers), mask and
+    // group, paint and texture, then bake and export; how the viewport looks last. The ids stay (saved layouts).
+    if (subpalette("tool.part", "Parts")) {
         tray::Section section;
-        Demo::pushScope("SubTools");
-        drawSubToolsContents();
+        Demo::pushScope("Parts");
+        drawPartsContents();
         Demo::popScope();
         drawExtractContents(); // PanelExtract.cpp
         Demo::pushScope("Project");
         drawProjectContents(); // ProjectAll (PanelRetopo.cpp)
         Demo::popScope();
     }
-    if (subpalette("tool.zspheres", "Forge Spheres")) {
+    if (subpalette("tool.garments", "Garments")) {
         tray::Section section;
-        Demo::pushScope("ZSpheres");
-        drawZSpheresContents(); // PanelZSpheres.cpp
+        Demo::pushScope("Garments");
+        drawGarmentsContents(); // PanelGarments.cpp
         Demo::popScope();
+    }
+    if (subpalette("tool.forgespheres", "Forge Spheres")) {
+        tray::Section section;
+        Demo::pushScope("Forge Spheres");
+        drawForgeSpheresContents(); // PanelForge Spheres.cpp
+        Demo::popScope();
+    }
+    if (subpalette("tool.tube", "Tube")) {
+        tray::Section section;
+        Demo::pushScope("Tube");
+        drawTubeContents(); // PanelTube.cpp
+        Demo::popScope();
+    }
+    if (subpalette("tool.geometry", "Geometry")) {
+        tray::Section section;
+        Demo::pushScope("Geometry");
+        drawGeometrySection(); // PanelGeometry.cpp
+        Demo::popScope();
+    }
+    if (subpalette("tool.remesh", "Remesh")) {
+        tray::Section section;
+        // QRemesh (quad retopology) first: the same controls and settings as in Tool > Geometry.
+        ImGui::PushID("remesh_qremesh");
+        Demo::pushScope("Remesh QRemesh");
+        drawQRemeshContents();
+        Demo::popScope();
+        ImGui::PopID();
+        tray::GroupLabel(*this, "Voxel Remesh");
+        const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (voxelRemesh_) { // remeshing in the background (PanelRetopo.cpp)
+            ImGui::ProgressBar(voxelRemesh_->progress->load(), ImVec2(half, 0), tr("Remeshing..."));
+            ui::HelpText("Voxel Remesh", nullptr,
+                         "Remeshing in the background (with a painted texture: Auto UV of the new surface, then the "
+                         "texture projected onto it). The result replaces the Part when it's done.",
+                         "Tool > Remesh");
+        } else {
+            ui::ActionButton(*this, "geometry.remesh", ImVec2(half, 0));
+            ui::HelpAction(*this, "geometry.remesh");
+        }
+        ImGui::SameLine();
+        drawVoxelResolution(); // the slider (32-4096) and the estimate under it (PanelRetopo.cpp)
+        if (voxelRemesh_) {
+            if (ImGui::Button(tr("Cancel##voxelremesh"), ImVec2(half, 0))) voxelRemesh_->cancel->store(true);
+            ui::HelpText("Cancel", nullptr, "Stop the remesh; the Part stays as it is.", "Tool > Remesh");
+        } else {
+            ImGui::Checkbox(tr("Keep Masked##remesh"), &voxelKeepMasked_);
+            ui::HelpText("Keep Masked", nullptr, kKeepMaskedHelp, "Tool > Remesh");
+            if (hasTexture(doc_.mesh)) {
+                ImGui::SameLine();
+                drawKeepTextureCheckbox("Keep Texture##remesh", "Tool > Remesh"); // only for a painted Part
+            }
+        }
+        drawQuickRemeshContents(); // Quick Remesh, Remesh after each stroke (#121, PanelRetopo.cpp)
+    }
+    if (subpalette("tool.deformation", "Reshape")) {
+        tray::Section section;
+        Demo::pushScope("Reshape");
+        drawDeformationContents(); // Smooth, Relax, Polish, Balloon, Size, Stack (PanelExtract.cpp)
+        Demo::popScope();
+    }
+    if (subpalette("tool.drape", "Drape")) {
+        tray::Section section;
+        drawDrapeSection(); // PanelDrape.cpp
+    }
+    if (subpalette("tool.cut", "Cut")) {
+        tray::Section section;
+        drawCutSection(); // PanelCut.cpp
     }
     if (subpalette("tool.layers", "Layers")) {
         tray::Section section;
@@ -680,101 +992,13 @@ void App::drawPalette_Tool() {
         drawFaceContents(); // PanelFace.cpp
         Demo::popScope();
     }
-    if (subpalette("tool.paint_layers", "Paint Layers")) {
-        tray::Section section;
-        Demo::pushScope("Paint Layers");
-        drawPaintLayersContents();
-        Demo::popScope();
-    }
-    if (subpalette("tool.texture", "Texture Map")) {
-        tray::Section section;
-        Demo::pushScope("Texture Map");
-        drawTextureMapContents();
-        Demo::popScope();
-    }
-    if (subpalette("tool.bake", "Bake")) {
-        tray::Section section;
-        Demo::pushScope("Bake");
-        drawBakeContents();
-        Demo::popScope();
-    }
-    if (subpalette("tool.geometry", "Geometry")) {
-        tray::Section section;
-        Demo::pushScope("Geometry");
-        drawGeometrySection();
-        actionRow(*this, {"geometry.subdivide"});
-        const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-        if (ImGui::Button(tr("Decimate"), ImVec2(half, 0))) {
-            Args args{{"ratio", double(decimateRatio_)}};
-            if (decimateKeepMasked_) args["keep_masked"] = true;
-            runCommand("decimate", args);
-        }
-        ui::HelpText("Decimate", nullptr, "Reduce the triangle count while keeping the shape. Sculpt layers are kept.",
-                     "Tool > Geometry");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(-1);
-        ui::SliderInside("##decimate", &decimateRatio_, 0.05f, 0.95f, "Keep %.2f");
-        ui::HelpText("Keep", nullptr, "Fraction of the triangles Decimate keeps.", "Tool > Geometry");
-        ImGui::Checkbox(tr("Keep Masked##decimate"), &decimateKeepMasked_);
-        ui::HelpText("Keep Masked", nullptr,
-                     "Decimate leaves masked vertices where they are, so masked areas keep their triangles exactly; "
-                     "the rest is decimated around them.",
-                     "Tool > Geometry");
-        Demo::pushScope("QRemesh");
-        drawQRemeshContents(); // quad retopology (PanelRetopo.cpp)
-        Demo::popScope();
-        drawModifyTopologyContents(); // Mirror And Weld (PanelExtract.cpp)
-    }
-    if (subpalette("tool.remesh", "Remesh")) {
-        tray::Section section;
-        // QRemesh (quad retopology) first: the same controls and settings as in Tool > Geometry.
-        ImGui::PushID("remesh_qremesh");
-        Demo::pushScope("Remesh QRemesh");
-        drawQRemeshContents();
-        Demo::popScope();
-        ImGui::PopID();
-        tray::GroupLabel(*this, "Voxel Remesh");
-        const float half = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-        if (voxelRemesh_) { // remeshing a painted SubTool in the background (PanelRetopo.cpp)
-            ImGui::ProgressBar(voxelRemesh_->progress->load(), ImVec2(half, 0), "Remeshing...");
-            ui::HelpText("Voxel Remesh", nullptr,
-                         "Remeshing and keeping the texture in the background (Auto UV of the new surface, then the "
-                         "texture projected onto it). The result replaces the Part when it's done.",
-                         "Tool > Remesh");
-        } else {
-            ui::ActionButton(*this, "geometry.remesh", ImVec2(half, 0));
-            ui::HelpAction(*this, "geometry.remesh");
-        }
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(-1);
-        tray::SliderInt("##voxres", &voxelResolution_, 64, 400, "Resolution %d");
-        ui::HelpText("Resolution", nullptr, "Voxels across the model: higher keeps more detail and makes more triangles.",
-                     "Tool > Remesh");
-        if (voxelRemesh_) {
-            if (ImGui::Button(tr("Cancel##voxelremesh"), ImVec2(half, 0))) voxelRemesh_->cancel->store(true);
-            ui::HelpText("Cancel", nullptr, "Stop the remesh; the Part stays as it is.", "Tool > Remesh");
-        } else {
-            ImGui::Checkbox(tr("Keep Masked##remesh"), &voxelKeepMasked_);
-            ui::HelpText("Keep Masked", nullptr, kKeepMaskedHelp, "Tool > Remesh");
-            if (hasTexture(doc_.mesh)) {
-                ImGui::SameLine();
-                drawKeepTextureCheckbox("Keep Texture##remesh", "Tool > Remesh"); // only for a painted SubTool
-            }
-        }
-    }
-    if (subpalette("tool.deformation", "Deformation")) {
-        tray::Section section;
-        Demo::pushScope("Deformation");
-        drawDeformationContents(); // Mirror (PanelExtract.cpp)
-        Demo::popScope();
-    }
     if (subpalette("tool.masking", "Masking")) {
         tray::Section section;
         drawMaskingSection();
     }
-    if (subpalette("tool.polygroups", "Face Groups")) {
+    if (subpalette("tool.facegroups", "Face Groups")) {
         tray::Section section;
-        drawPolygroupsSection();
+        drawFaceGroupsSection();
     }
     if (subpalette("tool.visibility", "Visibility")) {
         tray::Section section;
@@ -784,13 +1008,31 @@ void App::drawPalette_Tool() {
         tray::Section section;
         drawSelectionSetsSection();
     }
+    if (subpalette("tool.paint_layers", "Paint Layers")) {
+        tray::Section section;
+        Demo::pushScope("Paint Layers");
+        drawPaintLayersContents();
+        Demo::popScope();
+    }
+    if (subpalette("tool.texture", "Texture Image")) {
+        tray::Section section;
+        Demo::pushScope("Texture Image");
+        drawTextureMapContents();
+        Demo::popScope();
+    }
+    if (subpalette("tool.bake", "Bake")) {
+        tray::Section section;
+        Demo::pushScope("Bake");
+        drawBakeContents();
+        Demo::popScope();
+    }
     if (subpalette("tool.export", "Export")) {
         tray::Section section;
         Demo::pushScope("Game Ready");
         drawGameExportContents();
         Demo::popScope();
     }
-    if (subpalette("tool.display", "Display")) {
+    if (subpalette("tool.display", "Viewport Look")) {
         tray::Section section;
         ImGui::Checkbox(tr("Wireframe##display"), &renderSettings_.wireframe);
         ui::HelpAction(*this, "view.wireframe");
@@ -798,17 +1040,20 @@ void App::drawPalette_Tool() {
         ImGui::Checkbox(tr("Mask##display"), &renderSettings_.showMask);
         ui::HelpAction(*this, "view.mask");
         ImGui::SameLine();
-        ImGui::Checkbox(tr("Groups##display"), &renderSettings_.showPolygroups);
-        ui::HelpAction(*this, "view.polygroups");
+        ImGui::Checkbox(tr("Groups##display"), &renderSettings_.showFaceGroups);
+        ui::HelpAction(*this, "view.facegroups");
         if (ImGui::Checkbox(tr("Backface culling##display"), &renderSettings_.backfaceCulling))
             uiPrefs_.backfaceCulling = renderSettings_.backfaceCulling; // the default for the next session
         ui::HelpText("Backface culling", nullptr,
                      "Don't draw the back faces of the model: faster on dense meshes, and you see through the openings "
                      "of open meshes (a scan, a garment) instead of their inside. Brushes then work only on faces you "
-                     "can see. Off by default; Store Config keeps it, projects keep their own.",
-                     "Tool > Display");
+                     "can see. Off by default; saved automatically, projects keep their own.",
+                     "Tool > Viewport Look");
+        if (ImGui::Checkbox(tr("Floor grid##display"), &renderSettings_.floorGrid))
+            uiPrefs_.floorGrid = renderSettings_.floorGrid;
+        ui::HelpAction(*this, "view.floor_grid");
         ImGui::ColorEdit3(tr("Material colour"), &renderSettings_.baseColor.x, ImGuiColorEditFlags_NoInputs);
-        ui::HelpText("Material colour", nullptr, "Colour of the Studio material (the clay colour).", "Tool > Display");
+        ui::HelpText("Material colour", nullptr, "Colour of the Studio material (the clay colour).", "Tool > Viewport Look");
         drawShadingControls();
     }
 }
@@ -818,8 +1063,8 @@ void App::drawRadialSymmetryControls() {
     segmented(*this, {"transform.symmetry_radial", "transform.symmetry_local"});
     ImGui::BeginDisabled(!symmetry_.radialEnabled);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    tray::SliderInt("##radialcount", &symmetry_.radial, 2, Symmetry::kMaxRadial, tr("Radial Count %d"));
-    ui::HelpText("Radial Count", nullptr,
+    tray::SliderInt("##radialcount", &symmetry_.radial, 2, Symmetry::kMaxRadial, tr("Radial Copies %d"));
+    ui::HelpText("Radial Copies", nullptr,
                  "How many copies radial symmetry makes of every stroke, turned evenly around the axis (2 to 64). With "
                  "X, Y or Z on too, each mirror image gets its copies.",
                  "Transform > Symmetry");
@@ -834,8 +1079,8 @@ void App::drawPalette_Transform() {
     ImGui::TextDisabled("%s", tr("Symmetry"));
     segmented(*this, {"transform.symmetry_x", "transform.symmetry_y", "transform.symmetry_z"});
     drawRadialSymmetryControls();
-    actionRow(*this, {"view.frame", "subtool.solo"});
-    actionRow(*this, {"view.polyf"});
+    actionRow(*this, {"view.frame", "part.solo"});
+    actionRow(*this, {"view.wire"});
 }
 
 } // namespace sf

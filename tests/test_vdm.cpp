@@ -182,7 +182,7 @@ TEST(vdm_sample_is_bilinear_and_zero_outside) {
 }
 
 // Sculpt a known shape onto the VDM plane, capture it, stamp it on another plane at radius 1: every point lands
-// where the sculpted plane's point did (Z Intensity 50 = the map's own size).
+// where the sculpted plane's point did (Intensity 50 = the map's own size).
 TEST(vdm_capture_then_stamp_reproduces_the_shape) {
     Document plane = makeDoc(makeVdmPlane(128));
     CHECK(plane.mesh.hasUvs() && plane.mesh.hasMask());
@@ -351,7 +351,7 @@ TEST(vdm_library_commands) {
     fs::remove(lib.root / "user" / "broken.sfvdm");
 
     CHECK(run(d, "vdm_new_plane", {{"resolution", 64.0}}));
-    CHECK(d.subtoolCount() == 2 && !d.subtools[0].visible && d.activeSubtool == 1 && d.mesh.hasUvs());
+    CHECK(d.partCount() == 2 && !d.parts[0].visible && d.activePart == 1 && d.mesh.hasUvs());
     for (glm::vec3& p : d.mesh.positions) p += sculptedOffset(p);
     const std::string exr = (lib.root / "Spike.exr").string();
     CHECK(run(d, "vdm_capture", {{"name", std::string("Spike")}, {"resolution", 64.0}, {"exr", exr}}));

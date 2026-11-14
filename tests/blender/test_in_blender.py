@@ -7,7 +7,7 @@
 # Sends a small scene to SculptForge (sculptforge-cli stands in for the app: blender_receive, then
 # blender_send), receives it back and checks that the objects are unchanged: positions, n-gons,
 # transforms, materials, modifiers, UVs, colours, mask and face sets. Then a topology change (subdivide)
-# and a new SubTool come back as a rebuilt mesh and a new object. The ZBrush-style keys preference adds and
+# and a new Part come back as a rebuilt mesh and a new object. The classic keys preference adds and
 # removes its keymap items, each bound to a real operator with valid settings. Vector displacement maps that
 # SculptForge exports read in Blender with the same orientation, and Blender's EXRs load in SculptForge.
 # CMake runs it when `blender` is found.
@@ -33,6 +33,7 @@ import addon_utils  # noqa: E402
 addon_utils.enable("sculptforge_bridge", default_set=True)
 import sculptforge_bridge as bridge  # noqa: E402
 from sculptforge_bridge import exchange  # noqa: E402
+from sculptforge_bridge import splats as splat_io  # noqa: E402
 
 failures = []
 
@@ -110,32 +111,32 @@ def addon_sculpt_items():
     return list(km.keymap_items) if km else []
 
 
-def test_zbrush_keys():
-    keys = bridge.zbrush_keys
+def test_classic_keys():
+    keys = bridge.classic_keys
     p = bridge.prefs()
     before = len(addon_sculpt_items())
-    check(not p.zbrush_keys and not keys.enabled(), "ZBrush keys: off by default")
-    p.zbrush_keys = True
+    check(not p.classic_keys and not keys.enabled(), "Classic keys: off by default")
+    p.classic_keys = True
     table = keys.key_table()
     items = addon_sculpt_items()
-    check(len(items) == before + len(table), "ZBrush keys: one keymap item per key (%d)" % len(table))
+    check(len(items) == before + len(table), "Classic keys: one keymap item per key (%d)" % len(table))
     for zkey, what, idname, key, ctrl, shift, alt, value, props in table:
         kmi = next((i for i in items if i.idname == idname and i.type == key and i.ctrl == ctrl and i.shift == shift
                     and i.alt == alt), None)
-        check(kmi is not None and kmi.active, "ZBrush keys: %s -> %s" % (zkey or key, idname))
+        check(kmi is not None and kmi.active, "Classic keys: %s -> %s" % (zkey or key, idname))
         mod, fn = idname.split(".")
         try:  # (hasattr is always true on bpy.ops: the operator is looked up when called)
             getattr(getattr(bpy.ops, mod), fn).get_rna_type()
             exists = True
         except (AttributeError, KeyError, RuntimeError):
             exists = False
-        check(exists, "ZBrush keys: operator %s exists" % idname)
+        check(exists, "Classic keys: operator %s exists" % idname)
         for name, v in props.items():
             got = getattr(kmi.properties, name) if kmi else None
             same = got == v or (isinstance(v, str) and isinstance(got, str) and got.upper() == v.upper()) or \
                 (isinstance(v, float) and abs(got - v) < 1e-6)
-            check(same, "ZBrush keys: %s %s = %r" % (idname, name, v))
-    check(not keys.skipped, "ZBrush keys: none skipped %s" % keys.skipped)
+            check(same, "Classic keys: %s %s = %r" % (idname, name, v))
+    check(not keys.skipped, "Classic keys: none skipped %s" % keys.skipped)
     # Every data path the keys use resolves in Sculpt Mode (they changed between Blender 4.2 and 5).
     for obj in list(bpy.data.objects):
         bpy.data.objects.remove(obj)
@@ -151,37 +152,37 @@ def test_zbrush_keys():
                     ok = True
                 except ValueError:
                     ok = False
-                check(ok, "ZBrush keys: %s resolves (%s)" % (path, zkey or key))
-    check(bpy.types.Menu.bl_rna_get_subclass_py(keys.SCULPTFORGE_MT_zbrush_brushes.bl_idname) is not None,
-          "ZBrush keys: the brush menu is registered")
+                check(ok, "Classic keys: %s resolves (%s)" % (path, zkey or key))
+    check(bpy.types.Menu.bl_rna_get_subclass_py(keys.SCULPTFORGE_MT_classic_brushes.bl_idname) is not None,
+          "Classic keys: the brush menu is registered")
     # The brush menu's picks.
     for name, _, asset, sculpt_tool, _ in keys.BRUSHES:
-        r = bpy.ops.sculptforge.zbrush_brush(brush=name)
+        r = bpy.ops.sculptforge.classic_brush(brush=name)
         brush = bpy.context.tool_settings.sculpt.brush
         got = brush.name if keys.brush_assets() else brush.sculpt_tool
         check(r == {"FINISHED"} and got == (asset if keys.brush_assets() else sculpt_tool),
-              "ZBrush brush %s -> Blender %s (%s)" % (name, asset, got))
+              "classic brush %s -> Blender %s (%s)" % (name, asset, got))
     # Ctrl+D divides (a Multires level); D / Shift+D step between levels without adding any.
-    check(bpy.ops.sculptforge.zbrush_divide() == {"FINISHED"}, "Ctrl+D: Divide")
-    bpy.ops.sculptforge.zbrush_divide()
+    check(bpy.ops.sculptforge.classic_divide() == {"FINISHED"}, "Ctrl+D: Divide")
+    bpy.ops.sculptforge.classic_divide()
     multires = next((m for m in bpy.context.active_object.modifiers if m.type == "MULTIRES"), None)
     check(multires is not None and multires.total_levels == 2, "Ctrl+D in Sculpt Mode adds Multires levels")
     if multires is not None:
-        bpy.ops.sculptforge.zbrush_sdiv(step=-1)
-        bpy.ops.sculptforge.zbrush_sdiv(step=-1)
-        bpy.ops.sculptforge.zbrush_sdiv(step=-1)
-        check(multires.sculpt_levels == 0 and multires.total_levels == 2, "Shift+D steps down to SDiv 0")
-        bpy.ops.sculptforge.zbrush_sdiv(step=1)
-        bpy.ops.sculptforge.zbrush_sdiv(step=1)
-        bpy.ops.sculptforge.zbrush_sdiv(step=1)
+        bpy.ops.sculptforge.classic_sdiv(step=-1)
+        bpy.ops.sculptforge.classic_sdiv(step=-1)
+        bpy.ops.sculptforge.classic_sdiv(step=-1)
+        check(multires.sculpt_levels == 0 and multires.total_levels == 2, "Shift+D steps down to Level 0")
+        bpy.ops.sculptforge.classic_sdiv(step=1)
+        bpy.ops.sculptforge.classic_sdiv(step=1)
+        bpy.ops.sculptforge.classic_sdiv(step=1)
         check(multires.sculpt_levels == 2 and multires.total_levels == 2, "D steps up to the top, adds nothing")
-    # Ctrl+W (sculptforge.zbrush_group) runs sculpt operators that need a viewport (mask_flood_fill crashes
+    # Ctrl+W (sculptforge.classic_group) runs sculpt operators that need a viewport (mask_flood_fill crashes
     # headless Blender): only its poll is checked here.
-    check(bpy.ops.sculptforge.zbrush_group.poll(), "Ctrl+W: Group is available in Sculpt Mode")
+    check(bpy.ops.sculptforge.classic_group.poll(), "Ctrl+W: Group is available in Sculpt Mode")
     bpy.ops.object.mode_set(mode="OBJECT")
-    p.zbrush_keys = False
-    check(len(addon_sculpt_items()) == before and not keys.enabled(), "ZBrush keys: turning it off removes them")
-    p.zbrush_keys = True  # (the add-on's unregister removes them too: checked after disabling it)
+    p.classic_keys = False
+    check(len(addon_sculpt_items()) == before and not keys.enabled(), "Classic keys: turning it off removes them")
+    p.classic_keys = True  # (the add-on's unregister removes them too: checked after disabling it)
 
 
 def read_sfvdm(path):
@@ -228,6 +229,110 @@ def test_vdm_exr():
               "VDM EXR: Blender's %s-bit %s EXR loads in SculptForge (max diff %g)" % (depth, codec, np.abs(got - vec).max()))
 
 
+def sample_splats(n=400, degree=3, seed=5):
+    rng = np.random.default_rng(seed)
+    q = rng.normal(size=(n, 4))
+    q /= np.linalg.norm(q, axis=1, keepdims=True)
+    return splat_io.SplatArrays(rng.normal(size=(n, 3)), q, np.exp(rng.uniform(-6, -1, (n, 3))), rng.uniform(0.02, 0.98, n),
+                                rng.normal(scale=0.4, size=(n, (degree + 1) ** 2, 3)))
+
+
+def same_splats(a, b, what, atol=2e-5):
+    ok = len(a) == len(b) and a.sh.shape == b.sh.shape
+    err = {}
+    if ok:
+        sign = np.sign(np.sum(a.rotations * b.rotations, axis=1, keepdims=True))
+        err = {"positions": np.abs(a.positions - b.positions).max(), "rotations": np.abs(a.rotations - sign * b.rotations).max(),
+               "scales": np.abs(a.scales / b.scales - 1).max(), "opacities": np.abs(a.opacities - b.opacities).max(),
+               "sh": np.abs(a.sh - b.sh).max()}
+        ok = all(v < atol for v in err.values())
+    check(ok, "%s (%s)" % (what, ", ".join("%s %.2g" % kv for kv in err.items()) if err else "sizes %s vs %s" % (a.sh.shape, b.sh.shape)))
+
+
+def test_splats():
+    import mathutils
+    path = os.path.join(ROOT, "capture.ply")
+    a = sample_splats()
+    splat_io.write_ply(path, a)
+    dot = os.path.join(ROOT, "capture.splat")
+    with open(dot, "wb") as f:
+        for i in range(5):
+            f.write(np.array([i, 0, 1, 0.1, 0.1, 0.1], dtype="<f4").tobytes() + bytes([200, 100, 50, 255, 255, 128, 128, 128]))
+    for o in bpy.data.objects:
+        o.select_set(False)
+
+    if not bridge.splats_supported():
+        print("Blender %s has no Gaussian splats: they must refuse cleanly" % bpy.app.version_string)
+        # (An operator that reports an error raises RuntimeError for a script; Blender's UI shows the report.)
+        try:
+            bpy.ops.sculptforge.import_splat(filepath=dot)
+            said = ""
+        except RuntimeError as e:
+            said = str(e)
+        check("5.3" in said, "older Blender: importing a .splat says it needs 5.3 and does nothing (%s)" % said)
+        exchange.write_manifest(exchange.inbox(ROOT), [], "test", [{"name": "Capture", "file": "r99_splats.ply"}])
+        splat_io.write_ply(os.path.join(exchange.inbox(ROOT), "r99_splats.ply"), a)
+        try:
+            bpy.ops.sculptforge.receive()
+            said = ""
+        except RuntimeError as e:
+            said = str(e)
+        check("5.3" in said and "5.3" in bridge.state.message, "older Blender: receiving splats says it needs 5.3 (%s)" % bridge.state.message)
+        bpy.context.view_layer.objects.active = None  # (send also takes the active mesh)
+        check(not bpy.ops.sculptforge.send.poll(), "older Blender: nothing selected, nothing to send, no crash")
+        return
+
+    # Blender's own import reads our PLY with the values we wrote: opacity and scale decoded, SH in its attributes.
+    m = mathutils.Matrix.Translation((1.0, -2.0, 0.5)) @ mathutils.Matrix.Rotation(0.6, 4, (1.0, 2.0, 0.5)) @ mathutils.Matrix.Scale(1.5, 4)
+    obj, replaced = bridge.import_splat_ply(bpy.context, path, "Capture", m)
+    pc = obj.data
+    print("splat attributes:", sorted((x.name, x.data_type, x.domain) for x in pc.attributes if not x.name.startswith(".")))
+    check(bridge.is_splat_object(obj) and not replaced and obj.name == "Capture", "a splat PLY imports as a Gaussian splat object")
+    check(np.allclose(np.array(obj.matrix_world), np.array(m), atol=1e-6), "the object is placed by the matrix")
+    got = bridge.splat_arrays(pc)
+    same_splats(a, got, "Blender's import and the add-on's reading of its attributes agree with the PLY")
+    for name in ("radiance:base", "rotation", "scale"):
+        attr = pc.attributes[name]
+        print("splat attribute %s: %s, element properties %s" % (name, attr.data_type, [x.identifier for x in attr.data[0].bl_rna.properties]))
+    check(not bridge.slow_reads, "the splat attributes are read in bulk, not element by element (%s)" % bridge.slow_reads)
+
+    # To SculptForge and back through the folder: nothing baked, SH degree 3 intact, the placement kept.
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    check(bpy.ops.sculptforge.send() == {"FINISHED"}, "send a splat object: " + bridge.state.message)
+    manifest = exchange.read_manifest(exchange.outbox(ROOT))
+    check([e["name"] for e in manifest.get("splats", [])] == ["Capture"] and not manifest["objects"], "manifest lists the splats")
+    obj.matrix_world = mathutils.Matrix.Identity(4)  # SculptForge's placement must come back to the object
+    sculptforge(["blender_receive", "blender_send"])
+    count = len(bpy.data.objects)
+    check(bpy.ops.sculptforge.receive() == {"FINISHED"}, "receive the splats: " + bridge.state.message)
+    check("Gaussian splats updated" in bridge.state.message, "the splat object is updated in place (%s)" % bridge.state.message)
+    obj = bpy.data.objects["Capture"]
+    check(bridge.is_splat_object(obj) and len([o for o in bpy.data.objects if bridge.is_splat_object(o)]) == 1, "still one splat object")
+    check(np.allclose(np.array(obj.matrix_world), np.array(m), atol=1e-5), "its placement came back (max error %.2g)" %
+          np.abs(np.array(obj.matrix_world) - np.array(m)).max())
+    same_splats(a, bridge.splat_arrays(obj.data), "splats through SculptForge: positions, scales, rotations, opacity, SH")
+    for extra in [o for o in bpy.data.objects if o.name != "Capture" and o.name not in ("Box", "Disc ü", "Suzanne", "Extra", "Head", "Eyes")]:
+        bpy.data.objects.remove(extra)
+
+    # Export (Blender cannot): as stored, and placed by the object.
+    out = os.path.join(ROOT, "out.ply")
+    obj.select_set(True)
+    check(bpy.ops.sculptforge.export_splats(filepath=out, world_space=False) == {"FINISHED"}, "export Gaussian Splats (.ply)")
+    same_splats(a, splat_io.read_ply(out), "exported PLY holds the splats as they are")
+    check(bpy.ops.sculptforge.export_splats(filepath=out, world_space=True) == {"FINISHED"}, "export applying the object transform")
+    placed = splat_io.read_ply(out)
+    world = np.array(m)[:3, :3] @ a.positions.astype(np.float64).T + np.array(m)[:3, 3:4]
+    check(np.abs(placed.positions - world.T).max() < 1e-4 and placed.sh.shape[1] == 1, "exported world-space positions; turned splats keep plain colour")
+
+    # Dropping a .splat file: its handler's operator.
+    check(bpy.ops.sculptforge.import_splat(filepath=dot) == {"FINISHED"}, "import a .splat file")
+    dropped = bpy.data.objects.get("capture")
+    check(dropped is not None and bridge.is_splat_object(dropped) and len(dropped.data.attributes["position"].data) == 5, ".splat becomes a splat object")
+    check(dropped is not None and np.allclose(bridge.splat_arrays(dropped.data).positions[3], (3, 0, 1), atol=1e-6), ".splat positions")
+
+
 def main():
     check(bridge.prefs() is not None, "add-on enabled with its preferences")
     # No real SculptForge here: never start one.
@@ -256,9 +361,9 @@ def main():
         if "mask" in a:
             check("mask" in b and np.allclose(a["mask"], b["mask"], atol=1e-4), n + ": mask")
 
-    # Subdivide the box in SculptForge and add a SubTool: the box is rebuilt (transform, material and modifier
-    # kept), the new SubTool becomes a new object.
-    sculptforge(["blender_receive", "subtool_select name=Box", "subdivide", "subtool_append type=cube name=Extra",
+    # Subdivide the box in SculptForge and add a Part: the box is rebuilt (transform, material and modifier
+    # kept), the new Part becomes a new object.
+    sculptforge(["blender_receive", "part_select name=Box", "subdivide", "part_append type=cube name=Extra",
                  "blender_send"])
     check(bpy.ops.sculptforge.receive() == {"FINISHED"}, "Receive the changed scene: " + bridge.state.message)
     box = bpy.data.objects["Box"]
@@ -266,7 +371,7 @@ def main():
     check(np.allclose(np.array(box.matrix_world), before["Box"]["matrix"]), "Box: transform kept")
     check([m.name for m in box.data.materials] == ["Clay"] and box.modifiers.get("Bevel") is not None,
           "Box: material and modifier kept")
-    check("Extra" in bpy.data.objects, "the new SubTool is a new object")
+    check("Extra" in bpy.data.objects, "the new Part is a new object")
 
     # Sending and receiving work from Sculpt, Edit and Vertex Paint Mode (Edit Mode keeps UVs in its edit mesh):
     # the add-on switches to Object Mode for the transfer and back.
@@ -311,11 +416,12 @@ def main():
     check(eyes is not None and eyes.data.shape_keys is not None and "eyeLookUpLeft" in eyes.data.shape_keys.key_blocks,
           "Eyes: eyeLook shape keys")
 
-    test_zbrush_keys()
+    test_splats()
+    test_classic_keys()
     test_vdm_exr()
 
     addon_utils.disable("sculptforge_bridge")
-    check(not bridge.zbrush_keys.enabled(), "disabling the add-on removes the ZBrush keys")
+    check(not bridge.classic_keys.enabled(), "disabling the add-on removes the Classic keys")
     print("%d failure(s)" % len(failures))
     sys.exit(1 if failures else 0)
 

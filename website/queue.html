@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Feature queue - SculptForge</title>
+  <meta name="description" content="Every SculptForge feature idea in one public queue: what's being built, what's queued and what shipped.">
+  <meta name="theme-color" content="#111114">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png?v=7">
+  <link rel="icon" type="image/png" sizes="64x64" href="img/favicon-64.png?v=7">
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png?v=7">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="SculptForge feature queue">
+  <meta property="og:description" content="Every SculptForge feature idea in one public queue: what's being built, what's queued and what shipped.">
+  <meta property="og:image" content="https://sculptforge.app/img/social-preview.png?v=5">
+  <meta property="og:url" content="https://sculptforge.app/queue.html">
+  <link rel="canonical" href="https://sculptforge.app/queue.html">
+  <meta name="twitter:card" content="summary_large_image">
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="stylesheet" href="style.css?v=40">
+  <script src="motion.js?v=15" defer></script>
+  <script data-goatcounter="https://sculptforge.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+  <style>
+    .queue { width: 100%; max-width: 900px; border-collapse: collapse; font-size: 0.95rem; }
+    .queue th, .queue td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .queue th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
+    .queue .st { white-space: nowrap; }
+    .queue .detail { display: block; color: var(--muted); font-size: 0.85rem; white-space: normal; }
+    .tag { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 0.75rem;
+           border: 1px solid var(--border); color: var(--muted); }
+    .table-wrap + .fine { margin-top: 16px; }
+    .member-reqs { display: grid; gap: 12px; max-width: 900px; margin: 0 0 8px; padding: 0; list-style: none;
+                   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+    .member-reqs li { background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius);
+                      padding: 14px 16px; }
+    .member-reqs .badge { display: inline-block; margin-bottom: 6px; padding: 1px 9px; border-radius: 999px;
+                          font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; background: var(--accent); color: #1a0d04; }
+    .member-reqs .idea { display: block; font-weight: 600; }
+    .member-reqs .st { display: block; margin-top: 6px; color: var(--muted); font-size: 0.85rem; }
+    .member-cta { margin-top: 14px; }
+    @media (max-width: 600px) { .queue th, .queue td { padding: 8px 6px; } .queue .st { white-space: normal; } }
+  </style>
+</head>
+<body>
+  <div class="scroll-progress" aria-hidden="true"></div>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="index.html"><img class="brand-wordmark" src="img/logo-wordmark-dark.svg" width="137" height="32" alt="SculptForge"><img class="brand-cube" src="img/logo-cube.svg" width="38" height="40" alt="SculptForge"></a>
+      <nav aria-label="Main">
+        <a href="index.html#features">Features</a>
+        <a href="index.html#demos">Demos</a>
+        <a href="brushes.html">Brushes</a>
+        <a href="guide/index.html">Guide</a>
+        <a href="studios.html">For studios</a>
+        <a href="why.html">About</a>
+        <a href="https://sculptforge-shop.fourthwall.com/?utm_source=site&amp;utm_medium=nav" rel="noopener">Shop</a>
+        <span class="nav-social"><a class="gh" href="https://discord.gg/gWrYkEmQhH" rel="noopener" aria-label="Discord" title="Discord"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#discord"/></svg></a><a class="gh" href="https://github.com/islandmed/SculptForge" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#github"/></svg></a><a class="gh" href="https://x.com/SculptForgeApp?utm_source=site&amp;utm_medium=nav" rel="noopener" aria-label="X" title="X"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#x"/></svg></a><a class="gh" href="https://bsky.app/profile/sculptforge.bsky.social?utm_source=site&amp;utm_medium=nav" rel="noopener" aria-label="Bluesky" title="Bluesky"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#bluesky"/></svg></a><a class="gh" href="https://www.instagram.com/sculptforge.app?utm_source=site&amp;utm_medium=nav" rel="noopener" aria-label="Instagram" title="Instagram"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#instagram"/></svg></a><a class="gh" href="https://www.facebook.com/profile.php?id=61596196961617&amp;utm_source=site&amp;utm_medium=nav" rel="noopener" aria-label="Facebook" title="Facebook"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#facebook"/></svg></a></span>
+        <a class="nav-support" href="support.html">Support</a>
+        <a class="nav-dl" href="index.html#download">Download</a>
+        <button class="nav-toggle" type="button" aria-controls="site-menu" aria-expanded="false" aria-label="Menu"><span></span><span></span><span></span></button>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="wrap">
+        <p class="eyebrow">Membership</p>
+        <h1>Feature queue</h1>
+        <p class="lede">Every feature idea, from members and everyone else, in one public list. Bugs aren't listed:
+          they're always fixed first, for free. <a href="support.html#requests">How requests work</a>.</p>
+        <p class="member-cta"><a class="btn" href="vote.html">See the feature vote</a></p>
+      </div>
+    </section>
+
+
+    <section class="section">
+      <div class="wrap">
+        <h2>Member requests</h2>
+        <p class="lede">Members fund SculptForge, so their requests are built first and credited in the release.</p>
+        <ul class="member-reqs">
+            <li><span class="badge">Member request</span><span class="idea">⌨️ Interface: Detachable panels (Member Request, November)</span><span class="st">Building</span></li>
+            <li><span class="badge">Member request</span><span class="idea">👁️ View &amp; Camera: Silhouette view: small window with a flat black outline of the model, saved camera angles and lens in mm</span><span class="st">Building</span></li>
+            <li><span class="badge">Member request</span><span class="idea">〰️ Curves &amp; Tubes: Standalone curves: polyline to Bezier/NURBS, resample with point slider, curve from edges</span><span class="st">Planned</span></li>
+            <li><span class="badge">Member request</span><span class="idea">⌨️ Interface: Discord Rich Presence (opt-in)</span><span class="st">Queued</span></li>
+            <li><span class="badge">Member request</span><span class="idea">🔷 Topology: Polygon modelling mode: Points, Edges and Polygons panels; extrude, smart bevel, circle from edges, bridge, spin edge, add loops, inset. Plus a non-destructive Subdivision modifier: edit the low-poly cage and see the smooth result live (ebarranco)</span><span class="st">Queued</span></li>
+            <li><span class="badge">Member request</span><span class="idea">🖌️ Brushes: Wood detail brush pack: weathered grain, splinters/chaff, alphas in their own subfolder</span><span class="st">Queued</span></li>
+            <li><span class="badge">Member request</span><span class="idea">⌨️ Interface: Multi-key shortcut sequences (e.g. A then A) for more bindable keys</span><span class="st">Queued</span></li>
+            <li><span class="badge">Member request</span><span class="idea">⌨️ Interface: Workspaces (&quot;rooms&quot;) with their own tools and keys: Sculpt/Retopo, Model, Paint/Render, UV, and how a mesh moves between them</span><span class="st">Queued</span></li>
+            <li><span class="badge">Member request</span><span class="idea">⌨️ Interface: Custom quick panel: drag sections/buttons from any palette into it, open floating with a key or dock it in a tray; sections can be dragged out, hold a key to drag (not a pie menu)</span><span class="st">Queued</span></li>
+            <li><span class="badge">Member request</span><span class="idea">〰️ Curves &amp; Tubes: Improved Tube/curves: twist, spin and spread modifiers, rope / braid / sleeve profiles, and repeating a premade shape (e.g. a chain link) along a curve</span><span class="st">Queued</span></li>
+            <li><span class="badge">Member request</span><span class="idea">👕 Cloth &amp; Garments: Cloth panel: one place for the Cloth brush settings and running a simulation (Drape)</span><span class="st">Queued</span></li>
+            <li><span class="badge">Member request</span><span class="idea">📦 Files &amp; Pipeline: Houdini link via USD: watch an unowned USD file and reload when it changes</span><span class="st">Queued</span></li>
+        </ul>
+        <p class="member-cta"><a class="btn primary" href="support.html">Become a member</a></p>
+      </div>
+    </section>
+
+    <section class="section alt">
+      <div class="wrap">
+        <h2>Everyone's ideas</h2>
+        <div class="table-wrap">
+        <table class="queue">
+          <thead><tr><th scope="col">Idea</th><th scope="col">Status</th></tr></thead>
+          <tbody>
+            <tr><td>🖌️ Brushes: Insert brush + Forge Stamps brush pack</td><td class="st">Building</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Sculpt layer management (duplicate, reorder, ...)</td><td class="st">Building</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Geometry panel + Parts list improvements</td><td class="st">Building</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Two-step lattice deformer</td><td class="st">Building</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Bend over a range (start/end span)</td><td class="st">Building</td></tr>
+            <tr><td>🖌️ Brushes: Brush per modifier key (Shift/Ctrl assignment)</td><td class="st">Building</td></tr>
+            <tr><td>📦 Files &amp; Pipeline: Package managers (AUR, apt, dnf, winget, Scoop)</td><td class="st">Building</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: One-click mirrored copy of a Part</td><td class="st">Building</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Numbered duplicates (Head.01) instead of &quot;copy copy&quot;</td><td class="st">Building</td></tr>
+            <tr><td>🖌️ Brushes: Crisp-edge flatten</td><td class="st">Building</td></tr>
+            <tr><td>⚡ Performance: Faster Quad Remesh at high polygon counts</td><td class="st">Building</td></tr>
+            <tr><td>👁️ View &amp; Camera: Orbit around the point under the pointer</td><td class="st">Building</td></tr>
+            <tr><td>📦 Files &amp; Pipeline: Bones and skin weights as USD skeletons, posing first</td><td class="st">Designing</td></tr>
+            <tr><td>🎨 Paint &amp; Materials: Paint layers exported as separate colour attributes</td><td class="st">Planned</td></tr>
+            <tr><td>🔷 Topology: Sculpt layers on micro levels</td><td class="st">Planned</td></tr>
+            <tr><td>🔷 Topology: Micro levels: rebuild subdivision levels from a micro level</td><td class="st">Planned</td></tr>
+            <tr><td>🔷 Topology: Micro levels: turn top subdivision levels into a micro level</td><td class="st">Planned</td></tr>
+            <tr><td>📦 Files &amp; Pipeline: One export panel with a format drop-down, plus an OBJ + displacement preset</td><td class="st">Planned</td></tr>
+            <tr><td>📦 Files &amp; Pipeline: SpaceMouse alongside the 3Dconnexion driver on macOS</td><td class="st">Planned</td></tr>
+            <tr><td>🎭 Masking &amp; Face Groups: Split cut mode: new face groups along a line or shape, nothing removed</td><td class="st">Planned</td></tr>
+            <tr><td>📦 Files &amp; Pipeline: Blender Bridge: update the base mesh and keep detail layers; shape keys back as layers</td><td class="st">Planned</td></tr>
+            <tr><td>🔷 Topology: Manual retopology on the surface: draw polygons, strips, loops</td><td class="st">Planned</td></tr>
+            <tr><td>⚡ Performance: Brushes on the graphics card (GPU sculpting)</td><td class="st">Planned</td></tr>
+            <tr><td>🎨 Paint &amp; Materials: Paint brush blend modes (Multiply, Add, Screen, Overlay...)</td><td class="st">Queued</td></tr>
+            <tr><td>🧭 Navigation: Center view on the mouse cursor (keeps the zoom; Alt+Middle Mouse suggested)</td><td class="st">Queued</td></tr>
+            <tr><td>📱 Android: publish the APK on F-Droid for easier install</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: My Panel, more draggable: Alt+drag any command or UI element into it (some can&#x27;t be dragged yet), and several custom panels, each shown or hidden with its own button</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: Simpler app icon</td><td class="st">Queued</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Origin tools + pie menu</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Send Divide levels to Blender as Multires</td><td class="st">Queued</td></tr>
+            <tr><td>🖌️ Brushes: Brush size preview</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: VR sculpting</td><td class="st">Queued</td></tr>
+            <tr><td>👁️ View &amp; Camera: View Figure choices: built-in skull + use your own model as the corner figure</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: iPadOS port</td><td class="st">Queued</td></tr>
+            <tr><td>📦 Files &amp; Pipeline: One-click send to an external renderer (scene, materials, vertex paint)</td><td class="st">Queued</td></tr>
+            <tr><td>🎨 Paint &amp; Materials: Lit Sphere material per Part</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Quad Remesh that fuses overlapping pieces in one step</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Voxel Remesh minimum thickness (keep thin tips)</td><td class="st">Queued</td></tr>
+            <tr><td>👁️ View &amp; Camera: Frozen multi-angle view: stamp the current view onto the canvas as a flat picture, turn the model and stamp more angles beside it; not editable, no extra memory (thanks dm4nd)</td><td class="st">Queued</td></tr>
+            <tr><td>🎨 Paint &amp; Materials: Render: more lights, ambient occlusion, soft shadows</td><td class="st">Queued</td></tr>
+            <tr><td>〰️ Curves &amp; Tubes: Tube that subtracts: carve a tube stroke into the surface (boolean subtract)</td><td class="st">Queued</td></tr>
+            <tr><td>〰️ Curves &amp; Tubes: Tube profiles: square, disc and other cross-sections</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Voxel Remesh above 512 (to 4096, polygon estimate + one-time warning)</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: Android port (phones and tablets with a pen)</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: Tab over a shelf hides only that shelf (Tab elsewhere hides all, as now)</td><td class="st">Queued</td></tr>
+            <tr><td>🖌️ Brushes: Brush Accumulate on/off (off: a stroke does not pile up over itself)</td><td class="st">Queued</td></tr>
+            <tr><td>🖌️ Brushes: Brush auto-masking in the brush settings: directional, cavity (invert), backface, opposite, colour, topological, face group, face group boundary, view angle; per-mask strength + curve; own Sculpt &gt; Brush &gt; Auto-masking subpanel</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Blend across Parts switch: smoothing/dynamic topology strokes blend an appended Part into the one it overlaps</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: Custom interface colours (pick your own accent and panel colours)</td><td class="st">Queued</td></tr>
+            <tr><td>⚪ Forge Spheres: Forge Spheres: draw and move in one mode, no switching (e.g. drag a sphere to move it, drag from its edge to grow one); child size option for Drag places child; in-between spheres along links as a preview</td><td class="st">Queued</td></tr>
+            <tr><td>👁️ View &amp; Camera: Split view: a second live view of the model (e.g. sculpt from the side while watching the front); split by dragging, detachable window</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: Touch navigation on desktop: pen sculpts, fingers navigate (1 finger orbit, 2 fingers pan/zoom, 2-finger tap undo), setting to choose</td><td class="st">Queued</td></tr>
+            <tr><td>👁️ View &amp; Camera: F key: one press frames the active Part, a second press frames the whole scene</td><td class="st">Queued</td></tr>
+            <tr><td>✴️ Strokes &amp; Alphas: Noise panel (pop-up): procedural 3D / alpha noise as displacement with scale, strength, mask-magnify and curves; colour blend modes; Mask / Unmask by noise; apply to mesh; presets in the Library</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Freeze subdivision: freeze the levels, edit the base topology, unfreeze with the sculpted detail carried onto the new mesh; plus Rebuild Lower Levels (rebuild the lower levels from the top one)</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Confirm pop-up before Voxel Remesh, Quad Remesh, Decimate (and later modelling ops) drop subdivision levels: Freeze Levels and Proceed / Cancel</td><td class="st">Queued</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Morph panel, separate from Sculpt layers: Store, Delete, Apply and Accumulate; a Morph slider plus Width, Height and Distance sliders per axis; Project Morph</td><td class="st">Queued</td></tr>
+            <tr><td>🎨 Paint &amp; Materials: Unlit view: show painted colour/texture without lighting or shadows, with a quick key to toggle</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Tessellation panel (Geometry &gt; Tessellation: pre-subdivision, thickness, shape input with preview, fit, weld, scale, rotate)</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Mesh Bridge (renamed from Slime Bridge by the poster): bridge types Standard, Smooth, Slime, Cobweb and Organic (and more) with tensions, bridges, branches and capillaries; mask selection required</td><td class="st">Queued</td></tr>
+            <tr><td>🎭 Masking &amp; Face Groups: Stored masks: store, load, merge, flatten, rename, reorder, delete, wipe (Masking &gt; Store Masks; Select Masks as subpanel; a mask manager with multiselect, kept separate from face groups)</td><td class="st">Queued</td></tr>
+            <tr><td>👁️ View &amp; Camera: Clickable 3D orientation widget (top right) to jump to front/side/top views, for a stable character view</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: Screencast overlay: show pressed keys and mouse buttons for talks and tutorials</td><td class="st">Queued</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: New Parts and tools land exactly on the world origin (centre of the axis grid) so symmetry works at once</td><td class="st">Queued</td></tr>
+            <tr><td>📦 Files &amp; Pipeline: Render bridge: send a quick render straight to an image editor (any program) for client previews</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: Startup splash screen (with the first-run welcome card)</td><td class="st">Queued</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Primitive blockout kit: more primitives (cylinder, capsule, cone, torus), click-to-place on the surface, then merge the blockout into one mesh (Voxel Remesh)</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Quad Remesh options: adaptive (curvature-based) density, Repeat, Retry, curve strength for guide curves</td><td class="st">Queued</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Mesh Boolean: live Union/Subtract/Intersect preview + Make Boolean Mesh (new mesh, sources untouched), weld and face group options</td><td class="st">Queued</td></tr>
+            <tr><td>⚡ Performance: Remesh low-memory: &quot;Proceed anyway&quot; warning (allow swapping) instead of a hard stop, clear feedback if memory runs out</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: One-click Update button on macOS (today the banner links to the download)</td><td class="st">Queued</td></tr>
+            <tr><td>🖌️ Brushes: Smooth-peaks brush: smooths only the high points (peaks), valleys untouched</td><td class="st">Queued</td></tr>
+            <tr><td>👕 Cloth &amp; Garments: Wind for the Drape tool: direction, turbulence and similar parameters</td><td class="st">Queued</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Save a project with only some Parts (e.g. only the visible ones) to slim the file after working on different versions</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Panel tool: turn a selection / face group into a thin panel with thickness and edge loops (hard-surface panels)</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: Alternate interface</td><td class="st">Queued</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Node-based sculpting</td><td class="st">Queued</td></tr>
+            <tr><td>🎭 Masking: Choose the mask display colour (masked areas draw darker today)</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: Taller Parts panel (resize handle or scrollbar; little room in the Parts menu)</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Make Symmetric: choose the side to keep</td><td class="st">Queued</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Gizmo free-move handles</td><td class="st">Queued</td></tr>
+            <tr><td>🖌️ Brushes: Move brush reach beyond the edge (a buffer distance so Move still grabs when the cursor is just outside the silhouette)</td><td class="st">Queued</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Smooth blend for Booleans (SDF style): blend radius on union/subtract to control how far the merge reaches</td><td class="st">Queued</td></tr>
+            <tr><td>👁️ View &amp; Camera: Mouse orbit speed and smoothing (Blender-style middle-button rotation feels too fast)</td><td class="st">Queued</td></tr>
+            <tr><td>🧩 Parts &amp; Scene: Mesh array: repeat and chain copies of a Part (offset/scale/rotate/pivot stages, mirror + align, on/off pattern), live preview, bake to a mesh</td><td class="st">Queued</td></tr>
+            <tr><td>⚡ Performance: Scratch Disk: adaptive undo history that overflows to disk as free RAM shrinks (RAM &gt;10%/5-9%/&lt;5%/swap tiers), hidden Parts offloaded safely, full-drive safeguards</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: Hotkeys in categories (Sculpt brushes, Navigation, Modifier keys...), starting with sculpt shortcuts; Navigation = pan + zoom keys; Modifiers = mask, smooth (the action), gizmo, symmetry X/Y/Z</td><td class="st">Queued</td></tr>
+            <tr><td>⌨️ Interface: Command line docked under the brush shelf: type a command, it asks the next options step by step, history above</td><td class="st">Queued</td></tr>
+            <tr><td>🎬 Animation: a timeline to animate bones/poses over time (keyframes), after skeletons land</td><td class="st">Queued</td></tr>
+            <tr><td>🖌️ Brushes: Brush thumbnails that show the brush&#x27;s alpha, plus a Regenerate thumbnail right-click</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Local subdivide: subdivide only a masked/lasso/face-group area with the existing Subdivide method (N levels), seamless transition to the untouched mesh, optional soft fade at the mask edge; not Voxel Remesh; for fine engraving on a 500k-poly figure; related to Adaptive Detail (Micro)</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: Default Sphere as a Quad Sphere (cube-projected, even quads) instead of the triangulated icosphere, so sculpting doesn&#x27;t make spiky triangles</td><td class="st">Queued</td></tr>
+            <tr><td>🎭 Masking &amp; Face Groups: Cut Circle: cut the mesh with a circle/ellipse shape (resizable, free or locked round), next to Cut Line/Lasso/Rectangle/Polyline</td><td class="st">Queued</td></tr>
+            <tr><td>🔷 Topology: 2D drawing tools in Model space: line, curve, circle, square, triangle to start</td><td class="st">Queued</td></tr>
+            <tr><td>👁️ View &amp; Camera: XY and YZ grids in Model space, next to the XZ floor grid</td><td class="st">Queued</td></tr>
+            <tr><td>👁️ View &amp; Camera: Snap to grid (with the XY/YZ/XZ grids in Model space)</td><td class="st">Queued</td></tr>
+            <tr><td>Edge crease for subdivision + select edges by angle; creases through the Blender Bridge both ways <span class="tag">member</span></td><td class="st">Shipped<span class="detail">in 0.12.0</span></td></tr>
+            <tr><td>⌨️ Interface: Shortcut editor: warn when a key is already used (no silent reassign) + per-shortcut reset button <span class="tag">member</span></td><td class="st">Shipped<span class="detail">in 0.12.4</span></td></tr>
+            <tr><td>⌨️ Interface: Pan left/right/up/down as separate bindable keys (for game pads / analog sticks; zoom in/out keys exist) <span class="tag">member</span></td><td class="st">Shipped<span class="detail">in 0.12.4</span></td></tr>
+            <tr><td>Generate a cavity map <span class="tag">member</span></td><td class="st">Already in the app<span class="detail">Tool &gt; Bake &gt; Cavity; Masking &gt; By cavity</span></td></tr>
+            <tr><td>Deformation panel expansion</td><td class="st">Shipped<span class="detail">in 0.11.14</span></td></tr>
+            <tr><td>X/Y/Z orbit lock</td><td class="st">Shipped<span class="detail">in 0.11.13</span></td></tr>
+            <tr><td>Multi-object gizmo</td><td class="st">Shipped<span class="detail">in 0.11.16</span></td></tr>
+            <tr><td>Pose all Parts through a proxy (Pose Maker)</td><td class="st">Shipped<span class="detail">in 0.12.0</span></td></tr>
+            <tr><td>👁️ View &amp; Camera: Load reference images in the viewport</td><td class="st">Shipped<span class="detail">in 0.12.8</span></td></tr>
+            <tr><td>Memory use (RAM, GPU) in the top bar</td><td class="st">Shipped<span class="detail">in 0.11.15</span></td></tr>
+            <tr><td>Recent colours row on the left shelf</td><td class="st">Shipped<span class="detail">in 0.11.15</span></td></tr>
+            <tr><td>Shift+drag to rotate the alpha while stamping</td><td class="st">Shipped<span class="detail">in 0.12.3</span></td></tr>
+            <tr><td>Light rotation on one axis</td><td class="st">Already in the app<span class="detail">PBR shading &gt; Rotation</span></td></tr>
+            <tr><td>Duplicate Part shortcut</td><td class="st">Already in the app<span class="detail">Ctrl+Shift+D</span></td></tr>
+            <tr><td>Constant detail for dynamic topology</td><td class="st">Already in the app<span class="detail">Draw &amp; Tablet &gt; Constant detail</span></td></tr>
+            <tr><td>Hold a key to change brush size</td><td class="st">Already in the app<span class="detail">hold [ or ], S for a Size slider</span></td></tr>
+            <tr><td>Outside remeshing add-on</td><td class="st">Declined<span class="detail">no outside code; we&#x27;ll link it if published</span></td></tr>
+            <tr><td>Re-create a third-party add-on</td><td class="st">Declined<span class="detail">their work and licence</span></td></tr>
+            <tr><td>Rename the Tendril brush to a more familiar name</td><td class="st">Declined</td></tr>
+            <tr><td>One-time donation / tip jar for occasional supporters (alongside memberships)</td><td class="st">Declined<span class="detail">owner: keeps payments simple; $48/year is the lowest-commitment plan</span></td></tr>
+          </tbody>
+        </table>
+        </div>
+        <p class="fine">Ideas come from <a href="https://discord.gg/gWrYkEmQhH" rel="noopener">#ideas on Discord</a> and
+          <a href="https://github.com/islandmed/SculptForge/issues">GitHub</a>. "member" marks a member's request. <a href="support.html#requests">How requests work</a>.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-grid">
+      <div>
+        <a class="brand" href="index.html"><img class="brand-wordmark" src="img/logo-wordmark-dark.svg" width="103" height="24" alt="SculptForge"><img class="brand-cube" src="img/logo-cube.svg" width="30" height="32" alt="SculptForge"></a>
+        <p class="fine">Copyright © 2026 The SculptForge contributors. SculptForge is licensed under the
+          <a href="https://github.com/islandmed/SculptForge/blob/main/LICENSE">GNU GPL v3.0 or later</a>.</p>
+      </div>
+      <div class="links">
+        <a href="performance/">Performance</a>
+        <a href="guide/index.html">User Guide</a>
+        <a href="brushes.html">Community brushes</a>
+        <a href="benchmarks/">Benchmarks: 15M and 33M</a>
+        <a href="press.html">Press kit</a>
+        <a href="support.html">Membership</a>
+        <a href="https://sculptforge-shop.fourthwall.com/?utm_source=site&amp;utm_medium=footer" rel="noopener">Shop</a>
+        <a href="supporters.html">Members</a>
+        <a href="terms.html">Terms</a>
+        <a href="jobs.html">Jobs</a>
+        <a href="https://github.com/islandmed/SculptForge">Source code</a>
+        <a href="https://discord.gg/gWrYkEmQhH">Community Discord</a>
+        <div class="social" role="group" aria-label="Follow SculptForge"><a class="gh" href="https://discord.gg/gWrYkEmQhH" rel="noopener" aria-label="Discord" title="Discord"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#discord"/></svg></a><a class="gh" href="https://github.com/islandmed/SculptForge" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#github"/></svg></a><a class="gh" href="https://x.com/SculptForgeApp?utm_source=site&amp;utm_medium=footer" rel="noopener" aria-label="X" title="X"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#x"/></svg></a><a class="gh" href="https://bsky.app/profile/sculptforge.bsky.social?utm_source=site&amp;utm_medium=footer" rel="noopener" aria-label="Bluesky" title="Bluesky"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#bluesky"/></svg></a><a class="gh" href="https://www.instagram.com/sculptforge.app?utm_source=site&amp;utm_medium=footer" rel="noopener" aria-label="Instagram" title="Instagram"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#instagram"/></svg></a><a class="gh" href="https://www.facebook.com/profile.php?id=61596196961617&amp;utm_source=site&amp;utm_medium=footer" rel="noopener" aria-label="Facebook" title="Facebook"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><use href="img/social.svg#facebook"/></svg></a></div>
+      </div>
+      <p class="fine trademarks">SculptForge is an independent project. Product names are trademarks of their respective owners. The site uses no cookies. Visits are counted anonymously with <a href="https://www.goatcounter.com/">GoatCounter</a>.</p>
+    </div>
+  </footer>
+  <script>
+    // Our email: assembled in the browser, never present in the page source (spam scrapers). data-mail-show also
+    // shows the address as the link text, so the page reads "Email hello@..." with JavaScript on.
+    document.querySelectorAll('a[data-mail]').forEach((a) => {
+      const addr = 'hello' + '@' + 'sculptforge.app';
+      a.href = 'mailto:' + addr + '?subject=' + encodeURIComponent(a.dataset.mail);
+      a.removeAttribute('rel');
+      if (a.hasAttribute('data-mail-show')) a.textContent = addr;
+    });
+  </script>
+</body>
+</html>

@@ -37,11 +37,11 @@ std::string role(std::string name) {
     throw std::runtime_error("Unknown MetaHuman template object: " + name);
 }
 std::vector<int> targets(Document& doc, bool all = false) {
-    const auto& active = doc.activeSubtoolInfo().crkwMetaHuman;
-    if (!all && !active.isObject()) throw std::runtime_error("Select a MetaHuman Sculpt SubTool first");
+    const auto& active = doc.activePartInfo().crkwMetaHuman;
+    if (!all && !active.isObject()) throw std::runtime_error("Select a MetaHuman Sculpt Part first");
     std::vector<int> out;
-    for (int i = 0; i < doc.subtoolCount(); ++i) {
-        const auto& ref = doc.subtools[size_t(i)].crkwMetaHuman;
+    for (int i = 0; i < doc.partCount(); ++i) {
+        const auto& ref = doc.parts[size_t(i)].crkwMetaHuman;
         if (ref.isObject() && (all || ref["session"].asString() == active["session"].asString())) out.push_back(i);
     }
     if (out.empty()) throw std::runtime_error("No MetaHuman Sculpt character in this scene");
@@ -60,14 +60,14 @@ std::vector<glm::vec2> referenceUvs(const Json& ref, size_t corners) {
     return uv;
 }
 Mesh checkedBase(Document& doc, int index) {
-    const auto& mesh = doc.subtoolMesh(index);
+    const auto& mesh = doc.partMesh(index);
     Mesh base = subdivLevelCount(mesh) ? subdivLevelMesh(mesh, 0) : mesh;
-    const auto& ref = doc.subtools[size_t(index)].crkwMetaHuman;
+    const auto& ref = doc.parts[size_t(index)].crkwMetaHuman;
     const std::string r = ref["role"].asString();
     if (r != "head" && r != "body" && r != "full" && r != "eyeLeft" && r != "eyeRight" && r != "teeth")
         throw std::runtime_error("Invalid MetaHuman part identity");
     if (topologyKey(base) != ref["topology"].asString())
-        throw std::runtime_error(doc.subtools[size_t(index)].name + ": topology changed; remeshing, reordered vertices and applied subdivision cannot be repaired");
+        throw std::runtime_error(doc.parts[size_t(index)].name + ": topology changed; remeshing, reordered vertices and applied subdivision cannot be repaired");
     if (!base.layers.empty()) throw std::runtime_error("MetaHuman base export requires no sculpt layers; bake your intended base shape first");
     base.uvs = referenceUvs(ref, base.triangleCount() * 3);
     if (r == "full") {
@@ -93,8 +93,8 @@ void preview(Document& doc, const std::vector<int>& indices, const std::string& 
     std::vector<Display> pending;
     std::map<std::string, std::shared_ptr<PaintTexture>> cache;
     for (int index : indices) {
-        const auto& ref = doc.subtools[size_t(index)].crkwMetaHuman;
-        auto& mesh = doc.subtoolMesh(index);
+        const auto& ref = doc.parts[size_t(index)].crkwMetaHuman;
+        auto& mesh = doc.partMesh(index);
         Display display{index, {}, {}};
         if (mode != "OFF") {
             checkedBase(doc, index); // validate the base independently of UV edits and display state
@@ -126,7 +126,7 @@ void preview(Document& doc, const std::vector<int>& indices, const std::string& 
                 if (!mesh.hasUvs()) throw std::runtime_error("Fix base UVs before displaying full-body texture guides");
                 display.uv = mesh.uvs;
                 for (size_t t = 0; t < mesh.triangleCount(); ++t) {
-                    const int part = subdivLevelCount(mesh) ? int(mesh.polygroupAt(uint32_t(t))) : int(ref["parts"][t].asNumber());
+                    const int part = subdivLevelCount(mesh) ? int(mesh.facegroupAt(uint32_t(t))) : int(ref["parts"][t].asNumber());
                     for (int c = 0; c < 3; ++c) display.uv[t * 3 + c].x = (display.uv[t * 3 + c].x + float(part == 1)) * .5f;
                 }
             }
@@ -134,11 +134,11 @@ void preview(Document& doc, const std::vector<int>& indices, const std::string& 
         pending.push_back(std::move(display));
     }
     for (auto& display : pending) {
-        auto& mesh = doc.subtoolMesh(display.index);
+        auto& mesh = doc.partMesh(display.index);
         mesh.previewTexture = std::move(display.texture);
         mesh.previewUvs = std::move(display.uv);
         mesh.facesDirty = true;
-        if (remember) doc.subtools[size_t(display.index)].crkwMetaHuman.set("preview", mode);
+        if (remember) doc.parts[size_t(display.index)].crkwMetaHuman.set("preview", mode);
     }
 }
 Mesh partMesh(const Mesh& src, const Json& ref, int part) {
@@ -199,32 +199,32 @@ void registerCrkwMetaHumanCommands(CommandRegistry& registry) {
                 ref.set("session", std::to_string(stamp)); ref.set("role", r); ref.set("assets", folder);
                 ref.set("topology", topologyKey(object.mesh)); ref.set("preview", "OFF");
                 for (const auto& uv : object.mesh.uvs) { uvs.push(double(uv.x)); uvs.push(double(uv.y)); }
-                for (size_t t = 0; t < object.mesh.triangleCount(); ++t) parts.push(double(object.mesh.polygroupAt(uint32_t(t))));
+                for (size_t t = 0; t < object.mesh.triangleCount(); ++t) parts.push(double(object.mesh.facegroupAt(uint32_t(t))));
                 ref.set("uvs", std::move(uvs)); ref.set("parts", std::move(parts));
-                const int index = doc.addSubtool(std::move(object.mesh), "MH " + r, false);
-                doc.subtools[size_t(index)].crkwMetaHuman = std::move(ref);
+                const int index = doc.addPart(std::move(object.mesh), "MH " + r, false);
+                doc.parts[size_t(index)].crkwMetaHuman = std::move(ref);
                 if (r == "full" || r == "head") primary = index;
             }
-            doc.selectSubtool(primary); doc.sculptor.dyntopo.enabled = false;
-            return {true, "MetaHuman created: " + std::to_string(objects.size()) + " native SubTools (" + layout + ")"};
+            doc.selectPart(primary); doc.sculptor.dyntopo.enabled = false;
+            return {true, "MetaHuman created: " + std::to_string(objects.size()) + " native Parts (" + layout + ")"};
         });
     add("crkw_mh_fix_uvs", "Restore the selected character's original base UVs; reject changed topology.", {},
         [](Document& doc, const Args&) -> CommandResult {
             const auto indices = targets(doc);
             std::vector<Mesh> checked;
             for (int i : indices) {
-                if (subdivLevelCount(doc.subtoolMesh(i)) && subdivCurrentLevel(doc.subtoolMesh(i)) != 0)
+                if (subdivLevelCount(doc.partMesh(i)) && subdivCurrentLevel(doc.partMesh(i)) != 0)
                     throw std::runtime_error("Return to subdivision level 1 before fixing base UVs");
                 checked.push_back(checkedBase(doc, i));
             }
             for (size_t k = 0; k < indices.size(); ++k) {
-                auto& mesh = doc.subtoolMesh(indices[k]);
+                auto& mesh = doc.partMesh(indices[k]);
                 UndoRecord record; record.label = "MetaHuman Fix UVs"; record.mesh = std::make_unique<Mesh>(mesh);
                 record.mesh->previewTexture.reset(); record.mesh->previewUvs.clear();
-                (indices[k] == doc.activeSubtool ? doc.undo : doc.subtools[size_t(indices[k])].undo).push(std::move(record));
+                (indices[k] == doc.activePart ? doc.undo : doc.parts[size_t(indices[k])].data->undo).push(std::move(record));
                 mesh.uvs = std::move(checked[k].uvs);
                 mesh.previewUvs.clear(); mesh.previewTexture.reset(); mesh.facesDirty = true;
-                doc.subtools[size_t(indices[k])].crkwMetaHuman.set("preview", "OFF");
+                doc.parts[size_t(indices[k])].crkwMetaHuman.set("preview", "OFF");
             }
             doc.modified = true;
             return {true, "MetaHuman original base UVs restored; sculpt positions unchanged"};
@@ -243,7 +243,7 @@ void registerCrkwMetaHumanCommands(CommandRegistry& registry) {
             std::map<std::string, Mesh> meshes;
             for (int i : targets(doc)) {
                 Mesh base = checkedBase(doc, i);
-                const auto& ref = doc.subtools[size_t(i)].crkwMetaHuman;
+                const auto& ref = doc.parts[size_t(i)].crkwMetaHuman;
                 const std::string r = ref["role"].asString();
                 if (r == "full") { meshes["body"] = partMesh(base, ref, 0); meshes["head"] = partMesh(base, ref, 1); }
                 else meshes[r] = std::move(base);
@@ -275,12 +275,12 @@ void registerCrkwMetaHumanCommands(CommandRegistry& registry) {
 }
 
 void restoreCrkwMetaHumanPreviews(Document& doc) {
-    for (int i = 0; i < doc.subtoolCount(); ++i) {
-        const auto& ref = doc.subtools[size_t(i)].crkwMetaHuman;
+    for (int i = 0; i < doc.partCount(); ++i) {
+        const auto& ref = doc.parts[size_t(i)].crkwMetaHuman;
         const std::string mode = ref["preview"].asString();
         if (!ref.isObject() || mode.empty() || mode == "OFF") continue;
         try { preview(doc, {i}, mode, false); } catch (...) {
-            auto& mesh = doc.subtoolMesh(i); mesh.previewTexture.reset(); mesh.previewUvs.clear(); mesh.facesDirty = true;
+            auto& mesh = doc.partMesh(i); mesh.previewTexture.reset(); mesh.previewUvs.clear(); mesh.facesDirty = true;
         }
     }
 }

@@ -1,6 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ai/ComfyUI.h"
+#include "ai/AiPolicy.h"
 
 #include "ai/Http.h"
 #include "ai/ImageTo3DService.h"
@@ -249,7 +250,12 @@ bool parseSystemStats(const Json& stats, ServerInfo& info) {
 }
 
 bool checkServer(const std::string& url, ServerInfo& info, std::string& error, int timeoutSeconds) {
+    if (!aiEnabled()) {
+        error = aiOffError();
+        return false;
+    }
     const std::string base = normalizeUrl(url);
+    if (!aiRequestAllowed("comfyui", base + "/system_stats", error)) return false; // (a studio's policy)
     HttpResponse r = httpRequest("GET", base + "/system_stats", {}, {}, timeoutSeconds);
     if (!r.error.empty()) {
         error = unreachable(base, r.error);
@@ -569,6 +575,8 @@ int queuePosition(const Json& queue, const std::string& promptId) {
 GeneratorResult run(const AiSettings& s, const std::string& workflowPath, const std::string& imagePath,
                     const std::string& prompt, const std::string& outputStem, GenerationProgress* p,
                     std::optional<uint64_t> seed) {
+    if (!aiEnabled()) return {false, {}, aiOffError()};
+    if (std::string why; !aiRequestAllowed("comfyui", normalizeUrl(s.comfyUrl) + "/prompt", why)) return {false, {}, why};
     GeneratorResult result;
     const bool text = imagePath.empty();
     const std::string kind = text ? "text" : "image";

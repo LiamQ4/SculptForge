@@ -162,9 +162,9 @@ void registerCrkwMaskManagerCommands(CommandRegistry& registry) {
          {"name",T::String,"Custom region name to save",false}},
         [](Document& doc,const Args& args)->CommandResult {
             try {
-            Mesh& mesh=doc.mesh;const auto& ref=doc.activeSubtoolInfo().crkwMetaHuman;
+            Mesh& mesh=doc.mesh;const auto& ref=doc.activePartInfo().crkwMetaHuman;
             const std::string role=ref["role"].asString();
-            if ((role!="head" && role!="full") || !mesh.hasUvs()) return {false,"Select a MetaHuman head or full-body SubTool with its primary UVs"};
+            if ((role!="head" && role!="full") || !mesh.hasUvs()) return {false,"Select a MetaHuman head or full-body Part with its primary UVs"};
             Json state=crkwMaskSettings(mesh);
             const std::string action=argString(args,"action","toggle"),name=argString(args,"region",state["selected"].asString());
             const std::string side=argString(args,"side",state["side"].asString());

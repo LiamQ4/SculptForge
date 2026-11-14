@@ -10,7 +10,7 @@
 #include "core/AutoUv.h"
 #include "core/BrushAlpha.h"
 #include "core/Commands.h"
-#include "core/Polypaint.h"
+#include "core/VertexPaint.h"
 #include "core/Primitives.h"
 #include "core/Project.h"
 #include "core/Texture.h"
@@ -287,7 +287,7 @@ TEST(texture_layers_composite_merge_and_round_trip) {
     CommandRegistry reg;
     CHECK(reg.execute(doc, "paint_fill", {{"color", std::string("#808080")}, {"area", std::string("all")}}).ok);
     CHECK(reg.execute(doc, "paint_layer_add", {{"blend", std::string("multiply")}, {"name", std::string("Dirt")}}).ok);
-    CHECK(doc.mesh.paintLayers.empty()); // the texture's stack, not polypaint's
+    CHECK(doc.mesh.paintLayers.empty()); // the texture's stack, not vertex paint's
     CHECK(doc.mesh.texture->layers.size() == 1 && doc.mesh.texture->activeLayer == 0);
     TexturePainter painter;
     CHECK(painter.begin(doc.mesh));
@@ -418,7 +418,7 @@ TEST(texture_copies_are_independent) {
     Mesh a = texturedPlane(8, 64);
     a.rebuildTopology();
     a.recomputeAllNormals();
-    Mesh b = a; // e.g. a duplicated SubTool or an undo snapshot: shares the texture until one changes it
+    Mesh b = a; // e.g. a duplicated Part or an undo snapshot: shares the texture until one changes it
     CHECK(a.texture == b.texture);
     BVH bvh;
     bvh.build(a);
@@ -446,19 +446,36 @@ TEST(texture_commands) {
     CHECK(doc.undo.undo(doc.mesh, doc.bvh));
     CHECK(doc.mesh.texture->width == 1024);
 
-    // Fills paint the texture (the vertices stay unpainted), Texture > Polypaint copies it over.
+    // Fills paint the texture (the vertices stay unpainted), Texture > Vertex paint copies it over.
     CHECK(reg.execute(doc, "paint_fill", {{"color", std::string("#ff0000")}}).ok);
     CHECK(!doc.mesh.hasColors());
     CHECK(paintedTexels(*doc.mesh.texture) > 100000);
-    CHECK(reg.execute(doc, "polypaint_from_texture").ok);
+    CHECK(reg.execute(doc, "vertexpaint_from_texture").ok);
     CHECK(doc.mesh.hasColors());
     CHECK(glm::all(glm::lessThan(glm::abs(doc.mesh.colors[0] - glm::vec3(1, 0, 0)), glm::vec3(0.02f))));
 
-    // Polypaint > Texture bakes vertex colours (green) back.
+    // Line Gradient (#99) paints texels: red at the left of the front view, blue at the right, one undo step.
+    CHECK(reg.execute(doc, "paint_gradient", {{"color", std::string("#ff0000")}, {"to", std::string("#0000ff")}}).ok);
+    {
+        const Mesh& m = doc.mesh;
+        float minX = 1e9f, maxX = -1e9f;
+        glm::vec3 atMin(0.0f), atMax(0.0f);
+        for (size_t t = 0; t < m.triangleCount(); ++t)
+            for (int k = 0; k < 3; ++k) {
+                const glm::vec3& p = m.positions[m.triangles[t][k]];
+                const glm::vec3 c = sampleTexture(*m.texture, m.uvs[t * 3 + size_t(k)]);
+                if (p.x < minX) minX = p.x, atMin = c;
+                if (p.x > maxX) maxX = p.x, atMax = c;
+            }
+        CHECK(atMin.x > 0.9f && atMin.z < 0.1f && atMax.z > 0.9f && atMax.x < 0.1f);
+    }
+    CHECK(doc.undo.undoLabel() == "Line Gradient");
+    CHECK(doc.undo.undo(doc.mesh, doc.bvh));
+    // Vertex paint > Texture bakes vertex colours (green) back.
     CHECK(reg.execute(doc, "paint_target", {{"target", std::string("vertex")}}).ok);
     CHECK(!paintsTexture(doc.mesh));
     CHECK(reg.execute(doc, "paint_fill", {{"color", std::string("#00ff00")}}).ok);
-    CHECK(reg.execute(doc, "texture_from_polypaint").ok);
+    CHECK(reg.execute(doc, "texture_from_vertexpaint").ok);
     CHECK(paintsTexture(doc.mesh));
     const glm::vec3 c = sampleTexture(*doc.mesh.texture, doc.mesh.uvs[0]);
     CHECK(c.y > 0.9f && c.x < 0.05f);
@@ -534,7 +551,7 @@ TEST(texture_dab_is_interactive_at_4k_on_a_million_triangles) {
     std::printf("  texture dab at 4K / %zu tris: begin %.1f ms, %.2f ms per dab (%zu texels)\n", m.triangleCount(), beginMs,
                 dabMs, texels / 20);
     CHECK(texels > 0);
-    CHECK(dabMs < 30.0); // interactive: several dabs per frame
+    CHECK(dabMs < timeLimit(30.0)); // interactive: several dabs per frame
 }
 
 TEST(texture_stroke_benchmark) {
@@ -613,7 +630,7 @@ TEST(texture_dab_is_deterministic_with_threads) {
 }
 
 TEST(texture_dab_sharpness_does_not_depend_on_mesh_density) {
-    // The ZBrush tester's "resolution depends on the geometry density": a hard square alpha on a 2-triangle
+    // The classic tester's "resolution depends on the geometry density": a hard square alpha on a 2-triangle
     // plane must give the same texels as on a 64x64 plane, with an edge as sharp as the texture allows.
     BrushAlpha square; // fully opaque up to the square's edge: the hardest possible stamp
     square.width = square.height = 4;
@@ -631,7 +648,7 @@ TEST(texture_dab_sharpness_does_not_depend_on_mesh_density) {
         DabParams p = dab(glm::vec3(0.013f, 0, -0.021f), 0.1f);
         p.alpha = &square;
         p.alphaUp = glm::vec3(0, 0, 1);
-        p.focal = -1.0f; // (Focal Shift -100 keeps the alpha hard to its edge; 0 would soften it, #60)
+        p.focal = -1.0f; // (Falloff -100 keeps the alpha hard to its edge; 0 would soften it, #60)
         CHECK(painter.dab(m, bvh, p, glm::vec3(0.0f), Symmetry{false, false, false}) > 0);
         UndoRecord rec;
         painter.end(rec);

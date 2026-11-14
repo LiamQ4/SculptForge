@@ -12,6 +12,7 @@
 #include "app/AsyncStroke.h"
 
 #include "core/Micro.h"
+#include "core/PerfTrace.h"
 #include "core/Sculpt.h"
 #include "core/TierConfig.h"
 
@@ -25,6 +26,14 @@ namespace sf {
 namespace {
 
 constexpr double kBatchSeconds = 0.033; // a batch's dabs: about this much work (the surface updates this often)
+// Background dabs (no preview to cover a batch): batches of about a frame's share of work, as the frame loop places.
+constexpr double kBackgroundBatchSeconds = 0.010;
+// A fused batch (Fast Big Brushes) takes as many dabs as about this much work: a batch shows only when it is done,
+// so on slow cores a long batch is lag, while on fast ones the dabs share the vertex walk, refit and upload.
+constexpr double kFusedBatchSeconds = 0.05;
+// Meshes from this many vertices place a stroke's dabs on the solver thread even without predictive strokes: one
+// 240 px dab there moves millions of vertices (100-300 ms at 33M triangles), more than a frame can hold.
+constexpr size_t kBackgroundDabVertices = 2'000'000;
 
 } // namespace
 
@@ -50,8 +59,18 @@ void App::StrokeSolver::start() {
 }
 
 void App::StrokeSolver::wait() {
+    // The main thread waits here for the stroke thread (it must: the mesh is the stroke's until it is done). A
+    // wait of seconds is a frozen window (phoenix, Discord 11-05): say so in the log. (`batch` is only read there.)
     std::unique_lock<std::mutex> lock(mutex_);
-    idle_.wait(lock, [this] { return !busy_.load(std::memory_order_acquire); });
+    const auto start = std::chrono::steady_clock::now();
+    while (!idle_.wait_for(lock, std::chrono::seconds(2), [this] { return !busy_.load(std::memory_order_acquire); }))
+        SDL_Log("stroke: the main thread has waited %.0f s for the stroke thread (a batch of %zu dabs)",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(), batch.size());
+}
+
+bool App::StrokeSolver::waitFor(double seconds) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return idle_.wait_for(lock, std::chrono::duration<double>(seconds), [this] { return !busy_.load(std::memory_order_acquire); });
 }
 
 void App::StrokeSolver::loop() {
@@ -72,9 +91,20 @@ void App::StrokeSolver::loop() {
             app.doc_.sculptor.flushDraft(app.doc_.mesh, app.doc_.bvh);
             spent += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         }
+        app.doc_.sculptor.beginBatch(); // (a big brush's dabs go through the vertices together: core/SculptBatch.cpp)
         for (const PathDab& d : batch) {
             const auto t0 = std::chrono::steady_clock::now();
-            app.dabAt(d.x, d.y, d.pressure);
+            app.dabAt(d.x, d.y, d.pressure, d.stamp);
+            spent += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        }
+        {
+            const auto t0 = std::chrono::steady_clock::now();
+            app.doc_.sculptor.endBatch(app.doc_.mesh, app.doc_.bvh);
+            // Nothing more waiting: the exact normals behind the brush catch up (a frame's share of them).
+            if (catchUp && !finalize) app.doc_.sculptor.catchUpNormals(app.doc_.mesh, app.doc_.bvh, catchUpLeaves);
+            // A share of the exact normals the brush has left behind, every batch: lifting the pen then waits for
+            // the last stretch only (they cost a tenth of what the dab-by-dab normals did over the stroke).
+            else if (!finalize) app.doc_.sculptor.catchUpBehind(app.doc_.mesh, app.doc_.bvh, 0.35);
             spent += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         }
         app.dabView_ = nullptr;
@@ -122,6 +152,14 @@ bool App::predictiveStrokes() const {
     return env >= 0 ? env == 1 : uiPrefs_.predictiveStrokes;
 }
 
+bool App::fastBigBrushes() const {
+    static const int env = [] {
+        const char* v = std::getenv("SF_ADAPTIVE_DABS");
+        return v && *v ? (*v == '0' ? 0 : 1) : -1;
+    }();
+    return env >= 0 ? env == 1 : uiPrefs_.fastBigBrushes;
+}
+
 bool App::draftStrokes() const {
     static const int env = [] {
         const char* v = std::getenv("SF_DRAFT_STROKE");
@@ -132,11 +170,32 @@ bool App::draftStrokes() const {
     return predictiveStrokes() && (env >= 0 ? env == 1 : uiPrefs_.draftStrokes || currentTierConfig().draftBrushMode);
 }
 
+bool App::backgroundDabs() const {
+    static const int env = [] {
+        const char* v = std::getenv("SF_BACKGROUND_DABS");
+        return v && *v ? (*v == '0' ? 0 : 1) : -1;
+    }();
+    // The same dabs in the same order as the frame loop places them, only on the solver thread: the frame keeps
+    // drawing what the GPU has while a big dab is worked out, and letting go doesn't wait for the dabs queued.
+    return env >= 0 ? env == 1 : doc_.mesh.vertexCount() >= kBackgroundDabVertices;
+}
+
+bool App::previewStrokes() const {
+    // Background Preview (Preferences > Performance, experimental; SF_BG_GHOST=0 / 1 overrides): background dabs
+    // draw the predictive preview too (it never changes the mesh: the solver's dabs are the same), and the frame
+    // doesn't wait for them.
+    static const int env = [] {
+        const char* v = std::getenv("SF_BG_GHOST");
+        return v && *v ? (*v == '0' ? 0 : 1) : -1;
+    }();
+    return predictiveStrokes() || ((env >= 0 ? env == 1 : uiPrefs_.backgroundPreview) && backgroundDabs());
+}
+
 bool App::asyncStrokeAllowed() const {
     // Sculpt strokes of queued dabs only: Move, Snake Hook and the drag strokes work in strokeTo itself; painting,
     // masking and dynamic topology (which changes the layout the renderer packs for) stay in the frame loop.
     const bool recipe = strokeRecipe() != nullptr;
-    return interactiveStrokes_ && predictiveStrokes() && strokeSculpt_ && !strokePaint_ && !strokeMask_ &&
+    return interactiveStrokes_ && (predictiveStrokes() || backgroundDabs()) && strokeSculpt_ && !strokePaint_ && !strokeMask_ &&
            !doc_.sculptor.dyntopo.enabled && previewLod_ < 0 && !faceTakePlaying_ &&
            !doc_.mesh.micro && // (a micro level is sculpted and drawn by core/MicroSculpt and the MicroRenderer)
            (recipe || (strokeBrush_ != BrushType::Move && strokeBrush_ != BrushType::SnakeHook)) &&
@@ -191,6 +250,13 @@ void App::commitSolverBatch() {
     if (!s.batch.empty()) {
         lastDabScreen_ = glm::vec2(s.batch.back().x, s.batch.back().y);
         if (s.dabSeconds > 0.0) dabSeconds_ = dabSeconds_ > 0.0 ? dabSeconds_ * 0.8 + s.dabSeconds * 0.2 : s.dabSeconds;
+        // The fused batch size, toward kFusedBatchSeconds of work: scaled by how far this batch was from it (down at once, up
+        // at most 2x a batch, kept fractional so it climbs back from 1 where fusing pays). It settles where a batch costs
+        // the budget; on cores where one dab alone costs more, at one dab a batch.
+        if (s.dabSeconds > 0.0 && doc_.sculptor.fusesBatches()) {
+            const double size = double(s.batch.size()), from = size >= std::floor(fusedDabs_) ? fusedDabs_ : size;
+            fusedDabs_ = std::clamp(from * std::clamp(kFusedBatchSeconds / (s.dabSeconds * size), 0.0, 2.0), 1.0, 64.0);
+        }
     }
     if (doc_.sculptor.lastFrame.valid) {
         // The surface's curvature along the stroke (signed, 1 / radius; > 0 convex), from how the area normal
@@ -235,49 +301,107 @@ void App::pumpStroke() {
         StrokeSolver& s = *solver_;
         s.batch.clear();
         s.finalize = true;
-        s.view.camera = camera_;
+        s.catchUp = false;
+        s.view.camera = partCamera();
         s.view.canvas = canvasRect();
         s.view.probe = nullptr;
         s.view.radiusProbe = nullptr;
         s.view.settings = dabSettings();
-        s.uploadId = doc_.activeSubtoolInfo().id;
-        renderer_.bindStrokeUpload(s.uploadId, s.upload);
+        s.uploadId = doc_.meshKey(doc_.activePart);
+        renderer_.setPersistentUpload(uiPrefs_.fastUpload);
     renderer_.bindStrokeUpload(s.uploadId, s.upload); // (the slot, found here: the thread doesn't walk the renderer's list)
         s.prepare = &displayedMesh() == &doc_.mesh;
         s.start();
         return;
     }
     if (dabQueue_.empty()) {
-        if (strokeFinishing_) finishStrokeNow(); // released, and every dab is on the GPU
+        if (strokeFinishing_) {
+            finishStrokeNow(); // released, and every dab is on the GPU
+            return;
+        }
+        // The pen rests (no dabs for a tenth of a second): the exact normals behind the brush (Fast Big Brushes)
+        // catch up meanwhile. (Not while dabs keep coming: a catch-up batch would hold the next one back.)
+        if (!doc_.sculptor.normalsPending() || double(SDL_GetTicksNS()) * 1e-9 - lastDabsQueued_ < 0.1) return;
+        StrokeSolver& s = *solver_;
+        s.batch.clear();
+        s.finalize = false;
+        s.catchUp = true;
+        s.view.camera = partCamera();
+        s.view.canvas = canvasRect();
+        s.view.probe = nullptr;
+        s.view.radiusProbe = nullptr;
+        s.view.settings = dabSettings();
+        s.uploadId = doc_.meshKey(doc_.activePart);
+        renderer_.bindStrokeUpload(s.uploadId, s.upload);
+        s.prepare = &displayedMesh() == &doc_.mesh;
+        s.start();
         return;
     }
     // The next batch, oldest first: about kBatchSeconds of work, or as much as packing its upload costs (so the
     // packing, per batch, stays at most about half the work), at least one dab; once the pen has lifted, every
     // dab left (the preview shows them all: only the end result is waited for), with the stroke's end work.
     StrokeSolver& s = *solver_;
-    const double target = std::max(kBatchSeconds, prepSeconds_);
+    // (Background dabs: about a frame of work, which the solver does while the frame draws: at least as many dabs
+    // a frame as the frame loop placed, however long the frame.)
+    const double target = std::max(predictiveStrokes() ? kBatchSeconds : std::max(kBackgroundBatchSeconds, frameSeconds_ * 0.8),
+                                   prepSeconds_);
     size_t n = dabSeconds_ > 0.0 ? size_t(std::clamp(target / dabSeconds_, 1.0, 64.0)) : 1;
+    // A big brush's batch goes through the vertices together (Fast Big Brushes): about kFusedBatchSeconds of
+    // dabs at once (every dab left once the pen has lifted).
+    if (doc_.sculptor.fusesBatches()) n = size_t(fusedDabs_);
     if (strokeFinishing_) n = 64;
     s.batch.clear();
     while (!dabQueue_.empty() && s.batch.size() < n) s.batch.push_back(dabQueue_.pop());
     s.finalize = strokeFinishing_ && dabQueue_.empty();
-    s.view.camera = camera_;
+    s.catchUp = false; // (dabs are coming: the exact normals wait for a pause or the release)
+    lastDabsQueued_ = double(SDL_GetTicksNS()) * 1e-9;
+    s.view.camera = partCamera();
     s.view.canvas = canvasRect();
     s.view.probe = strokeProbe_ ? &s.probe : nullptr;
     s.view.radiusProbe = strokeProbe_ ? &s.radiusProbe : nullptr;
     s.view.settings = dabSettings();
-    s.uploadId = doc_.activeSubtoolInfo().id;
+    s.uploadId = doc_.activePartInfo().id;
+    renderer_.setPersistentUpload(uiPrefs_.fastUpload);
     renderer_.bindStrokeUpload(s.uploadId, s.upload); // (the slot, found here: the thread doesn't walk the renderer's list)
     s.prepare = &displayedMesh() == &doc_.mesh; // (a previewed LOD shows instead: nothing to pack)
     renderer_.setDraftNormals(doc_.sculptor.draftActive() ? s.uploadId : 0);
     s.start();
+    // Background dabs: a batch is waited for here up to a frame's share of work, so a light one shows in this frame
+    // as in the frame loop's own path; a heavier one goes on while the frame draws, and the next frame commits it.
+    // (How often the batch isn't done in time: a stroke whose solver is the bottleneck. The frame loop then stops
+    // overlapping the GPU with it: see App::run.)
+    if (!previewStrokes() && dabSeconds_ > 0.0) {
+        const bool inTime = s.waitFor(kBackgroundBatchSeconds * 1.25);
+        solverLateShare_ += 0.1 * ((inTime ? 0.0 : 1.0) - solverLateShare_);
+        // (On above a fifth late, off below one in twenty: Lucy 28M's ~35% stays on between its late runs.)
+        if (solverLateShare_ > 0.2) solverBound_ = true;
+        else if (solverLateShare_ < 0.05) solverBound_ = false;
+        if (inTime && s.done) commitSolverBatch();
+    }
+}
+
+bool App::liveMoveEnabled() const {
+    static const int env = [] {
+        const char* v = std::getenv("SF_LIVE_MOVE");
+        return v && *v ? (*v == '0' ? 0 : 1) : -1;
+    }();
+    return env >= 0 ? env == 1 : uiPrefs_.liveMove;
+}
+
+void App::commitLiveMove() {
+    if (!liveMove_.active) return;
+    liveMove_.active = false;
+    // One grab with the whole move: the weights are the grab's own, so this is the sum of the per-frame grabs.
+    if (glm::dot(liveMove_.delta, liveMove_.delta) > 0.0f) doc_.sculptor.grab(doc_.mesh, doc_.bvh, liveMove_.delta);
+    renderer_.setGhost(0, GhostStroke());
 }
 
 void App::finishStrokeNow() {
+    commitLiveMove();
     if (solver_) solver_->finalize = false;
     doc_.sculptor.flushDraft(doc_.mesh, doc_.bvh); // (a draft stroke ended here rather than on the solver thread)
     renderer_.setDraftNormals(0);
-    if (asyncStroke_) renderer_.refineStrokeBounds(doc_.activeSubtoolInfo().id, displayedMesh()); // (the quick ones)
+    if (asyncStroke_) renderer_.refineStrokeBounds(doc_.meshKey(doc_.activePart), displayedMesh()); // (the quick ones)
     strokeFinishing_ = false;
     asyncStroke_ = false;
     renderer_.setGhost(0, GhostStroke());
@@ -285,7 +409,8 @@ void App::finishStrokeNow() {
     strokeMask_ = false;
     maskClickPending_ = false;
     firstDabPending_ = false;
-    // Preferences > Performance shows what the stroke cost.
+    // Preferences > Performance shows what the stroke cost (and Help > Record a performance trace writes it).
+    const bool traceStroke = doc_.sculptor.timings.dabs > 0 && perftrace::on();
     if (doc_.sculptor.timings.dabs > 0) {
         perf_.lastStroke = doc_.sculptor.timings;
         perf_.lastStrokeSyncMs = perf_.strokeSyncMs;
@@ -295,9 +420,11 @@ void App::finishStrokeNow() {
     perf_.strokeSyncMs = 0.0;
     perf_.strokeFrames = 0;
     UndoRecord r = doc_.sculptor.endStroke();
+    if (traceStroke) tracePerfStroke(r.label);
     finishPaintStroke(r);
     if (r.topology && !r.topology->uvs.empty())
         status_ = "Dynamic topology removed the UVs of the remeshed Part (Undo brings them back)";
+    strokeEndedForRemesh(r); // Tool > Remesh > Remesh after each stroke (#121): stretched enough to remesh?
     if (!r.empty()) {
         doc_.undo.push(std::move(r));
         doc_.modified = true;
@@ -308,14 +435,18 @@ void App::finishStrokeNow() {
 App::DabSettings App::dabSettings() const {
     DabSettings st;
     st.radiusPx = radiusPx_;
-    st.strength = strength_;
+    st.worldRadius = worldSize_ && worldRadius_ > 0.0f ? worldRadius_ : 0.0f;
+    st.pressureCurve = strokeCurve_;
+    st.strength = precisionActive_ ? precisionIntensity_ : strokeStrength(); // Shift+Alt mid-stroke (Precision.cpp)
     st.smoothStrength = smoothStrength_;
     st.smoothKeepVolume = smoothKeepVolume_ != strokeAltSmooth_;
+    st.smoothGroupBorders = smoothGroupBorders_;
     st.focal = focalShift_;
     st.maskStrength = maskStrength_;
     st.sprayScatter = sprayScatter_;
-    st.pressureSize = pressureSize_;
-    st.pressureStrength = pressureStrength_;
+    st.alphaOptions = alphaOptions_;
+    st.pressureSize = pressureSizeOn();
+    st.pressureStrength = pressureStrengthOn();
     st.invert = strokeInvert_;
     st.frontFacesOnly = frontFacesOnly_;
     st.connectedOnly = uiPrefs_.connectedOnly;
@@ -323,13 +454,15 @@ App::DabSettings App::dabSettings() const {
     st.mask = strokeMask_;
     st.paint = strokePaint_;
     st.sculpt = strokeSculpt_;
-    st.visible = doc_.activeSubtoolInfo().visible;
+    st.visible = doc_.activePartInfo().visible;
     st.brush = strokeBrush_;
     st.strokeType = strokeType_;
     st.symmetry = symmetry_;
     // A predictive stroke works from its own copies of the recipe and alpha (made when it began).
     st.recipe = asyncStroke_ ? strokeRecipe_.get() : strokeRecipe();
     st.alpha = asyncStroke_ ? strokeAlpha_.get() : &doc_.brushAlpha; // (null: round)
+    st.pool = alphaPool_;
+    st.stencil = doc_.stencil;
     st.vdmOwner = doc_.brushVdm;
     st.vdm = st.vdmOwner.get();
     return st;
@@ -343,7 +476,7 @@ bool App::pickWith(const DabView& view, float x, float y, RayHit& hit) const {
 }
 
 glm::vec2 App::predictedPointer() const {
-    if (!predictiveStrokes() || drag_ != Drag::Stroke || !asyncStroke_) return glm::vec2(mouseX_, mouseY_);
+    if (!previewStrokes() || drag_ != Drag::Stroke || !asyncStroke_) return glm::vec2(mouseX_, mouseY_);
     // To when this frame reaches the screen: about a frame after the newest sample.
     const double ahead = std::clamp(frameSeconds_, 0.004, PenPredictor::kMaxAhead);
     return penPredictor_.predict(pointerLatestAt_ + ahead, pointerLatest_);
@@ -374,12 +507,32 @@ bool App::ghostSurface(const glm::vec3& origin, const glm::vec3& dir, glm::vec3&
 
 void App::buildGhost() {
     ghostHeadValid_ = false;
-    const uint32_t id = doc_.activeSubtoolInfo().id;
+    renderer_.setScreenStroke(GhostStroke()); // (set again below when this frame's dabs draw on the screen)
+    const uint32_t id = doc_.meshKey(doc_.activePart); // (the renderer's slot: linked Parts share it)
+    if (liveMove_.active) { // Live Move: one "dab" per mirror, the whole move so far
+        GhostStroke g;
+        g.kind = GhostKind::Move;
+        g.focal = focalShift_;
+        std::vector<SymCopy> mirrors = Sculptor::copies(symmetry_);
+        if (mirrors.size() > GhostStroke::kMaxMirrors) mirrors.resize(GhostStroke::kMaxMirrors);
+        for (uint32_t m = 0; m < mirrors.size(); ++m) {
+            GhostDab d;
+            d.center = mirrors[m].point(liveMove_.center);
+            d.radius = liveMove_.radius;
+            d.normal = mirrors[m].m * liveMove_.delta;
+            d.strength = liveMove_.scale;
+            d.areaCenter = d.center;
+            d.mirror = m;
+            g.dabs.push_back(d);
+        }
+        renderer_.setGhost(id, g);
+        return;
+    }
     static const bool noGhost = [] { // SF_GHOST=0: the solver thread without the preview (for comparison)
         const char* v = std::getenv("SF_GHOST");
         return v && *v == '0';
     }();
-    if (!asyncStroke_ || !solver_ || !predictiveStrokes() || noGhost) {
+    if (!asyncStroke_ || !solver_ || !previewStrokes() || noGhost) {
         renderer_.setGhost(id, GhostStroke());
         return;
     }
@@ -396,9 +549,10 @@ void App::buildGhost() {
     for (const PathDab& d : solver_->batch) pending.push_back({d.x, d.y, d.pressure, 1.0f});
     for (const PathDab& d : dabQueue_.items()) pending.push_back({d.x, d.y, d.pressure, 1.0f});
     // The head: from the last dab to where the pen will be when this frame shows (not for strokes that move the
-    // pointer's path: Lazy Mouse, a Shift line, jitter or spray), in part, as the dabs the pen is about to lay.
-    const float spacing = std::max(1.0f, radiusPx_ * (strokeRecipe() ? strokeRecipe()->spacing : 0.15f));
-    if (drag_ == Drag::Stroke && strokeType_ != StrokeType::LazyMouse && strokeType_ != StrokeType::Spray && !straight_.active &&
+    // pointer's path: Steady Stroke, the precision drag, a Shift line, jitter or spray), in part, as the dabs the pen is about to lay.
+    const float spacing = dabSpacingPx(radiusPx_, strokeRecipe() ? strokeRecipe()->spacing : 0.15f);
+    if (drag_ == Drag::Stroke && !steadyOn() && !precisionActive_ && precision_.caughtUp() &&
+        strokeType_ != StrokeType::Spray && !straight_.active &&
         !(strokeRecipe() && strokeRecipe()->jitter > 0.0f)) {
         const glm::vec2 head = predictedPointer();
         const glm::vec2 from = !pending.empty() ? glm::vec2(pending.back().x, pending.back().y) : lastDabScreen_;
@@ -426,18 +580,21 @@ void App::buildGhost() {
     if (mirrors.size() > GhostStroke::kMaxMirrors) mirrors.resize(GhostStroke::kMaxMirrors); // (the shader's groups)
     const size_t perMirror = GhostStroke::kMaxDabs / std::max<size_t>(1, mirrors.size());
     std::vector<GhostDab> base;
+    const Camera cam = partCamera();
     for (const Screen& sd : pending) {
         if (base.size() >= perMirror) break;
         glm::vec3 origin, dir, n;
-        camera_.screenRay(sd.x - c.x, sd.y - c.y, c.w, c.h, origin, dir);
+        cam.screenRay(sd.x - c.x, sd.y - c.y, c.w, c.h, origin, dir);
         GhostDab d;
         if (!ghostSurface(origin, dir, d.center, n)) continue;
-        d.radius = radiusPx_ * (pressureSize_ ? std::max(sd.pressure, 0.05f) : 1.0f) * camera_.worldPerPixel(d.center, c.h);
+        d.radius = (worldSize_ && worldRadius_ > 0.0f ? worldRadius_ : radiusPx_ * cam.worldPerPixel(d.center, c.h)) *
+                   (pressureSizeOn() ? std::max(sd.pressure, 0.05f) : 1.0f);
         d.normal = n;
-        d.strength = std::clamp((strokeBrush_ == BrushType::Smooth ? smoothStrength_ : strength_), 0.0f, 1.0f) *
-                     std::clamp(pressureStrength_ ? sd.pressure : 1.0f, 0.0f, 1.0f);
+        d.strength = std::clamp(strokeIntensity(), 0.0f, 1.0f) *
+                     std::clamp(pressureStrengthOn() ? sd.pressure : 1.0f, 0.0f, 1.0f);
         d.areaCenter = d.center - n * depth;
         d.weight = sd.weight;
+        d.up = screenUpVector(lastDabAngle_); // (the square tip of Clay Block turns with the dabs' angle)
         base.push_back(d);
     }
     for (uint32_t m = 0; m < mirrors.size(); ++m)
@@ -446,9 +603,20 @@ void App::buildGhost() {
             d.center = mirrors[m].point(b.center);
             d.normal = mirrors[m].dir(b.normal);
             d.areaCenter = mirrors[m].point(b.areaCenter);
+            d.up = mirrors[m].dir(b.up);
             d.mirror = m;
             g.dabs.push_back(d);
         }
+    // Research (render/ScreenStroke.h; SF_SCREEN_STROKE=1): the pending dabs drawn on the view, not the geometry.
+    static const bool screenStroke = [] {
+        const char* v = std::getenv("SF_SCREEN_STROKE");
+        return v && *v == '1';
+    }();
+    if (screenStroke && ScreenStroke::supports(g) && renderSettings_.litsphere >= 0 && !renderSettings_.pbr()) {
+        renderer_.setScreenStroke(g);
+        renderer_.setGhost(id, GhostStroke());
+        return;
+    }
     renderer_.setGhost(id, g);
 }
 
@@ -523,3 +691,4 @@ bool App::verifyStroke(uint64_t before, const std::vector<glm::vec2>& dabs, cons
 }
 
 } // namespace sf
+

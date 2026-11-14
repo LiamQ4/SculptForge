@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/BrushRecipe.h"
 
+#include "core/BrushAlpha.h"
+#include "core/BrushPacks.h"
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -129,6 +132,8 @@ void BrushRecipe::clamp() {
     for (const auto& p : recipeParams())
         if (p.kind == K::Float)
             if (float* f = floatField(*this, p.key)) *f = std::clamp(*f, p.min, p.max);
+    alphaAngle = std::isfinite(alphaAngle) ? std::clamp(alphaAngle, -180.0f, 180.0f) : 0.0f;
+    alphaJitter = std::isfinite(alphaJitter) ? std::clamp(alphaJitter, 0.0f, 180.0f) : 0.0f;
     if (name.empty()) name = "Custom Brush";
     if (name.size() > 64) name.resize(64);
     if (description.size() > 500) description.resize(500);
@@ -141,6 +146,14 @@ Json BrushRecipe::toJson() const {
     j.set("description", r.description);
     if (connectedOnly) j.set("connectedOnly", true);
     if (viewFalloff) j.set("viewFalloff", true);
+    if (planeLock) j.set("planeLock", true);
+    if (crispEdge) j.set("crispEdge", true);
+    if (!alpha.empty()) j.set("alpha", alpha);
+    if (alphaFollow) j.set("alphaFollow", true);
+    if (alphaAngle != 0.0f) j.set("alphaAngle", std::round(double(alphaAngle) * 1000.0) / 1000.0);
+    if (alphaJitter != 0.0f) j.set("alphaAngleJitter", std::round(double(alphaJitter) * 1000.0) / 1000.0);
+    if (pressureSize != PenPressure::Global) j.set("penPressureSize", penPressureId(pressureSize));
+    if (pressureStrength != PenPressure::Global) j.set("penPressureStrength", penPressureId(pressureStrength));
     for (const auto& p : recipeParams()) {
         switch (p.kind) {
         case K::Float: j.set(p.key, std::round(double(*floatField(r, p.key)) * 1000.0) / 1000.0); break;
@@ -161,6 +174,17 @@ void BrushRecipe::applyJson(const Json& j) {
     if (j["description"].isString()) description = j["description"].asString();
     if (j["connectedOnly"].isBool()) connectedOnly = j["connectedOnly"].asBool();
     if (j["viewFalloff"].isBool()) viewFalloff = j["viewFalloff"].asBool();
+    if (j["planeLock"].isBool()) planeLock = j["planeLock"].asBool();
+    if (j["crispEdge"].isBool()) crispEdge = j["crispEdge"].asBool();
+    if (j["alphaFollow"].isBool()) alphaFollow = j["alphaFollow"].asBool();
+    if (j["alphaAngle"].isNumber()) alphaAngle = float(j["alphaAngle"].asNumber());
+    if (j["alphaAngleJitter"].isNumber()) alphaJitter = float(j["alphaAngleJitter"].asNumber());
+    if (j["penPressureSize"].isString()) pressureSize = penPressureFromId(j["penPressureSize"].asString());
+    if (j["penPressureStrength"].isString()) pressureStrength = penPressureFromId(j["penPressureStrength"].asString());
+    if (j["alpha"].isString()) {
+        BrushAlpha a;
+        alpha = BrushAlpha::builtin(j["alpha"].asString(), a) && !a.empty() ? a.name : std::string();
+    }
     for (const auto& p : recipeParams()) {
         const Json& v = j[p.key];
         if (v.isNull()) continue;
@@ -299,7 +323,7 @@ std::vector<BrushRecipe> builtinBrushRecipes() {
     }
     {
         BrushRecipe r;
-        r.name = "Stone Chisel";
+        r.name = "Stone Carve";
         r.description = "Scrapes hard planes and breaks them up with cracks for rocks and ruins.";
         r.depth = -0.25f;
         r.plane = BrushRecipe::Plane::Scrape;
@@ -346,6 +370,7 @@ std::vector<BrushRecipe> builtinBrushRecipes() {
         r.hardness = 0.4f;
         add(r);
     }
+    for (BrushRecipe& r : builtinPackRecipes()) add(std::move(r));
     return out;
 }
 

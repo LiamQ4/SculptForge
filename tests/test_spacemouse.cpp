@@ -30,7 +30,13 @@ TEST(spacemouse_device_ids) {
     CHECK(!isSpaceMouseDevice(0x046D, 0xC52B)); // a Logitech Unifying receiver
     CHECK(!isSpaceMouseDevice(0x046D, 0xC215, "Logitech Extreme 3D")); // a flight stick
     CHECK(isSpaceMouseDevice(0x046D, 0xC6AA, "3Dconnexion SpaceNavigator")); // by name
-    CHECK(!isSpaceMouseDevice(0x045E, 0x028E, "SpaceMouse")); // another vendor never
+    CHECK(!isSpaceMouseDevice(0x045E, 0x028E, "SpaceMouse")); // another vendor: not by a bare model name
+    // #104: no vendor id (Bluetooth on some systems), or a name that says 3Dconnexion, whatever the id.
+    CHECK(isSpaceMouseDevice(0x0000, 0x0000, "SpaceMouse Wireless BT"));
+    CHECK(isSpaceMouseDevice(0x1234, 0x0001, "3Dconnexion SpaceMouse Pro"));
+    CHECK(!isSpaceMouseDevice(0x0000, 0x0000, "Wireless Controller"));
+    CHECK(!isSpaceMouseDevice(0x1234, 0x0001, "3Dconnexion CadMouse"));
+    CHECK(!isSpaceMouseDevice(0x0000, 0x0000, "3Dconnexion Keyboard Pro"));
 }
 
 TEST(spacemouse_dead_zone) {
@@ -149,8 +155,9 @@ TEST(spacemouse_frame_rate_independent) {
 
 TEST(spacemouse_settings_json) {
     SpaceMouseSettings s;
-    CHECK(s.enabled && s.buttons[0] == "view.frame" && s.buttons[1] == "view.front");
+    CHECK(s.enabled && s.holdWhileStroking && s.buttons[0] == "view.frame" && s.buttons[1] == "view.front");
     s.enabled = false;
+    s.holdWhileStroking = false;
     s.speed = 2.25f;
     s.deadZone = 0.2f;
     s.invert[2] = s.invert[5] = true;
@@ -164,7 +171,7 @@ TEST(spacemouse_settings_json) {
     std::string err;
     CHECK(Json::parse(toJson(s).dump(), parsed, err));
     fromJson(parsed, r);
-    CHECK(!r.enabled && near(r.speed, 2.25f) && near(r.deadZone, 0.2f) && r.turntable && r.dominant);
+    CHECK(!r.enabled && !r.holdWhileStroking && near(r.speed, 2.25f) && near(r.deadZone, 0.2f) && r.turntable && r.dominant);
     for (int i = 0; i < kSmAxes; ++i) CHECK(r.invert[size_t(i)] == (i == 2 || i == 5));
     CHECK(r.buttons[0] == "view.top" && r.buttons[1].empty() && r.buttons[3] == "edit.undo");
 
@@ -174,7 +181,42 @@ TEST(spacemouse_settings_json) {
     j.set("deadZone", -1.0);
     SpaceMouseSettings d;
     fromJson(j, d);
-    CHECK(near(d.speed, 4.0f) && near(d.deadZone, 0.0f) && d.enabled && d.buttons[0] == "view.frame");
+    CHECK(near(d.speed, 4.0f) && near(d.deadZone, 0.0f) && d.enabled && d.holdWhileStroking && d.buttons[0] == "view.frame");
     fromJson(Json(), d); // not an object: untouched
     CHECK(near(d.speed, 4.0f));
+}
+
+// fenix (Discord 11-06): slowly turning the cap about a horizontal axis first turned the view, then zoomed it away.
+// A turn alone only turns (no zoom or pan from Rx or Ry, free or turntable), and the driver's echo counts from the cap's first stir, inside the
+// dead zone, so its scrolling is dropped from the start.
+TEST(spacemouse_tilt_only_turns_and_stirs_early) {
+    SpaceMouseSettings s;
+    for (bool turntable : {false, true}) {
+        s.turntable = turntable;
+        for (float r : {0.1f, 0.3f, -0.6f, 1.0f}) {
+            std::array<float, kSmAxes> a{};
+            a[kSmRx] = r; // forward / back
+            SpaceMouseMotion m = spaceMouseMotion(a, 1.0f / 60.0f, s);
+            CHECK(m.tip != 0.0f && m.zoom == 0.0f && m.panX == 0.0f && m.panY == 0.0f && m.spin == 0.0f && m.roll == 0.0f);
+            a = {};
+            a[kSmRy] = r; // sideways: a roll, none in turntable
+            m = spaceMouseMotion(a, 1.0f / 60.0f, s);
+            CHECK((m.roll != 0.0f) != turntable && m.zoom == 0.0f && m.panX == 0.0f && m.panY == 0.0f && m.spin == 0.0f &&
+                  m.tip == 0.0f);
+        }
+    }
+    s = SpaceMouseSettings(); // dead zone 8%: stirred past 4%
+    std::array<float, kSmAxes> a{};
+    CHECK(!spaceMouseStirred(a, s));
+    a[kSmRx] = 0.03f;
+    CHECK(!spaceMouseStirred(a, s)); // a cap resting a little off centre
+    a[kSmRx] = -0.05f;
+    CHECK(spaceMouseStirred(a, s) && !spaceMouseMotion(a, 1.0f / 60.0f, s).any()); // stirred, not yet moving the view
+    s.deadZone = 0.0f;
+    a[kSmRx] = 0.005f;
+    CHECK(!spaceMouseStirred(a, s));
+    a[kSmRx] = 0.02f;
+    CHECK(spaceMouseStirred(a, s));
+    s.enabled = false; // SpaceMouse off: its driver's scrolling is the user's to keep
+    CHECK(!spaceMouseStirred(a, s));
 }

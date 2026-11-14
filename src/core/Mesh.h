@@ -81,32 +81,62 @@ struct SculptLayer {
 // a feature needs them, so plain meshes pay nothing. When present their size
 // always matches the vertex / triangle / corner count; rebuildTopology()
 // drops any that don't.
-// One sphere of a ZSphere armature (core/ZSpheres.h): the root is index 0 with parent -1; every other sphere
+// One sphere of a Forge Sphere armature (core/Forge Spheres.h): the root is index 0 with parent -1; every other sphere
 // grows from `parent`.
-struct ZSphere {
+struct ForgeSphere {
     glm::vec3 center{0.0f};
     float radius = 1.0f;
     int parent = -1;
 };
 
+// A Tube's curve (core/Tube.h): control points the tube passes through, each with its own radius. Not empty =
+// a Tube Part, whose triangles are swept along the curve until Bake.
+struct TubePoint {
+    glm::vec3 position{0.0f};
+    float radius = 0.1f;
+};
+struct TubeShape {
+    std::vector<TubePoint> points;
+    bool flatCaps = false; // flat ends instead of round
+    bool mirrorX = false;  // a mirror copy across x = 0 (symmetry X)
+    float edge = 0.0f;     // target edge length; 0 = from the radius (16 sides around the average)
+    // Rope, Braid (three strands) and Sleeve (a hollow tube, open ends) are built from the round sweep, not one outline.
+    enum class Profile : uint8_t { Round, Square, Triangle, Ribbon, Rope, Braid, Sleeve };
+    Profile profile = Profile::Round; // the cross-section (its "radius" is half its width)
+    float thickness = 0.25f;          // Ribbon: its thickness as a fraction of its width
+    float roll = 0.0f;                // degrees the cross-section is turned about the curve (the Turn slider)
+    glm::vec3 up{0.0f};               // the first ring's orientation (0: automatic)
+    float taperStart = 0.0f, taperEnd = 0.0f; // fraction of the length narrowing to a point at each end
+    float twist = 0.0f;  // degrees the cross-section turns from the start to the end (on top of roll)
+    float spin = 0.0f;   // degrees it turns per average radius of length (on top of roll and twist)
+    int strands = 3;     // Rope/Braid: how many strands (1..8; a rope of one strand is a spring)
+    float spread = 0.5f; // Rope/Braid: strand spacing (0.5: touching); Sleeve: wall thickness (half of it, as a fraction of the radius)
+    bool curve = false;  // a Curve Part: only the guide line (a thin wire) is swept until Tube from curve clears this
+    bool empty() const { return points.empty(); }
+};
+
 class Mesh {
 public:
     std::vector<glm::vec3> positions;
-    std::shared_ptr<const Json> crkwMaskState; // immutable per-SubTool region selections and saved seeds
+    std::shared_ptr<const Json> crkwMaskState; // immutable per-Part region selections and saved seeds
     std::vector<glm::vec3> normals;
     std::vector<glm::uvec3> triangles;
 
-    // Per vertex: mask (0 = free, 1 = fully masked) and polypaint (linear RGB, 0..1).
+    // Per vertex: mask (0 = free, 1 = fully masked) and vertex paint (linear RGB, 0..1).
     std::vector<float> mask;
     std::vector<glm::vec3> colors;
-    // Per triangle: polygroup id (empty = everything in group 0) and hidden flag (empty = all visible).
-    std::vector<uint32_t> polygroups;
+    // Per triangle: face group id (empty = everything in group 0) and hidden flag (empty = all visible).
+    std::vector<uint32_t> facegroups;
     std::vector<uint8_t> hidden;
     // Per triangle corner (3 per triangle, in triangle order): texture coordinates.
     std::vector<glm::vec2> uvs;
     // Per triangle corner (empty = none): UV editing flags (core/Uv.h), kUvSeam on the edge from this corner to
     // the next (a marked seam, kept on both sides of the edge) and kUvPin (the corner's UV stays put on Unwrap).
     std::vector<uint8_t> uvFlags;
+    // Per triangle corner (empty = none): the crease of the edge from this corner to the next, 0..1 (#108, core/
+    // EdgeSelect.h; 1 = fully sharp), kept on both sides of the edge. Set on a base level: subdivision keeps creased
+    // edges sharp. A quad's diagonal is no edge and has none.
+    std::vector<float> creases;
     // Per triangle: the triangle it forms a quad with (kNoQuad = a plain triangle; empty = no quads). Imported
     // quads are split into two triangles that keep each other here, so the wireframe and the exporters can
     // show and write them as quads again. Pairs are symmetric and share one edge, wound oppositely;
@@ -116,24 +146,25 @@ public:
 
     bool hasMask() const { return !mask.empty(); }
     bool hasColors() const { return !colors.empty(); }
-    bool hasPolygroups() const { return !polygroups.empty(); }
+    bool hasFaceGroups() const { return !facegroups.empty(); }
     bool hasHidden() const { return !hidden.empty(); }
     bool hasUvs() const { return !uvs.empty(); }
     bool hasUvFlags() const { return !uvFlags.empty(); }
+    bool hasCreases() const { return !creases.empty(); }
     bool hasQuads() const { return !quadPartners.empty(); }
 
     float maskAt(uint32_t v) const { return mask.empty() ? 0.0f : mask[v]; }
     glm::vec3 colorAt(uint32_t v, const glm::vec3& fallback = glm::vec3(1.0f)) const {
         return colors.empty() ? fallback : colors[v];
     }
-    uint32_t polygroupAt(uint32_t t) const { return polygroups.empty() ? 0u : polygroups[t]; }
+    uint32_t facegroupAt(uint32_t t) const { return facegroups.empty() ? 0u : facegroups[t]; }
     bool triangleHidden(uint32_t t) const { return !hidden.empty() && hidden[t] != 0; }
     // The triangle `t` is shown and exported as one quad with, or kNoQuad: a stored pair whose halves share a
-    // polygroup (a pair split between groups shows and exports as two triangles).
+    // face group (a pair split between groups shows and exports as two triangles).
     uint32_t quadPartnerAt(uint32_t t) const {
         if (quadPartners.empty()) return kNoQuad;
         const uint32_t u = quadPartners[t];
-        return u < quadPartners.size() && polygroupAt(t) == polygroupAt(u) ? u : kNoQuad;
+        return u < quadPartners.size() && facegroupAt(t) == facegroupAt(u) ? u : kNoQuad;
     }
     // Which edge of `t` (t[e] -> t[(e + 1) % 3]) is the diagonal it shares with triangle `u` (wound the other
     // way in `u`, whose third corner is not on `t`), or -1 when they don't form a quad.
@@ -150,18 +181,20 @@ public:
     // Allocate an attribute (no-op if present); returns it for convenience.
     std::vector<float>& ensureMask(float fill = 0.0f);
     std::vector<glm::vec3>& ensureColors(const glm::vec3& fill = glm::vec3(1.0f));
-    std::vector<uint32_t>& ensurePolygroups(uint32_t fill = 0);
+    std::vector<uint32_t>& ensureFaceGroups(uint32_t fill = 0);
     std::vector<uint8_t>& ensureHidden();
     std::vector<uint32_t>& ensureQuadPartners();
+    std::vector<float>& ensureCreases();
     // Records triangles `t` and `u` as one quad (growing quadPartners to the triangle count, so it can be called
     // while triangles are being added).
     void pairQuad(uint32_t t, uint32_t u);
     // Free an attribute again once it holds only its default (e.g. after "clear mask" / "show all").
     void clearMask() { std::vector<float>().swap(mask); }
     void clearColors() { std::vector<glm::vec3>().swap(colors); }
-    void clearPolygroups() { std::vector<uint32_t>().swap(polygroups); }
+    void clearFaceGroups() { std::vector<uint32_t>().swap(facegroups); }
     void clearHidden() { std::vector<uint8_t>().swap(hidden); }
     void clearQuads() { std::vector<uint32_t>().swap(quadPartners); }
+    void clearCreases() { std::vector<float>().swap(creases); }
     // Drops attributes whose size no longer matches the mesh and unpairs invalid quad pairs (called by
     // rebuildTopology).
     void sanitizeAttributes();
@@ -185,10 +218,19 @@ public:
 
     // Paint layers (core/PaintLayer.h). While any exist, `paintBase` holds the
     // Base layer and `colors` the composited stack; `activePaintLayer` is the
-    // layer painting writes into (-1 = Base). Empty = plain polypaint in `colors`.
+    // layer painting writes into (-1 = Base). Empty = plain vertex paint in `colors`.
     std::vector<glm::vec3> paintBase;
     std::vector<PaintLayer> paintLayers;
     int activePaintLayer = -1;
+    // The colour vertex paint last laid on `colors` / `paintBase` (paintVertex fills it): one target colour (a brush
+    // colour, or white for an erase) lets a stroke at a low subdivision level reach the detail above as
+    // lerp(old, target, amount) instead of a difference (and an undo of it take that back exactly). state 2 = several
+    // colours since subdivCommit took the paint up; `settled` = it did, so the next paintVertex starts afresh.
+    struct PaintTarget {
+        glm::vec3 color{1.0f};
+        uint8_t state = 0; // 0 none, 1 one colour, 2 mixed
+        bool settled = false;
+    } paintTarget;
 
     // Texture painting (core/Texture.h): an RGBA texture on the UVs, shared by copies of the mesh until
     // one of them changes it (mutableTexture copies first). `paintToTexture`: the Paint brush, fills and
@@ -209,12 +251,15 @@ public:
     // triangle or vertex count changes.
     std::shared_ptr<MicroMesh> micro;
 
-    // ZSpheres (core/ZSpheres.h): not empty = a ZSphere SubTool, whose triangles are made from this armature (the
-    // spheres and their links, or the skin while `zspherePreview`). Copies, undo steps and projects carry it.
-    std::vector<ZSphere> zspheres;
-    bool zspherePreview = false;
+    // Forge Spheres (core/Forge Spheres.h): not empty = a Forge Sphere Part, whose triangles are made from this armature (the
+    // spheres and their links, or the skin while `Forge SpherePreview`). Copies, undo steps and projects carry it.
+    std::vector<ForgeSphere> forgespheres;
+    bool forgespherePreview = false;
 
-    // Selection Sets (core/SelectionSets.h): named snapshots of the mask, polygroups, vertex paint, hidden faces, UVs
+    // Tube (core/Tube.h): not empty = a Tube Part, whose triangles are swept from this curve; Bake clears it.
+    TubeShape tube;
+
+    // Selection Sets (core/SelectionSets.h): named snapshots of the mask, face groups, vertex paint, hidden faces, UVs
     // and shape, immutable and shared by copies of the mesh (undo steps swap the whole list). They belong to the
     // Part, not to one subdivision level: stepping levels keeps them. Null = none.
     std::shared_ptr<const SelectionSetList> selectionSets;
@@ -285,7 +330,7 @@ public:
     // GPU synchronisation state: [dirtyBegin, dirtyEnd) bounds what needs re-uploading,
     // topologyDirty means everything (including indices) does.
     // Vertex attributes (mask, colours) share the vertex range; facesDirty
-    // means per-triangle state (hidden, polygroups) needs re-uploading.
+    // means per-triangle state (hidden, face groups) needs re-uploading.
     // Within the range each changed vertex has a bit in dirtyBits, and each block of kDirtyBlock vertices with
     // any a mark in dirtyBlocks, so uploads find a dab's vertices without scanning the mesh (core/UploadOrder.h).
     uint32_t dirtyBegin = std::numeric_limits<uint32_t>::max();

@@ -6,12 +6,14 @@
 #include "TestHarness.h"
 
 #include "core/Benchmark.h"
+#include "core/BrushRecipe.h"
 #include "core/Commands.h"
 #include "core/Micro.h"
 #include "core/Multires.h"
 #include "core/Primitives.h"
 #include "core/Project.h"
 #include "core/TierConfig.h"
+#include "core/Wavelet.h"
 #include "io/Zip.h"
 
 #include <chrono>
@@ -106,7 +108,7 @@ TEST(micro_divide_counts_and_memory) {
     CHECK(worstMicro < worstFlat * 0.5f);
     CHECK(watertight(doc.mesh));
     std::string err;
-    CHECK(!microDivide(doc.mesh, 2, err)); // one micro level per SubTool
+    CHECK(!microDivide(doc.mesh, 2, err)); // one micro level per Part
 }
 
 TEST(micro_divide_needs_top_level) {
@@ -147,14 +149,49 @@ TEST(micro_standard_brush_raises_and_undoes) {
     CHECK(doc.mesh.micro->disp == after);
 }
 
+// #120: a recipe brush on a micro level keeps its surface pattern (Dragon Scales was a plain Standard blob) and its
+// depth's sign (Wrinkle carves).
+TEST(micro_recipe_brushes_keep_pattern_and_depth) {
+    auto recipe = [](const char* name) {
+        for (const BrushRecipe& r : builtinBrushRecipes())
+            if (r.name == name) return r;
+        CHECK(false);
+        return BrushRecipe{};
+    };
+    const BrushRecipe scales = recipe("Dragon Scales"), wrinkle = recipe("Wrinkle");
+    Symmetry sym;
+    auto sculpt = [&](const BrushRecipe* r) {
+        Document doc = microDoc(4);
+        CHECK(doc.sculptor.beginStroke(doc.mesh, "Recipe"));
+        for (int i = 0; i < 6; ++i) {
+            if (r) doc.sculptor.dabRecipe(doc.mesh, doc.bvh, *r, dabAt(glm::vec3(0, 0, 1), 0.3f), sym);
+            else doc.sculptor.dab(doc.mesh, doc.bvh, BrushType::Standard, dabAt(glm::vec3(0, 0, 1), 0.3f), sym);
+        }
+        doc.undo.push(doc.sculptor.endStroke());
+        CHECK(watertight(doc.mesh));
+        return doc;
+    };
+    const float h0 = frontHeight(microDoc(4));
+    const Document plain = sculpt(nullptr), scaled = sculpt(&scales), carved = sculpt(&wrinkle);
+    CHECK(frontHeight(scaled) > h0 + 0.001f);
+    CHECK(frontHeight(carved) < h0 - 0.001f);
+    // The pattern: the scales' displacement differs from Standard's smooth bump over many grid points.
+    const auto& a = plain.mesh.micro->disp;
+    const auto& b = scaled.mesh.micro->disp;
+    CHECK(a.size() == b.size());
+    size_t differ = 0;
+    for (size_t i = 0; i < a.size(); ++i) differ += std::abs(int(a[i]) - int(b[i])) > 2;
+    CHECK(differ > 1000);
+}
+
 TEST(micro_brushes_each_change_the_surface_and_stay_closed) {
     struct Case {
         BrushType type;
         bool invert;
     };
-    for (const Case c : {Case{BrushType::Clay, false}, Case{BrushType::ClayBuildup, false}, Case{BrushType::Inflate, false},
+    for (const Case c : {Case{BrushType::Clay, false}, Case{BrushType::ClayBlock, false}, Case{BrushType::Inflate, false},
                          Case{BrushType::Flatten, false}, Case{BrushType::Crease, false}, Case{BrushType::Pinch, false},
-                         Case{BrushType::DamStandard, false}, Case{BrushType::Layer, false}, Case{BrushType::Trim, false},
+                         Case{BrushType::SharpCrease, false}, Case{BrushType::Layer, false}, Case{BrushType::Trim, false},
                          Case{BrushType::Standard, true}}) {
         Document doc = microDoc(3);
         microNoise(doc.mesh, 0.01f, 12.0f); // something to flatten, trim and pinch
@@ -199,6 +236,38 @@ TEST(micro_smooth_flattens_noise) {
     for (int i = 0; i < 8; ++i) doc.sculptor.dab(doc.mesh, doc.bvh, BrushType::Smooth, dabAt(glm::vec3(0, 0, 1), 0.4f, 1.0f), sym);
     doc.undo.push(doc.sculptor.endStroke());
     CHECK(roughness() < r0 * 0.5);
+    CHECK(watertight(doc.mesh));
+}
+
+TEST(micro_smooth_peaks_lowers_the_high_points_only) {
+    Document doc = microDoc(3);
+    microNoise(doc.mesh, 0.01f, 30.0f);
+    const auto before = doc.mesh.micro->disp;
+    // The heights under the front, where the dabs land.
+    const auto front = [&](const MicroStore& d, int16_t& lo, int16_t& hi) {
+        const MicroMesh& mm = *doc.mesh.micro;
+        lo = INT16_MAX, hi = INT16_MIN;
+        for (uint32_t t = 0; t < mm.baseTriangles; ++t) {
+            if (doc.mesh.positions[doc.mesh.triangles[t].x].z < 0.97f) continue;
+            for (uint32_t k = 0; k < mm.samples; ++k) {
+                const int16_t v = d[size_t(t) * mm.samples + k];
+                lo = std::min(lo, v), hi = std::max(hi, v);
+            }
+        }
+    };
+    int16_t lo0, hi0, lo1, hi1;
+    front(before, lo0, hi0);
+    Symmetry sym;
+    doc.sculptor.beginStroke(doc.mesh, "SmoothPeaks");
+    for (int i = 0; i < 8; ++i) doc.sculptor.dab(doc.mesh, doc.bvh, BrushType::SmoothPeaks, dabAt(glm::vec3(0, 0, 1), 0.4f, 1.0f), sym);
+    doc.undo.push(doc.sculptor.endStroke());
+    const MicroStore& after = doc.mesh.micro->disp;
+    front(after, lo1, hi1);
+    CHECK(hi1 < hi0);  // the tallest peak came down
+    CHECK(lo1 >= lo0); // no hollow was cut deeper
+    bool rose = false;
+    for (size_t i = 0; i < after.size(); ++i) rose = rose || after[i] > before[i];
+    CHECK(!rose); // nothing rose
     CHECK(watertight(doc.mesh));
 }
 
@@ -262,6 +331,7 @@ TEST(micro_move_brush_moves_along_normals) {
 
 TEST(micro_range_widens_for_big_strokes) {
     Document doc = microDoc(2);
+    doc.sculptor.microBaseDabs = false; // (the grid's range; a brush this big moves the base otherwise)
     const float step0 = doc.mesh.micro->step;
     Symmetry sym;
     doc.sculptor.beginStroke(doc.mesh, "Standard");
@@ -321,6 +391,48 @@ TEST(micro_shading_partial_matches_full) {
         ++total;
     }
     CHECK(outward >= total * 9 / 10);
+}
+
+// A stroke's shading writes the changed triangles alone (MicroRenderer: their neighbours wait for the stroke's
+// end): those come out exact, the neighbours after them complete it, and until then they're off by the falloff tail.
+TEST(micro_shading_alone_then_outer) {
+    Document doc = microDoc(3, 5000);
+    microNoise(doc.mesh, 0.01f, 10.0f);
+    const MicroMesh& mm = *doc.mesh.micro;
+    const size_t S = mm.samples;
+    std::vector<uint32_t> before(size_t(mm.baseTriangles) * S, 0), full(before.size(), 0);
+    MicroShader shader;
+    std::vector<uint32_t> written, outer;
+    auto into = [&](std::vector<uint32_t>& v) { return [&v, S](uint32_t t) { return v.data() + size_t(t) * S; }; };
+    shader.shade(doc.mesh, {}, true, written, into(before));
+    Symmetry sym;
+    doc.sculptor.beginStroke(doc.mesh, "Standard");
+    doc.sculptor.dab(doc.mesh, doc.bvh, BrushType::Standard, dabAt(glm::vec3(0, 0, 1), 0.2f, 1.0f), sym);
+    UndoRecord r = doc.sculptor.endStroke();
+    std::vector<uint32_t> dirty = r.micro->tris;
+    std::sort(dirty.begin(), dirty.end());
+    shader.shade(doc.mesh, {}, true, written, into(full));
+    std::vector<uint32_t> part = before;
+    shader.shade(doc.mesh, dirty, false, written, into(part), {}, false, &outer);
+    CHECK(written.size() == dirty.size());
+    CHECK(!outer.empty());
+    for (uint32_t t : dirty) CHECK(std::equal(part.begin() + std::ptrdiff_t(t * S), part.begin() + std::ptrdiff_t((t + 1) * S),
+                                              full.begin() + std::ptrdiff_t(t * S)));
+    // The stale neighbours: a few points along the shared border, by little.
+    int worst = 0;
+    size_t off = 0;
+    for (uint32_t t : outer)
+        for (size_t k = 0; k < S; ++k) {
+            const uint32_t a = part[t * S + k], b = full[t * S + k];
+            if (a == b) continue;
+            ++off;
+            for (int c = 0; c < 16; c += 8) worst = std::max(worst, std::abs(int((a >> c) & 255) - int((b >> c) & 255)));
+        }
+    std::printf("  %zu changed, %zu outer, %zu stale points, worst normal code off by %d\n", dirty.size(), outer.size(), off, worst);
+    CHECK(off < outer.size() * 3 * mm.n);
+    CHECK(worst <= 8);
+    shader.shade(doc.mesh, outer, false, written, into(part), {}, false, nullptr);
+    CHECK(part == full);
 }
 
 TEST(micro_bake_mesh_is_closed_and_matches) {
@@ -421,7 +533,7 @@ TEST(micro_commands) {
     CHECK(reg.execute(doc, "micro_noise", {{"amplitude", 0.002}}).ok);
     CHECK(reg.execute(doc, "micro_info").message.find("Micro level") != std::string::npos);
     CHECK(reg.execute(doc, "micro_bake", {{"level", 1.0}}).ok);
-    CHECK(doc.subtoolCount() == 2);
+    CHECK(doc.partCount() == 2);
     CHECK(reg.execute(doc, "micro_delete").ok);
     CHECK(doc.mesh.micro == nullptr);
     CHECK(reg.execute(doc, "undo").ok);
@@ -568,5 +680,348 @@ TEST(micro_tier_config_and_page_table) {
         CHECK(cold.resident(7));
         cold.trim(1);
         CHECK(ooc.mesh.micro->disp[7 * ooc.mesh.micro->samples] == 3); // trimmed pages come back from the file
+    }
+}
+
+TEST(micro_core200m_scene_small) {
+    // The core-200m research scene (docs/design/core-200m.md), at a test's size: in memory, detailed, and it
+    // survives a project round trip unchanged.
+    Document doc;
+    doc.mesh = makeCore200mMesh(2000, 3);
+    CHECK(doc.mesh.micro);
+    if (!doc.mesh.micro) return;
+    const MicroMesh& mm = *doc.mesh.micro;
+    CHECK(mm.level == 3 && !mm.disp.mapped());
+    CHECK(microTriangleCount(doc.mesh) == size_t(mm.baseTriangles) * 64);
+    CHECK(mm.rangeMax > 0); // the noise is there
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const std::string path = (fs::temp_directory_path(ec) / "sf-test-core200m.sfproj").string();
+    std::string err;
+    const bool saved = saveProject(path, doc, err);
+    CHECK(saved);
+    Document back;
+    const bool loaded = saved && loadProject(path, back, err);
+    CHECK(loaded);
+    fs::remove(path, ec);
+    if (!loaded) return;
+    CHECK(back.mesh.micro);
+    if (!back.mesh.micro) return;
+    CHECK(back.mesh.micro->baseTriangles == mm.baseTriangles && back.mesh.micro->level == 3);
+    bool same = true;
+    for (size_t i = 0; i < mm.disp.size() && same; ++i) same = back.mesh.micro->disp[i] == mm.disp[i];
+    CHECK(same);
+}
+
+TEST(wavelet_round_trip_and_coarse_edit) {
+    // N2 (docs/design/core-200m.md): the integer lifting transform is exactly invertible, whatever the values, and a
+    // coarse edit leaves the fine detail alone: the result is the old surface plus the coarse change interpolated.
+    const uint32_t n = 32, S = (n + 1) * (n + 2) / 2;
+    std::vector<int16_t> g(S), orig;
+    uint32_t seed = 12345;
+    for (int16_t& v : g) seed = seed * 1664525u + 1013904223u, v = int16_t(seed >> 16);
+    orig = g;
+    waveletForward(g.data(), n);
+    CHECK(g != orig);
+    waveletInverse(g.data(), n);
+    CHECK(g == orig);
+    // A smooth surface with fine detail, then a constant raise on the spacing-8 lattice.
+    for (uint32_t j = 0; j <= n; ++j)
+        for (uint32_t i = 0; i + j <= n; ++i)
+            g[MicroMesh::index(i, j, n)] = int16_t(100 * i + 37 * j + ((i * 7 + j * 13) % 5) * 20);
+    orig = g;
+    waveletForward(g.data(), n);
+    waveletAddCoarse(g.data(), n, 8, [](uint32_t, uint32_t, int) { return 500; });
+    waveletInverse(g.data(), n);
+    int worst = 0;
+    for (uint32_t k = 0; k < S; ++k) worst = std::max(worst, std::abs(int(g[k]) - int(orig[k]) - 500));
+    CHECK(worst <= 3); // (floor averages round at most once per finer level: 3 levels below spacing 8)
+}
+
+TEST(micro_dab_marks_only_what_changed) {
+    // A dab marks dirty (what the renderer re-sends, re-bounds and re-shades) every patch whose heights changed,
+    // and not the candidates it left alone: a Clay dab's plane misses much of what it covers (on a scan's micro
+    // level, millions of tiny patches).
+    Document doc = microDoc(2, 200000);
+    doc.sculptor.microBaseDabs = false; // (the grid's dabs; one this big moves the base otherwise)
+    MicroMesh& mm = *doc.mesh.micro;
+    Symmetry sym;
+    sym.x = false;
+    doc.sculptor.beginStroke(doc.mesh, "Clay");
+    doc.sculptor.dab(doc.mesh, doc.bvh, BrushType::Clay, dabAt(glm::vec3(0, 0, 1), 0.3f), sym); // (some height to level)
+    const std::vector<int16_t> before = mm.disp;
+    mm.clearDirty();
+    doc.sculptor.dab(doc.mesh, doc.bvh, BrushType::Clay, dabAt(glm::vec3(0.05f, 0, 1), 0.3f), sym);
+    doc.undo.push(doc.sculptor.endStroke());
+    const uint32_t S = mm.samples;
+    size_t changed = 0, marked = 0, missed = 0;
+    for (uint32_t t = 0; t < mm.baseTriangles; ++t) {
+        const bool moved = !std::equal(before.begin() + size_t(t) * S, before.begin() + size_t(t + 1) * S, mm.disp.begin() + size_t(t) * S);
+        const bool dirty = mm.dirtyBits[t >> 6] >> (t & 63) & 1;
+        changed += moved, marked += dirty, missed += moved && !dirty;
+    }
+    std::printf("  clay dab: %zu patches changed, %zu marked\n", changed, marked);
+    CHECK(changed > 100);
+    CHECK(missed == 0);
+    CHECK(marked <= changed + changed / 10); // (the ones changed, give or take a stitched edge)
+    CHECK(watertight(doc.mesh));
+}
+
+namespace {
+
+// A stroke across the sphere's front on `d` (a big brush: Sculptor::kMicroBaseSpan base edges and more).
+void baseTestStroke(Document& d, BrushType type, float r, Symmetry sym = {}) {
+    d.sculptor.beginStroke(d.mesh, "Stroke");
+    for (int i = 0; i < 10; ++i) {
+        const float x = -0.2f + 0.04f * float(i);
+        d.sculptor.dab(d.mesh, d.bvh, type, dabAt(glm::vec3(x, 0.05f, std::sqrt(1.0f - x * x - 0.0025f)), r, 0.4f), sym);
+    }
+    d.undo.push(d.sculptor.endStroke());
+}
+
+// Every grid point of the micro surface, in order.
+std::vector<glm::vec3> microSurface(const Mesh& m) {
+    const MicroMesh& mm = *m.micro;
+    std::vector<glm::vec3> out;
+    for (uint32_t t = 0; t < mm.baseTriangles; ++t)
+        for (uint32_t j = 0; j <= mm.n; ++j)
+            for (uint32_t i = 0; i + j <= mm.n; ++i) out.push_back(microPoint(m, t, i, j));
+    return out;
+}
+
+} // namespace
+
+TEST(micro_base_stroke_is_the_plain_brush) {
+    // A big Standard, Inflate or Clay brush on a micro level over a dense base (a scan's) moves the base vertices
+    // (Sculptor::microBaseDab): as the plain brush moves the same mesh without the level (no detail: the corners are
+    // the vertices), the detail riding along untouched (its heights bit-identical), one undo step
+    // bringing every vertex and height back bit-exactly, redo the stroke.
+    for (BrushType type : {BrushType::Standard, BrushType::Inflate, BrushType::Clay}) {
+        for (bool detail : {false, true}) {
+            Document plain = makeDoc(makeBenchSphere(200000)), base = microDoc(2, 200000);
+            plain.sculptor.adaptiveDabs = false; // (its plane from every vertex, as the base path's)
+            if (detail) microNoise(base.mesh, 0.002f, 60.0f, 7);
+            const std::vector<glm::vec3> positions = base.mesh.positions;
+            const std::vector<int16_t> heights = base.mesh.micro->disp;
+            const std::vector<glm::vec3> surface = microSurface(base.mesh);
+            for (Document* d : {&plain, &base}) baseTestStroke(*d, type, 0.3f);
+            CHECK(base.mesh.micro->disp == heights);
+            CHECK(base.sculptor.microStroke().points == 0); // (not one grid point visited)
+            double height = 0, worst = 0;
+            for (size_t v = 0; v < positions.size(); ++v) {
+                height = std::max(height, double(glm::distance(plain.mesh.positions[v], positions[v])));
+                worst = std::max(worst, double(glm::distance(plain.mesh.positions[v], base.mesh.positions[v])));
+            }
+            std::printf("  base stroke %d%s: height %.4f, off the plain brush by %.4f%% at most\n", int(type), detail ? " (detail)" : "",
+                        height, 100.0 * worst / height);
+            CHECK(height > 0.005);
+            // (within a few percent: the plain brush picks and re-normals its region its own way, dab after dab; the
+            // detail's corner heights tilt the brush plane a little more)
+            CHECK(worst <= height * (detail ? 0.08 : 0.03));
+            const std::vector<glm::vec3> after = microSurface(base.mesh);
+            CHECK(base.undo.undo(base.mesh, base.bvh));
+            CHECK(base.mesh.positions == positions && base.mesh.micro->disp == heights && microSurface(base.mesh) == surface);
+            CHECK(base.undo.redo(base.mesh, base.bvh));
+            CHECK(microSurface(base.mesh) == after);
+            CHECK(watertight(base.mesh));
+        }
+    }
+}
+
+TEST(micro_base_release_dabs_fuse) {
+    // The dabs still waiting when the pen lifts (Sculptor::microBaseFuse, App::endStroke) go through the plain
+    // path, fused: they move the base exactly as the plain brush moves the same mesh, and a stroke whose first dabs
+    // took the base kernel and whose last ones were fused is still one undo step, bit-exact both ways.
+    Symmetry sym;
+    sym.x = false;
+    auto dabs = [&](Document& d, int from, int to) {
+        for (int i = from; i < to; ++i) {
+            const float x = -0.2f + 0.04f * float(i);
+            d.sculptor.dab(d.mesh, d.bvh, BrushType::Clay, dabAt(glm::vec3(x, 0.05f, std::sqrt(1.0f - x * x - 0.0025f)), 0.3f, 0.4f), sym);
+        }
+    };
+    {
+        Document plain = makeDoc(makeBenchSphere(200000)), base = microDoc(2, 200000);
+        microNoise(base.mesh, 0.002f, 60.0f, 7);
+        const std::vector<int16_t> heights = base.mesh.micro->disp;
+        base.sculptor.microBaseFuse = true;
+        for (Document* d : {&plain, &base}) {
+            d->sculptor.beginStroke(d->mesh, "Clay");
+            d->sculptor.beginBatch();
+            dabs(*d, 0, 10);
+            d->sculptor.endBatch(d->mesh, d->bvh);
+            d->undo.push(d->sculptor.endStroke());
+        }
+        CHECK(base.mesh.positions == plain.mesh.positions);
+        CHECK(base.mesh.micro->disp == heights);
+        CHECK(base.sculptor.microStroke().points == 0);
+        CHECK(watertight(base.mesh));
+    }
+    {
+        Document doc = microDoc(2, 200000);
+        const std::vector<glm::vec3> positions = doc.mesh.positions;
+        const std::vector<int16_t> heights = doc.mesh.micro->disp;
+        doc.sculptor.beginStroke(doc.mesh, "Clay");
+        dabs(doc, 0, 5);
+        doc.sculptor.microBaseFuse = true;
+        doc.sculptor.beginBatch();
+        dabs(doc, 5, 10);
+        doc.sculptor.endBatch(doc.mesh, doc.bvh);
+        doc.sculptor.microBaseFuse = false;
+        doc.undo.push(doc.sculptor.endStroke());
+        const std::vector<glm::vec3> after = doc.mesh.positions;
+        CHECK(after != positions);
+        CHECK(doc.undo.undo(doc.mesh, doc.bvh));
+        CHECK(doc.mesh.positions == positions && doc.mesh.micro->disp == heights);
+        CHECK(doc.undo.redo(doc.mesh, doc.bvh));
+        CHECK(doc.mesh.positions == after);
+        CHECK(watertight(doc.mesh));
+    }
+}
+
+TEST(micro_base_stroke_symmetry_hidden_mask) {
+    // Symmetry: both sides move alike. Hidden faces: their vertices stay. A micro mask: the grid brush (it masks
+    // per grid point), not the base.
+    {
+        Document doc = microDoc(2, 200000);
+        Symmetry sym; // (x on)
+        const std::vector<glm::vec3> before = doc.mesh.positions;
+        doc.sculptor.beginStroke(doc.mesh, "Stroke");
+        doc.sculptor.dab(doc.mesh, doc.bvh, BrushType::Standard, dabAt(glm::vec3(0.4f, 0.0f, std::sqrt(1.0f - 0.16f)), 0.25f), sym);
+        doc.undo.push(doc.sculptor.endStroke());
+        double left = 0, right = 0;
+        for (size_t v = 0; v < before.size(); ++v) {
+            const double d = glm::distance(before[v], doc.mesh.positions[v]);
+            (before[v].x > 0 ? right : left) += d;
+        }
+        CHECK(right > 0.0);
+        CHECK(std::abs(left - right) <= right * 0.02);
+    }
+    {
+        // Hidden faces: the grid (it keeps hidden patches whole, and the base path would move their shared corners).
+        Document doc = microDoc(2, 200000);
+        Mesh& m = doc.mesh;
+        m.hidden.assign(m.triangles.size(), 0);
+        for (size_t t = 0; t < m.triangles.size(); ++t) {
+            const glm::uvec3 tr = m.triangles[t];
+            if ((m.positions[tr[0]].x + m.positions[tr[1]].x + m.positions[tr[2]].x) / 3.0f > 0.0f) m.hidden[t] = 1;
+        }
+        const std::vector<glm::vec3> before = m.positions;
+        baseTestStroke(doc, BrushType::Standard, 0.3f);
+        CHECK(m.positions == before);
+        CHECK(doc.sculptor.microStroke().points > 0);
+        CHECK(watertight(m));
+    }
+    {
+        Document doc = microDoc(2, 200000);
+        Symmetry sym;
+        sym.x = false;
+        doc.sculptor.beginStroke(doc.mesh, "Mask");
+        doc.sculptor.dabMask(doc.mesh, doc.bvh, dabAt(glm::vec3(0, 0, 1), 0.1f, 1.0f), sym);
+        doc.undo.push(doc.sculptor.endStroke());
+        const std::vector<glm::vec3> before = doc.mesh.positions;
+        const uint64_t p0 = doc.sculptor.microStroke().points;
+        baseTestStroke(doc, BrushType::Standard, 0.3f);
+        CHECK(doc.mesh.positions == before); // (the grid took it)
+        CHECK(doc.sculptor.microStroke().points > p0);
+    }
+}
+
+TEST(micro_crease_strokes_stay_smooth) {
+    // #125: a deep Sharp Crease stroke at full strength left grid-scale noise on the micro level (the old sharpen
+    // pushed every point away from its neighbours' average, which grows any noise dab after dab).
+    for (float radius : {0.08f, 0.3f}) // (0.3: scale-adaptive, stride 2)
+    for (BrushType type : {BrushType::Standard, BrushType::SharpCrease, BrushType::Crease, BrushType::Pinch}) {
+        Document doc = microDoc(4);
+        microNoise(doc.mesh, 0.0004f, 40.0f); // a little fine detail, as a sculpt has
+        Symmetry sym;
+        doc.sculptor.beginStroke(doc.mesh, brushName(type));
+        for (int k = 0; k <= 60; ++k) {
+            const float x = -0.15f + 0.3f * float(k) / 60.0f;
+            DabParams p = dabAt(glm::normalize(glm::vec3(x, 0.0f, 1.0f)), radius, 1.0f);
+            p.strokeDelta = glm::vec3(0.005f, 0.0f, 0.0f);
+            doc.sculptor.dab(doc.mesh, doc.bvh, type, p, sym);
+        }
+        doc.undo.push(doc.sculptor.endStroke());
+        // Grid-scale roughness: each interior point's distance from its six neighbours' average, against the
+        // stroke's depth.
+        const MicroMesh& mm = *doc.mesh.micro;
+        const uint32_t n = mm.n;
+        double lap = 0.0, deepest = 0.0;
+        size_t count = 0;
+        for (uint32_t t = 0; t < mm.baseTriangles; ++t) {
+            const glm::uvec3 tr = doc.mesh.triangles[t];
+            const glm::vec3 c = (doc.mesh.positions[tr.x] + doc.mesh.positions[tr.y] + doc.mesh.positions[tr.z]) / 3.0f;
+            if (c.z < 0.9f || std::abs(c.y) > 0.05f || std::abs(c.x) > 0.12f) continue;
+            const int16_t* g = mm.disp.data() + size_t(t) * mm.samples;
+            for (uint32_t j = 1; j < n; ++j)
+                for (uint32_t i = 1; i + j < n; ++i) {
+                    const double v = g[MicroMesh::index(i, j, n)];
+                    const double avg = (g[MicroMesh::index(i - 1, j, n)] + g[MicroMesh::index(i + 1, j, n)] +
+                                        g[MicroMesh::index(i, j - 1, n)] + g[MicroMesh::index(i, j + 1, n)] +
+                                        g[MicroMesh::index(i + 1, j - 1, n)] + g[MicroMesh::index(i - 1, j + 1, n)]) / 6.0;
+                    lap += std::abs(v - avg), ++count;
+                    deepest = std::max(deepest, std::abs(v));
+                }
+        }
+        const double rough = lap / double(count) / deepest;
+        // (11-05, radius 0.08: Sharp Crease 0.276 and Crease 0.144 before, 0.014 and 0.012 after, Standard 0.0016;
+        // radius 0.3 brushes at stride 2: 0.011 and 0.008, and Pinch 0.021 with the pull interpolated, 0.081 without)
+        CHECK(rough < 0.04);
+        if (type == BrushType::Crease || type == BrushType::SharpCrease) CHECK(deepest * mm.step > 0.01); // (a groove)
+        CHECK(watertight(doc.mesh));
+    }
+}
+
+TEST(micro_stroke_end_no_spikes_on_a_rough_surface) {
+    // Dabs piled on one spot (a stroke's end) over a rough surface (strands leaning over the skin beside them, the
+    // lion's mane meeting its brow, 11-06) used to grow spikes on the grid: Clay moved points that can't reach its
+    // plane along their own normals further away every dab. No point of the surface may move more than twice the
+    // brush's radius in these 15 full-strength dabs (Clay's own build-up reaches 1.7; the grid's runaway reached 2.8).
+    // The base path (a big brush) is printed only: sending its folding dabs to the grid (f084f9fd) made big brushes
+    // 8x slower on the floor tier and tore them into shards on the lion, and was reverted for 0.11.15 (11-07).
+    for (bool base : {false, true}) {
+        Mesh rough = makeBenchSphere(200000);
+        rough.recomputeAllNormals();
+        for (size_t v = 0; v < rough.vertexCount(); ++v) { // narrow ridges leaning over the surface beside them
+            const glm::vec3 p = rough.positions[v], nn = rough.normals[v];
+            const float ridge = std::pow(std::max(0.0f, std::cos(p.x * 60.0f)), 8.0f);
+            const glm::vec3 lean = glm::normalize(glm::cross(nn, glm::vec3(0, 1, 0)) + glm::vec3(1e-6f));
+            rough.positions[v] += nn * (0.05f * ridge) + lean * (0.08f * ridge);
+        }
+        rough.recomputeAllNormals();
+        Document doc = makeDoc(std::move(rough));
+        std::string err;
+        CHECK(microDivide(doc.mesh, 2, err));
+        microNoise(doc.mesh, 0.002f, 60.0f, 7);
+        doc.sculptor.microBaseDabs = base;
+        const std::vector<glm::vec3> positions = doc.mesh.positions;
+        const std::vector<glm::vec3> surface = microSurface(doc.mesh);
+        const float r = base ? 0.6f : 0.3f; // (the base path takes Sculptor::kMicroBaseSpan base edges and more)
+        Symmetry sym;
+        doc.sculptor.beginStroke(doc.mesh, "Clay");
+        for (int i = 0; i < 15; ++i)
+            doc.sculptor.dab(doc.mesh, doc.bvh, BrushType::Clay, dabAt(glm::normalize(glm::vec3(0.002f * float(i % 3), 0.05f, 1.0f)), r, 1.0f), sym);
+        doc.undo.push(doc.sculptor.endStroke());
+        size_t turned = 0;
+        for (const glm::uvec3& t : doc.mesh.triangles) {
+            const glm::vec3 a = glm::cross(positions[t.y] - positions[t.x], positions[t.z] - positions[t.x]);
+            const glm::vec3 b = glm::cross(doc.mesh.positions[t.y] - doc.mesh.positions[t.x], doc.mesh.positions[t.z] - doc.mesh.positions[t.x]);
+            turned += glm::dot(a, b) < 0.0f;
+        }
+        const std::vector<glm::vec3> after = microSurface(doc.mesh);
+        float worst = 0.0f, moved = 0.0f;
+        for (size_t k = 0; k < after.size(); ++k) {
+            const float d = glm::distance(after[k], surface[k]);
+            worst = std::max(worst, d);
+            moved += d;
+        }
+        std::printf("  %s, 15 Clay dabs (r %.2f): %zu base triangles turned over, largest move %.4f\n", base ? "base" : "grid", r, turned,
+                    worst);
+        CHECK(moved > 0.0f);
+        CHECK(watertight(doc.mesh));
+        if (base) continue;
+        CHECK(turned == 0);
+        CHECK(worst <= 2.0f * r);
     }
 }

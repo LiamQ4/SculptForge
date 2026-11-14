@@ -1,9 +1,10 @@
 # SpaceMouse navigation (#6), with a virtual joystick that has a SpaceMouse Compact's USB ids (the app finds and
 # opens it as it would the real device): twisting, tilting, pushing and pulling the cap turn, pan and zoom the view;
 # a resting cap inside the dead zone does nothing; Preferences > Input > SpaceMouse inverts axes, locks the
-# rotation to a turntable and turns it off; the side buttons frame and show the front; a pen stroke held while the
-# view turns stays one stroke; unplugging and plugging back in works; every input style.
-run ui_look look=classic layout=zbrush        # written for the Classic look and the ZBrush-style palette bar and shelves
+# rotation to a turntable and turns it off; the side buttons frame and show the front; a stroke holds the view still
+# (Hold during strokes) or, with that off, stays one stroke while the view turns; unplugging and plugging back in
+# works; every input style.
+run ui_look look=classic layout=classic        # written for the Classic look and the classic palette bar and shelves
 run new_sphere subdivisions=4
 snapshot
 expect_value spacemouse_connected == 0
@@ -105,7 +106,30 @@ click "Use SpaceMouse##spacemouse.enabled"
 click "SpaceMouse defaults##spacemouse.defaults"
 key escape
 
-# A pen stroke held while the cap turns the view stays one stroke, and one undo takes it back.
+# Hold during strokes (on by default, phoenix 11-05): while a stroke runs the cap neither turns the view nor runs
+# its buttons; the view moves again once the stroke ends.
+key f
+camera 30 0
+snapshot
+drag_path 0.3 0.45 0.7 0.55 keep
+expect_value stroking == 1
+spacemouse 0 0 0 0 0 0.8 0.3
+expect_value camera_yaw > 29.9
+expect_value camera_yaw < 30.1
+expect_value spacemouse_moving == 0
+spacemouse_button 2
+expect_value camera_aligned == 0
+release
+expect_value stroking == 0
+key ctrl+z
+expect_value moved == 0
+spacemouse 0 0 0 0 0 0.8 0.3
+expect_value camera_yaw > 40
+
+# Hold during strokes off: a pen stroke held while the cap turns the view stays one stroke, and one undo takes it back.
+click "Preferences##palette.preferences"
+click "Hold during strokes##spacemouse.hold"
+key escape
 key f
 camera 0 0
 snapshot
@@ -121,6 +145,10 @@ expect_value moved == 0
 pen_stroke 0.3 0.45 0.7 0.55 0.6 0.6
 expect_value moved_out > 0
 key ctrl+z
+pen_out
+click "Preferences##palette.preferences"
+click "Hold during strokes##spacemouse.hold"
+key escape
 
 # Unplugged and plugged back in (hot-plug).
 spacemouse_unplug
@@ -148,3 +176,26 @@ expect_value camera_yaw > 25
 remember camera_distance d3
 spacemouse 0 0.8 0 0 0 0 0.3
 expect_value camera_distance < $d3
+
+# #104: Preferences lists what SDL sees and why; a SpaceMouse that is open but has not moved gets the 3DxWare hint;
+# Copy device report puts the list on the clipboard; once the cap moves, the hint and the report go away.
+spacemouse_unplug
+click "Preferences##palette.preferences"
+hover "Copy device report##spacemouse.report"
+expect_text "No joysticks or game controllers seen."
+click "Copy device report##spacemouse.report"
+expect_clipboard SpaceMouse: none
+key escape
+spacemouse 0 0 0 0 0 0 0.2
+click "Preferences##palette.preferences"
+hover "Copy device report##spacemouse.report"
+expect_text "SpaceMouse Compact (UI test) (256f:c635): in use"
+expect_text "holds the SpaceMouse"
+click "Copy device report##spacemouse.report"
+expect_clipboard (256f:c635): in use
+shot spacemouse_report
+key escape
+spacemouse 0 0 0 0 0 0.8 0.2
+click "Preferences##palette.preferences"
+expect_no_text "holds the SpaceMouse"
+key escape

@@ -3,7 +3,7 @@
 //
 // Headless strokes: applies a brush along a path of world-space points, the
 // way a cursor drag does in the viewport. Each dab lands where a ray along the
-// view direction through the path point meets the active SubTool, so a path
+// view direction through the path point meets the active Part, so a path
 // drawn in the camera's plane behaves like a screen-space stroke. Used by the
 // `stroke` command (scripts, AI agents, brush preview renders) and tests.
 #pragma once
@@ -21,7 +21,8 @@ struct PathStroke {
     glm::vec3 view{0.0f, 0.0f, -1.0f}; // projection / camera direction (into the scene)
     float radius = 0.0f;   // world units; <= 0: 4% of the mesh's bounding box diagonal
     float strength = 0.5f; // 0..1
-    float pressure = 1.0f; // constant pen pressure, 0..1
+    float pressure = 1.0f; // pen pressure, 0..1 (at the start of the path when pressureEnd is set)
+    float pressureEnd = -1.0f; // >= 0: the pressure eases linearly from `pressure` to this along the path (a pen stroke)
     bool invert = false;
     bool curve = true;     // pass a smooth Catmull-Rom curve through the points (else straight segments)
     float spacing = -1.0f; // dab spacing as a fraction of the radius; < 0: the recipe's (0.15 for built-ins)
@@ -37,7 +38,7 @@ bool parseVec3(const std::string& text, glm::vec3& out);
 // Samples the path at even `step` distance (curved through the points when `curve` is set).
 std::vector<glm::vec3> samplePath(const std::vector<glm::vec3>& points, bool curve, float step);
 
-// Strokes the active SubTool with `recipe` (when not null) or the built-in brush `type`,
+// Strokes the active Part with `recipe` (when not null) or the built-in brush `type`,
 // as one undoable step. Returns the number of dabs that hit the surface, or -1 on error.
 int strokePath(Document& doc, const BrushRecipe* recipe, BrushType type, const PathStroke& stroke, std::string& error);
 

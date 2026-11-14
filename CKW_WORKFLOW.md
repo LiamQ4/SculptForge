@@ -56,6 +56,40 @@ systems. Preserve upstream license and attribution files.
 
 ## Local app and build
 
+### Upstream v0.12.16 integration — 2026-11-14 (in progress)
+
+This entry supersedes the earlier build/version status below. Started from `c3827b6` on
+`ckw/crookedtools`, baseline `e55d3e0` (0.10.7), and fetched the exact upstream release
+`v0.12.16` into update branch `ckw/update-upstream-2026-11-14`. The untracked root and
+Blender `AGENTS.md` files are preserved. No stock release binary is used.
+
+Build with the workspace CMake at `out/build-tools/cmake/data/bin/cmake.exe`, build tree
+`build-ckw`, Release, `SCULPTFORGE_UPDATE_CHECK=OFF`. Dependency downloads are pinned by
+upstream hashes; plugins and WebRTC remain enabled. On Visual Studio, `$env:CL='/MP8'`
+allows compiler workers in addition to CMake's `--parallel 8` project workers.
+
+CRKW source is adapted to Parts/PartData, Face Groups, Vertex Paint and Lit Sphere APIs.
+All thirteen custom materials retain their old indices, including built-in Gold;
+importing a Gold image yields Gold 2. Layout version 6 migrates the new upstream view
+toggles even from the existing CRKW version-5 layout. UI script fixture paths expand
+after parsing, supporting this workspace's spaces. Clipboard image commands use the
+new table-driven parser. CRKW settings access honors upstream's `SF_USER_DATA_DIR`
+isolation; `SF_TEST_SETTINGS_DIR` remains supported for existing local test scripts.
+Project name migration leaves artist-owned CRKW mask/template payloads unchanged.
+Linked Parts retain MetaHuman identity through creation and project reload. The silhouette
+frames transformed linked instances in world space. Custom file dialogs use upstream
+NativeDialog suppression during tests. Windows clipboard-dependent UI scripts share a
+CTest resource lock. Material checks are in `tests/test_crkw_litspheres.cpp`.
+
+User settings snapshot: `out/update-01216-preferences-snapshot`; before hashes:
+`out/update-01216-preferences-before.json`. Existing installation is still 0.10.7.
+Both bridge 1.0.0 ZIPs passed `build_addon.py --check`; Blender installation is unchanged.
+Build, runtime tests and application installation are pending. Logs use the prefix
+`out/crkw-01216-`. Installation will only use `out/crkw-app`, after backup and validation.
+
+
+Historical entries below retain their versions, counts and log paths; terminology was normalized on 2026-11-14 to match the current UI.
+
 ### Upstream 0.9.4 integration (2026-10-30)
 
 Current CRKW camera, mask manager, automatic retopology, MetaHuman and texture
@@ -71,8 +105,8 @@ and reset behavior. Upstream shelf sizes, interface changes, phone/AR fixes and
 
 Validation: the Windows Release build succeeded with WebRTC enabled. All 57,402
 core checks passed, as did every CRKW UI test. CTest passed 59/61 entries; only
-the previously documented `ui_lightbox` QuickSave help-text check and
-`ui_zbrush_feel` negative Focal Shift input check failed, at the same assertions
+the previously documented the retired library UI test QuickSave help-text check and
+the retired classic-input UI test negative brush focus input check failed, at the same assertions
 as before. All six phone/AR relay tests also passed.
 
 Installed to `out/crkw-app` and verified that the installed executable is
@@ -86,7 +120,7 @@ Logs: `out/crkw-094-configure.log`, `out/crkw-094-build.log`,
 
 ### Upstream 0.9.1 integration (2026-10-27)
 
-Local matcaps, symmetric mask shapes, clipboard image paste and isolated UI-test
+Local Lit Spheres, symmetric mask shapes, clipboard image paste and isolated UI-test
 settings were saved in commit `24375d8` before merging upstream tag `v0.9.1`.
 The merge completed without textual conflicts. The Windows Release build succeeded
 with WebRTC enabled and upstream update notifications disabled.
@@ -94,8 +128,8 @@ with WebRTC enabled and upstream update notifications disabled.
 Validation: all 54,699 core checks and every CRKW UI test passed. Of the 55 CTest
 entries, 53 passed after two test compatibility fixes: the one-sided lasso test
 explicitly disables X symmetry, and the face-shape test quotes paths with spaces.
-The two previously documented UI failures remain: LightBox's QuickSave help-message
-expectation and negative Focal Shift keyboard input in `ui_zbrush_feel`.
+The two previously documented UI failures remain: the library's QuickSave help-message
+expectation and negative brush focus keyboard input in the retired classic-input UI test.
 Logs: `out/crkw-091-build.log`, `out/crkw-091-tests.log`,
 `out/crkw-091-mask-retest.log`, and `out/crkw-091-face-retest.log`.
 
@@ -129,13 +163,13 @@ Sculpt Helper add-on's Mesh Sharpen geometry-nodes filter (`src/core/CkwMeshShar
 curvature-weighted smoothing that flattens planes and tightens creases. Curvature is measured
 once, then Iterations passes pull each vertex toward its neighbours weighted by their curvature;
 Blend mixes with the input, Pin Borders keeps open edges fixed, Curvature is Mean or Curvedness.
-Like ZBrush it works on the current subdivision level, and it respects masks, hidden vertices
+Like the classic workflow it works on the current subdivision level, and it respects masks, hidden vertices
 and sculpt layers (one undo step). Not yet compared numerically with Blender's output.
 
 The Reset Clay Polish button restores all six filter values without modifying
 the mesh or its undo history. Background controls offer a solid colour or a
 two-colour gradient, with a reset to the upstream colours. The optional silhouette
-shows all visible SubTools from the current view direction, framed independently
+shows all visible Parts from the current view direction, framed independently
 of main-view pan/zoom. Its size and top-left/top-right placement are adjustable.
 It reuses uploaded GPU geometry, renders into a small persistent texture without
 CPU pixel readback, and refreshes at most about seven times per second.
@@ -154,7 +188,7 @@ administrator consent; CRKW does not bypass it or create elevated tasks. Turn
 off auto-start or open Huion manually from CrokedWillo. Headless tests, renders,
 and recordings never launch Huion or change desktop window settings.
 
-The Draw Size popup closes on mouse/pen release, not transient widget
+The brush size popup closes on mouse/pen release, not transient widget
 deactivation. The legacy `CKW-SIZE-DRAG` comments in Pickers.cpp preserve the original
 upstream close logic for review/removal if upstream supplies an equivalent fix.
 
@@ -176,9 +210,9 @@ off), and 45/47 CTest checks passed (including core and Blender exchange/UI
 checks). The CRKW workspace and appearance checks validate drag-to-release,
 filter reset, solid/gradient backgrounds, silhouette toggle/size/corner, and
 the Settings dropdown. CRKW geometry tests passed 988 checks.
-`ui_lightbox` failed on a QuickSave help message;
-`ui_zbrush_feel` failed on negative Focal Shift entry. The official 0.8.1 portable
-release also fails the Focal Shift check at the same test line. Full local logs:
+the retired library UI test failed on a QuickSave help message;
+the retired classic-input UI test failed on negative brush focus entry. The official 0.8.1 portable
+release also fails the brush focus check at the same test line. Full local logs:
 `out/crkw-build.log`, `out/crkw-tests.log`,
 `out/crkw-appearance-tests.log`, and `out/crkw-startup.log`.
 

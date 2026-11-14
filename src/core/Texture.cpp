@@ -1,6 +1,8 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Texture.h"
+#include "core/AtomicRef.h"
+#include "core/Parallel.h"
 
 #include "core/ThreadPool.h"
 
@@ -60,7 +62,7 @@ inline void putLinear(uint8_t* p, const glm::vec3& c) {
 // Runs fn(begin, end) over rows [0, n) on several threads for big jobs.
 template <class Fn>
 void parallelRows(int n, size_t work, Fn fn) {
-    const int threads = work < 500000 ? 1 : int(std::clamp<unsigned>(std::thread::hardware_concurrency(), 1u, 16u));
+    const int threads = work < 500000 ? 1 : parallelThreads();
     if (threads <= 1 || n < 2) {
         fn(0, n);
         return;
@@ -1239,7 +1241,7 @@ size_t TexturePainter::dabTiles(const DabContext& c, const Paint& paint, bool co
                 for (int ty = ty0; ty <= ty1; ++ty)
                     for (int tx = tx0; tx <= tx1; ++tx) {
                         uint8_t& flag = touchedFlag_[size_t(ty) * size_t(idx.tilesX) + size_t(tx)];
-                        std::atomic_ref<uint8_t> f(flag);
+                        AtomicRef<uint8_t> f(flag);
                         if (!f.load(std::memory_order_relaxed)) f.store(1, std::memory_order_relaxed);
                     }
             }
@@ -1754,7 +1756,32 @@ size_t textureFill(Mesh& m, const glm::vec3& color, const std::vector<float>& vw
     return changed;
 }
 
-void polypaintToTexture(Mesh& m) {
+size_t textureFillBy(Mesh& m, const std::vector<float>& tv, const std::vector<float>& vw,
+                     const std::function<glm::vec4(float)>& shade) {
+    if (!hasTexture(m) || vw.size() != m.vertexCount() || tv.size() != m.vertexCount()) return 0;
+    PaintTexture& tex = mutableTexture(m);
+    const int layer = tex.layers.empty() ? -1 : tex.activeLayer;
+    if (!textureLayerEditable(tex, layer)) return 0;
+    std::vector<uint8_t>& target = tex.target(layer);
+    const bool onLayer = layer >= 0;
+    size_t changed = 0;
+    bakeTexels(m, tex, [&](uint32_t t, float b0, float b1, float b2, int x, int y) {
+        const glm::uvec3& v = m.triangles[t];
+        const float wgt = std::clamp(vw[v.x] * b0 + vw[v.y] * b1 + vw[v.z] * b2, 0.0f, 1.0f);
+        if (wgt <= 0.0f) return;
+        const glm::vec4 c = shade(tv[v.x] * b0 + tv[v.y] * b1 + tv[v.z] * b2);
+        if (c.w * wgt <= 0.0f) return;
+        uint8_t* px = &target[(size_t(y) * size_t(tex.width) + size_t(x)) * 4];
+        uint8_t orig[4];
+        std::memcpy(orig, px, 4);
+        paintTexel(px, orig, onLayer, glm::vec3(c), c.w * wgt, false);
+        ++changed;
+    });
+    compositeTextureAll(tex);
+    return changed;
+}
+
+void vertexpaintToTexture(Mesh& m) {
     if (!hasTexture(m)) return;
     PaintTexture& tex = mutableTexture(m);
     const int layer = tex.layers.empty() ? -1 : tex.activeLayer;
@@ -1769,7 +1796,7 @@ void polypaintToTexture(Mesh& m) {
     compositeTextureAll(tex);
 }
 
-void textureToPolypaint(Mesh& m) {
+void textureToVertexPaint(Mesh& m) {
     if (!hasTexture(m)) return;
     const size_t nv = m.vertexCount();
     std::vector<glm::vec3> sum(nv, glm::vec3(0.0f));

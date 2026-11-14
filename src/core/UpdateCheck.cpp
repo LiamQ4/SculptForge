@@ -27,9 +27,68 @@ std::vector<uint64_t> versionParts(const std::string& v) {
     return parts;
 }
 
+// The prerelease after the numbers ("beta.1" in "0.11.0-beta.1"), "" when there is none.
+std::string prerelease(const std::string& v) {
+    const size_t dash = v.find('-');
+    if (dash == std::string::npos || versionParts(v.substr(0, dash)).empty()) return {};
+    return v.substr(dash + 1, v.find('+', dash) - dash - 1);
+}
+
+bool allDigits(const std::string& s) {
+    return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); });
+}
+
+// SemVer's prerelease order: dot-separated, numbers numerically and below words, words as text, fewer parts first.
+int comparePrerelease(const std::string& a, const std::string& b) {
+    if (a.empty() || b.empty()) return a.empty() == b.empty() ? 0 : a.empty() ? 1 : -1; // none sorts above any
+    size_t i = 0, j = 0;
+    while (i <= a.size() && j <= b.size()) {
+        const size_t ei = std::min(a.find('.', i), a.size()), ej = std::min(b.find('.', j), b.size());
+        const std::string x = a.substr(i, ei - i), y = b.substr(j, ej - j);
+        if (x != y) {
+            const bool nx = allDigits(x), ny = allDigits(y);
+            if (nx && ny) {
+                if (x.size() != y.size()) return x.size() < y.size() ? -1 : 1;
+                return x < y ? -1 : 1;
+            }
+            if (nx != ny) return nx ? -1 : 1;
+            return x < y ? -1 : 1;
+        }
+        i = ei + 1, j = ej + 1;
+        if (i > a.size() || j > b.size()) return i > a.size() && j > b.size() ? 0 : i > a.size() ? -1 : 1;
+    }
+    return 0;
+}
+
+// One release out of the feed (its top level or a channel's entry); false when it lacks a version or https link.
+bool readRelease(const Json& j, UpdateInfo& info) {
+    if (!j.isObject()) return false;
+    if (j["version"].isString()) info.version = j["version"].asString();
+    if (j["download"].isString()) info.downloadUrl = j["download"].asString();
+    if (j["notes"].isString()) info.notesUrl = j["notes"].asString();
+    if (versionParts(info.version).empty() || !httpsUrl(info.downloadUrl)) return false;
+    if (!httpsUrl(info.notesUrl)) info.notesUrl = info.downloadUrl;
+    for (const auto& h : j["highlights"].items())
+        if (h.isString() && !h.asString().empty() && info.highlights.size() < 4)
+            info.highlights.push_back(h.asString().substr(0, 200));
+    return true;
+}
+
+// Feed text as it may be shown: no control characters, cut to `max` bytes on a UTF-8 boundary.
+std::string feedText(const std::string& in, size_t max) {
+    std::string out;
+    for (char c : in) // (UTF-8 kept whole below)
+        if (static_cast<unsigned char>(c) >= 0x20 && c != 0x7f) out += c;
+    if (out.size() > max) {
+        size_t cut = max;
+        while (cut > 0 && (static_cast<unsigned char>(out[cut]) & 0xC0) == 0x80) --cut;
+        out.resize(cut);
+    }
+    return out;
+}
 } // namespace
 
-bool parseUpdateFeed(const std::string& json, UpdateInfo& out, std::string& error) {
+bool parseUpdateFeed(const std::string& json, UpdateInfo& out, std::string& error, UpdateChannel channel) {
     Json j;
     if (!Json::parse(json, j, error)) return false;
     if (!j.isObject()) {
@@ -37,21 +96,48 @@ bool parseUpdateFeed(const std::string& json, UpdateInfo& out, std::string& erro
         return false;
     }
     UpdateInfo info;
-    if (j["version"].isString()) info.version = j["version"].asString();
-    if (j["download"].isString()) info.downloadUrl = j["download"].asString();
-    if (j["notes"].isString()) info.notesUrl = j["notes"].asString();
-    if (versionParts(info.version).empty()) {
-        error = "the update feed has no version";
+    if (!readRelease(j, info)) {
+        error = versionParts(info.version).empty() ? "the update feed has no version"
+                                                   : "the update feed has no https download link";
         return false;
     }
-    if (!httpsUrl(info.downloadUrl)) {
-        error = "the update feed has no https download link";
-        return false;
+    if (channel == UpdateChannel::Preview && j["channels"].isObject()) {
+        UpdateInfo preview;
+        if (readRelease(j["channels"]["preview"], preview) && compareVersions(preview.version, info.version) > 0)
+            info = std::move(preview); // never older than stable: once stable passes the beta, it is offered
     }
-    if (!httpsUrl(info.notesUrl)) info.notesUrl = info.downloadUrl;
-    for (const auto& h : j["highlights"].items())
-        if (h.isString() && !h.asString().empty() && info.highlights.size() < 4)
-            info.highlights.push_back(h.asString().substr(0, 200));
+    const Json& challenge = j["challenge"];
+    if (challenge.isObject() && challenge["id"].isString()) {
+        const std::string& id = challenge["id"].asString();
+        const bool idOk = !id.empty() && id.size() <= 32 && std::all_of(id.begin(), id.end(), [](char c) {
+            return std::isalnum(static_cast<unsigned char>(c)) || c == '-';
+        });
+        if (idOk) {
+            info.challengeId = id;
+            if (challenge["title"].isString()) info.challengeTitle = feedText(challenge["title"].asString(), 48);
+        }
+    }
+    const Json& support = j["support"];
+    if (support.isObject()) {
+        SupportFeed& f = info.support;
+        f.present = true;
+        if (support["funded_this_month"].isArray())
+            for (const Json& n : support["funded_this_month"].items()) {
+                if (f.funded.size() >= 5) break;
+                if (!n.isString()) continue;
+                std::string name = feedText(n.asString(), 48);
+                if (name.find_first_not_of(' ') != std::string::npos) f.funded.push_back(std::move(name));
+            }
+        auto count = [](const Json& v) { // a whole number 0..100000, else -1
+            const double d = v.isNumber() ? v.asNumber(-1.0) : -1.0;
+            return d >= 0.0 && d <= 100000.0 && d == double(int(d)) ? int(d) : -1;
+        };
+        if (support["founding"].isObject()) {
+            const int taken = count(support["founding"]["taken"]), limit = count(support["founding"]["limit"]);
+            if (taken >= 0 && limit >= 1 && taken <= limit) f.foundingTaken = taken, f.foundingLimit = limit;
+        }
+        f.memberRequests = count(support["member_requests_this_release"]);
+    }
     out = std::move(info);
     return true;
 }
@@ -62,7 +148,28 @@ int compareVersions(const std::string& a, const std::string& b) {
         const uint64_t x = i < pa.size() ? pa[i] : 0, y = i < pb.size() ? pb[i] : 0;
         if (x != y) return x < y ? -1 : 1;
     }
-    return 0;
+    return comparePrerelease(prerelease(a), prerelease(b));
+}
+
+std::string versionLabel(const std::string& version, const std::string& prerelease) {
+    if (prerelease.empty()) return version;
+    std::string label = version;
+    size_t i = 0;
+    while (i <= prerelease.size()) { // "beta.1" -> " Beta 1", "rc.2" -> " RC 2"
+        const size_t e = std::min(prerelease.find('.', i), prerelease.size());
+        std::string part = prerelease.substr(i, e - i);
+        if (part == "rc") part = "RC";
+        else if (!part.empty()) part[0] = char(std::toupper(static_cast<unsigned char>(part[0])));
+        if (!part.empty()) label += " " + part;
+        i = e + 1;
+    }
+    return label;
+}
+
+ShownVersion shownVersion(const std::string& version, const std::string& prerelease, const std::string& devCommit) {
+    ShownVersion v{version, prerelease};
+    if (!devCommit.empty()) v.tag += (v.tag.empty() ? "dev " : " dev ") + devCommit.substr(0, 7);
+    return v;
 }
 
 } // namespace sf

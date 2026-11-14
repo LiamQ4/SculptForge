@@ -3,16 +3,19 @@
 #pragma once
 
 #include "core/EnvironmentMath.h"
-#include "core/Matcap.h"
+#include "core/LitSphere.h"
 #include "core/Mesh.h"
+#include "core/Reference.h"
 #include "core/Splats.h"
 #include "core/UploadOrder.h"
 #include "render/Camera.h"
 #include "render/Clusters.h"
 #include "render/GL.h"
 #include "render/Ghost.h"
+#include "render/ScreenStroke.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <list>
 #include <memory>
@@ -31,23 +34,44 @@ struct RenderSettings {
     bool silhouette = false; // internal flat-black preview pass
     bool wireframe = false;
     glm::vec3 baseColor{0.62f, 0.58f, 0.53f}; // Studio's colour: a warm clay grey, like the default Soft Clay
-    bool showPolypaint = true;   // vertex colours replace baseColor when the mesh has them
-    bool showTexture = true;     // with showPolypaint: a SubTool's painted texture (core/Texture.h) multiplies in
-    bool showMask = true;        // masked areas render darker (ZBrush style)
-    bool showPolygroups = false; // colour each polygroup (see polygroupColor)
-    int matcap = defaultMatcap(); // built-in MatCap material (core/Matcap.h), Soft Clay; -1 = studio clay lighting
+    bool showVertexPaint = true;   // vertex colours replace baseColor when the mesh has them
+    // The active colour tints the Lit Sphere material on meshes with no vertex paint (Color palette, as the classic
+    // main colour does): materialTint multiplies the material there, white leaves it as it is (materialTintFor).
+    bool colorTintsMaterial = true;
+    glm::vec3 materialTint{1.0f};
+    bool showTexture = true;     // with showVertex paint: a Part's painted texture (core/Texture.h) multiplies in
+    bool showMask = true;        // masked areas render darker
+    float maskDarkness = 0.7f;   // how dark: 0 = no tint .. 1 = darkest (Preferences > Interface > Mask darkness)
+    bool maskColorCustom = false; // masked areas blend towards maskColor (linear) instead of darkening (Mask colour)
+    glm::vec3 maskColor{0.20f, 0.22f, 0.30f};
+    bool showFaceGroups = false; // colour each face group (see face groupColor)
+    int litsphere = defaultLitSphere(); // built-in Lit Sphere material (core/Lit Sphere.h), Soft Clay; -1 = studio clay lighting
     bool showMesh = true;
     bool showSplats = true;
     float splatOpacity = 1.0f; // global fade for using a capture as reference
-    bool dimInactive = true;   // SubTools other than the active one render slightly darker (ZBrush style)
+    bool dimInactive = true;   // Parts other than the active one render slightly darker
     bool motionProxy = false;  // the view is moving (Fast Navigation): draw big meshes' lighter proxy (render/Clusters.h)
-    bool flatShading = false;  // the scene's shading (Material palette): faceted; SubTools can override (core/Document.h)
-    // Backface culling (#68, Tool > Display): back faces are never drawn, on any mesh (closed or not, from any
+    double stillSeconds = 0.0; // how long the view has been still (0 while it moves): coarse levels give way to full detail
+    bool stroking = false;     // a stroke runs (its dabs still landing): coarse levels stay
+    // Offline frames (the timelapse, --render): always the full mesh, never its coarse levels. In the view a frame
+    // too slow for the still budget stays coarse while edited clusters draw in full until their levels follow, so
+    // a timelapse seeking through the history flipped between the two from frame to frame (Discord, 0.11.10).
+    bool fullDetail = false;
+    // Unlit (#168): every surface shows its base colour (vertex paint, texture, face groups) with no lighting, Lit Sphere
+    // or PBR shading, for judging painted colour as stored. The mask tint, wireframe and the dimming stay.
+    bool unlit = false;
+    bool flatShading = false;  // the scene's shading (Material palette): faceted; Parts can override (core/Document.h)
+    // Backface culling (#68, Tool > Viewport Look): back faces are never drawn, on any mesh (closed or not, from any
     // view). Off: they are skipped only where they can't show (a closed mesh seen from outside, Renderer::cull).
     bool backfaceCulling = false;
+    // Floor grid (#115, View > Floor grid): a faint grid on the floor under the model (y = floorHeight, Y up; the
+    // app keeps it at the lowest point of the visible Parts), its X and Z axes through the origin, fading with
+    // distance. Drawn under every Part. Off by default.
+    bool floorGrid = false;
+    float floorHeight = 0.0f;
     // The view's background: the charcoal radial gradient (default) or one flat display (sRGB) colour (#21).
     bool gradientBackground = true;
-    glm::vec3 backgroundColor{0.165f, 0.165f, 0.173f};
+    glm::vec3 backgroundColor{0.168f, 0.168f, 0.168f};
     // The gradient's colours (display sRGB): behind the model and at the edges. The interface look sets them
     // (Preferences > Interface > Look); these are the Classic look's charcoal.
     glm::vec3 gradientCentre{0.215f, 0.215f, 0.222f};
@@ -56,7 +80,7 @@ struct RenderSettings {
     // of detail drops to fit; a hardware profile may set it), and the micro edge length to aim for on screen.
     size_t renderTriangleBudget = 0; // 0 = TierConfig::activeTriangleBudget (core/TierConfig.h)
     float microTargetPx = 2.0f;
-    // Viewport shading: Lit Sphere (the matcap or studio lights above) or PBR, which shades the material channels
+    // Viewport shading: Lit Sphere (the lit sphere or studio lights above) or PBR, which shades the material channels
     // (core/TextureChannels.h) with image-based lighting from an environment (core/EnvironmentMath.h): GGX
     // specular through a prefiltered environment and a BRDF table, diffuse from its SH9, exposure and a tone map.
     // Meshes without a PBR texture use pbrRoughness / pbrMetallic with their colour.
@@ -70,8 +94,23 @@ struct RenderSettings {
     float backgroundBlur = 0.4f;        // 0 = sharp .. 1 = the roughest level
     float pbrRoughness = 0.45f, pbrMetallic = 0.0f;
     float pbrCavity = 0.5f; // how much the sculpt's creases darken under PBR (0 = physically plain)
+    // Lit Sphere and studio lighting (#80): the light turned from where the material has it, in degrees about the
+    // view's up axis (yaw, + to the right) and its side axis (pitch, + up), its intensity (a multiplier) and an
+    // ambient term that lifts the shadows (a share of the colour). The defaults leave the material as it is.
+    float lightYaw = 0.0f, lightPitch = 0.0f;
+    float lightIntensity = 1.0f, lightAmbient = 0.0f;
+    // X-Ray (#80, #91): the other visible Parts are drawn see-through (only their nearest surface, at
+    // xrayOpacity), so the active Part shows through them; with no other Part shown, the active one is see-through.
+    bool xray = false;
+    float xrayOpacity = 0.3f;
+    // The 3D view's resolution as a share of the window's (#80): lower draws fewer pixels on slow GPUs and scales
+    // the picture up (Renderer::drawView). 1 = full resolution.
+    float resolutionScale = 1.0f;
     bool pbr() const { return shading == Shading::Pbr; }
 };
+
+// RenderSettings::lightYaw / lightPitch as a rotation of view-space directions (the shader's uLightRot).
+glm::mat3 lightRotation(float yawDegrees, float pitchDegrees);
 
 // A baked tangent-space normal map to preview on a mesh (core/Bake.h): RGB8 rows bottom-up, with the
 // MikkTSpace tangent + sign of every triangle corner it was baked against. `serial` changes with the data.
@@ -92,11 +131,13 @@ struct MeshOverlay {
     float checkerScale = 8.0f;    // checker squares per UV unit
 };
 
-// One mesh of the scene for Renderer::syncScene: a SubTool, keyed by its stable id.
+// One mesh of the scene for Renderer::syncScene: a Part, keyed by its stable id. Linked Parts (#94) share one
+// mesh: they come with the same id (their PartData key) and their own `model` matrices, and are drawn from one
+// GPU slot, uploaded once.
 struct SceneMesh {
     uint32_t id = 0;
     Mesh* mesh = nullptr;
-    bool active = false; // gets mask darkening, polygroup colours and wireframe; never dimmed
+    bool active = false; // gets mask darkening, face group colours and wireframe; never dimmed
     bool visible = true; // hidden meshes keep their GPU slot but aren't drawn (or uploaded)
     const NormalMapView* normalMap = nullptr; // shade with this normal map (needs the mesh's UVs)
     bool wireframe = false; // keep the wireframe's edges on the GPU (built on first need; draw() falls back to
@@ -104,6 +145,7 @@ struct SceneMesh {
     bool flat = false;      // flat shading: each triangle shows its own face normal (faceted)
     bool pbr = false;       // the view shades PBR: upload the texture's material channels and their tangents
     const MeshOverlay* overlay = nullptr; // the UV Editor's view of the active mesh (must outlive the frame)
+    glm::mat4 model{1.0f}; // where the mesh is in the scene (Part::transform)
 };
 
 // Part of the target the 3D view is drawn into (framebuffer pixels, origin bottom-left); the rest is
@@ -113,27 +155,40 @@ struct RenderViewport {
     glm::vec3 surround{0.118f, 0.118f, 0.125f};
 };
 
-// Display colour of a polygroup id (linear RGB): a stable hash spread over
+// Display colour of a face group id (linear RGB): a stable hash spread over
 // pleasant hues. The mesh shader uses the same formula.
-glm::vec3 polygroupColor(uint32_t id);
+glm::vec3 facegroupColor(uint32_t id);
 
-// Draws every visible SubTool, each from its own GPU buffers (a slot keyed by
-// SubTool id), in clusters (core/UploadOrder.h) culled on the CPU every frame
+// Draws every visible Part, each from its own GPU buffers (a slot keyed by
+// Part id), in clusters (core/UploadOrder.h) culled on the CPU every frame
 // (render/Clusters.h) and drawn with one multi-draw. Mesh drawing honours the optional Mesh attributes: colours
-// (polypaint), mask (darkening), polygroups (group colours) and hidden
+// (vertex paint), mask (darkening), face groups (group colours) and hidden
 // triangles (not drawn). Mark changed vertices dirty for colour/mask edits and
-// set Mesh::facesDirty after changing `hidden` or `polygroups`. Only what a
-// mesh marks dirty is uploaded, so inactive SubTools upload once.
+// set Mesh::facesDirty after changing `hidden` or `face groups`. Only what a
+// mesh marks dirty is uploaded, so inactive Parts upload once.
 class Renderer {
 public:
     bool init(std::string& error);
     void shutdown();
+    // The warm UI test server (app/UiServe.h): shaders linked once and kept for the next Renderer in the same GL
+    // context (and the driver check init makes); false frees them.
+    static void keepPrograms(bool keep);
+    // The next simpler mesh shader variant (the same feature bits meshProgram takes) for a driver that rejects one:
+    // drops the fanciest bit left, in the order ghost, PBR, normal map, texture, per-triangle data, flat. Returns
+    // `features` unchanged when nothing more can go (then the mesh isn't drawn, and the log says why).
+    static int simplerMeshFeatures(int features) {
+        for (int bit : {kGhost, kPbr, kNormalMap, kTextured, kPrim, kFlat})
+            if (features & bit) return features & ~bit;
+        return features;
+    }
     // Makes `scene` what draw() shows, in order: uploads whatever each visible
     // mesh marked dirty and clears its dirty state (a new slot uploads
     // everything), and frees the slots of ids no longer listed.
     void syncScene(const std::vector<SceneMesh>& scene);
-    // True when SubTool `id` didn't fit in GPU memory at its last full upload (it isn't drawn until it does).
+    // True when Part `id` didn't fit in GPU memory at its last full upload (it isn't drawn until it does).
     bool outOfMemory(uint32_t id) const;
+    // Full mesh uploads so far (a whole layout and every vertex): UI tests check that an undo sends only what it changed.
+    uint64_t fullUploads() const { return fullUploads_; }
     // Re-uploads the splats when `version` differs from the last upload.
     void syncSplats(const SplatCloud& splats, uint64_t version);
     using Viewport = RenderViewport;
@@ -143,6 +198,10 @@ public:
     // target (e.g. out of memory) it uses fewer samples. Returns the samples used.
     int drawView(const Camera& camera, int fbWidth, int fbHeight, const RenderSettings& settings, const Viewport& viewport,
                  int samples);
+    // Reference images (core/Reference.h) for the next draws: Behind ones over the background, In the scene ones
+    // after the Parts (depth tested, so the model hides them, never writing depth). The window's view shows every
+    // shown one; renderToImage (renders, exports, the timelapse) only those with inRenders, thumbnails none.
+    void setReferences(const std::vector<ReferenceImage>& refs); // (their GPU memory: referenceGpuBytes)
     // Offscreen render (4x MSAA) into top-down RGBA8 pixels.
     bool renderToImage(const Camera& camera, int width, int height, const RenderSettings& settings,
                        std::vector<uint8_t>& rgba, std::string& error);
@@ -154,16 +213,21 @@ public:
     // PBR view: an environment's lighting is being built (the view shows the previous one meanwhile). `wake` is
     // called from the worker thread when it is ready (the app redraws then).
     bool environmentPending() const;
-    // The PBR planes SubTool `id` has on the GPU (pbrViewPlanes bits: 1 ORM, 2 normal, 4 emissive), for tests.
+    // The PBR planes Part `id` has on the GPU (pbrViewPlanes bits: 1 ORM, 2 normal, 4 emissive), for tests.
     uint32_t pbrPlanes(uint32_t id) const;
     void setEnvironmentWake(std::function<void()> wake) { envWake_ = std::move(wake); }
 
-    // GL texture of the painted texture of SubTool `id` as last synced (0 if none), for UI previews (rows bottom-up).
+    // GL texture of the painted texture of Part `id` as last synced (0 if none), for UI previews (rows bottom-up).
     GLuint paintTexture(uint32_t id) const;
 
     // --- Strokes on heavy meshes (app/AsyncStroke.cpp) ---
-    // The predictive stroke preview (render/Ghost.h) drawn on SubTool `id`; an empty stroke turns it off.
+    // The predictive stroke preview (render/Ghost.h) drawn on Part `id`; an empty stroke turns it off.
     void setGhost(uint32_t id, const GhostStroke& ghost);
+    // Research (render/ScreenStroke.h, SF_SCREEN_STROKE=1): the same pending dabs applied to the drawn view instead
+    // of the geometry (Lit Sphere views through drawView only); an empty stroke turns it off.
+    void setScreenStroke(const GhostStroke& stroke) { screenStroke_ = stroke; }
+    // The last drawView applied the screen stroke.
+    bool screenStrokeDrawn() const { return screenStrokeDrawn_; }
     // A sculpt stroke's vertex upload made in two halves: prepareStrokeUpload packs what the mesh marked dirty
     // (positions and normals only) and the culling bounds of the clusters that moved, on any thread and without
     // GL, while the GL thread keeps drawing from what it has; commitStrokeUpload sends it on the GL thread.
@@ -189,20 +253,30 @@ public:
         bool exact = false;                            // refineStrokeBoundsInto: exact bounds to set
         std::vector<uint32_t> exactClusters;
         std::vector<ClusterBounds> exactBounds;
-        size_t bytes() const { return data.size() * sizeof(PackedVertex); }
+        size_t bytes() const { return packed * sizeof(PackedVertex); }
+        size_t packed = 0; // vertices packed (in data, or the staging buffer)
+        // Persistent upload (SF_PERSISTENT_UPLOAD=1, a research prototype): bindStrokeUpload lends a persistently
+        // mapped staging buffer; prepare packs straight into it when the batch fits (`staged`), and commit has
+        // the GPU copy the ranges into the vertex buffer (no glBufferSubData of the packed data on the GL thread).
+        PackedVertex* stagingPtr = nullptr;
+        size_t stagingCap = 0; // vertices
+        int stagingIndex = -1;
+        bool staged = false;
+        PackedVertex* dst() { return staged ? stagingPtr : data.data(); }
     };
     // `curvature` (optional, by vertex): the cavity term of every vertex the mesh marked dirty, already worked
     // out (Sculptor::strokeCurvature).
     bool prepareStrokeUpload(uint32_t id, Mesh& mesh, StrokeUpload& out, const float* curvature = nullptr);
-    // GL thread, before handing `up` to another thread: finds SubTool id's slot (slots come and go on the GL
+    // GL thread, before handing `up` to another thread: finds Part id's slot (slots come and go on the GL
     // thread, e.g. thumbnails; the other thread uses this one, which stays put in the list).
     void bindStrokeUpload(uint32_t id, StrokeUpload& up);
+    void setPersistentUpload(bool on) { persistentUpload_ = on; } // Fast Upload (Preferences > Performance, experimental)
     void commitStrokeUpload(StrokeUpload& up);
     // The stroke uploads gave the clusters they moved quick culling bounds (around their vertices' boxes, which
     // packing finds anyway, without the normal cone, so they are never culled as facing away); at the stroke's
     // end this works out the exact ones (GL thread, the mesh no longer changing).
     void refineStrokeBounds(uint32_t id, const Mesh& mesh);
-    // A draft stroke on SubTool `id` (0: none): the clusters its uploads moved draw with per-pixel face normals
+    // A draft stroke on Part `id` (0: none): the clusters its uploads moved draw with per-pixel face normals
     // (theirs are stale) until refineStrokeBounds.
     void setDraftNormals(uint32_t id);
     // refineStrokeBounds on the solver thread at a stroke's end, after prepareStrokeUpload: the exact bounds go
@@ -211,32 +285,72 @@ public:
 
     // Bytes of GPU buffers and textures the mesh slots hold.
     size_t gpuBytes() const;
+    // Micro grid points whose shading still waits for a frame's budget (MicroRenderer::pendingShading, all slots).
+    size_t microPendingShading() const;
+    // Focus Detail's GPU sync time by part since the last call (MicroFocus::Part; adds into out[MicroFocus::kParts]).
+    void takeFocusSplit(double* out);
     // Triangles the last draw() sent to the GPU (after culling), for the benchmark.
     size_t lastDrawnTriangles() const { return lastDrawn_; }
+    bool floorGridDrawn() const { return floorGridDrawn_; } // the last draw() drew the floor grid (tests)
+    // Coarse levels (tests): the clusters the last frame drew at a coarse level, and the edited clusters whose levels
+    // are still to be updated (drawn in full until then).
+    size_t coarseDrawnClusters() const { return lastCoarseClusters_; }
+    size_t coarsePendingClusters() const;
+    // Dynamic topology patches (tests): the triangles of mesh slot `id`'s uploaded patches whose indices on the GPU
+    // (read back) aren't the mesh's triangles now.
+    size_t patchErrors(uint32_t id, const Mesh& mesh);
+    size_t patchCount(uint32_t id) const {
+        for (const MeshSlot& s : slots_)
+            if (s.id == id) return s.patches.size();
+        return 0;
+    }
+    // The stroke-only programs (predictive preview, draft normals) compiled so far: drawSlot warms them before a stroke.
+    int strokePrograms() const {
+        int n = 0;
+        for (int f = 0; f < 256; ++f) n += programs_[f].id && (f & (kGhost | kFlat)) ? 1 : 0;
+        return n;
+    }
+    // At rest (still 150 ms, no stroke) an over-budget mesh draws in full detail when one full frame fits the still-frame
+    // budget (100 ms, from the measured GPU time per triangle); else it stays coarse (coarsePreviewOnly: the info line
+    // says so). coarseStillWanted: the last frame drew coarse and full detail follows once the view has been still long
+    // enough (the app draws until then).
+    bool coarsePreviewOnly() const { return previewOnly_; }
+    bool coarseStillWanted() const { return stillWanted_; }
+    // The frame governor's GPU timer: the whole frame's GPU time, the CPU's before the 3D view drew (render/Clusters.h:
+    // nextGpuMsPerTriangle)
+    void noteGpuFrame(double gpuMs, uint64_t drawnTriangles, double cpuBeforeDrawMs = 0.0);
+    void setTriangleRate(double millionsPerSecond) { triangleRateM_ = millionsPerSecond; } // (calibration; 0 = unknown)
+    void setStroking(bool on) { stroking_ = on; } // a stroke runs: sync leaves the edited clusters' levels until it ends
+    // The last syncScene left motion proxies to build (a few milliseconds of them a frame; the rest draw in full).
+    bool proxiesPending() const { return proxyPending_; }
+    // Build stale motion proxies on still frames too (after a stroke, so the next orbit starts with them), at a
+    // smaller budget; only for meshes whose proxies were drawn before. The app turns it on when nothing sculpts.
+    void setProxyPrebuild(bool on) { proxyPrebuild_ = on; }
 
-    // Texture of matcap `index` (sRGB RGBA8, rows bottom-up) for UI previews; 0 if none (or a custom one not
+    // Texture of lit sphere `index` (sRGB RGBA8, rows bottom-up) for UI previews; 0 if none (or a custom one not
     // uploaded yet: the next syncScene or draw does).
-    GLuint matcapTexture(int index) const;
-    // Small GPU-only scene preview; reuses uploaded meshes and never reads pixels back.
+    GLuint litsphereTexture(int index) const;
     GLuint silhouetteTexture(const Camera& camera, int size);
 
-    // --- Thumbnails (LightBox / pickers) ---
+    // --- Thumbnails (Library / pickers) ---
     // Renders `mesh` alone (not the synced scene, which is left as it was) into a `size` x `size`
     // top-down RGBA8 image with a transparent background. Keeps the caller's framebuffer and viewport.
     bool renderMeshThumbnail(Mesh& mesh, const Camera& camera, int size, const RenderSettings& settings,
                              std::vector<uint8_t>& rgba, std::string& error);
-    // SubTool thumbnails (#43): SubTool `id` alone as last synced, from the GPU buffers it already has (nothing
+    // Part thumbnails (#43): Part `id` alone as last synced, from the GPU buffers it already has (nothing
     // uploaded, so it stays cheap on 30M+ meshes: those draw their motion proxy where built), framed from the
     // angle `yaw`, `pitch` (degrees) into a `size` x `size` top-down RGBA8 image with a transparent background.
-    // False when the SubTool has no drawn slot (hidden, not synced yet, out of GPU memory). Keeps the caller's
+    // False when the Part has no drawn slot (hidden, not synced yet, out of GPU memory). Keeps the caller's
     // framebuffer and viewport.
-    bool renderSubtoolThumbnail(uint32_t id, float yaw, float pitch, int size, const RenderSettings& settings,
+    bool renderPartThumbnail(uint32_t id, float yaw, float pitch, int size, const RenderSettings& settings,
                                 std::vector<uint8_t>& rgba, std::string& error);
 
 private:
+    void drawFloorGrid(const Camera& camera, const glm::mat4& view, const glm::mat4& proj,
+                       const RenderSettings& settings);
     void drawSplats(const glm::mat4& view, const glm::mat4& proj, int fbWidth, int fbHeight, float opacity);
 
-    GLuint wireProgram_ = 0, bgProgram_ = 0, splatProgram_ = 0;
+    GLuint wireProgram_ = 0, wireLineProgram_ = 0, bgProgram_ = 0, splatProgram_ = 0;
     GLuint silhouetteFbo_ = 0, silhouetteTex_ = 0, silhouetteDepth_ = 0;
     int silhouetteSize_ = 0;
     GLint bgTop_ = -1, bgBottom_ = -1, bgGradient_ = -1;
@@ -257,10 +371,28 @@ private:
     GLuint viewFbo_ = 0, viewResolveFbo_ = 0, viewRb_[3] = {};
     int viewW_ = 0, viewH_ = 0, viewSamples_ = 0, viewFailed_ = 0;
     bool directView_ = false;
+    struct Staging { // the persistent upload's buffers (StrokeUpload::stagingPtr), used in turn
+        GLuint buffer = 0;
+        void* ptr = nullptr;
+        size_t cap = 0; // vertices
+        GLsync fence = nullptr;
+    } persist_[2];
+    int stagingNext_ = 0;
+    bool persistentUpload_ = false; // setPersistentUpload
+    bool persistentUpload() const;  // the preference, SF_PERSISTENT_UPLOAD=0 / 1 overrides; needs GL_ARB_buffer_storage
     int captureW_ = 0, captureH_ = 0;
     GLuint emptyVao_ = 0;
     bool thumbnailPass_ = false; // draw(): transparent background, no gradient (renderMeshThumbnail)
-    // The GPU copy of one mesh (one SubTool), in the cluster layout of `order`.
+    std::vector<ReferenceImage> references_; // setReferences
+    struct ReferenceTexture {
+        std::shared_ptr<const Image> image; // (kept: the pointer stays the key while the texture lives)
+        GLuint tex = 0;
+    };
+    std::vector<ReferenceTexture> referenceTextures_;
+    GLuint referenceProgram_ = 0;
+    bool viewReferences_ = true; // false inside renderToImage: only the references marked for renders
+    void drawReferences(bool behind, const glm::mat4& view, const glm::mat4& proj, bool ortho, float aspect);
+    // The GPU copy of one mesh (one Part), in the cluster layout of `order`.
     struct MeshSlot {
         uint32_t id = 0;
         GLuint vao = 0, lineVao = 0;
@@ -268,7 +400,7 @@ private:
         GLuint indexBuffer = 0;  // 16-bit, relative to each cluster's first vertex; kClusterTriangles * 3 per cluster
         GLuint lineBuffer = 0;   // wireframe edges, 16-bit like the triangles, each edge once
         GLuint colorBuffer = 0, maskBuffer = 0; // RGBA8 (gamma encoded), R8
-        GLuint groupData = 0, groupTexture = 0; // polygroup id per drawn triangle (texture buffer, R16UI or R32UI)
+        GLuint groupData = 0, groupTexture = 0; // face group id per drawn triangle (texture buffer, R16UI or R32UI)
         GLuint primData = 0, primTexture = 0;   // per GPU block: the first drawn triangle of its cluster (R32UI)
         GLuint uvData = 0, uvTexture = 0; // per drawn triangle corner UVs (texture buffer), meshes with a texture
         GLuint paintTexture = 0;          // the painted texture (sRGB, mipmapped)
@@ -290,7 +422,7 @@ private:
         bool hasColors = false, hasMask = false, hasGroups = false, hasUvs = false;
         const MeshOverlay* overlay = nullptr; // this frame's (SceneMesh::overlay)
         uint64_t overlaySerial = 0;           // the one uploaded
-        bool overlayColors = false;           // the per-triangle data holds overlay colours, not polygroups
+        bool overlayColors = false;           // the per-triangle data holds overlay colours, not face groups
         bool fresh = true; // nothing uploaded yet
         bool regrid = false; // a stroke's vertex left the position grid (prepareStrokeUpload): the next sync re-sends everything
         bool outOfMemory = false; // the last full upload ran out of GPU memory: not drawn
@@ -311,9 +443,17 @@ private:
         std::vector<uint8_t> proxyStale;     // to rebuild before use
         std::vector<ClusterBounds> proxyBounds; // the proxy's normal cone
         bool proxyAllocated = false;
+        // Coarse levels (buildCoarseLevels at the first sync over the budget, again after a new layout). Clusters an
+        // edit moved draw in full (coarseDirty) until the first sync without new edits updates their levels.
+        GLuint coarseVao = 0, coarseVertices = 0, coarseIndices = 0, coarseColors = 0, coarseMask = 0; // (colours RGBA8, mask R8)
+        std::unique_ptr<CoarseLevels> coarse;
+        std::vector<uint8_t> coarseDirty;
+        std::vector<uint32_t> coarsePending; // the dirty clusters, to update
+        bool coarseTried = false, coarseEdited = false; // (coarseEdited: this sync marked some)
         std::vector<uint32_t> drawnOrder; // the mesh triangle of each drawn triangle (meshes with UVs only)
         size_t drawnTriangles = 0;
         size_t vertexCapacity = 0;
+        std::vector<uint16_t> sentCurvature; // per vertex, the cavity bits it last went up with (kKeepCurvature)
         std::vector<uint64_t> blockHash; // per UploadOrder block: hashes of its packed positions, and the rest
         std::vector<AABB> blockBox;      // per UploadOrder block: its vertices' box as last packed
         // Clusters whose culling bounds a stroke upload set from blockBox (a sphere round the box, no normal cone,
@@ -332,7 +472,7 @@ private:
             uint32_t indices = 0, lines = 0; // drawn
             std::vector<uint32_t> verts;     // the mesh vertex of each local index
             std::vector<uint16_t> local;     // triangles (local indices), while stale
-            std::vector<uint32_t> groups;    // their polygroups, while stale
+            std::vector<uint32_t> groups;    // their face groups, while stale
             ClusterBounds bounds;
             bool stale = true;    // triangles changed: rebuild and upload everything
             bool uploaded = false;
@@ -350,6 +490,9 @@ private:
         // A mesh with a micro level (core/Micro.h) draws through this instead of the buffers above.
         std::shared_ptr<MicroRenderer> micro;
         size_t microDrawn = 0;
+        // The stroke-only programs (GHOST, draft FLAT) warmed for these features (drawSlot; -1: not yet), and
+        // the frames drawn while waiting (the open's first frame isn't made slower).
+        mutable int strokeWarmed = -1, strokeWarmFrames = 0;
     };
     MeshSlot& slot(uint32_t id); // created on first use
     static void freeSlot(MeshSlot& s);
@@ -360,11 +503,28 @@ private:
     void buildLines(MeshSlot& s, const Mesh& mesh);
     void buildProxies(MeshSlot& s, const Mesh& mesh);
     bool proxyUsed_ = false; // the last draw() drew motion proxies: sync keeps them current
+    bool proxyPending_ = false; // (proxiesPending)
+    bool proxyPrebuild_ = false; // (setProxyPrebuild)
+    double proxyMsPerCluster_ = 0.0; // measured, so a frame's batches fit its budget on slow cores too
+    // Coarse levels (docs/design/micro-coarse-lod.md; SF_COARSE_LOD=0 turns them off): plain meshes over the triangle
+    // budget draw every visible cluster at one coarse level (render/Clusters.h: CoarseLevels), the finest that fits the
+    // budget; full detail when it all fits.
+    const bool coarseLod_ = !(std::getenv("SF_COARSE_LOD") && std::string(std::getenv("SF_COARSE_LOD")) == "0");
+    void markCoarseDirty(MeshSlot& s, uint32_t c);
+    void updateCoarse(MeshSlot& s, const Mesh& mesh);
+    size_t lodBudget_ = 0; // the last still draw's triangle budget: sync builds the coarse levels of meshes over it
+    void buildCoarse(MeshSlot& s, const Mesh& mesh);
+    void uploadCoarsePoints(MeshSlot& s);
+    void uploadCoarseAttributes(MeshSlot& s); // the cells' colours and mask (with the coarse VAO bound)
+    size_t triangleBudget(const RenderSettings& settings) const;
     // The ghost (setGhost), drawn on the slot ghostId_.
     GhostStroke ghost_;
     uint32_t ghostId_ = 0;
     struct MeshProgram;
     void setGhostUniforms(const MeshProgram& p);
+    GhostStroke screenStroke_;
+    ScreenStroke screenPass_;
+    bool screenStrokeDrawn_ = false;
     void syncNormalMap(MeshSlot& s, const Mesh& mesh, const NormalMapView* normalMap);
     // `indicesDone`: the index buffer and drawCount are already written (a full upload writes them while
     // building the layout).
@@ -389,7 +549,14 @@ private:
     // level), the BRDF table (RG16F) and the SH9, built when the environment first shows or changes.
     bool ensureEnvironment(int index);
     void setPbrUniforms(const MeshProgram& p, const RenderSettings& settings, bool textured, const MeshSlot& s);
+    void setLightUniforms(const MeshProgram& p, const RenderSettings& settings) const;
+    float drawAlpha_ = 1.0f;     // the opacity the next meshes draw with (X-Ray's see-through Parts)
+    bool scaleFailed_ = false;   // the scaled view couldn't reach the window: full resolution from then on
+    bool keepBackfaces_ = false;
+    GLenum xrayCull_ = 0;        // X-Ray's lone Part: the faces this pass culls (GL_FRONT, then GL_BACK) // X-Ray's lone see-through Part: draw its back faces too (cull)
     GLuint envTexture_ = 0, brdfTexture_ = 0, envBgProgram_ = 0;
+    GLuint floorProgram_ = 0;   // drawFloorGrid's, linked when the grid first shows
+    bool floorGridDrawn_ = false;
     struct EnvJob;
     std::shared_ptr<EnvJob> envJob_;
     std::function<void()> envWake_;
@@ -399,10 +566,20 @@ private:
     // The clusters of `s` to draw this frame: in full (drawClusters_), and with `proxy` as their motion proxy
     // where it is built (proxyClusters_).
     void cull(const MeshSlot& s, const CullView& view, bool proxy = false);
+    // The coarse-level cull: every visible cluster in full (drawClusters_) if that fits `budget`, else at one level
+    // (coarseClusters_, coarseLevel_), the finest that fits.
+    void cullCoarse(const MeshSlot& s, const CullView& view, size_t budget);
+    std::vector<uint32_t> coarseClusters_;
+    size_t lastCoarseClusters_ = 0;
+    bool previewOnly_ = false, stillWanted_ = false, stroking_ = false;
+    uint64_t fullUploads_ = 0;
+    double gpuMsPerTriangle_ = 0.0; // measured (moving average), 0 = not yet
+    double triangleRateM_ = 0.0;    // calibrated, million triangles a second (0 = unknown)
+    std::vector<uint8_t> coarseLevel_;
     void drawSlot(const MeshSlot& s, bool active, bool flat, const RenderSettings& settings);
-    enum class Part { Triangles, Lines, Proxy };
-    void drawPatches(const MeshSlot& s, GLenum mode, Part part, GLint primBaseLocation);
-    void drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clusters, GLenum mode, Part part, GLint primBaseLocation);
+    enum class DrawPart { Triangles, Lines, Proxy };
+    void drawPatches(const MeshSlot& s, GLenum mode, DrawPart part, GLint primBaseLocation);
+    void drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clusters, GLenum mode, DrawPart part, GLint primBaseLocation);
     std::vector<uint32_t> proxyClusters_;
     std::vector<GLsizei> drawCounts_;
     std::vector<const void*> drawOffsets_;
@@ -421,15 +598,20 @@ private:
     // Mesh shader variants by feature bits (kPaint, kPrim, kTextured, kNormalMap, kFlat, kPbr), compiled on first use.
     struct MeshProgram {
         GLuint id = 0;
+        bool failed = false; // the driver rejected this variant (logged once): draws use a simpler one
         GLint view = -1, proj = -1, gridOrigin = -1, gridStep = -1, viewport = -1, projScale = -1, baseColor = -1, paint = -1,
-              showMask = -1, groups = -1, matcap = -1, matcapCavity = -1, dim = -1, primBase = -1, hasPaint = -1,
-              normalFlipY = -1, twoSided = -1, silhouette = -1, checker = -1, checkerScale = -1;
+              silhouette = -1, showMask = -1, maskDarkness = -1, maskColor = -1, groups = -1, litsphere = -1, litsphereCavity = -1, dim = -1, primBase = -1,
+              hasPaint = -1, unlit = -1, normalFlipY = -1, twoSided = -1, checker = -1, checkerScale = -1, tintShift = -1, lightRot = -1,
+              lightLevels = -1, alpha = -1, microWire = -1;
         GLint hasOrm = -1, hasEmissive = -1, hasMatNormal = -1, envLevels = -1, exposure = -1, toneMap = -1, material = -1,
               pbrCavity = -1, viewToEnv = -1, sh = -1;
-        GLint ghostGroups = -1, ghostRange = -1, ghostEdge = -1, ghostA = -1, ghostB = -1, ghostC = -1, ghostBound = -1, ghostKind = -1, ghostFocal = -1;
+        // The units the environment and BRDF table are bound to (meshProgram: a micro level's own buffers hold 8-15).
+        GLenum envUnit = 0x84CA, brdfUnit = 0x84CB; // GL_TEXTURE10, GL_TEXTURE11
+        GLint ghostGroups = -1, ghostRange = -1, ghostEdge = -1, ghostA = -1, ghostB = -1, ghostC = -1, ghostD = -1, ghostBound = -1, ghostKind = -1, ghostFocal = -1;
     };
     static constexpr int kPaint = 1, kPrim = 2, kTextured = 4, kNormalMap = 8, kFlat = 16, kMicro = 32, kGhost = 64,
                          kPbr = 128;
+    static constexpr int kFocus = kPaint; // with kMicro: a streamed level (render/MicroFocus.h; micro programs never paint)
     MeshProgram programs_[256];
     void drawMicro(const MeshSlot& s, bool active, bool flat, const RenderSettings& settings);
     std::string programError_;
@@ -442,15 +624,19 @@ private:
         uint32_t id;
         bool active;
         bool flat;
+        bool moved = false;      // drawn with `model` (a linked copy, #94)
+        glm::mat4 model{1.0f};
     };
+    // drawSlot for `item`: with its model matrix in the frame's view and culling (restored after).
+    void drawItem(const MeshSlot& s, const DrawItem& item, const RenderSettings& settings);
     std::vector<DrawItem> drawList_;      // visible meshes, in scene order
     std::vector<uint32_t> visibleGroups_; // scratch for uploadFaces
     std::vector<glm::vec2> visibleUvs_;   // scratch for uploadFaces
-    std::vector<GLuint> matcapTextures_; // one per matcap (core/Matcap.h): the built-ins, then custom ones
-    std::vector<uint64_t> matcapHashes_; // the custom matcap pixels each texture holds
-    uint64_t matcapRevision_ = 0;
-    void syncMatcaps(); // uploads custom matcaps added or changed since the last call (syncScene and draw call it)
-    static void uploadMatcap(GLuint texture, int size, const std::vector<uint8_t>& pixels);
+    std::vector<GLuint> litsphereTextures_; // one per lit sphere (core/Lit Sphere.h): the built-ins, then custom ones
+    std::vector<uint64_t> litsphereHashes_; // the custom lit sphere pixels each texture holds
+    uint64_t litsphereRevision_ = 0;
+    void syncLitSpheres(); // uploads custom lit spheres added or changed since the last call (syncScene and draw call it)
+    static void uploadLitSphere(GLuint texture, int size, const std::vector<uint8_t>& pixels);
 };
 
 } // namespace sf

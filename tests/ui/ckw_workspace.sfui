@@ -3,8 +3,8 @@ run ui_look look=forge layout=sculptforge
 click "Mesh##menu.mesh"
 expect "CrokedWillo##section.ckw"
 key escape
-run ui_look look=classic layout=zbrush
-input_style zbrush
+run ui_look look=classic layout=classic
+input_style classic
 # CRKW: resizing a brush must leave shelves and menus visible.
 run new_sphere subdivisions=3
 mouse_move 0.5 0.5

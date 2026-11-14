@@ -3,7 +3,7 @@
 //
 // Multiresolution subdivision levels (core/Multires.h): Divide keeps quads, detail survives stepping up and
 // down bit-for-bit, low-level edits carry the high-level detail along, high-level edits show up below, mask /
-// polygroups / UVs / paint / sculpt layers follow the levels, undo steps across levels, Del Lower / Del
+// face groups / UVs / paint / sculpt layers follow the levels, undo steps across levels, Remove Below / Delete
 // Higher / Reconstruct, projects keep every level, and exports can write the base.
 #include "TestHarness.h"
 
@@ -11,7 +11,9 @@
 #include "core/Multires.h"
 #include "core/Primitives.h"
 #include "core/Project.h"
-#include "core/SubTools.h"
+#include "core/Parts.h"
+#include "core/PaintLayer.h"
+#include "core/VertexPaint.h"
 #include "io/ObjIO.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -21,6 +23,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <sstream>
 
 using namespace sf;
@@ -89,7 +92,7 @@ TEST(multires_divide_keeps_quads_and_counts) {
     CHECK(d.mesh.triangleCount() == baseTris * 4);
     CHECK(d.mesh.quadCount() * 2 == d.mesh.triangleCount()); // Catmull-Clark: all quads
     CHECK(run(d, "subdiv_divide").ok);
-    CHECK(subdivLevelText(d.mesh) == "SDiv 3/3");
+    CHECK(subdivLevelText(d.mesh) == "Level 3/3");
     CHECK(d.mesh.triangleCount() == baseTris * 16);
     CHECK(d.mesh.quadCount() * 2 == d.mesh.triangleCount());
     CHECK(subdivLevelTriangles(d.mesh, 0) == baseTris);
@@ -245,7 +248,7 @@ TEST(multires_undo_steps_across_levels) {
 
 TEST(multires_attributes_follow_levels) {
     Document d = dividedCube(2);
-    // Mask painted at the top shows at the corners of the base; polygroups set low are inherited up.
+    // Mask painted at the top shows at the corners of the base; face groups set low are inherited up.
     run(d, "mask_all");
     d.mesh.ensureMask();
     for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) d.mesh.mask[v] = d.mesh.positions[v].x > 0 ? 1.0f : 0.0f;
@@ -254,19 +257,19 @@ TEST(multires_attributes_follow_levels) {
     CHECK(d.mesh.hasMask());
     const Mesh base = subdivLevelMesh(d.mesh, 0);
     for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v) CHECK(d.mesh.mask[v] == (base.positions[v].x > 0 ? 1.0f : 0.0f));
-    d.mesh.ensurePolygroups();
-    for (auto& g : d.mesh.polygroups) g = 7;
-    d.mesh.polygroups[0] = 9;
-    d.mesh.polygroups[1] = 9; // one quad
+    d.mesh.ensureFaceGroups();
+    for (auto& g : d.mesh.facegroups) g = 7;
+    d.mesh.facegroups[0] = 9;
+    d.mesh.facegroups[1] = 9; // one quad
     CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
     CHECK(d.mesh.mask == topMask); // untouched mask detail kept
     size_t nine = 0;
-    for (uint32_t g : d.mesh.polygroups) nine += g == 9;
+    for (uint32_t g : d.mesh.facegroups) nine += g == 9;
     CHECK(nine == 2 * 16); // the quad's 16 grandchildren
-    for (uint32_t g : d.mesh.polygroups) CHECK(g == 7 || g == 9);
+    for (uint32_t g : d.mesh.facegroups) CHECK(g == 7 || g == 9);
     // Hidden faces at the top hide their parents below.
     d.mesh.ensureHidden();
-    for (uint32_t t = 0; t < d.mesh.triangleCount(); ++t) d.mesh.hidden[t] = d.mesh.polygroups[t] == 9;
+    for (uint32_t t = 0; t < d.mesh.triangleCount(); ++t) d.mesh.hidden[t] = d.mesh.facegroups[t] == 9;
     CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
     CHECK(d.mesh.hasHidden() && d.mesh.hidden[0] && d.mesh.hidden[1] && !d.mesh.hidden[2]);
     // Clearing the mask clears it everywhere.
@@ -296,7 +299,7 @@ TEST(multires_attributes_follow_levels) {
     CHECK(run(u, "subdiv_level", {{"level", 1.0}}).ok);
     CHECK(run(u, "subdiv_level", {{"level", 2.0}}).ok);
     CHECK(u.mesh.uvs == uvs);
-    // Polypaint painted low is interpolated up; paint at the top survives a low-level paint elsewhere.
+    // Vertex paint painted low is interpolated up; paint at the top survives a low-level paint elsewhere.
     Document c = dividedCube(2);
     c.mesh.ensureColors();
     c.mesh.colors[0] = glm::vec3(1, 0, 0);
@@ -306,6 +309,209 @@ TEST(multires_attributes_follow_levels) {
     CHECK(run(c, "subdiv_level", {{"level", 3.0}}).ok);
     CHECK(c.mesh.colors[0] == glm::vec3(1, 0, 0));
     CHECK(c.mesh.colors[5] == glm::vec3(0, 0, 1));
+}
+
+// Invariants: fine detail painted at the top level, then a low-opacity stroke at the lowest level, then back up (#bug-reports,
+// @masterfull95: the dots went black with a pale halo). The promises, per vertex of the top level:
+//   (a) a vertex the stroke did not reach is bit for bit what it was,
+//   (b) a vertex it reached is lerp(old, stroke, t) with t in [0, opacity]: the change lies on the old -> stroke line,
+//   (c) no channel ends outside [min, max] of the old colour and the stroke colour (no black, no halo),
+//   and the vertices the two levels share take exactly the stroke's blend.
+struct PaintLevelsCheck {
+    size_t untouched = 0, touched = 0, outside = 0, offLine = 0, tooStrong = 0, notBitEqual = 0;
+    float maxT = 0.0f;
+};
+
+PaintLevelsCheck checkStrokeUp(const std::vector<glm::vec3>& before, const std::vector<glm::vec3>& after,
+                               const glm::vec3& stroke, float opacity) {
+    PaintLevelsCheck r;
+    constexpr float eps = 2e-5f;
+    for (size_t v = 0; v < before.size(); ++v) {
+        const glm::vec3 o = before[v], n = after[v];
+        if (n == o) {
+            ++r.untouched;
+            continue;
+        }
+        ++r.touched;
+        const glm::vec3 lo = glm::min(o, stroke) - eps, hi = glm::max(o, stroke) + eps;
+        if (glm::any(glm::lessThan(n, lo)) || glm::any(glm::greaterThan(n, hi))) ++r.outside;
+        const glm::vec3 d = stroke - o;
+        const float len2 = glm::dot(d, d);
+        const float t = len2 > 1e-10f ? glm::dot(n - o, d) / len2 : 0.0f;
+        r.maxT = std::max(r.maxT, t);
+        if (glm::length(n - o - t * d) > 1e-4f) ++r.offLine;
+        if (t > opacity + 1e-4f) ++r.tooStrong;
+    }
+    return r;
+}
+
+TEST(multires_low_level_paint_invariants_keep_the_detail_above) {
+    const glm::vec3 red(0.55f, 0.02f, 0.05f), cream(0.9f, 0.85f, 0.7f), green(0.2f, 0.8f, 0.3f);
+    const float opacity = 0.3f;
+    Document d = dividedCube(3);
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    const size_t nv0 = d.mesh.vertexCount();
+    d.mesh.ensureColors();
+    for (uint32_t v = 0; v < nv0; ++v) paintVertex(d.mesh, v, cream, 1.0f);
+    CHECK(run(d, "subdiv_level", {{"level", 4.0}}).ok);
+    const size_t nvTop = d.mesh.vertexCount();
+    CHECK(nvTop > nv0 * 16);
+    d.mesh.ensureColors();
+    // Fine red dots (every 7th vertex of the top level's own) and a soft blob of them over the first fifth.
+    for (size_t v = nv0; v < nvTop; v += 7) paintVertex(d.mesh, uint32_t(v), red, v < nvTop / 5 ? 0.6f : 1.0f);
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    CHECK(d.mesh.vertexCount() == nv0);
+    const std::vector<glm::vec3> lowOld = d.mesh.colors;
+    CHECK(run(d, "subdiv_level", {{"level", 4.0}}).ok);
+    const std::vector<glm::vec3> topOld = d.mesh.colors;
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    // A low-opacity stroke over a patch of the coarse level, fading out toward the patch's edge.
+    std::vector<float> w(nv0, 0.0f);
+    for (uint32_t v = 0; v < nv0 / 3; ++v) {
+        w[v] = opacity * (1.0f - 0.8f * float(v) / float(nv0 / 3));
+        paintVertex(d.mesh, v, green, w[v]);
+    }
+    const std::vector<glm::vec3> lowNew = d.mesh.colors;
+    CHECK(run(d, "subdiv_level", {{"level", 4.0}}).ok);
+    CHECK(d.mesh.vertexCount() == nvTop);
+    const PaintLevelsCheck r = checkStrokeUp(topOld, d.mesh.colors, green, opacity);
+    std::printf("paint levels: untouched %zu touched %zu outside %zu offLine %zu tooStrong %zu maxT %.3f\n", r.untouched, r.touched,
+                r.outside, r.offLine, r.tooStrong, double(r.maxT));
+    CHECK(r.touched > 0 && r.untouched > r.touched); // the stroke reaches its neighbourhood only
+    CHECK(r.outside == 0);                           // (c) never darker or lighter than both the old colour and the stroke
+    CHECK(r.offLine == 0);                           // (b) a lerp toward the stroke colour
+    CHECK(r.tooStrong == 0);                         // at most the stroke's opacity
+    // The shared vertices take the stroke exactly: the low level's own blend.
+    for (uint32_t v = 0; v < nv0; ++v) {
+        const glm::vec3 want = glm::mix(lowOld[v], green, w[v]);
+        CHECK(glm::length(d.mesh.colors[v] - want) < 1e-5f);
+    }
+    // The dots away from the stroke are exactly as painted (a), and a second round trip changes nothing, bit for bit.
+    size_t keptDots = 0;
+    for (size_t v = nv0; v < nvTop; v += 7) keptDots += d.mesh.colors[v] == topOld[v];
+    CHECK(keptDots > 0);
+    const std::vector<glm::vec3> top = d.mesh.colors;
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    CHECK(bitEqual(d.mesh.colors, lowNew));
+    CHECK(run(d, "subdiv_level", {{"level", 4.0}}).ok);
+    CHECK(bitEqual(d.mesh.colors, top));
+}
+
+// Erasing (Alt) is a stroke toward white: it lightens the detail above by the same rule.
+TEST(multires_low_level_erase_invariants_keep_the_detail_above) {
+    const glm::vec3 red(0.55f, 0.02f, 0.05f), white(1.0f);
+    auto topPainted = [&](Document& d) {
+        CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+        CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
+        d.mesh.ensureColors();
+        for (size_t v = 0; v < d.mesh.vertexCount(); v += 3) paintVertex(d.mesh, uint32_t(v), red, 1.0f);
+        return d.mesh.colors;
+    };
+    Document ref = dividedCube(2);
+    const std::vector<glm::vec3> before = topPainted(ref);
+    Document d = dividedCube(2);
+    topPainted(d);
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    const size_t nv0 = d.mesh.vertexCount();
+    for (uint32_t v = 0; v < nv0 / 2; ++v) paintVertex(d.mesh, v, red, 0.4f, true); // Alt: toward white
+    CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
+    const PaintLevelsCheck r = checkStrokeUp(before, d.mesh.colors, white, 0.4f);
+    std::printf("erase: touched %zu outside %zu offLine %zu tooStrong %zu maxT %.3f\n", r.touched, r.outside, r.offLine, r.tooStrong, double(r.maxT));
+    CHECK(r.touched > 0 && r.outside == 0 && r.offLine == 0 && r.tooStrong == 0);
+}
+
+TEST(multires_low_level_paint_layer_blends_into_the_detail_above) {
+    const glm::vec3 red(1, 0, 0), green(0, 1, 0);
+    Document d = dividedCube(2);
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    const size_t nv0 = d.mesh.vertexCount();
+    CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
+    addPaintLayer(d.mesh, "Detail");
+    PaintLayer& top = d.mesh.paintLayers[size_t(d.mesh.activePaintLayer)];
+    for (size_t v = nv0; v < d.mesh.vertexCount(); ++v) top.color[v] = red, top.alpha[v] = 1.0f;
+    compositePaintAll(d.mesh);
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    PaintLayer& low = d.mesh.paintLayers[size_t(d.mesh.activePaintLayer)];
+    CHECK(low.alpha[0] == 0.0f);
+    low.color[0] = green;
+    low.alpha[0] = 0.3f;
+    compositePaintAll(d.mesh);
+    CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
+    const PaintLayer& up = d.mesh.paintLayers[size_t(d.mesh.activePaintLayer)];
+    CHECK(up.alpha[0] == 0.3f && up.color[0] == green);
+    size_t red_kept = 0;
+    for (size_t v = nv0; v < d.mesh.vertexCount(); ++v) {
+        CHECK(up.alpha[v] >= 1.0f - 1e-6f); // the dots keep their full coverage
+        red_kept += up.color[v].x > 0.99f || up.color[v].y > 0.0f; // red, or red with the green stroke mixed in
+    }
+    CHECK(red_kept == d.mesh.vertexCount() - nv0);
+    CHECK(d.mesh.colors.size() == d.mesh.vertexCount());
+}
+
+TEST(multires_paint_strokes_undo_across_levels_and_remesh_keeps_the_colour) {
+    const glm::vec3 tone(0.8f, 0.4f, 0.4f); // inside the colour range, so the blended delta can be taken back exactly
+    auto near = [](const std::vector<glm::vec3>& a, const std::vector<glm::vec3>& b) { return maxDistance(a, b) < 1e-5f; };
+    Document d = dividedCube(2);
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    const size_t nv0 = d.mesh.vertexCount();
+    CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
+    d.mesh.ensureColors();
+    for (size_t v = nv0; v < d.mesh.vertexCount(); ++v) d.mesh.colors[v] = tone;
+    const std::vector<glm::vec3> topTone = d.mesh.colors;
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    const std::vector<glm::vec3> lowWhite = d.mesh.colors;
+    // A real Paint stroke at the lowest level (undoable).
+    auto lowStroke = [&] {
+        const glm::vec3 centre = d.mesh.positions[0];
+        DabParams dab;
+        dab.center = centre;
+        dab.viewDir = -glm::normalize(centre);
+        dab.radius = 0.4f;
+        dab.strength = 0.3f;
+        CHECK(d.sculptor.beginStroke(d.mesh, "Paint"));
+        CHECK(paintDab(d.sculptor, d.mesh, d.bvh, dab, glm::vec3(0, 1, 0), Symmetry{}) > 0);
+        d.undo.push(d.sculptor.endStroke());
+    };
+    // Stroke, undo it at once: going up gives the detail back untouched.
+    lowStroke();
+    CHECK(d.mesh.colors != lowWhite);
+    CHECK(d.undo.undo(d.mesh, d.bvh));
+    CHECK(d.mesh.colors == lowWhite);
+    CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
+    CHECK(d.mesh.colors == topTone);
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    // Stroke again, go up: detail kept, stroke blended in.
+    lowStroke();
+    const std::vector<glm::vec3> painted = d.mesh.colors;
+    CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
+    const std::vector<glm::vec3> topPainted = d.mesh.colors;
+    CHECK(topPainted != topTone);
+    for (size_t v = nv0; v < d.mesh.vertexCount(); ++v) { // the dots move from their tone toward the green, never past either
+        const glm::vec3 c = topPainted[v];
+        CHECK(c.y >= tone.y - 1e-6f && c.y <= 1.0f + 1e-6f && c.x <= tone.x + 1e-6f && c.x >= -1e-6f && c.z <= tone.z + 1e-6f);
+    }
+    // Undo the step up, then the stroke: the low level is unpainted, and stepping up again gives the detail back.
+    CHECK(run(d, "undo").ok);
+    CHECK(subdivCurrentLevel(d.mesh) == 0);
+    CHECK(d.mesh.colors == painted);
+    CHECK(run(d, "undo").ok);
+    CHECK(d.mesh.colors == lowWhite);
+    // Redo both: the same painted level and the same blended top.
+    CHECK(run(d, "redo").ok);
+    CHECK(d.mesh.colors == painted);
+    CHECK(run(d, "redo").ok);
+    CHECK(near(d.mesh.colors, topPainted));
+    CHECK(run(d, "undo").ok);
+    CHECK(run(d, "undo").ok);
+    CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
+    CHECK(near(d.mesh.colors, topTone));
+    // Voxel Remesh at this level carries the colour over (the levels are dropped, the current one is kept).
+    CHECK(run(d, "remesh", {{"resolution", 64.0}}).ok);
+    CHECK(subdivLevelCount(d.mesh) == 0);
+    CHECK(d.mesh.colors.size() == d.mesh.vertexCount());
+    size_t toned = 0;
+    for (const glm::vec3& c : d.mesh.colors) toned += glm::distance(c, tone) < 1e-4f;
+    CHECK(toned > 0);
 }
 
 TEST(multires_sculpt_layers_work_at_every_level) {
@@ -335,22 +541,55 @@ TEST(multires_delete_lower_and_higher) {
     const std::vector<glm::vec3> level2 = d.mesh.positions;
     const size_t tris2 = d.mesh.triangleCount();
     CHECK(run(d, "subdiv_delete_lower").ok);
-    CHECK(subdivLevelText(d.mesh) == "SDiv 1/3");
+    CHECK(subdivLevelText(d.mesh) == "Level 1/3");
     CHECK(bitEqual(d.mesh.positions, level2));
     CHECK(run(d, "subdiv_level", {{"level", 3.0}}).ok);
     CHECK(d.mesh.triangleCount() == tris2 * 16);
     CHECK(run(d, "subdiv_level", {{"level", 2.0}}).ok);
     CHECK(run(d, "subdiv_delete_higher").ok);
-    CHECK(subdivLevelText(d.mesh) == "SDiv 2/2");
+    CHECK(subdivLevelText(d.mesh) == "Level 2/2");
     CHECK(!run(d, "subdiv_higher").ok);
     CHECK(run(d, "undo").ok);
-    CHECK(subdivLevelText(d.mesh) == "SDiv 2/3");
+    CHECK(subdivLevelText(d.mesh) == "Level 2/3");
     // Deleting down to one level leaves a plain mesh.
     CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
     CHECK(run(d, "subdiv_delete_higher").ok);
     CHECK(subdivLevelCount(d.mesh) == 0);
     CHECK(run(d, "undo").ok);
     CHECK(subdivLevelCount(d.mesh) == 3);
+}
+
+// A review hit "Dynamic topology needs a mesh without subdivision levels" on the divided default sphere: Freeze
+// Levels keeps the level shown as a plain mesh in one undo step, and dyntopo freeze_levels=true does it and turns
+// Dynamic on.
+TEST(multires_freeze_levels_for_dynamic) {
+    Document d = dividedCube(3);
+    CHECK(stroke(d, "0,0,2", "Standard", 0.3));
+    CHECK(run(d, "subdiv_level", {{"level", 2.0}}).ok);
+    const std::vector<glm::vec3> level2 = d.mesh.positions;
+    const size_t tris2 = d.mesh.triangleCount();
+    CHECK(!run(d, "dyntopo", {{"enabled", true}}).ok); // still blocked without the option
+    CHECK(!d.sculptor.dyntopo.enabled);
+    CHECK(run(d, "subdiv_freeze").ok);
+    CHECK(subdivLevelCount(d.mesh) == 0);
+    CHECK(d.mesh.triangleCount() == tris2);
+    CHECK(bitEqual(d.mesh.positions, level2));
+    CHECK(run(d, "undo").ok);
+    CHECK(subdivLevelText(d.mesh) == "Level 2/4");
+    CHECK(bitEqual(d.mesh.positions, level2));
+    // In one go, from the top level.
+    Document e = dividedCube(2);
+    const size_t top = e.mesh.triangleCount();
+    const CommandResult r = run(e, "dyntopo", {{"enabled", true}, {"freeze_levels", true}});
+    CHECK(r.ok);
+    CHECK(e.sculptor.dyntopo.enabled);
+    CHECK(subdivLevelCount(e.mesh) == 0);
+    CHECK(e.mesh.triangleCount() == top);
+    CHECK(run(e, "undo").ok);
+    CHECK(subdivLevelCount(e.mesh) == 3);
+    // Nothing to freeze on a plain mesh.
+    Document p = makeDoc(makeCube(3));
+    CHECK(!run(p, "subdiv_freeze").ok);
 }
 
 TEST(multires_reconstruct_finds_lower_levels) {
@@ -361,11 +600,11 @@ TEST(multires_reconstruct_finds_lower_levels) {
     const std::vector<glm::vec3> fine = plain.positions;
     Document d = makeDoc(std::move(plain));
     CHECK(run(d, "subdiv_reconstruct").ok);
-    CHECK(subdivLevelText(d.mesh) == "SDiv 1/2");
+    CHECK(subdivLevelText(d.mesh) == "Level 1/2");
     CHECK(d.mesh.triangleCount() == src.mesh.triangleCount() / 4);
     CHECK(d.mesh.quadCount() * 2 == d.mesh.triangleCount());
     CHECK(run(d, "subdiv_reconstruct").ok);
-    CHECK(subdivLevelText(d.mesh) == "SDiv 1/3");
+    CHECK(subdivLevelText(d.mesh) == "Level 1/3");
     CHECK(d.mesh.triangleCount() == makeCube(2).triangleCount());
     CHECK(d.mesh.vertexCount() == makeCube(2).vertexCount());
     // The base sits on the fine level's corner vertices.
@@ -391,7 +630,305 @@ TEST(multires_reconstruct_finds_lower_levels) {
     CHECK(subdivLevelCount(ok.mesh) == 0);
     CHECK(run(d, "undo").ok); // the step to level 3
     CHECK(run(d, "undo").ok); // the second reconstruct
-    CHECK(subdivLevelText(d.mesh) == "SDiv 1/2");
+    CHECK(subdivLevelText(d.mesh) == "Level 1/2");
+}
+
+// #145: `coarse` (all quads) gets UDIM UVs, every quad in its own tile (so every edge is a seam), is divided once
+// and imported as a plain mesh; Reconstruct must find `coarse` again with each face's corner UVs (not UVs from
+// across seams or tiles), and stepping back up must give back the imported UVs exactly.
+static void checkReconstructKeepsUvs(Mesh coarse, bool flip = false) {
+    std::vector<uint32_t> quadOf(coarse.triangleCount());
+    uint32_t quads = 0;
+    for (uint32_t t = 0; t < coarse.triangleCount(); ++t) {
+        const uint32_t q = coarse.quadPartnerAt(t);
+        quadOf[t] = q != Mesh::kNoQuad && q < t ? quadOf[q] : quads++;
+    }
+    coarse.uvs.resize(coarse.triangleCount() * 3);
+    for (size_t t = 0; t < coarse.triangleCount(); ++t)
+        for (int c = 0; c < 3; ++c) {
+            const uint32_t q = quadOf[t], v = coarse.triangles[t][c];
+            const uint32_t h = (q * 2654435761u) ^ (v * 40503u + 977u);
+            coarse.uvs[t * 3 + size_t(c)] = glm::vec2(float(q % 10), float(q / 10)) +
+                                            glm::vec2(0.05f + 0.9f * float(h % 1000) / 1000.0f, 0.05f + 0.9f * float(h / 1000 % 1000) / 1000.0f);
+        }
+    Document src = makeDoc(std::move(coarse));
+    CHECK(run(src, "subdiv_divide").ok);
+    Mesh plain = subdivLevelMesh(src.mesh, 1);
+    // An imported mesh numbers its vertices its own way (here: backwards), not base corners first.
+    const uint32_t nf = uint32_t(plain.vertexCount());
+    std::reverse(plain.positions.begin(), plain.positions.end());
+    for (glm::uvec3& t : plain.triangles) t = glm::uvec3(nf - 1) - t;
+    // ... and may split its quads along the other diagonal (edge point to edge point, not corner to face point).
+    for (uint32_t t = 0; flip && t < plain.triangleCount(); ++t) {
+        const uint32_t u = plain.quadPartnerAt(t);
+        if (u == Mesh::kNoQuad || u < t) continue;
+        const glm::uvec3 a = plain.triangles[t], b = plain.triangles[u];
+        auto uvOf = [&](uint32_t v) {
+            for (uint32_t x : {t, u})
+                for (int c = 0; c < 3; ++c)
+                    if (plain.triangles[x][c] == v) return plain.uvs[size_t(x) * 3 + size_t(c)];
+            return glm::vec2(0.0f);
+        };
+        int k = 0; // a's corner off the shared diagonal
+        for (int c = 0; c < 3; ++c)
+            if (b.x != a[c] && b.y != a[c] && b.z != a[c]) k = c;
+        uint32_t w = b.x; // b's corner off it
+        for (int c = 0; c < 3; ++c)
+            if (b[c] != a.x && b[c] != a.y && b[c] != a.z) w = b[c];
+        const uint32_t q[4] = {a[k], a[(k + 1) % 3], w, a[(k + 2) % 3]};
+        const glm::vec2 uv[4] = {uvOf(q[0]), uvOf(q[1]), uvOf(q[2]), uvOf(q[3])};
+        plain.triangles[t] = {q[0], q[1], q[2]};
+        plain.triangles[u] = {q[0], q[2], q[3]};
+        for (int c = 0; c < 3; ++c) {
+            plain.uvs[size_t(t) * 3 + size_t(c)] = uv[c];
+            plain.uvs[size_t(u) * 3 + size_t(c)] = uv[c == 0 ? 0 : c + 1];
+        }
+    }
+    plain.recomputeAllNormals();
+    const std::vector<glm::vec2> fineUvs = plain.uvs;
+    const std::vector<glm::uvec3> fineTris = plain.triangles;
+    const std::vector<glm::vec3> finePositions = plain.positions;
+    Document d = makeDoc(std::move(plain));
+    CHECK(run(d, "subdiv_reconstruct").ok);
+    CHECK(subdivLevelText(d.mesh) == "Level 1/2");
+    const Mesh base = subdivLevelMesh(src.mesh, 0);
+    CHECK(d.mesh.triangleCount() == base.triangleCount() && d.mesh.vertexCount() == base.vertexCount());
+    CHECK(d.mesh.uvs.size() == d.mesh.triangleCount() * 3);
+    if (d.mesh.uvs.size() != d.mesh.triangleCount() * 3 || d.mesh.vertexCount() != base.vertexCount()) return;
+    // The base sits on the fine level's corners, which a divided level numbers as the base vertices.
+    std::vector<uint32_t> baseIndex(d.mesh.vertexCount(), UINT32_MAX);
+    for (uint32_t v = 0; v < d.mesh.vertexCount(); ++v)
+        for (uint32_t b = 0; b < base.vertexCount(); ++b)
+            if (d.mesh.positions[v] == finePositions[nf - 1 - b]) baseIndex[v] = b;
+    // Every base triangle lies in one original quad and has that quad's corner UVs.
+    size_t wrong = 0;
+    for (size_t t = 0; t < d.mesh.triangleCount(); ++t) {
+        bool found = false;
+        for (uint32_t b = 0; b < base.triangleCount() && !found; ++b) {
+            const uint32_t partner = base.quadPartnerAt(b);
+            auto uvAt = [&](uint32_t v, glm::vec2& uv) {
+                for (uint32_t bt : {b, partner}) {
+                    if (bt == Mesh::kNoQuad) continue;
+                    for (int k = 0; k < 3; ++k)
+                        if (base.triangles[bt][k] == v) {
+                            uv = base.uvs[size_t(bt) * 3 + size_t(k)];
+                            return true;
+                        }
+                }
+                return false;
+            };
+            bool all = true;
+            for (int c = 0; c < 3 && all; ++c) {
+                glm::vec2 uv;
+                all = uvAt(baseIndex[d.mesh.triangles[t][c]], uv) && uv == d.mesh.uvs[t * 3 + size_t(c)];
+            }
+            found = all;
+        }
+        if (!found && wrong++ == 0)
+            std::printf("  base triangle %zu: UVs (%g,%g) (%g,%g) (%g,%g) aren't one original face's\n", t, d.mesh.uvs[t * 3].x,
+                        d.mesh.uvs[t * 3].y, d.mesh.uvs[t * 3 + 1].x, d.mesh.uvs[t * 3 + 1].y, d.mesh.uvs[t * 3 + 2].x,
+                        d.mesh.uvs[t * 3 + 2].y);
+    }
+    CHECK(wrong == 0);
+    CHECK(run(d, "subdiv_level", {{"level", 2.0}}).ok);
+    CHECK(d.mesh.triangles == fineTris);
+    CHECK(d.mesh.uvs == fineUvs);
+    CHECK(run(d, "subdiv_level", {{"level", 1.0}}).ok);
+    CHECK(run(d, "subdiv_level", {{"level", 2.0}}).ok);
+    CHECK(d.mesh.uvs == fineUvs);
+}
+
+TEST(multires_reconstruct_keeps_udim_uvs) {
+    checkReconstructKeepsUvs(makePlane(4));        // open: a border
+    checkReconstructKeepsUvs(makeTorus(12));       // closed, every vertex regular: four readings of the corners fit,
+    checkReconstructKeepsUvs(makeTorus(12), true); // and with these diagonals the first one tried is a shifted one
+    checkReconstructKeepsUvs(makeCube(3), true);
+}
+
+// #145 reopened: the reconstructed LOWER levels broke. `coarse` gets UDIM islands (by face direction; the x < 0 half
+// mirrored onto the x > 0 half's tile), is divided `levels` times, and the top goes out and back in as an OBJ; then
+// Reconstruct runs `levels` times. Every reconstructed level must be the divided one: each triangle inside one
+// original face, with that face's corner UVs (so seams kept, islands intact, values in their UDIM tile).
+static void checkReconstructLevelsKeepUvs(const char* name, Mesh coarse, int levels) {
+    std::printf("  %s\n", name);
+    coarse.recomputeAllNormals();
+    coarse.uvs.resize(coarse.triangleCount() * 3);
+    for (uint32_t t = 0; t < coarse.triangleCount(); ++t) {
+        uint32_t f = t; // a quad's two triangles share an island: pick by the pair's first triangle
+        if (coarse.quadPartnerAt(t) != Mesh::kNoQuad) f = std::min(t, coarse.quadPartnerAt(t));
+        const glm::uvec3 tf = coarse.triangles[f];
+        const glm::vec3 p0 = coarse.positions[tf.x], p1 = coarse.positions[tf.y], p2 = coarse.positions[tf.z];
+        const glm::vec3 n = glm::cross(p1 - p0, p2 - p0), c = (p0 + p1 + p2) / 3.0f;
+        int axis = 0;
+        for (int a = 1; a < 3; ++a)
+            if (std::abs(n[a]) > std::abs(n[axis])) axis = a;
+        const uint32_t island = uint32_t(axis * 2 + (n[axis] < 0 ? 1 : 0)) * 2 + (c.y > 0.0f ? 1 : 0);
+        for (int k = 0; k < 3; ++k) {
+            const glm::vec3 p = coarse.positions[coarse.triangles[t][k]];
+            glm::vec2 uv(p[(axis + 1) % 3], p[(axis + 2) % 3]);
+            if (axis != 0) uv.x = std::abs(uv.x); // mirrored: both halves on one tile
+            uv = glm::clamp(uv * 0.2f + 0.5f, glm::vec2(0.01f), glm::vec2(0.99f));
+            coarse.uvs[size_t(t) * 3 + size_t(k)] = uv + glm::vec2(float(island % 10), float(island / 10));
+        }
+    }
+    Document src = makeDoc(std::move(coarse));
+    for (int i = 0; i < levels; ++i) CHECK(run(src, "subdiv_divide").ok);
+    const Mesh top = subdivLevelMesh(src.mesh, levels);
+    const std::string path = tempPath("sf_reconstruct_uvs.obj");
+    std::string err;
+    CHECK(saveObj(path, top, err));
+    Mesh plain;
+    CHECK(loadObj(path, plain, err));
+    std::filesystem::remove(path);
+    // Divided levels number their vertices coarse corners first, so source level k's vertex b is the top's b (the OBJ
+    // keeps the order; its positions and UVs are rounded to 7 digits).
+    CHECK(plain.vertexCount() == top.vertexCount());
+    std::map<std::tuple<float, float, float>, uint32_t> topIndex;
+    for (uint32_t v = 0; v < plain.vertexCount(); ++v) topIndex[{plain.positions[v].x, plain.positions[v].y, plain.positions[v].z}] = v;
+    Document d = makeDoc(std::move(plain));
+    for (int i = 0; i < levels; ++i) CHECK(run(d, "subdiv_reconstruct").ok);
+    CHECK(subdivLevelCount(d.mesh) == levels + 1);
+    if (subdivLevelCount(d.mesh) != levels + 1) return;
+    for (int k = 0; k < levels; ++k) {
+        const Mesh want = subdivLevelMesh(src.mesh, k), got = subdivLevelMesh(d.mesh, k);
+        CHECK(got.triangleCount() == want.triangleCount() && got.vertexCount() == want.vertexCount());
+        CHECK(got.uvs.size() == got.triangleCount() * 3);
+        if (got.uvs.size() != got.triangleCount() * 3 || got.vertexCount() != want.vertexCount()) continue;
+        // The reconstructed level's corners sit on the top's vertices (the top is the imported mesh).
+        std::vector<uint32_t> srcIndex(got.vertexCount(), UINT32_MAX);
+        for (uint32_t v = 0; v < got.vertexCount(); ++v) {
+            auto it = topIndex.find({got.positions[v].x, got.positions[v].y, got.positions[v].z});
+            if (it != topIndex.end()) srcIndex[v] = it->second;
+        }
+        // Source triangles by vertex, then: each triangle lies in one source face and has its corner UVs.
+        std::vector<std::vector<uint32_t>> facesOf(want.vertexCount());
+        for (uint32_t t = 0; t < want.triangleCount(); ++t)
+            for (int c = 0; c < 3; ++c) facesOf[want.triangles[t][c]].push_back(t);
+        size_t wrong = 0;
+        for (uint32_t t = 0; t < got.triangleCount(); ++t) {
+            bool found = false;
+            const uint32_t v0 = srcIndex[got.triangles[t].x];
+            for (uint32_t b : v0 < want.vertexCount() ? facesOf[v0] : std::vector<uint32_t>{}) {
+                auto uvAt = [&](uint32_t v, glm::vec2& uv) {
+                    for (uint32_t bt : {b, want.quadPartnerAt(b)}) {
+                        if (bt == Mesh::kNoQuad) continue;
+                        for (int c = 0; c < 3; ++c)
+                            if (want.triangles[bt][c] == v) {
+                                uv = want.uvs[size_t(bt) * 3 + size_t(c)];
+                                return true;
+                            }
+                    }
+                    return false;
+                };
+                bool all = true;
+                for (int c = 0; c < 3 && all; ++c) {
+                    glm::vec2 uv;
+                    all = uvAt(srcIndex[got.triangles[t][c]], uv) &&
+                          glm::all(glm::lessThan(glm::abs(uv - got.uvs[size_t(t) * 3 + size_t(c)]), glm::vec2(1e-5f)));
+                }
+                if ((found = all)) break;
+            }
+            if (!found && wrong++ == 0)
+                std::printf("    Level %d triangle %u: UVs (%g,%g) (%g,%g) (%g,%g) aren't one original face's\n", k + 1, t,
+                            got.uvs[t * 3].x, got.uvs[t * 3].y, got.uvs[t * 3 + 1].x, got.uvs[t * 3 + 1].y, got.uvs[t * 3 + 2].x,
+                            got.uvs[t * 3 + 2].y);
+        }
+        if (wrong) std::printf("    Level %d: %zu of %zu triangles wrong\n", k + 1, wrong, got.triangleCount());
+        CHECK(wrong == 0);
+    }
+    // Stepping through every level and back to the top gives back the imported UVs.
+    CHECK(run(d, "subdiv_level", {{"level", double(levels + 1)}}).ok);
+    const std::vector<glm::vec2> topUvs = d.mesh.uvs;
+    for (int k = levels; k >= 1; --k) CHECK(run(d, "subdiv_level", {{"level", double(k)}}).ok);
+    CHECK(run(d, "subdiv_level", {{"level", double(levels + 1)}}).ok);
+    CHECK(d.mesh.uvs == topUvs);
+}
+
+TEST(multires_reconstruct_lower_levels_keep_uvs) {
+    checkReconstructLevelsKeepUvs("cube (valence-3 poles)", makeCube(2), 3);
+    checkReconstructLevelsKeepUvs("plane (open border)", makePlane(3), 3);
+    checkReconstructLevelsKeepUvs("torus (regular, closed)", makeTorus(8), 2);
+    checkReconstructLevelsKeepUvs("quad sphere", makeQuadSphere(2), 2);
+    checkReconstructLevelsKeepUvs("cylinder (n-gon caps)", makeCylinder(8), 2);
+    checkReconstructLevelsKeepUvs("cone (triangles + quads)", makeCone(6), 2);
+    checkReconstructLevelsKeepUvs("capsule", makeCapsule(8), 2);
+}
+
+// #145 (RodTDai's answers, screenshots and hint): a high-poly unwrapped on its own, so UV seams run THROUGH the
+// faces of the levels Reconstruct finds, and islands overlap (automatic unwraps stack them). Before, such a face took
+// each corner's UV from whichever island that corner was in and stretched across UDIM tiles. Fine UVs here: a planar
+// projection per island, islands cut by planes off the coarse edges, two tiles of four overlapping islands each
+// (as is, mirrored, rotated, shifted); out and back in as an OBJ. Every reconstructed triangle must lie in one
+// island: all three corners near that island's projection of their positions.
+static glm::vec2 islandUv(uint32_t island, glm::vec3 p) {
+    glm::vec2 uv = glm::vec2(p.x, p.y + 0.5f * p.z) * 0.25f + 0.5f;
+    switch (island >> 1) {
+    case 1: uv.x = 1.0f - uv.x; break;
+    case 2: uv = glm::vec2(1.0f) - uv; break;
+    case 3: uv += glm::vec2(0.07f, 0.05f); break;
+    }
+    return uv + glm::vec2(float(island & 1), 0.0f);
+}
+
+static void checkReconstructSeamsThroughFaces(const char* name, Mesh coarse, int levels) {
+    std::printf("  %s\n", name);
+    Document src = makeDoc(std::move(coarse));
+    for (int i = 0; i < levels; ++i) CHECK(run(src, "subdiv_divide").ok);
+    Mesh top = subdivLevelMesh(src.mesh, levels);
+    top.uvs.resize(top.triangleCount() * 3);
+    for (uint32_t t = 0; t < top.triangleCount(); ++t) {
+        uint32_t f = t; // both halves of a fine quad in one island
+        if (top.quadPartnerAt(t) != Mesh::kNoQuad) f = std::min(t, top.quadPartnerAt(t));
+        const uint32_t g = top.quadPartnerAt(f);
+        glm::vec3 c(0.0f);
+        int k = 0;
+        for (uint32_t x : {f, g})
+            if (x != Mesh::kNoQuad)
+                for (int j = 0; j < 3; ++j) c += top.positions[top.triangles[x][j]], ++k;
+        c /= float(k);
+        const uint32_t island = uint32_t(c.x > 0.13f) + 2u * uint32_t(c.y > -0.21f) + 4u * uint32_t(c.z > 0.37f);
+        for (int j = 0; j < 3; ++j) top.uvs[size_t(t) * 3 + size_t(j)] = islandUv(island, top.positions[top.triangles[t][j]]);
+    }
+    const std::string path = tempPath("sf_reconstruct_seams.obj");
+    std::string err;
+    CHECK(saveObj(path, top, err));
+    Mesh plain;
+    CHECK(loadObj(path, plain, err));
+    std::filesystem::remove(path);
+    const std::vector<glm::vec2> fineUvs = plain.uvs;
+    Document d = makeDoc(std::move(plain));
+    for (int i = 0; i < levels; ++i) CHECK(run(d, "subdiv_reconstruct").ok);
+    CHECK(subdivLevelCount(d.mesh) == levels + 1);
+    for (int k = 0; k < levels && subdivLevelCount(d.mesh) == levels + 1; ++k) {
+        const Mesh got = subdivLevelMesh(d.mesh, k);
+        CHECK(got.uvs.size() == got.triangleCount() * 3);
+        if (got.uvs.size() != got.triangleCount() * 3) continue;
+        size_t wrong = 0;
+        for (uint32_t t = 0; t < got.triangleCount(); ++t) {
+            bool ok = false;
+            for (uint32_t island = 0; island < 8 && !ok; ++island) {
+                ok = true;
+                for (int j = 0; j < 3 && ok; ++j)
+                    ok = glm::length(got.uvs[size_t(t) * 3 + size_t(j)] - islandUv(island, got.positions[got.triangles[t][j]])) < 0.05f;
+            }
+            if (!ok && wrong++ == 0)
+                std::printf("    Level %d triangle %u: UVs (%g,%g) (%g,%g) (%g,%g) aren't one island's\n", k + 1, t, got.uvs[t * 3].x,
+                            got.uvs[t * 3].y, got.uvs[t * 3 + 1].x, got.uvs[t * 3 + 1].y, got.uvs[t * 3 + 2].x, got.uvs[t * 3 + 2].y);
+        }
+        if (wrong) std::printf("    Level %d: %zu of %zu triangles wrong\n", k + 1, wrong, got.triangleCount());
+        CHECK(wrong == 0);
+    }
+    CHECK(run(d, "subdiv_level", {{"level", double(levels + 1)}}).ok);
+    CHECK(d.mesh.uvs == fineUvs); // the imported level keeps its own UVs exactly
+}
+
+TEST(multires_reconstruct_keeps_overlapping_uvs_with_seams_through_faces) {
+    checkReconstructSeamsThroughFaces("cube", makeCube(3), 1);
+    checkReconstructSeamsThroughFaces("cube, 2 levels", makeCube(3), 2);
+    checkReconstructSeamsThroughFaces("quad sphere", makeQuadSphere(3), 2);
+    checkReconstructSeamsThroughFaces("cone (triangles + quads)", makeCone(8), 2);
+    checkReconstructSeamsThroughFaces("plane (open border)", makePlane(5), 2);
+    checkReconstructSeamsThroughFaces("torus (regular, closed)", makeTorus(12), 1);
 }
 
 TEST(multires_project_round_trip_keeps_every_level) {
@@ -399,7 +936,7 @@ TEST(multires_project_round_trip_keeps_every_level) {
     CHECK(stroke(d, "0,0,2", "Standard", 0.3));
     CHECK(run(d, "subdiv_level", {{"level", 2.0}}).ok);
     CHECK(stroke(d, "0.4,0.4,2", "Inflate", 0.4, 1.0)); // pending, not folded in yet
-    d.mesh.ensurePolygroups()[3] = 5;
+    d.mesh.ensureFaceGroups()[3] = 5;
     std::vector<std::vector<glm::vec3>> levels;
     for (int i = 0; i < 4; ++i) levels.push_back(subdivLevelMesh(d.mesh, i).positions);
     const std::string path = tempPath("sf_multires.sfproj");
@@ -407,44 +944,44 @@ TEST(multires_project_round_trip_keeps_every_level) {
     CHECK(saveProject(path, d, err));
     Document e;
     CHECK(loadProject(path, e, err));
-    CHECK(subdivLevelText(e.mesh) == "SDiv 2/4");
+    CHECK(subdivLevelText(e.mesh) == "Level 2/4");
     CHECK(bitEqual(e.mesh.positions, levels[1]));
-    CHECK(e.mesh.polygroupAt(3) == 5);
+    CHECK(e.mesh.facegroupAt(3) == 5);
     for (int i : {0, 3, 2, 1}) {
         CHECK(run(e, "subdiv_level", {{"level", double(i + 1)}}).ok);
         CHECK(maxDistance(e.mesh.positions, levels[size_t(i)]) < 1e-6f);
     }
-    // Saved through the command too (which folds pending edits in first), and a second SubTool keeps its own levels.
-    e.addSubtool(makeIcosphere(1), "Eye", true);
+    // Saved through the command too (which folds pending edits in first), and a second Part keeps its own levels.
+    e.addPart(makeIcosphere(1), "Eye", true);
     run(e, "subdiv_divide");
     CHECK(run(e, "save_project", {{"path", path}}).ok);
     Document f;
     CHECK(loadProject(path, f, err));
-    CHECK(f.subtoolCount() == 2);
-    CHECK(subdivLevelText(f.mesh) == "SDiv 2/2");
-    f.selectSubtool(0);
-    CHECK(subdivLevelText(f.mesh) == "SDiv 2/4");
+    CHECK(f.partCount() == 2);
+    CHECK(subdivLevelText(f.mesh) == "Level 2/2");
+    f.selectPart(0);
+    CHECK(subdivLevelText(f.mesh) == "Level 2/4");
     CHECK(run(f, "subdiv_level", {{"level", 4.0}}).ok);
     CHECK(maxDistance(f.mesh.positions, levels[3]) < 1e-6f);
     std::filesystem::remove(path);
 }
 
-TEST(multires_subtools_exports_and_info) {
+TEST(multires_parts_exports_and_info) {
     Document d = dividedCube(2);
-    d.addSubtool(makeIcosphere(1), "Eye", true);
+    d.addPart(makeIcosphere(1), "Eye", true);
     CHECK(subdivLevelCount(d.mesh) == 0);
-    d.selectSubtool(0);
-    CHECK(subdivLevelText(d.mesh) == "SDiv 3/3");
-    CHECK(run(d, "subtool_list").message.find("SDiv 3/3") != std::string::npos);
-    CHECK(run(d, "subdiv_info").message.find("SDiv 1: 108 triangles") != std::string::npos);
+    d.selectPart(0);
+    CHECK(subdivLevelText(d.mesh) == "Level 3/3");
+    CHECK(run(d, "part_list").message.find("Level 3/3") != std::string::npos);
+    CHECK(run(d, "subdiv_info").message.find("Level 1: 108 triangles") != std::string::npos);
     // Exports write the current level; subdiv_export the base.
     const std::string cur = tempPath("sf_multires_cur.obj"), base = tempPath("sf_multires_base.obj");
-    d.subtools[1].visible = false;
+    d.parts[1].visible = false;
     CHECK(run(d, "save_obj", {{"path", cur}}).ok);
     CHECK(run(d, "subdiv_export", {{"path", base}}).ok);
     CHECK(countObjFaces(cur, 4) == 54 * 16);
     CHECK(countObjFaces(base, 4) == 54);
-    CHECK(subdivLevelText(d.mesh) == "SDiv 3/3"); // exporting the base doesn't change the scene
+    CHECK(subdivLevelText(d.mesh) == "Level 3/3"); // exporting the base doesn't change the scene
     std::filesystem::remove(cur);
     std::filesystem::remove(base);
     // A topology change (remesh, the old flat subdivide) drops the levels.

@@ -68,8 +68,12 @@ bool parseAxes(const std::string& text, std::vector<int>& axes) {
 
 Mesh extractShell(const Mesh& mesh, const ExtractOptions& o, std::string& error) {
     const size_t nv = mesh.vertexCount(), nt = mesh.triangleCount();
-    if (!mesh.zspheres.empty()) {
+    if (!mesh.forgespheres.empty()) {
         error = "Extract works on meshes; make the Forge Spheres a mesh first";
+        return {};
+    }
+    if (!mesh.tube.empty()) {
+        error = "Extract works on meshes; bake the Tube first";
         return {};
     }
     // The patch: the visible triangles whose corners are masked (on average), with their own vertices.
@@ -99,7 +103,7 @@ Mesh extractShell(const Mesh& mesh, const ExtractOptions& o, std::string& error)
     std::vector<glm::vec3> p(np);
     for (uint32_t i = 0; i < np; ++i) p[i] = mesh.positions[kept[i]];
 
-    // E Smt: Taubin smoothing along the patch's edge, which follows the triangles' staircase, so it doesn't shrink.
+    // Edge Smooth: Taubin smoothing along the patch's edge, which follows the triangles' staircase, so it doesn't shrink.
     const auto boundary = boundaryEdges(tris);
     if (o.smooth > 0 && !boundary.empty()) {
         std::vector<std::array<uint32_t, 2>> nb(np, {kNone, kNone});
@@ -148,12 +152,12 @@ Mesh extractShell(const Mesh& mesh, const ExtractOptions& o, std::string& error)
             for (uint32_t v : kept) out.colors.push_back(mesh.colors[v]);
     }
     out.triangles = tris;
-    out.polygroups.assign(tris.size(), 1u);
+    out.facegroups.assign(tris.size(), 1u);
     if (!single) {
         // The inner surface faces the other way; the rim joins the two along the patch's edge, one quad per edge.
         for (const glm::uvec3& c : tris) out.triangles.push_back(glm::uvec3(c.x + np, c.z + np, c.y + np));
-        out.polygroups.resize(out.triangles.size(), 2u);
-        // TCorne: where the edge turns sharply (over 50 degrees) the rim keeps triangles; TBorder: all along it.
+        out.facegroups.resize(out.triangles.size(), 2u);
+        // Corners: where the edge turns sharply (over 50 degrees) the rim keeps triangles; Border: all along it.
         std::vector<uint8_t> corner(o.triangleCorners && !o.triangleBorder ? np : 0, 0);
         if (!corner.empty()) {
             std::vector<uint32_t> next(np, kNone), prev(np, kNone);
@@ -175,8 +179,8 @@ Mesh extractShell(const Mesh& mesh, const ExtractOptions& o, std::string& error)
             const uint32_t first = uint32_t(out.triangles.size());
             out.triangles.push_back(glm::uvec3(v, u, u + np));
             out.triangles.push_back(glm::uvec3(v, u + np, v + np));
-            out.polygroups.push_back(3u);
-            out.polygroups.push_back(3u);
+            out.facegroups.push_back(3u);
+            out.facegroups.push_back(3u);
             if (!o.triangleBorder && (corner.empty() || (!corner[u] && !corner[v]))) out.pairQuad(first, first + 1);
         }
     }
@@ -351,7 +355,7 @@ Mesh mirrorAndWeld(const Mesh& mesh, int axis, bool keepPositive, std::string& e
     std::vector<uint32_t> mirrored(half.size(), kNone);
     auto addTriangle = [&](const glm::uvec3& v, uint32_t source, const std::array<glm::vec2, 3>& uv) {
         out.triangles.push_back(v);
-        if (mesh.hasPolygroups()) out.polygroups.push_back(mesh.polygroups[source]);
+        if (mesh.hasFaceGroups()) out.facegroups.push_back(mesh.facegroups[source]);
         if (mesh.hasHidden()) out.hidden.push_back(mesh.hidden[source]);
         if (uvs) out.uvs.insert(out.uvs.end(), uv.begin(), uv.end());
     };
@@ -384,7 +388,8 @@ Mesh mirrorFlip(const Mesh& mesh, int axis, float pivot) {
     for (auto& p : out.base) p[axis] = 2.0f * pivot - p[axis];
     for (auto& l : out.layers)
         for (auto& v : l.delta) v[axis] = -v[axis];
-    for (auto& z : out.zspheres) z.center[axis] = 2.0f * pivot - z.center[axis];
+    for (auto& z : out.forgespheres) z.center[axis] = 2.0f * pivot - z.center[axis];
+    for (auto& p : out.tube.points) p.position[axis] = 2.0f * pivot - p.position[axis];
     for (auto& t : out.triangles) std::swap(t.y, t.z);
     for (size_t t = 0; t * 3 + 2 < out.uvs.size(); ++t) std::swap(out.uvs[3 * t + 1], out.uvs[3 * t + 2]);
     out.rebuildTopology();
@@ -403,16 +408,16 @@ CommandResult acceptPreview(Document& doc) {
         doc.dropExtractPreview();
         return {false, "Nothing to accept: press Extract first"};
     }
-    const int i = doc.subtoolIndex(doc.extractPreview.id);
+    const int i = doc.partIndex(doc.extractPreview.id);
     UndoRecord r;
     r.label = "Extract";
-    r.subtool = std::make_shared<SubtoolStep>();
-    r.subtool->id = doc.extractPreview.id;
-    r.subtool->at = i;
+    r.part = std::make_shared<PartStep>();
+    r.part->id = doc.extractPreview.id;
+    r.part->at = i;
     doc.undo.push(std::move(r));
     doc.extractPreview = {};
     doc.modified = true;
-    return {true, "Extracted " + doc.subtools[size_t(i)].name + " (" + triangles(doc.subtoolMesh(i).triangleCount()) + ")"};
+    return {true, "Extracted " + doc.parts[size_t(i)].name + " (" + triangles(doc.partMesh(i).triangleCount()) + ")"};
 }
 
 CommandResult runExtract(Document& doc, const Args& a) {
@@ -420,8 +425,8 @@ CommandResult runExtract(Document& doc, const Args& a) {
     o.thickness = std::clamp(float(argNumber(a, "thickness", o.thickness)), -1.0f, 1.0f);
     o.smooth = std::clamp(int(std::lround(argNumber(a, "smooth", o.smooth))), 0, 50);
     o.doubleSided = argBool(a, "double", false);
-    o.triangleCorners = argBool(a, "tcorne", false);
-    o.triangleBorder = argBool(a, "tborder", false);
+    o.triangleCorners = argBool(a, "triangle_corners", false);
+    o.triangleBorder = argBool(a, "triangle_border", false);
     std::string error;
     Mesh shell = extractShell(doc.mesh, o, error);
     if (shell.triangleCount() == 0) {
@@ -431,14 +436,15 @@ CommandResult runExtract(Document& doc, const Args& a) {
     const size_t tris = shell.triangleCount();
     doc.dropExtractPreview(true);
     if (doc.extractPreview.id) { // Extract again (other settings): the preview is replaced
-        SubTool& s = doc.subtools[size_t(doc.subtoolIndex(doc.extractPreview.id))];
+        PartData& s = *doc.parts[size_t(doc.partIndex(doc.extractPreview.id))].data;
         s.mesh = std::move(shell);
         s.mesh.topologyDirty = true;
         s.bvh.build(s.mesh);
         s.bvhDirty = false;
     } else {
-        const int i = doc.addSubtool(std::move(shell), "Extract", false, doc.activeSubtool + 1);
-        doc.extractPreview = {doc.subtools[size_t(i)].id, doc.activeSubtoolInfo().id, doc.undo.revision()};
+        const int i = doc.addPart(std::move(shell), "Extract", false, doc.activePart + 1);
+        doc.parts[size_t(i)].transform = doc.activePartInfo().transform; // (made from the active mesh: where it is)
+        doc.extractPreview = {doc.parts[size_t(i)].id, doc.activePartInfo().id, doc.undo.revision()};
     }
     if (argBool(a, "accept", false)) return acceptPreview(doc);
     return {true, "Extract preview (" + triangles(tris) + "): Accept keeps it as a new Part"};
@@ -448,17 +454,17 @@ CommandResult runExtract(Document& doc, const Args& a) {
 
 void registerExtractMirrorCommands(CommandRegistry& reg) {
     reg.add({"extract",
-             "ZBrush Extract (Tool > SubTool): make a shell from the masked, visible part of the active Part and "
+             "(Tool > Part): make a shell from the masked, visible part of the active Part and "
              "show it as a preview below it; extract_accept (or accept=true) keeps it as a new Part in one undo "
              "step. Running it again replaces the preview.",
              {{"thickness", T::Number,
-               "Thick: shell thickness as a fraction of the Part's largest side (default 0.015; negative grows "
+               "Thickness: shell thickness as a fraction of the Part's largest side (default 0.015; negative grows "
                "inward; 0 = a single-sided surface).",
                false},
-              {"smooth", T::Number, "E Smt: smoothing passes along the extracted edge (0-50, default 5).", false},
-              {"double", T::Bool, "Double: grow the shell both inward and outward (default false).", false},
-              {"tcorne", T::Bool, "TCorne: triangles instead of quads in the rim's sharp corners (default false).", false},
-              {"tborder", T::Bool, "TBorder: the whole rim is triangles instead of quads (default false).", false},
+              {"smooth", T::Number, "Edge Smooth: smoothing passes along the extracted edge (0-50, default 5).", false},
+              {"double", T::Bool, "Both Sides: grow the shell both inward and outward (default false).", false},
+              {"triangle_corners", T::Bool, "Corners: triangles instead of quads in the rim's sharp corners (default false).", false},
+              {"triangle_border", T::Bool, "Border: the whole rim is triangles instead of quads (default false).", false},
               {"accept", T::Bool, "Accept at once instead of leaving a preview (default false).", false}},
              runExtract});
     reg.add({"extract_accept", "Keep the Extract preview as a new Part (undo removes it again).", {},
@@ -471,7 +477,7 @@ void registerExtractMirrorCommands(CommandRegistry& reg) {
              }});
 
     reg.add({"mirror_and_weld",
-             "ZBrush Mirror And Weld (Tool > Geometry > Modify Topology): keep the half of the active Part on the "
+             "(Tool > Geometry > Symmetry): keep the half of the active Part on the "
              "+ side of the plane through the origin, mirror it onto the other side and weld the seam into one "
              "watertight mesh. Face Groups, vertex paint, mask, UVs and sculpt layers are kept. One undo step.",
              {{"axis", T::String, "Axis whose plane to mirror across: x (default), y or z; several (xz) in turn.", false},
@@ -483,7 +489,8 @@ void registerExtractMirrorCommands(CommandRegistry& reg) {
                  const bool positive = side == "positive" || side == "+" || side == "pos";
                  if (!positive && side != "negative" && side != "-" && side != "neg")
                      return {false, "Bad side '" + side + "' (positive or negative)"};
-                 if (!doc.mesh.zspheres.empty()) return {false, "Mirror And Weld works on meshes; make the Forge Spheres a mesh first"};
+                 if (!doc.mesh.forgespheres.empty()) return {false, "Make Symmetric works on meshes; make the Forge Spheres a mesh first"};
+                 if (!doc.mesh.tube.empty()) return {false, "Make Symmetric works on meshes; bake the Tube first"};
                  if (doc.mesh.triangleCount() == 0) return {false, "The Part is empty"};
                  const size_t before = doc.mesh.triangleCount();
                  Mesh m = doc.mesh;
@@ -495,13 +502,13 @@ void registerExtractMirrorCommands(CommandRegistry& reg) {
                      names += axisName(axis);
                  }
                  const size_t after = m.triangleCount();
-                 doc.replaceMeshUndoable(std::move(m), "Mirror And Weld");
-                 return {true, "Mirror And Weld " + names + ": " + triangles(before) + " -> " + triangles(after)};
+                 doc.replaceMeshUndoable(std::move(m), "Make Symmetric");
+                 return {true, "Make Symmetric " + names + ": " + triangles(before) + " -> " + triangles(after)};
              }});
 
     reg.add({"mirror",
-             "ZBrush Mirror (Tool > Deformation): flip the active Part across a plane, by default the one through "
-             "the origin that symmetry and Mirror And Weld use. One undo step.",
+             "(Tool > Reshape): flip the active Part across a plane, by default the one through "
+             "the origin that symmetry and Make Symmetric use. One undo step.",
              {{"axis", T::String, "Axis to flip along: x (default), y or z; several (xz) in turn.", false},
               {"pivot", T::String, "origin (default) or center (flip in place about the Part's centre).", false}},
              [](Document& doc, const Args& a) -> CommandResult {

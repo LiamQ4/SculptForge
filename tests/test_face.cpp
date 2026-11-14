@@ -3,7 +3,7 @@
 //
 // Facial shapes (core/Face.h): the ARKit names, the template, the fit (landmark error on a known head, with and
 // without landmarks, on a reshaped and re-topologised head), deformation transfer on the template itself
-// (near-identity), mirrored Left / Right pairs, SubTools (eyes, teeth), multires, face_weights (exact, no undo,
+// (near-identity), mirrored Left / Right pairs, Parts (eyes, teeth), multires, face_weights (exact, no undo,
 // timing on a 500k head), takes, and export round trips that keep the morph targets, their names and the take.
 #include "TestHarness.h"
 
@@ -312,7 +312,7 @@ TEST(face_symmetric_pairs_mirror) {
     CHECK(run(doc, "face_shapes_generate", {{"symmetry", std::string("off")}}).ok);
 }
 
-TEST(face_subtools_eyes_and_teeth) {
+TEST(face_parts_eyes_and_teeth) {
     // Eyes turn about their centres for eyeLook*, the lower teeth follow jawOpen and the upper teeth don't, and
     // brows on the face follow the skin.
     const FaceTemplate& t = faceTemplate();
@@ -331,7 +331,7 @@ TEST(face_subtools_eyes_and_teeth) {
     }
     eyes.rebuildTopology();
     eyes.recomputeAllNormals();
-    doc.addSubtool(eyes, "Eyes", false);
+    doc.addPart(eyes, "Eyes", false);
     // Teeth: an upper and a lower row of little boxes behind the lips.
     Mesh teeth;
     for (int row = 0; row < 2; ++row) {
@@ -346,12 +346,12 @@ TEST(face_subtools_eyes_and_teeth) {
     }
     teeth.rebuildTopology();
     teeth.recomputeAllNormals();
-    doc.addSubtool(teeth, "Teeth", false);
-    doc.addSubtool(makeIcosphere(2, 0.5f), "Far away ball", false);
-    for (auto& p : doc.subtools[3].mesh.positions) p += glm::vec3(3, 0, 0);
+    doc.addPart(teeth, "Teeth", false);
+    doc.addPart(makeIcosphere(2, 0.5f), "Far away ball", false);
+    for (auto& p : doc.parts[3].data->mesh.positions) p += glm::vec3(3, 0, 0);
     CHECK(run(doc, "face_shapes_generate").ok);
 
-    const Mesh& em = doc.subtools[1].mesh;
+    const Mesh& em = doc.parts[1].data->mesh;
     const SculptLayer* up = findLayer(em, "eyeLookUpLeft");
     const SculptLayer* out = findLayer(em, "eyeLookOutLeft");
     CHECK(up && out && em.layers.size() == 8);
@@ -368,7 +368,7 @@ TEST(face_subtools_eyes_and_teeth) {
         CHECK(out->delta[front].x > 0.003f); // looking out = towards the character's left
         CHECK(up->delta[rightFront] == glm::vec3(0.0f));
     }
-    const Mesh& tm = doc.subtools[2].mesh;
+    const Mesh& tm = doc.parts[2].data->mesh;
     const SculptLayer* jaw = findLayer(tm, "jawOpen");
     CHECK(jaw != nullptr);
     if (jaw) {
@@ -382,12 +382,12 @@ TEST(face_subtools_eyes_and_teeth) {
         CHECK(upperMove == 0.0f);
     }
     CHECK(findLayer(tm, "eyeBlinkLeft") == nullptr); // teeth only get the jaw shapes
-    CHECK(doc.subtools[3].mesh.layers.empty());      // not on the face: left alone
+    CHECK(doc.parts[3].data->mesh.layers.empty());      // not on the face: left alone
 
-    // face_weights drives every SubTool: the eyes turn with eyeLookUpLeft.
-    const auto eyesBefore = doc.subtools[1].mesh.positions;
+    // face_weights drives every Part: the eyes turn with eyeLookUpLeft.
+    const auto eyesBefore = doc.parts[1].data->mesh.positions;
     CHECK(run(doc, "face_weights", {{"json", std::string("{\"eyeLookUpLeft\":1,\"jawOpen\":0.5}")}}).ok);
-    CHECK(doc.subtools[1].mesh.positions != eyesBefore);
+    CHECK(doc.parts[1].data->mesh.positions != eyesBefore);
 }
 
 TEST(face_weights_fast_path_is_exact_and_not_undoable) {
@@ -437,7 +437,7 @@ TEST(face_weights_fast_path_is_exact_and_not_undoable) {
     CHECK(again.positions == doc.mesh.positions);
 }
 
-TEST(face_weights_timing_on_a_500k_head) {
+TEST(nightly_face_weights_timing_on_a_500k_head) {
     // A 720k-vertex head (the template skin divided three times) with the 52 shapes: a live frame that changes
     // every weight costs a few milliseconds and touches only the face.
     Mesh base = templateHead();
@@ -506,7 +506,7 @@ TEST(face_generation_is_deterministic_with_threads) {
 }
 
 TEST(face_shapes_on_subdivision_levels) {
-    // A head with 3 levels (11k, 45k, 180k vertices): the shapes are made on SDiv 2 (the lowest with 20k) and show
+    // A head with 3 levels (11k, 45k, 180k vertices): the shapes are made on Level 2 (the lowest with 20k) and show
     // at the top level, where the top level's own detail is kept at weight 0.
     Document doc = makeDoc(templateHead());
     std::string msg;
@@ -519,7 +519,7 @@ TEST(face_shapes_on_subdivision_levels) {
     const auto detailed = doc.mesh.positions;
     const CommandResult r = run(doc, "face_shapes_generate");
     CHECK(r.ok);
-    CHECK(r.message.find("SDiv 2") != std::string::npos);
+    CHECK(r.message.find("Level 2") != std::string::npos);
     CHECK(subdivCurrentLevel(doc.mesh) == 2);
     CHECK(doc.mesh.layers.size() == 52);
     float detailErr = 0.0f;
@@ -527,7 +527,7 @@ TEST(face_shapes_on_subdivision_levels) {
     CHECK(detailErr < 1e-5f);
     const SculptLayer* jaw = findLayer(doc.mesh, "jawOpen");
     CHECK(jaw && maxLength(jaw->delta) > 0.02f);
-    // Down to SDiv 1 and the layers are there too.
+    // Down to Level 1 and the layers are there too.
     CHECK(setSubdivLevelUndoable(doc, 0, msg));
     CHECK(doc.mesh.layers.size() == 52);
 }
@@ -636,7 +636,7 @@ TEST(face_export_round_trips_keep_morph_targets_and_names) {
     CHECK(loadFbx(fbx, f, error));
     sameShapes(f, 1e-5f, "fbx");
 
-    // The Blender bridge sends the layers as shape keys beside the .GoZ (base shape).
+    // The Blender bridge sends the layers as shape keys beside the Bridge (base shape).
     const std::string root = tempPath("sf_face_bridge");
     std::filesystem::remove_all(root);
     std::string message;

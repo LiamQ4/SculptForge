@@ -4,14 +4,22 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
+    inputs:
+      full:
+        description: Also the VFX Reference Platform and Blender add-on jobs (main always runs them)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# A newer push cancels a branch's run, but never main's: a commit's finished run on main is what the next commits reuse
+# (a release bump right after a merge reused nothing when the bump cancelled its parent's run, 0.10.10).
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Compiler cache (ccache). Every job compiles through ccache and starts from the newest cache of the same job; ccache
 # hashes the compiler and the preprocessed source with every flag, so a hit is the object file that compiler would
@@ -30,14 +38,26 @@ concurrency:
 # The release packages are built by packages.yml (on pushes to main), the Flatpak check for pull requests is flatpak.yml.
 
 jobs:
-  # Pushes and pull requests that change only the website (not its phone page, website/link, which is built into the
-  # app) or release paperwork skip the build and test jobs; their required checks then pass as skipped.
+  # Site-lane changes (every file on tools/ci/site_lane.txt) skip the build and test jobs on every event, the merge
+  # queue's staging dispatch too (diffed against main); the Trademarks job always runs. Pushes and pull requests that
+  # change only the website (not its phone page, website/link, which is built into the app), docs no build or test
+  # reads (docs/guide and docs/supporters.txt are built in), note fragments or release paperwork skip them as well;
+  # their required checks then pass as skipped.
+  # `full`: the slow platform checks (VFX Reference Platform containers, Blender add-on in Blender) run on main, in the
+  # merge queue's batch run (scripts/merge-queue.sh), on a dispatch with full=true and on a pull request labelled full-ci; other branch runs skip them.
   changes:
     name: Changes
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read # the staging run this commit may reuse
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      full: ${{ steps.diff.outputs.full }}
     steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'push'
+        with: { fetch-depth: 20 } # the pushed range, for the paperwork check below
       - id: diff
         env:
           GH_TOKEN: ${{ github.token }}
@@ -46,26 +66,85 @@ jobs:
           BEFORE: ${{ github.event.before }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          FULL: ${{ github.ref == 'refs/heads/main' || inputs.full == true || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
+          echo "full=$FULL" | tee -a "$GITHUB_OUTPUT"
           base=$BASE
           [ "$EVENT" = push ] && base=$BEFORE
           code=true
-          if [ "$EVENT" != workflow_dispatch ] && [ -n "$base" ] && [ "$base" != 0000000000000000000000000000000000000000 ]; then
+          # A dispatch (the merge queue's staging batch, scripts/merge-queue.sh) is diffed against main.
+          [ "$EVENT" = workflow_dispatch ] && base=main
+          if [ -n "$base" ] && [ "$base" != 0000000000000000000000000000000000000000 ]; then
             # (the compare API lists at most 300 files: more than that counts as a code change)
-            if files=$(gh api "repos/$REPO/compare/$base...$HEAD" --jq '.files | if length >= 300 then error("many") else .[].filename end'); then
+            files=$(gh api "repos/$REPO/compare/$base...$HEAD" --jq '.files | if length >= 300 then error("many") else .[].filename end') || files=""
+            # Site lane: every file on tools/ci/site_lane.txt (the list ~/Work/.sf/lane.sh reads too), read from the base,
+            # never from the change itself (a pull request can't widen it for its own run).
+            lane=$(gh api "repos/$REPO/contents/tools/ci/site_lane.txt?ref=$base" -H 'Accept: application/vnd.github.raw') &&
+              { appin=$(grep '^!' <<< "$lane" | cut -c2-); lane=$(grep -v -e '^#' -e '^!' -e '^[[:space:]]*$' <<< "$lane"); } || lane="" # (a blank line would match every file)
+            # '!' lines: app inputs inside the site paths (compiled in): touching one means build and test.
+            if [ -n "$appin" ] && grep -qE -f <(echo "$appin") <<< "$files"; then lane=""; fi
+            if [ -n "$files" ] && [ -n "$lane" ] && ! grep -qvE -f <(echo "$lane") <<< "$files"; then
+              echo "::notice::site lane only (tools/ci/site_lane.txt): no build or tests"
+              code=false
+            elif [ -n "$files" ] && [ "$EVENT" != workflow_dispatch ]; then
               code=false
               while IFS= read -r f; do
                 case "$f" in
-                  website/link/*) code=true ;;
-                  website/*|.github/workflows/pages.yml|.github/workflows/download-stats.yml|packaging/arch/*|tools/publish/*|scripts/release.sh|docs/releasing.md) ;;
+                  website/link/*|website/founding.json) code=true ;; # (built into the app)
+                  website/*|.github/workflows/pages.yml|.github/workflows/download-stats.yml|packaging/arch/*|tools/publish/*|scripts/release.sh|scripts/merge-queue.sh) ;;
+                  docs/guide/*|docs/supporters.txt) code=true ;;
+                  docs/*.md|docs/design/*|changes/*|.github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE.md) ;;
+                  CHANGELOG.md|README.md|ROADMAP.md|CONTRIBUTING.md|CODE_OF_CONDUCT.md|SECURITY.md|TESTERS.md|REPORT.md|BRIEF.md) ;;
                   '') ;;
                   *) code=true ;;
                 esac
               done <<< "$files"
             fi
           fi
+          # T2 (docs/testing-flow.md): main only ever fast-forwards to a commit the merge queue tested on the branch
+          # staging (scripts/merge-queue.sh staging). When this exact commit already passed a full run of this workflow
+          # there (dispatched, full=true: its VFX Reference Platform jobs ran and passed), main's run reuses it.
+          if [ "$code" = true ] && [ "$EVENT" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            for id in $(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD&event=workflow_dispatch&status=success&per_page=5" \
+                --jq '.workflow_runs[] | select(.head_sha == "'"$HEAD"'" and .path == ".github/workflows/ci.yml" and .head_repository.full_name == "'"$REPO"'") | .id'); do
+              vfx=$(gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" \
+                --jq '[.jobs[] | select((.name | startswith("VFX Reference Platform")) and .conclusion == "success")] | length')
+              if [ "${vfx:-0}" -ge 2 ]; then
+                echo "::notice::$HEAD passed the full CI on staging (run $id, https://github.com/$REPO/actions/runs/$id): reused, not rebuilt"
+                code=false
+                break
+              fi
+            done
+          fi
+          # A release bump (scripts/release.sh step bump: only version lines, notes, docs, site; checked line by line by
+          # tools/release/paperwork_only.py) on top of a main commit whose CI passed: that result stands for it.
+          if [ "$code" = true ] && [ "$EVENT" = push ] && [ "$GITHUB_REF" = refs/heads/main ] && [ -f tools/release/paperwork_only.py ] &&
+             python3 tools/release/paperwork_only.py "$BEFORE" "$HEAD"; then
+            id=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$BEFORE&event=push&branch=main&status=success&per_page=5" \
+              --jq '[.workflow_runs[] | select(.head_sha == "'"$BEFORE"'" and .path == ".github/workflows/ci.yml")][0].id // empty')
+            if [ -n "$id" ]; then
+              echo "::notice::only release paperwork since $BEFORE, whose CI passed (run $id): reused"
+              code=false
+            fi
+          fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
 
+
+  # Trademark gate (docs/legal/trademarks.md): every tracked file and path, on every push and pull request, docs-only
+  # ones too. Seconds; no build.
+  marks:
+    name: Trademarks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 tools/check_marks.py --self-test && python3 tools/check_marks.py
+      - run: python3 tools/check_public_email.py --self-test && python3 tools/check_public_email.py
+      # On screen too: images and video frames, read from tools/marks_media_cache.json; a file the cache doesn't have
+      # yet is OCR'd here (commit its entry: run tools/check_marks_media.py locally).
+      - run: |
+          python3 tools/media_takedown.py --self-test
+          python3 tools/check_marks_media.py || { grep -q . <(python3 tools/check_marks_media.py 2>/dev/null | grep "not in tools/marks_media_cache.json") &&
+            sudo ./packaging/linux/apt-retry.sh update -qq && sudo ./packaging/linux/apt-retry.sh install -y -qq tesseract-ocr ffmpeg python3-pil >/dev/null && python3 tools/check_marks_media.py; }
 
   build:
     name: ${{ matrix.name }} (${{ matrix.shard }}/${{ matrix.shards }})
@@ -81,40 +160,51 @@ jobs:
           - { name: Linux ARM64, key: linux-arm64, shard: 1, shards: 2, os: "${{ vars.SF_RUNNER_LINUX_ARM || 'ubuntu-24.04-arm' }}" }
           - { name: Linux ARM64, key: linux-arm64, shard: 2, shards: 2, os: "${{ vars.SF_RUNNER_LINUX_ARM || 'ubuntu-24.04-arm' }}" }
           - { name: macOS, key: macos, shard: 1, shards: 1, os: "${{ vars.SF_RUNNER_MAC || 'macos-15' }}" }
-          - { name: Windows, key: windows, shard: 1, shards: 3, os: "${{ vars.SF_RUNNER_WIN || 'windows-2022' }}" }
-          - { name: Windows, key: windows, shard: 2, shards: 3, os: "${{ vars.SF_RUNNER_WIN || 'windows-2022' }}" }
-          - { name: Windows, key: windows, shard: 3, shards: 3, os: "${{ vars.SF_RUNNER_WIN || 'windows-2022' }}" }
+          - { name: Windows, key: windows, shard: 1, shards: 4, os: "${{ vars.SF_RUNNER_WIN || 'windows-2022' }}" }
+          - { name: Windows, key: windows, shard: 2, shards: 4, os: "${{ vars.SF_RUNNER_WIN || 'windows-2022' }}" }
+          - { name: Windows, key: windows, shard: 3, shards: 4, os: "${{ vars.SF_RUNNER_WIN || 'windows-2022' }}" }
+          - { name: Windows, key: windows, shard: 4, shards: 4, os: "${{ vars.SF_RUNNER_WIN || 'windows-2022' }}" }
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_MAXSIZE: 500M
       CCACHE_DEPEND: 'true' # include files from the compiler's own dependency list (-MD, /showIncludes): no extra preprocessor run
+      SF_TEST_BUDGET: 150 # seconds per test (tools/test/run.py); software OpenGL is several times slower than the PC's GPU
+      SF_DEPS_CACHE: .deps # downloads: cmake/Fetch.cmake, tools/ci/fetch.sh
     steps:
       - uses: actions/checkout@v7
+      - name: Downloads (cmake/Fetch.cmake's archives and pinned tools, kept by hash by tools/ci/fetch.sh)
+        uses: actions/cache@v5
+        with:
+          path: .deps
+          key: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Fetch.cmake', '.github/workflows/ci.yml') }}
+          restore-keys: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-
       - uses: actions/setup-python@v7
+        id: py
         with:
           python-version: '3.13'
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo ./packaging/linux/install-build-deps.sh
-          sudo apt-get install -y --no-install-recommends ccache xvfb libgl1-mesa-dri
+          sudo ./packaging/linux/apt-retry.sh install -y --no-install-recommends ccache xvfb libgl1-mesa-dri mold # mold: faster links (docs/build-speed.md)
       - name: ccache (macOS; the release binary, pinned by hash)
         if: runner.os == 'macOS'
         run: |
-          curl -fsSLO https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-darwin.tar.gz
-          echo "cf240009630b605b775c7c5c7b7105a3b196c79f31af322c1557969aa28003fc  ccache-4.14.2-darwin.tar.gz" | shasum -a 256 -c
-          tar xzf ccache-4.14.2-darwin.tar.gz -C "$RUNNER_TEMP"
+          tar xzf "$(tools/ci/fetch.sh https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-darwin.tar.gz \
+            cf240009630b605b775c7c5c7b7105a3b196c79f31af322c1557969aa28003fc)" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/ccache-4.14.2-darwin" >> "$GITHUB_PATH"
-      - name: ccache (Windows; the release binary, pinned by hash, standing in for cl.exe)
+      - name: ccache (Windows; the release binary, pinned by hash)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          tools/ci/fetch.sh https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-windows-x86_64.zip 6993ce645e53192cec592ee23186200b574ac4c59097ecde8d9cfd681b47ae84
+          tools/ci/fetch.sh https://github.com/pal1000/mesa-dist-win/releases/download/26.2.4/mesa3d-26.2.4-release-msvc.7z 351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695
+      - name: ccache (Windows; unpacked, standing in for cl.exe)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $zip = 'ccache-4.14.2-windows-x86_64.zip'
-          Invoke-WebRequest "https://github.com/ccache/ccache/releases/download/v4.14.2/$zip" -OutFile $zip
-          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne '6993CE645E53192CEC592EE23186200B574AC4C59097ECDE8D9CFD681B47AE84') {
-            throw 'ccache archive hash mismatch'
-          }
+          $zip = '.deps\6993ce645e53192cec592ee23186200b574ac4c59097ecde8d9cfd681b47ae84-ccache-4.14.2-windows-x86_64.zip'
           Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP
           $dir = "$env:RUNNER_TEMP\ccache-4.14.2-windows-x86_64"
           "$dir" >> $env:GITHUB_PATH
@@ -132,6 +222,20 @@ jobs:
           restore-keys: ccache-ci-${{ matrix.key }}.
       - name: NumPy for the Python API test
         run: python -m pip install numpy
+      # The configured build folder (CMake's cache with every compiler and library check, the fetched dependency
+      # sources, the generated project), right after configure and before any compiling: a hit skips the minute or
+      # more of checks (93 s on Windows). Exact key only: the runner image (compiler), Python and every CMake file, so
+      # a changed CMakeLists.txt or option configures from scratch, as a fresh checkout would.
+      - name: Runner image (the compiler version, for the configure cache key)
+        id: image
+        shell: bash
+        run: echo "id=${ImageOS:-$RUNNER_OS}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Configure cache (restore)
+        id: cmake-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: build
+          key: cmake-ci-${{ matrix.key }}~${{ steps.image.outputs.id }}-py${{ steps.py.outputs.python-version }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'packaging/linux/install-build-deps.sh') }}
       - name: Configure
         if: runner.os != 'Windows'
         run: >
@@ -144,41 +248,49 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF
           -DCMAKE_VS_GLOBALS="CLToolExe=cl.exe;CLToolPath=${{ env.SF_CCACHE_CL }};TrackFileAccess=false;UseMultiToolTask=true;EnforceProcessCountAcrossBuilds=true"
           -DSCULPTFORGE_BUILD_PYTHON=ON -DPython_EXECUTABLE="${{ env.pythonLocation }}/python.exe"
+      - name: Configure cache (save; a miss, not from pull requests; one shard saves)
+        if: steps.cmake-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && matrix.shard == 1
+        uses: actions/cache/save@v5
+        with:
+          path: build
+          key: ${{ steps.cmake-cache.outputs.cache-primary-key }}
       - name: Build
         run: |
           ccache -z
           cmake --build build --config Release --parallel 4
           ccache -s -v
       - name: Compiler cache (save; not from pull requests; one shard saves)
-        if: github.event_name != 'pull_request' && matrix.shard == 1
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && matrix.shard == 1
         uses: actions/cache/save@v5
         with:
           path: .ccache
           key: ccache-ci-${{ matrix.key }}.${{ github.sha }}
       # Every test in one parallel ctest run (UI tests too, where there is a display), so no core idles while the
-      # last tests of one group finish.
+      # last tests of one group finish. tools/test/run.py (docs/testing-flow.md): leaves out label nightly, reruns a
+      # failed test once (a pass on the rerun is reported as flaky and doesn't fail the job), and fails a test slower
+      # than SF_TEST_BUDGET seconds: 20 on the PC's GPU, scaled here for software OpenGL on 4-core runners.
       - name: Test (C++, Python API, UI tests with Xvfb + Mesa)
         if: runner.os == 'Linux'
         run: |
           xvfb-run -a -s "-screen 0 1920x1080x24" env LIBGL_ALWAYS_SOFTWARE=1 \
-            ctest --test-dir build -C Release --output-on-failure -j 4 -I '${{ matrix.shard }},,${{ matrix.shards }}'
+            python3 tools/test/run.py --build build --junit build/ctest.xml -- -C Release -j 4 -I '${{ matrix.shard }},,${{ matrix.shards }}'
       - name: Test (C++ and Python API; UI tests need a display)
         if: runner.os == 'macOS'
-        run: ctest --test-dir build -C Release --output-on-failure -LE ui -j 4 -I '${{ matrix.shard }},,${{ matrix.shards }}'
+        run: python3 tools/test/run.py --build build --junit build/ctest.xml -- -C Release -LE ui -j 4 -I '${{ matrix.shard }},,${{ matrix.shards }}'
       - name: Test (C++, Python API, UI tests with Mesa llvmpipe)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # The runner has no GPU driver: Mesa's software OpenGL (pal1000/mesa-dist-win), pinned by hash.
-          $url = 'https://github.com/pal1000/mesa-dist-win/releases/download/26.2.4/mesa3d-26.2.4-release-msvc.7z'
-          Invoke-WebRequest $url -OutFile mesa.7z
-          if ((Get-FileHash mesa.7z -Algorithm SHA256).Hash -ne '351FC8C8B695878FFB3EAA044B3EAD08672A48B1A045E3C3E3975811DF0F6695') {
-            throw 'mesa3d archive hash mismatch'
-          }
-          7z e mesa.7z x64/opengl32.dll x64/libgallium_wgl.dll -obuild/Release -y | Out-Null
+          # The runner has no GPU driver: Mesa's software OpenGL (pal1000/mesa-dist-win), pinned by hash (fetched with
+          # ccache above, tools/ci/fetch.sh).
+          7z e .deps\351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695-mesa3d-26.2.4-release-msvc.7z x64/opengl32.dll x64/libgallium_wgl.dll -obuild/Release -y | Out-Null
           $env:GALLIUM_DRIVER = 'llvmpipe'
-          ctest --test-dir build -C Release --output-on-failure -j 4 -I '${{ matrix.shard }},,${{ matrix.shards }}'
+          python tools/test/run.py --build build --junit build/ctest.xml -- -C Release -j 4 -I '${{ matrix.shard }},,${{ matrix.shards }}'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Slowest tests (job summary; tells which test to split when a shard is the long pole)
+        if: always()
+        run: python tools/ci/slowest_tests.py build/ctest.xml | tee -a "$GITHUB_STEP_SUMMARY"
+        shell: bash
       - name: UI test screenshots
         if: always() && runner.os != 'macOS'
         uses: actions/upload-artifact@v7
@@ -188,11 +300,11 @@ jobs:
           if-no-files-found: ignore
 
   # The Blender add-on inside Blender itself (the bpy wheel is Blender as a Python module), against
-  # sculptforge-cli: the oldest supported Blender (4.2 LTS, Python 3.11) and the newest.
+  # sculptforge-cli: the oldest supported Blender (4.2 LTS, Python 3.11), the newest, and the one before splats.
   blender-addon:
     name: Blender add-on (bpy ${{ matrix.bpy }})
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ${{ vars.SF_RUNNER_LINUX || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
@@ -200,19 +312,27 @@ jobs:
         include:
           - { bpy: '4.2.0', python: '3.11' }
           - { bpy: '5.2.3', python: '3.13' }
+          - { bpy: '5.3.0', python: '3.13' } # first with Gaussian splats
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_MAXSIZE: 300M
       CCACHE_DEPEND: 'true'
+      SF_DEPS_CACHE: .deps
     steps:
       - uses: actions/checkout@v7
+      - name: Downloads (cmake/Fetch.cmake's archives and pinned tools, kept by hash by tools/ci/fetch.sh)
+        uses: actions/cache@v5
+        with:
+          path: .deps
+          key: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Fetch.cmake', '.github/workflows/ci.yml') }}
+          restore-keys: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - run: |
           sudo ./packaging/linux/install-build-deps.sh
-          sudo apt-get install -y --no-install-recommends ccache
+          sudo ./packaging/linux/apt-retry.sh install -y --no-install-recommends ccache
       - name: Compiler cache (restore)
         uses: actions/cache/restore@v5
         with:
@@ -223,12 +343,13 @@ jobs:
         run: python -m pip install "bpy==${{ matrix.bpy }}" numpy
       - name: Build sculptforge-cli
         run: |
+          ccache -z # (ccache -s below: this run's hits, not the restored cache's lifetime)
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF -DSCULPTFORGE_BUILD_APP=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --target sculptforge-cli --parallel 4
           ccache -s -v
       - name: Compiler cache (save; not from pull requests)
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: actions/cache/save@v5
         with:
           path: .ccache
@@ -245,7 +366,7 @@ jobs:
   vfx-platform:
     name: VFX Reference Platform ${{ matrix.cy }} build (${{ matrix.image }})
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.full == 'true'
     runs-on: ${{ vars.SF_RUNNER_LINUX || 'ubuntu-24.04' }}
     container: ${{ matrix.image }}
     strategy:
@@ -258,11 +379,17 @@ jobs:
       - run: dnf -y install git tar gzip zstd # zstd: actions/cache compresses with it (gzip is several times slower)
       - uses: actions/checkout@v7
       - run: ./packaging/linux/install-build-deps.sh
+      - name: Downloads (cmake/Fetch.cmake's archives and pinned tools, kept by hash by tools/ci/fetch.sh)
+        uses: actions/cache@v5
+        with:
+          path: .deps
+          key: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Fetch.cmake', '.github/workflows/ci.yml') }}
+          restore-keys: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-
       - name: ccache (the static release binary, pinned by hash)
         run: |
-          curl -fsSLO https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-linux-x86_64-musl-static.tar.gz
-          echo "d540ba01f160addbd3dd5e18eda9bd34005591b095c09ac8ae9d0a1b655e7ef5  ccache-4.14.2-linux-x86_64-musl-static.tar.gz" | sha256sum -c
-          tar xzf ccache-4.14.2-linux-x86_64-musl-static.tar.gz -C /opt
+          echo "SF_DEPS_CACHE=$GITHUB_WORKSPACE/.deps" >> "$GITHUB_ENV"
+          tar xzf "$(tools/ci/fetch.sh https://github.com/ccache/ccache/releases/download/v4.14.2/ccache-4.14.2-linux-x86_64-musl-static.tar.gz \
+            d540ba01f160addbd3dd5e18eda9bd34005591b095c09ac8ae9d0a1b655e7ef5)" -C /opt
           echo "/opt/ccache-4.14.2-linux-x86_64-musl-static" >> "$GITHUB_PATH"
           # (In a container job the github.workspace expression gives the host's path; $GITHUB_WORKSPACE is the container's.)
           echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
@@ -275,11 +402,16 @@ jobs:
           path: .ccache
           key: ccache-ci-${{ matrix.cy }}.${{ github.sha }}
           restore-keys: ccache-ci-${{ matrix.cy }}.
-      - name: Python 3.13 (python-build-standalone via uv)
+      - name: Python 3.13 (python-build-standalone, pinned by hash)
         run: |
-          curl -LsSf https://astral.sh/uv/0.9.5/install.sh | sh
-          ~/.local/bin/uv venv --python 3.13 /opt/py313
-          ~/.local/bin/uv pip install --python /opt/py313/bin/python numpy
+          case $(uname -m) in
+            x86_64) sum=c0ccda275948c79996e46993c2c5476ff5cca606dee530f1dea712179131b348 ;;
+            aarch64) sum=baa3d107d17e4328448e30c3c9c83cca0eb41ca7a37c10982e14d46a5c3db07d ;;
+          esac
+          f=$(tools/ci/fetch.sh "https://github.com/astral-sh/python-build-standalone/releases/download/20251014/cpython-3.13.9%2B20251014-$(uname -m)-unknown-linux-gnu-install_only_stripped.tar.gz" $sum)
+          tar xzf "$f" -C /opt # /opt/python
+          /opt/python/bin/python3.13 -m venv /opt/py313
+          /opt/py313/bin/python -m pip install --retries 8 --timeout 60 numpy
           echo "PYTHON313=/opt/py313/bin/python" >> "$GITHUB_ENV"
       - name: Build with GCC 14
         run: |
@@ -292,13 +424,13 @@ jobs:
           cmake --build build --parallel 4
           ccache -s -v
       - name: Compiler cache (save; not from pull requests)
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: actions/cache/save@v5
         with:
           path: .ccache
           key: ccache-ci-${{ matrix.cy }}.${{ github.sha }}
       - name: Test
-        run: ctest --test-dir build --output-on-failure -LE ui -j 4
+        run: ctest --test-dir build --output-on-failure -LE 'ui|nightly' -j 4
       - name: Check binary compatibility (glibc <= ${{ matrix.glibc }})
         run: |
           for f in build/sculptforge build/sculptforge-cli build/sculptforge*.so; do
@@ -307,11 +439,38 @@ jobs:
             [ "$(printf '%s\n' "GLIBC_${{ matrix.glibc }}" "$max" | sort -V | tail -1)" = "GLIBC_${{ matrix.glibc }}" ]
           done
 
+  # The oldest Linux headers the packages build against (the .deb/AppImage job runs on Ubuntu 22.04: wayland 1.20,
+  # older than 24.04's 1.22 and EL8/9's 1.21), on every code change, not just full runs: SDL 3.4.18 named a
+  # wayland 1.24 enum and broke the 24.04 builds unseen (11-07). Builds only the fetched SDL, a few minutes.
+  oldest-linux:
+    name: Oldest Linux headers (Ubuntu 22.04, SDL)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ vars.SF_RUNNER_LINUX_OLD || 'ubuntu-22.04' }}
+    env:
+      SF_DEPS_CACHE: .deps
+    steps:
+      - uses: actions/checkout@v7
+      - name: Downloads (cmake/Fetch.cmake's archives, kept by hash)
+        uses: actions/cache@v5
+        with:
+          path: .deps
+          key: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Fetch.cmake', '.github/workflows/ci.yml') }}
+          restore-keys: deps-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-
+      - run: sudo ./packaging/linux/install-build-deps.sh >/dev/null
+      - name: Configure and build SDL3 (Wayland and X11 on, as the packages)
+        run: |
+          pkg-config --modversion wayland-client
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSCULPTFORGE_USE_SYSTEM_SDL=OFF -DSCULPTFORGE_BUILD_TESTS=OFF \
+            -DSCULPTFORGE_MOLD=OFF -DSDL_WAYLAND=ON -DSDL_X11=ON
+          cmake --build build --target SDL3-static -j4
+          find build -name SDL_waylandevents.c.o | grep -q . # Wayland really built, not quietly left out
+
   # The checks branch protection requires, by name. Each passes when the build and test jobs passed or were skipped
   # (a website-only change); a failure anywhere fails them all, and the run shows which job failed.
   result:
     name: ${{ matrix.check }}
-    needs: [changes, build, blender-addon, vfx-platform]
+    needs: [changes, marks, build, oldest-linux, blender-addon, vfx-platform]
     if: always()
     runs-on: ubuntu-24.04
     strategy:
@@ -326,7 +485,7 @@ jobs:
           - VFX Reference Platform CY2027 (rockylinux:9)
     steps:
       - env:
-          RESULTS: ${{ needs.changes.result }} ${{ needs.build.result }} ${{ needs.blender-addon.result }} ${{ needs.vfx-platform.result }}
+          RESULTS: ${{ needs.changes.result }} ${{ needs.marks.result }} ${{ needs.build.result }} ${{ needs.oldest-linux.result }} ${{ needs.blender-addon.result }} ${{ needs.vfx-platform.result }}
         run: |
-          echo "changes, build, blender-addon, vfx-platform: $RESULTS"
+          echo "changes, marks, build, oldest-linux, blender-addon, vfx-platform: $RESULTS"
           for r in $RESULTS; do case $r in success|skipped) ;; *) exit 1 ;; esac; done

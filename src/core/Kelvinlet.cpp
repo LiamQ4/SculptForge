@@ -670,6 +670,7 @@ void Sculptor::kelvinletStep(Mesh& mesh, BVH& bvh, BrushType type, const Kelvinl
     dabVerts_.clear();
     dabLeaves_.clear();
     for (const SymCopy& m : copies(sym)) {
+        if (kelvinNearMask(mesh, bvh, m.point(step.center), step.radius)) continue;
         KelvinletStep ms = step;
         ms.center = m.point(step.center);
         ms.delta = m.dir(step.delta);
@@ -690,7 +691,7 @@ void Sculptor::kelvinletStep(Mesh& mesh, BVH& bvh, BrushType type, const Kelvinl
 
 // A plain dab of a Kelvinlet brush (strokes along a path, the Dots stroke, scripts): Grab and Snake follow the
 // stroke (a click without motion pulls the surface toward the viewer), Twist turns and Scale pinches by an amount
-// set by Z Intensity per dab (Alt reverses).
+// set by Intensity per dab (Alt reverses).
 void Sculptor::dabKelvinlet(Mesh& mesh, BVH& bvh, BrushType type, const DabParams& p, Symmetry sym) {
     if (type == BrushType::DetailClone) {
         dabDetailClone(mesh, bvh, p, sym);

@@ -261,8 +261,8 @@ bool parseBakeMaps(const std::string& list, uint32_t& maps, std::string& error) 
         if (s == "convexity") s = "curvature";
         if (s == "thick" || s == "translucency") s = "thickness";
         if (s == "pos") s = "position";
-        if (s == "material_id" || s == "polygroups" || s == "polygroup") s = "id";
-        if (s == "colour" || s == "polypaint" || s == "albedo" || s == "texture") s = "color";
+        if (s == "material_id" || s == "facegroups" || s == "facegroup") s = "id";
+        if (s == "colour" || s == "vertexpaint" || s == "albedo" || s == "texture") s = "color";
         bool found = false;
         for (int i = 0; i < kBakeMapCount; ++i)
             if (s == bakeMapId(BakeMap(i))) {
@@ -297,7 +297,7 @@ bool bakeMaps(const Mesh& low, const std::vector<const Mesh*>& sources, const Ba
         return false;
     }
     if (low.uvs.size() != nt * 3) {
-        error = "The low-poly Part has no UVs: import it with UVs or run Auto UV (Tool > Texture Map)";
+        error = "The low-poly Part has no UVs: import it with UVs or run Auto UV (Tool > Texture Image)";
         return false;
     }
     if (low.normals.size() != low.vertexCount()) {
@@ -428,10 +428,10 @@ bool bakeMaps(const Mesh& low, const std::vector<const Mesh*>& sources, const Ba
     out.positionMin = all.min;
     out.positionMax = all.max;
     const glm::vec3 posScale = 1.0f / glm::max(all.max - all.min, glm::vec3(1e-12f));
-    // ID colours: by polygroup (when any source has them and IdSource::Polygroups) or by source mesh.
+    // ID colours: by face group (when any source has them and IdSource::Face groups) or by source mesh.
     bool anyGroups = false;
-    for (const Mesh* m : src.meshes) anyGroups = anyGroups || m->hasPolygroups();
-    const bool idByGroup = st.idSource == BakeSettings::IdSource::Polygroups && anyGroups;
+    for (const Mesh* m : src.meshes) anyGroups = anyGroups || m->hasFaceGroups();
+    const bool idByGroup = st.idSource == BakeSettings::IdSource::FaceGroups && anyGroups;
 
     // --- Output planes ---
     const int W = st.size, H = st.size, S = st.samples;
@@ -634,7 +634,7 @@ bool bakeMaps(const Mesh& low, const std::vector<const Mesh*>& sources, const Ba
                         if (wantPos) a.pos += (hp - all.min) * posScale;
                         if (wantId) {
                             const Mesh& m = *src.meshes[src.triMesh[h.tri]];
-                            const uint32_t key = idByGroup ? m.polygroupAt(src.triLocal[h.tri]) * 2654435761u + src.triMesh[h.tri]
+                            const uint32_t key = idByGroup ? m.facegroupAt(src.triLocal[h.tri]) * 2654435761u + src.triMesh[h.tri]
                                                            : src.triMesh[h.tri] * 2246822519u + 7u;
                             a.id += idMapColor(key);
                         }
@@ -890,7 +890,7 @@ bool bakeLevelSources(const Mesh& part, const std::string& source, Mesh& low, Me
     low.texture.reset();
     high.texture = part.texture; // (colour comes from the Part's own texture)
     if (low.uvs.size() != low.triangleCount() * 3) {
-        error = "The Part's lowest level has no UVs: run Auto UV on it first (Tool > Texture Map)";
+        error = "The Part's lowest level has no UVs: run Auto UV on it first (Tool > Texture Image)";
         return false;
     }
     if (low.normals.size() != low.vertexCount()) low.recomputeAllNormals();
@@ -1009,21 +1009,21 @@ std::string bakeSummary(const BakeResult& r) {
     return s.str();
 }
 
-bool bakeSourceSubtools(const Document& doc, const std::string& source, std::vector<int>& indices, std::string& error) {
+bool bakeSourceParts(const Document& doc, const std::string& source, std::vector<int>& indices, std::string& error) {
     indices.clear();
     if (source.empty() || source == "all" || source == "visible") {
-        for (int i = 0; i < doc.subtoolCount(); ++i)
-            if (i != doc.activeSubtool && doc.subtools[size_t(i)].visible && doc.subtoolMesh(i).triangleCount())
+        for (int i = 0; i < doc.partCount(); ++i)
+            if (i != doc.activePart && doc.parts[size_t(i)].visible && doc.partMesh(i).triangleCount())
                 indices.push_back(i);
         if (indices.empty()) error = "No other visible Part to bake from: show the high-poly Part(s), or append one";
         return !indices.empty();
     }
-    const int i = doc.findSubtool(source);
+    const int i = doc.findPart(source);
     if (i < 0) {
         error = "No Part called '" + source + "'";
         return false;
     }
-    if (i == doc.activeSubtool) {
+    if (i == doc.activePart) {
         error = "'" + source + "' is the active Part (the low-poly the maps go onto): pick another source";
         return false;
     }
@@ -1062,7 +1062,7 @@ void registerBakeCommands(CommandRegistry& reg) {
     reg.add({"bake",
              "Bake maps from a high-poly source onto the active Part's UVs (the low-poly): tangent-space normal "
              "(MikkTSpace), object-space (world) normal, displacement (16-bit PNG + 32-bit EXR), ambient occlusion, cavity, "
-             "colour, curvature, thickness, position (16-bit) and ID (polygroups or Parts). Rays go along the low-poly's "
+             "colour, curvature, thickness, position (16-bit) and ID (face groups or Parts). Rays go along the low-poly's "
              "smooth normals from 'front' in front of it to 'rear' behind it. The source can be other Parts, or the "
              "active Part's own top subdivision level (baked onto its lowest level) or micro level (onto its base). "
              "UVs outside 0..1 bake as UDIM tiles. Writes <name>_<map>.png (<name>_<map>.1001.png per UDIM tile) into "
@@ -1086,7 +1086,7 @@ void registerBakeCommands(CommandRegistry& reg) {
               {"thickness_rays", T::Number, "Thickness rays per texel. Default 24.", false},
               {"thickness_distance", T::Number, "Rays longer than this (a fraction of the size) count as thick. Default 0.1.", false},
               {"curvature_radius", T::Number, "A bend of this radius (a fraction of the size) is fully bright or dark. Default 0.02.", false},
-              {"id", T::String, "What the ID map colours: polygroups (default) or parts.", false},
+              {"id", T::String, "What the ID map colours: facegroups (default) or parts.", false},
               {"udim", T::Bool, "Bake UVs outside 0..1 as UDIM tiles (default true; false bakes the 0..1 square only).", false}},
              [](Document& doc, const Args& a) -> CommandResult {
                  BakeSettings st;
@@ -1133,9 +1133,9 @@ void registerBakeCommands(CommandRegistry& reg) {
                  st.thicknessRays = int(argNumber(a, "thickness_rays", st.thicknessRays));
                  st.thicknessDistance = float(argNumber(a, "thickness_distance", st.thicknessDistance));
                  st.curvatureRadius = float(argNumber(a, "curvature_radius", st.curvatureRadius));
-                 const std::string id = argString(a, "id", "polygroups");
-                 if (id != "polygroups" && id != "parts") return {false, "id must be polygroups or parts"};
-                 st.idSource = id == "parts" ? BakeSettings::IdSource::Parts : BakeSettings::IdSource::Polygroups;
+                 const std::string id = argString(a, "id", "facegroups");
+                 if (id != "facegroups" && id != "parts") return {false, "id must be facegroups or parts"};
+                 st.idSource = id == "parts" ? BakeSettings::IdSource::Parts : BakeSettings::IdSource::FaceGroups;
 
                  // The meshes: other Parts onto the active one, or the active Part's own levels.
                  const std::string sourceArg = argString(a, "source", "all");
@@ -1148,8 +1148,8 @@ void registerBakeCommands(CommandRegistry& reg) {
                      sources.push_back(&levelHigh);
                  } else {
                      std::vector<int> idx;
-                     if (!bakeSourceSubtools(doc, sourceArg, idx, err)) return {false, err};
-                     for (int i : idx) sources.push_back(&doc.subtoolMesh(i));
+                     if (!bakeSourceParts(doc, sourceArg, idx, err)) return {false, err};
+                     for (int i : idx) sources.push_back(&doc.partMesh(i));
                  }
                  std::vector<BakeResult> results;
                  if (argBool(a, "udim", true)) {
@@ -1159,7 +1159,7 @@ void registerBakeCommands(CommandRegistry& reg) {
                      if (!bakeMaps(*low, sources, st, results.back(), err)) return {false, err};
                  }
                  auto result = std::make_shared<BakeResult>(results.front());
-                 std::string name = argString(a, "name", doc.activeSubtoolInfo().name);
+                 std::string name = argString(a, "name", doc.activePartInfo().name);
                  for (char& c : name)
                      if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|')
                          c = '_';

@@ -129,8 +129,8 @@ glm::vec2 uvCenter(const std::vector<glm::vec2>& uvs, const std::vector<uint32_t
 
 // Marks (`on`) or clears the seam on the edges starting at `corners`, on both sides of each edge.
 void uvSetSeams(Mesh& mesh, const std::vector<uint32_t>& twin, const std::vector<uint32_t>& corners, bool on);
-// Seam presets: every polygroup border, every current island border, edges sharper than `degrees`.
-size_t uvSeamsFromPolygroups(Mesh& mesh, const std::vector<uint32_t>& twin);
+// Seam presets: every face group border, every current island border, edges sharper than `degrees`.
+size_t uvSeamsFromFaceGroups(Mesh& mesh, const std::vector<uint32_t>& twin);
 size_t uvSeamsFromIslands(Mesh& mesh, const UvTopology& topo);
 size_t uvSeamsFromAngle(Mesh& mesh, const std::vector<uint32_t>& twin, float degrees);
 size_t uvSeamCount(const Mesh& mesh); // marked edges (each counted once)
@@ -181,21 +181,31 @@ struct UvPackOptions {
     float marginPx = 8.0f;    // texels between islands (and half of it at tile borders)
     bool rotate = true;       // turn islands to their smallest bounding box and allow 90-degree turns
     int tiles = 1;            // UDIM tiles to fill (1001, 1002, ... ten per row); ignored with `density`
+    int columns = 0;          // > 0: a grid this wide (1-10; UDIM's row is ten) from firstTile: tile k goes to
+                              // column k % columns of row k / columns (1001 + column + 10 row), with `density`
+                              // too. 0: UDIM order from firstTile, ten per row (as before the grid)
     bool equalDensity = true; // scale islands to one texel density first (off: keep their relative sizes)
     float density = 0.0f;     // > 0: keep exactly this texel density (texels per unit) and use as many tiles as
-                              // it takes (up to 100) instead of fitting `tiles`
-    int firstTile = 1001;     // where packing starts
+                              // it takes (up to uvPackMaxTiles) instead of fitting `tiles`
+    int firstTile = 1001;     // where packing starts (the grid's bottom-left tile)
 };
+// The UDIM tile number of the `k`th tile (from 0) a pack with `options` fills.
+int uvPackTile(const UvPackOptions& options, int k);
+// How many tiles a pack with `options` may fill at most: the grid's columns x the rows from firstTile up
+// (without columns, the tiles from firstTile to 1100).
+int uvPackMaxTiles(const UvPackOptions& options);
 struct UvPackResult {
     size_t islands = 0;
     int tilesUsed = 0;
     float coverage = 0.0f; // UV area of the islands over the area of the tiles used
     float density = 0.0f;  // texel density after packing (the mean)
 };
+using UvProgress = std::function<bool(float fraction)>; // false: cancel
 // Packs the islands in `islands` (all when empty) of `mesh` per `options`. Islands not packed stay where they
-// are (and may then overlap the packed ones). False with `error` when nothing could be packed.
+// are (and may then overlap the packed ones). False with `error` when nothing could be packed, or "Cancelled"
+// when `progress` returned false (the UVs are then as they were). `progress` is called on the calling thread.
 bool uvPack(Mesh& mesh, const UvTopology& topo, const std::vector<uint8_t>& islands, const UvPackOptions& options,
-            UvPackResult& result, std::string& error);
+            UvPackResult& result, std::string& error, const UvProgress& progress = {});
 
 // Lower-level packing of rectangles into unit tiles (exposed for the tests): sizes in, positions and 90-degree
 // turns out; returns the tiles used (0 when something doesn't fit even alone). Rectangles already include
@@ -209,18 +219,18 @@ enum class UvUnwrapMethod {
     Auto,       // xatlas: finds its own seams (core/AutoUv.h)
     Conformal,  // LSCM: angle-preserving, cut along the marked seams
     Isometric,  // LSCM then as-rigid-as-possible: keeps lengths too (least stretch), along the marked seams
-    Polygroups, // Isometric, cut along the polygroup borders as well as the marked seams
+    FaceGroups, // Isometric, cut along the face group borders as well as the marked seams
     Planar,     // each piece projected along its mean normal
     Unfold,     // the current islands flattened again in place (Isometric, honouring pins)
 };
-const char* uvUnwrapMethodId(UvUnwrapMethod m); // auto, conformal, isometric, polygroups, planar, unfold
+const char* uvUnwrapMethodId(UvUnwrapMethod m); // auto, conformal, isometric, face groups, planar, unfold
 const char* uvUnwrapMethodLabel(UvUnwrapMethod m);
 bool parseUvUnwrapMethod(const std::string& id, UvUnwrapMethod& m);
 
 struct UvUnwrapOptions {
     UvUnwrapMethod method = UvUnwrapMethod::Isometric;
     int resolution = 2048;
-    int iterations = 10;          // as-rigid-as-possible steps (Isometric, Polygroups, Unfold)
+    int iterations = 10;          // as-rigid-as-possible steps (Isometric, Face groups, Unfold)
     bool pack = true;             // pack the new islands (UvPackOptions below); off for Unfold (fitted in place)
     UvPackOptions packing;
     const std::vector<uint8_t>* faces = nullptr; // only these triangles (null: all); the rest keep their UVs and
@@ -232,7 +242,6 @@ struct UvUnwrapResult {
     size_t extraCuts = 0;       // edges cut automatically so closed or looped pieces could flatten
     UvPackResult packing;
 };
-using UvProgress = std::function<bool(float fraction)>; // false: cancel
 // Unwraps `mesh` (its UVs, seams and pins are read; nothing is written). False with `error` on failure or cancel.
 bool uvUnwrap(const Mesh& mesh, const UvUnwrapOptions& options, UvUnwrapResult& result, std::string& error,
               const UvProgress& progress = {});

@@ -8,6 +8,7 @@
 #pragma once
 
 #include "core/Json.h"
+#include "core/PenPressure.h"
 
 #include <string>
 #include <vector>
@@ -72,10 +73,31 @@ struct BrushRecipe {
     // the recipe's JSON only when on, so other recipes' files stay as they were.
     bool connectedOnly = false;
     bool viewFalloff = false;
+    // Hard-surface planes (Crisp Flatten; thanks _tfx on Discord). Written to the JSON only when on.
+    // planeLock: the plane is taken at the stroke's first dab and kept for the whole stroke (off: it follows the
+    // surface under each dab). crispEdge: the tip is full strength out to a hard edge with a thin anti-aliased band
+    // (about two and a half vertices wide, so the boundary doesn't stair-step), and the plane pulls all the way at the
+    // default Intensity (Hardness and Tip sharpness don't apply).
+    bool planeLock = false;
+    bool crispEdge = false;
     float cavityMask = 0.0f; // -1..1: >0 only affects cavities, <0 only ridges/peaks
+
+    // The built-in alpha (core/BrushAlpha.h) the brush starts with the first time it is picked; empty = whatever
+    // alpha is on. Written to the JSON only when set. An unknown name is dropped.
+    std::string alpha;
+    bool alphaFollow = false; // the alpha turns along the stroke (Alpha > Follow stroke direction) on that first pick
+    float alphaAngle = 0.0f;  // Alpha > Angle (degrees, -180..180) and Angle jitter (0..180) on that first pick (#136);
+    float alphaJitter = 0.0f; // written only when not 0. Save Brush Settings writes all three from the brush's live ones
+    // Pen pressure > Size / Strength for this brush (#122, core/PenPressure.h): what it starts with, and what Brush
+    // Lab sets. Written to the JSON only when not Use global.
+    PenPressure pressureSize = PenPressure::Global;
+    PenPressure pressureStrength = PenPressure::Global;
 
     // Library bookkeeping, not part of the recipe: never written by toJson().
     BrushOrigin origin;
+    // Stable identity of a brush file in the library (written to the .sfbrush by the library, not by toJson, so brush
+    // codes and projects never carry it): a shelf slot finds its brush by it after a rename or a move. Empty = none yet.
+    std::string id;
 
     void clamp();
     // Numeric parameter by key (see recipeParams()), or nullptr.
@@ -107,6 +129,7 @@ const std::vector<RecipeParam>& recipeParams();
 // additionalProperties, ranges given in descriptions).
 Json recipeJsonSchema();
 
+// The built-ins: the seven classic recipes, then the brush packs (core/BrushPacks.h; origin.pack names the pack).
 std::vector<BrushRecipe> builtinBrushRecipes();
 
 } // namespace sf

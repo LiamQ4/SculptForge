@@ -1,0 +1,4 @@
+# Labels ImGui shows without tr() on purpose (coverage.py --raw-check, ctest i18n_raw_labels). One per line: file, call
+# and the literal as JSON, tab-separated. Only names that stay English in every language, each also in
+# keep_english.txt (products, file formats, units); anything else fails the test: wrap it in tr() and translate it in
+# every table (coverage.py --missing). There is no backlog: an untranslated label in a translated language is a bug.

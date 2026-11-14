@@ -3,7 +3,7 @@
 //
 // Micro-displacement levels: hundreds of millions of sculptable triangles without a mesh that size.
 //
-// Above the top subdivision level a SubTool can carry a micro level (Mesh::micro). The surface is then
+// Above the top subdivision level a Part can carry a micro level (Mesh::micro). The surface is then
 //
 //     micro point = S(t, i, j) + d(t, i, j) * N(t, i, j)
 //
@@ -32,7 +32,7 @@
 //
 // What a scalar displacement can't do: move points sideways. Brushes that slide the surface (Move's sideways
 // part, Snake Hook, Nudge, VDM stamps with overhangs) work on real subdivision levels; on a micro level Pinch
-// sharpens the height profile instead (see microBrushSupport).
+// resamples the heights from where its pull would bring the surface (see microBrushSupport).
 #pragma once
 
 #include "core/Mesh.h"
@@ -41,6 +41,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <vector>
@@ -49,6 +50,7 @@ namespace sf {
 
 class BVH;
 class CommandRegistry;
+class FocusDetail;
 struct Document;
 struct RayHit;
 enum class BrushType;
@@ -74,6 +76,26 @@ struct MicroMesh {
     // neighbouring triangle (tri << 2 | its edge), or kNone on a boundary.
     std::vector<uint32_t> edgeNeighbor;
 
+    // Picks and brushes find the base triangles a displaced surface may reach through the BVH, each node grown by the
+    // largest displacement under it (not the level's largest everywhere: one tall stroke made every query on a
+    // dense base visit millions of triangles). Derived, per BVH: microQueryTriangles / microRayTriangles keep it.
+    struct Reach {
+        std::mutex lock;
+        const void* bvh = nullptr;
+        uint64_t structure = 0;
+        float step = 0.0f;
+        std::vector<float> pad;     // per BVH node, world units (upper bounds: they only shrink on a full pass)
+        std::vector<uint64_t> bits; // base triangles changed since (markDirty)
+        bool all = true;            // everything (markAllDirty, a rescale, a new level)
+        Reach() = default;
+        Reach(const Reach&) {} // (a copy starts over: it may be checked against another BVH)
+        Reach& operator=(const Reach&) {
+            all = true, bvh = nullptr;
+            return *this;
+        }
+    };
+    mutable Reach reach;
+
     // What changed since the renderer last looked: per base triangle a bit, or everything.
     std::vector<uint64_t> dirtyBits;
     bool allDirty = true;
@@ -85,6 +107,9 @@ struct MicroMesh {
     // its GPU copy while the serial stays.
     uint64_t serial = 0;
     static uint64_t newSerial();
+    // Focus Detail (core/FocusDetail.h, prototype): set when the level streams from a detail file. Tiles outside
+    // the focus hold a coarse grid; brushes and undo make the tiles they change full first (ensureFull).
+    std::shared_ptr<FocusDetail> focus;
 
     size_t microTriangles() const { return size_t(baseTriangles) * n * n; }
     size_t microVertices() const; // unique grid points (shared edges and corners counted once)
@@ -99,18 +124,21 @@ struct MicroMesh {
         else if (e == 1) i = n - k, j = k;
         else i = 0, j = n - k;
     }
-    void markDirty(uint32_t tri) { dirtyBits[tri >> 6] |= uint64_t(1) << (tri & 63); }
+    void markDirty(uint32_t tri) {
+        dirtyBits[tri >> 6] |= uint64_t(1) << (tri & 63);
+        if (!reach.bits.empty()) reach.bits[tri >> 6] |= uint64_t(1) << (tri & 63);
+    }
     // Grows `step` (by powers of two, at least 4x) until +/-`need` world units fit, rescaling every value (each
     // loses its lowest bits). Returns the divisor applied (1 = it fitted already).
     int widen(float need);
-    void markAllDirty() { allDirty = true; }
+    void markAllDirty() { allDirty = true, reach.all = true; }
     void clearDirty();
     // Builds edgeNeighbor for `base` (if it doesn't fit already).
     void ensureTopology(const Mesh& base);
 };
 
 // --- The two-tier engine's vocabulary ---
-// BaseCage: the coarse surface the brushes for big forms (Move, transforms) deform: the SubTool's mesh, its highest
+// BaseCage: the coarse surface the brushes for big forms (Move, transforms) deform: the Part's mesh, its highest
 // subdivision level. Its polygons are triangles (a quad of the cage is a triangle pair, one patch each).
 using BaseCage = Mesh;
 // MicroPatch: one base triangle's regular grid of scalar heights (n + 1)(n + 2) / 2, implicit topology (no index
@@ -189,7 +217,7 @@ void microDelete(Mesh& m);
 // (`mask` that many or none). Works out the derived data (ranges, bulge, edge neighbours).
 bool microAttach(Mesh& m, int level, float step, MicroStore disp, std::vector<uint8_t> mask, std::string& error);
 // A regular mesh of the micro surface at micro level `level` (<= the micro level): shared points welded, the base
-// triangles' UVs, polygroups and hidden flags carried to their micro triangles, mask from the micro mask. Fails
+// triangles' UVs, face groups and hidden flags carried to their micro triangles, mask from the micro mask. Fails
 // when it would exceed `maxTriangles` (0 = what subdivision Divide allows on this computer).
 bool microBakeMesh(const Mesh& m, int level, Mesh& out, std::string& error, size_t maxTriangles = 0);
 // Displacement maps over the base UVs (needs UVs): `vector` = object-space offset of the micro surface from the
@@ -205,6 +233,17 @@ void microNoise(Mesh& m, float amplitude, float frequency, uint32_t seed = 1);
 // Ray against the micro surface: the base triangle hit (BVH) and its neighbourhood within the displacement range,
 // at full micro resolution. hit.triangle is the base triangle; hit.position / normal are on the micro surface.
 bool microRaycast(const Mesh& m, const BVH& bvh, const glm::vec3& origin, const glm::vec3& dir, RayHit& hit);
+// After the base moved under a micro level (brushes on the base: Sculptor::microBaseDab, Move): its bulge bound
+// raised to what the base's triangles now need.
+void microRaiseBulge(Mesh& m);
+// The base triangles whose displaced surface may come within `radius` of `center` (each BVH node grown by the
+// largest displacement and bulge under it, MicroMesh::Reach), for the caller's exact test per triangle.
+void microQueryTriangles(const Mesh& m, const BVH& bvh, const glm::vec3& center, float radius, std::vector<uint32_t>& out);
+// True when any grid point (or base corner) within `radius` of `center`, and the two base edges around it, is masked at all:
+// the base cage can't hold a mask finer than its triangles, so a Move over one takes the grid's per-point rule instead.
+bool microMaskNear(const Mesh& m, const BVH& bvh, const glm::vec3& center, float radius);
+// ... and those whose displaced surface the ray may cross.
+void microRayTriangles(const Mesh& m, const BVH& bvh, const glm::vec3& origin, const glm::vec3& dir, std::vector<uint32_t>& out);
 // bvh.raycast, or microRaycast on a mesh with a micro level: what brushes and the cursor pick.
 bool surfaceRaycast(const Mesh& m, const BVH& bvh, const glm::vec3& origin, const glm::vec3& dir, RayHit& hit);
 
@@ -216,14 +255,22 @@ public:
     // and of every base triangle sharing a vertex with one (whose shared edges and corners average with them).
     // out(tri) gives where that triangle's `samples` values go (each written whole). `written` lists them.
     // `prepare`, if given, sees the triangles about to be written (before any out() call), once per batch.
+    // `grow` false: the dirty triangles alone are written (exact: their neighbours' edge sums are read, not written);
+    // the neighbours whose shared points changed (those sharing a vertex) go to `outer`, to write later.
     using Prepare = std::function<void(std::span<const uint32_t> tris)>;
     void shade(const Mesh& m, std::span<const uint32_t> dirty, bool all, std::vector<uint32_t>& written,
-               const std::function<uint32_t*(uint32_t tri)>& out, const Prepare& prepare = {});
+               const std::function<uint32_t*(uint32_t tri)>& out, const Prepare& prepare = {}, bool grow = true,
+               std::vector<uint32_t>* outer = nullptr);
+    // shade() for another level of the same base: `level` instead of base.micro (Focus Detail's coarse grids,
+    // render/MicroFocus.h). It needs the base's edge neighbours (edgeNeighbor).
+    void shadeLevel(const Mesh& base, const MicroMesh& level, std::span<const uint32_t> dirty, bool all,
+                    std::vector<uint32_t>& written, const std::function<uint32_t*(uint32_t tri)>& out, bool grow = true);
 
 private:
+    const MicroMesh* level_ = nullptr; // (shadeLevel)
     // shade() for the triangles `seeds` (grown by the triangles sharing a vertex when `grow`); appends to `written`.
     void shadeSet(const Mesh& m, std::span<const uint32_t> seeds, bool grow, std::vector<uint32_t>& written,
-                  const std::function<uint32_t*(uint32_t tri)>& out, const Prepare& prepare);
+                  const std::function<uint32_t*(uint32_t tri)>& out, const Prepare& prepare, std::vector<uint32_t>* outer = nullptr);
     std::vector<uint32_t> seed_, grown_;
     std::vector<uint32_t> stamp_, slot_; // per base triangle: in a set of this call (stamp), its partials (slot)
     std::vector<uint32_t> vstamp_;       // per base vertex
@@ -234,18 +281,24 @@ private:
 
 // --- Brushes (driven by Sculptor, which calls these when the mesh has a micro level) ---
 
-// Whether a brush works on micro levels: 2 = as on a mesh, 1 = approximated (Pinch, Crease and Dam Standard
-// sharpen instead of pulling sideways; Move moves along the normal), 0 = not at all.
+// Whether a brush works on micro levels: 2 = as on a mesh, 1 = approximated (Pinch, Crease and Sharp Crease
+// resample the heights from where their pull would bring the surface; Move moves along the normal), 0 = not at all.
 int microBrushSupport(BrushType type);
 
+struct BrushAlpha;
 struct MicroUndo;
 class MicroStroke {
 public:
     void begin(Mesh& m);
     // One dab (one mirror) of a displacement brush, or the mask brush (`maskBrush`: raises the mask to 1, or
-    // lowers it with invert).
+    // lowers it with invert). `alpha` (null/empty = round) shapes a displacement dab as on a mesh, its top edge
+    // toward `alphaUp` (#92).
     void dab(Mesh& m, const BVH& bvh, BrushType type, const glm::vec3& center, const glm::vec3& viewDir, float radius,
-             float strength, bool invert, float focal, const glm::vec3& alphaUp, bool maskBrush, float maskStrength);
+             float strength, bool invert, float focal, const glm::vec3& alphaUp, bool maskBrush, float maskStrength,
+             const BrushAlpha* alpha = nullptr, const std::function<float(const glm::vec3&)>& texture = {},
+             const glm::vec3& strokeDir = glm::vec3(0.0f));
+    // (texture: a brush recipe's surface pattern, 0..1 at a surface point, times the tip; #120. strokeDir: where the
+    // stroke is heading, for Sharp Crease's pull across it; 0 = none)
     // Move: captures the points within the dab (with each mirror's signs), then moves them along their normals.
     void beginGrab(Mesh& m, const BVH& bvh, const glm::vec3& center, float radius, float focal, const glm::mat3& mirror);
     void grab(Mesh& m, const glm::vec3& delta);
@@ -265,9 +318,15 @@ public:
     uint64_t points = 0; // grid points visited
 
 private:
+    std::vector<uint8_t> changed_;        // per candidate of the last dab: the kernel changed its grid
+    std::vector<int16_t> snap_;           // Pinch, Crease, Sharp Crease: the grids of this dab's triangles as it found them
+    std::vector<uint32_t> snapOf_;        // per base triangle: its grid in snap_ + 1 (0 = none)
+    std::vector<uint32_t> stitchStamp_;   // per base triangle: dabEpoch_ when the stitch changed a point of it
     void touch(MicroMesh& mm, std::span<const uint32_t> tris);
     void widen(MicroMesh& mm, float need); // MicroMesh::widen, keeping this stroke's saved tiles in step
-    void stitch(const Mesh& m, MicroMesh& mm, std::span<const uint32_t> tris);
+    // `changed` (per entry of tris, or null: all): the triangles the kernel wrote; only they and those the stitch
+    // changed are marked dirty (the renderer re-sends, re-bounds and re-shades what's marked).
+    void stitch(const Mesh& m, MicroMesh& mm, std::span<const uint32_t> tris, const uint8_t* changed = nullptr);
     bool active_ = false;
     float strokeStep_ = 0.0f;
     std::vector<uint32_t> tileOf_;        // per base triangle: its undo tile + 1 (0 = not yet touched)

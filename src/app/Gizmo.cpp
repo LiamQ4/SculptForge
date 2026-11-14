@@ -1,14 +1,16 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Gizmo 3D (ZBrush's Move W / Scale E / Rotate R, Q back to Draw): a gizmo at the pivot with axis arrows, plane
-// squares and a free-move centre (Move), rings and a view ring (Rotate), axis boxes and a uniform centre (Scale).
-// Dragging a handle transforms the active SubTool, or only its unmasked part (posing), through a
+// Transform gizmo (Move W / Scale E / Rotate R / All Shift+W, Q back to Draw): a gizmo at the pivot with axis arrows,
+// plane squares and a free-move centre (Move), rings and a view ring (Rotate), axis balls and a uniform centre (Scale);
+// All has every handle at once (shafts with a scale ball and a move cone inside the rings, even-scale tabs outermost).
+// Dragging a handle transforms the active Part, or only its unmasked part (posing), through a
 // TransformSession (core/MeshTransform.h): every frame recomputes from the drag's start, so nothing drifts, and
-// the release makes one undo step per SubTool. Shift snaps (15 degrees, the grid, 10%), Alt+drag moves the pivot
-// or turns the axes only, Alt+click on the model puts the pivot there. The Gizmo 3D panel adds numeric entry.
+// the release makes one undo step per Part. Shift snaps (15 degrees, the grid, 10%), Alt+drag moves the pivot
+// or turns the axes only, Alt+click on the model puts the pivot there. The Transform gizmo panel adds numeric entry.
 #include "app/App.h"
 #include "app/Ui.h"
+#include "core/FigurePose.h"
 
 #include <IconsLucide.h>
 
@@ -28,7 +30,12 @@ constexpr float kViewRing = 1.22f;   // the view ring, relative to the others
 constexpr float kPickPx = 8.0f;
 constexpr float kSnapDegrees = 15.0f;
 
+namespace ga = gizmo_all;
+
 using H = App::GizmoHandle;
+static_assert(int(H::MoveView) == ga::MoveView && int(H::RotateView) == ga::RotateView &&
+              int(H::ScaleUniform) == ga::ScaleUniform && int(H::Count) == ga::ScaleUniform + 1,
+              "app/GizmoAll.h numbers the handles as App::GizmoHandle");
 
 int axisOf(H h) {
     switch (h) {
@@ -52,6 +59,39 @@ ImU32 axisColor(int axis, float alpha = 1.0f) {
     }
 }
 constexpr ImU32 kHot = IM_COL32(255, 214, 92, 255);
+constexpr ImU32 kOutline = IM_COL32(0, 0, 0, 150); // round every handle: they read on light backgrounds too
+
+ImU32 withAlpha(ImU32 c, float alpha) { return (c & 0x00ffffffu) | (ImU32(std::clamp(alpha, 0.0f, 1.0f) * float(c >> 24)) << 24); }
+
+ImU32 lighter(ImU32 c, float t) { // toward white, alpha kept
+    auto ch = [&](int sh) { const float v = float((c >> sh) & 0xff); return ImU32(v + (255.0f - v) * t) << sh; };
+    return ch(0) | ch(8) | ch(16) | (c & 0xff000000u);
+}
+
+// The handles' shapes (fenix's design: thin shafts, solid cones and balls, room between them). A cone from base to
+// tip, half as wide as w, its lit half lighter so it reads as solid.
+void drawCone(ImDrawList* dl, ImVec2 base, ImVec2 tip, float w, ImU32 col, float s) {
+    const float dx = tip.x - base.x, dy = tip.y - base.y, len = std::sqrt(dx * dx + dy * dy);
+    if (len < 1e-3f) return;
+    const ImVec2 n(-dy / len * w, dx / len * w), d(dx / len, dy / len), m(base.x - d.x * 1.5f * s, base.y - d.y * 1.5f * s);
+    const ImVec2 l(base.x + n.x, base.y + n.y), r(base.x - n.x, base.y - n.y);
+    const float o = 1.4f * s; // the outline: the same cone a little bigger, under it
+    dl->AddTriangleFilled(ImVec2(tip.x + d.x * o, tip.y + d.y * o), ImVec2(l.x + n.x / w * o - d.x * o, l.y + n.y / w * o - d.y * o),
+                          ImVec2(r.x - n.x / w * o - d.x * o, r.y - n.y / w * o - d.y * o), kOutline);
+    dl->AddTriangleFilled(tip, l, m, col);
+    dl->AddTriangleFilled(tip, m, r, lighter(col, 0.28f));
+}
+
+void drawBall(ImDrawList* dl, ImVec2 at, float radius, ImU32 col, float s) {
+    dl->AddCircleFilled(at, radius + 1.4f * s, kOutline, 24);
+    dl->AddCircleFilled(at, radius, col, 24);
+    dl->AddCircleFilled(ImVec2(at.x - radius * 0.32f, at.y - radius * 0.32f), radius * 0.38f, withAlpha(lighter(col, 0.6f), 0.8f), 12);
+}
+
+void drawShaft(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float s) {
+    dl->AddLine(a, b, kOutline, 4.0f * s);
+    dl->AddLine(a, b, col, 2.0f * s);
+}
 
 float dist2(ImVec2 a, ImVec2 b) { return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y); }
 
@@ -133,7 +173,12 @@ void App::registerGizmoActions() {
         actions_.add(std::move(a));
     };
     auto mode = [this](GizmoMode m) {
-        return [this, m] { setGizmoMode(gizmo_.mode == m && m != GizmoMode::Off ? GizmoMode::Off : m); };
+        return [this, m] {
+            if (drag_ == Drag::Guide) return;
+            const std::string guides = leaveGuides(); // (the buttons and keys, not setGizmoMode: Guides calls that itself)
+            setGizmoMode(gizmo_.mode == m && m != GizmoMode::Off ? GizmoMode::Off : m);
+            if (!guides.empty()) status_ = "Left " + guides + ". " + status_;
+        };
     };
     auto is = [this](GizmoMode m) { return [this, m] { return gizmo_.mode == m; }; };
     add("tool.draw", "Draw", ICON_LC_PENCIL, "Transform", "Q", mode(GizmoMode::Off), is(GizmoMode::Off),
@@ -142,13 +187,23 @@ void App::registerGizmoActions() {
         "Gizmo, Move: drag an arrow to move along an axis, a square to move in a plane, the centre to move in "
         "the view. Masked parts stay; Shift snaps to the grid; Alt+drag moves only the gizmo. W again: back to Draw.");
     add("tool.scale", "Scale", ICON_LC_SCALING, "Transform", "E", mode(GizmoMode::Scale), is(GizmoMode::Scale),
-        "Gizmo, Scale: drag a box to stretch along an axis or the centre to scale evenly (right or up: bigger). "
+        "Gizmo, Scale: drag a ball to stretch along an axis or the centre to scale evenly (right or up: bigger). "
         "Shift snaps to 10% steps. E again: back to Draw.");
     add("tool.rotate", "Rotate", ICON_LC_ROTATE_CW, "Transform", "R", mode(GizmoMode::Rotate), is(GizmoMode::Rotate),
         "Gizmo, Rotate: drag a ring to turn about that axis, the outer ring to turn in the view. Mask the body "
         "and put the pivot at a joint to pose a limb. Shift snaps to 15 degrees. R again: back to Draw.");
+    add("tool.gizmo_all", "All", ICON_LC_AXIS_3D, "Transform", "Shift+W", mode(GizmoMode::All), is(GizmoMode::All),
+        "Gizmo, All: move, rotate and scale handles at once. Arrows and squares move, the centre moves in the view, "
+        "rings turn, the ball on each axis stretches along it and the four outer tabs scale evenly. Shift "
+        "snaps. Shift+W again: back to Draw.");
     add("gizmo.reset_pivot", "Reset", ICON_LC_LOCATE_FIXED, kPath, "", [this] { resetGizmoPivot(); }, nullptr,
         "Put the gizmo back at the centre of what moves (the Part, or its unmasked part) with world axes.");
+    add("gizmo.center_origin", "Center on origin", ICON_LC_CROSSHAIR, kPath, "", [this] { originMove("center_origin"); }, nullptr,
+        "Move the Part so the centre of its bounding box sits at the world origin 0,0,0, as one undo step (with "
+        "All Parts: every visible Part together, keeping how they sit to each other).");
+    add("gizmo.drop_floor", "Drop to floor", ICON_LC_ARROW_DOWN_TO_LINE, kPath, "", [this] { originMove("drop_floor"); }, nullptr,
+        "Move the Part straight down (or up) until its lowest point rests on the floor, Y = 0, as one undo step "
+        "(with All Parts: every visible Part together).");
     add("gizmo.snap_pivot", "To Surface", ICON_LC_CROSSHAIR, kPath, "",
         [this] {
             gizmo_.snapNext = !gizmo_.snapNext;
@@ -174,18 +229,37 @@ void App::registerGizmoActions() {
         "Part moves whatever the mask.");
     add("gizmo.all", "All Parts", ICON_LC_LAYERS, kPath, "", [this] { gizmo_.all = !gizmo_.all; },
         [this] { return gizmo_.all; },
-        "Transform every visible Part together (ZBrush Transpose All). Each Part gets its own undo step.");
+        "Transform every visible Part together. Each Part gets its own undo step.");
+    add("gizmo.folder", "Folder", ICON_LC_FOLDER, kPath, "", [this] { gizmo_.folder = !gizmo_.folder; },
+        [this] { return gizmo_.folder; },
+        "Transform the visible Parts in the active Part's folder together (Parts list folders). Each Part gets its "
+        "own undo step.");
+    commands_.add({"gizmo_mode", "Sets the Transform gizmo's mode (needs the app, not the CLI).",
+                   {{"mode", ParamSpec::Type::String, "draw (no gizmo), move, scale, rotate or all (every handle at once).", true}},
+                   [this](Document&, const Args& a) -> CommandResult {
+                       const std::string m = argString(a, "mode");
+                       const GizmoMode mode = m == "move" ? GizmoMode::Move : m == "scale" ? GizmoMode::Scale
+                                              : m == "rotate" ? GizmoMode::Rotate : m == "all" ? GizmoMode::All
+                                              : m == "draw" || m == "off" ? GizmoMode::Off : GizmoMode(-1);
+                       if (int(mode) < 0) return {false, "mode is draw, move, scale, rotate or all"};
+                       if (drag_ == Drag::Gizmo) return {false, "A gizmo drag is under way"};
+                       setGizmoMode(mode);
+                       return {true, "Gizmo: " + m};
+                   }});
 }
 
 void App::setGizmoMode(GizmoMode mode) {
     if (drag_ == Drag::Gizmo) return;
+    const std::string left = leaveDrawModes(); // Draw / Move / Scale / Rotate leave Draw Tube and Append > Insert
     gizmo_.mode = mode;
     gizmo_.snapNext = false;
     gizmo_.hover = GizmoHandle::None;
     status_ = mode == GizmoMode::Move     ? "Move: drag the arrows, squares or centre (Alt+drag: the gizmo only)"
-              : mode == GizmoMode::Scale  ? "Scale: drag a box or the centre (Shift: 10% steps)"
+              : mode == GizmoMode::Scale  ? "Scale: drag a ball or the centre (Shift: 10% steps)"
               : mode == GizmoMode::Rotate ? "Rotate: drag a ring (Shift: 15 degrees); mask first to pose a part"
+              : mode == GizmoMode::All    ? "All: arrows and squares move, rings turn, balls and the outer tabs scale"
                                           : "Draw";
+    if (!left.empty()) status_ = "Left " + left + ". " + status_;
     if (mode != GizmoMode::Off) {
         doc_.syncBvh();
         updateGizmoPivot();
@@ -198,24 +272,28 @@ void App::setGizmoMode(GizmoMode mode) {
 
 std::vector<int> App::gizmoTargets() const {
     std::vector<int> out;
-    for (int i = 0; i < doc_.subtoolCount(); ++i) {
-        const bool visible = doc_.subtools[size_t(i)].visible;
-        if (i == doc_.activeSubtool ? visible : gizmo_.all && visible) out.push_back(i);
+    const uint32_t folder = doc_.activePartInfo().folder;
+    for (int i = 0; i < doc_.partCount(); ++i) {
+        const bool visible = doc_.parts[size_t(i)].visible;
+        const bool together = gizmo_.all || (gizmo_.folder && folder && doc_.parts[size_t(i)].folder == folder);
+        if (i == doc_.activePart ? visible : together && visible) out.push_back(i);
     }
     return out;
 }
 
 void App::updateGizmoPivot() {
-    // Recomputed only when the scene changes: a new undo step, another SubTool, the options.
-    uint64_t key = uint64_t(doc_.activeSubtoolInfo().id) * 1000003u ^ doc_.undo.revision() * 7919u ^
+    // Recomputed only when the scene changes: a new undo step, another Part, the options.
+    uint64_t key = uint64_t(doc_.activePartInfo().id) * 1000003u ^ doc_.undo.revision() * 7919u ^
                    doc_.mesh.vertexCount() * 31u ^ (gizmo_.all ? 2u : 0u) ^ (gizmo_.useMask ? 4u : 0u) ^
-                   uint64_t(doc_.subtoolCount()) << 48;
-    if (gizmo_.all)
-        for (const SubTool& s : doc_.subtools) key = key * 1099511628211ull ^ s.undo.revision() ^ (s.visible ? 1u : 0u);
+                   (gizmo_.folder ? 8u + uint64_t(doc_.activePartInfo().folder) * 16u : 0u) ^
+                   uint64_t(doc_.partCount()) << 48;
+    if (gizmo_.all || gizmo_.folder)
+        for (int i = 0; i < doc_.partCount(); ++i)
+            key = key * 1099511628211ull ^ doc_.partUndo(i).revision() ^ (doc_.parts[size_t(i)].visible ? 1u : 0u);
     if (key == gizmo_.centreKey) return;
     gizmo_.centreKey = key;
-    // A new mask (or another SubTool) means a new part to move: follow its centre again.
-    uint64_t maskKey = doc_.activeSubtoolInfo().id;
+    // A new mask (or another Part) means a new part to move: follow its centre again.
+    uint64_t maskKey = doc_.activePartInfo().id;
     const auto& mask = doc_.mesh.mask;
     double sum = 0.0;
     for (size_t v = 0; v < mask.size(); v += 1 + mask.size() / 65536) sum += double(mask[v]) * double(v % 97 + 1);
@@ -227,11 +305,25 @@ void App::updateGizmoPivot() {
     if (gizmo_.pivotPlaced) return;
     AABB box;
     for (int i : gizmoTargets()) {
-        const Mesh& m = doc_.subtoolMesh(i);
+        const Mesh& m = doc_.partMesh(i);
         if (m.vertexCount() == 0) continue;
-        box.expand(transformBounds(m, transformWeights(m, gizmo_.useMask, 0.0f)));
+        const AABB local = transformBounds(m, transformWeights(m, gizmo_.useMask, 0.0f));
+        const glm::mat4& t = doc_.parts[size_t(i)].transform; // (a linked copy's place in the scene)
+        for (int c = 0; c < 8 && local.valid(); ++c)
+            box.expand(glm::vec3(t * glm::vec4(c & 1 ? local.max.x : local.min.x, c & 2 ? local.max.y : local.min.y,
+                                               c & 4 ? local.max.z : local.min.z, 1.0f)));
     }
     gizmo_.pivot = box.valid() ? box.center() : glm::vec3(0.0f);
+}
+
+// Origin tools: center_on_origin / drop_to_floor on what the gizmo moves, then the gizmo follows the Part again.
+void App::originMove(const char* which) {
+    Args args;
+    if (gizmo_.all) args["all"] = true;
+    else if (gizmo_.folder && doc_.activePartInfo().folder) args["folder"] = true;
+    runCommand(std::string(which) == "center_origin" ? "center_on_origin" : "drop_to_floor", args);
+    gizmo_.pivotPlaced = false;
+    gizmo_.centreKey = ~uint64_t(0);
 }
 
 void App::resetGizmoPivot() {
@@ -243,7 +335,7 @@ void App::resetGizmoPivot() {
     status_ = "Pivot at the centre, world axes";
 }
 
-void App::snapGizmoPivot(const RayHit& hit, int subtool) {
+void App::snapGizmoPivot(const RayHit& hit, int part) {
     gizmo_.pivot = hit.position;
     gizmo_.pivotPlaced = true;
     gizmo_.snapNext = false;
@@ -251,7 +343,7 @@ void App::snapGizmoPivot(const RayHit& hit, int subtool) {
     // The triangle's normal faces either way: turn it toward the viewer.
     if (glm::dot(gizmo_.surfaceNormal, camera_.forward()) > 0.0f) gizmo_.surfaceNormal = -gizmo_.surfaceNormal;
     if (gizmo_.orientSurface) gizmo_.frame = frameFromNormal(gizmo_.surfaceNormal);
-    status_ = "Pivot on " + doc_.subtools[size_t(subtool)].name + " at " + vecText(hit.position);
+    status_ = "Pivot on " + doc_.parts[size_t(part)].name + " at " + vecText(hit.position);
 }
 
 glm::mat3 App::gizmoFrame() const {
@@ -271,12 +363,18 @@ bool App::gizmoProject(const glm::vec3& p, ImVec2& out) const {
     return true;
 }
 
+bool App::partProject(const glm::vec3& p, ImVec2& out) const {
+    const Part& s = doc_.activePartInfo();
+    return gizmoProject(s.moved() ? glm::vec3(s.transform * glm::vec4(p, 1.0f)) : p, out);
+}
+
 // ---------------------------------------------------------------------------
 // Handles: shapes, picking
 // ---------------------------------------------------------------------------
 
 App::GizmoHandle App::gizmoHandleAt(float x, float y) const {
     if (!gizmoActive()) return H::None;
+    if (gizmo_.mode == GizmoMode::All) return H(ga::pick(gizmoAllScreen(), glm::vec2(x, y)));
     const glm::vec3 c = gizmo_.pivot;
     const glm::mat3 f = gizmoFrame();
     const float L = gizmoWorldSize(), pick = kPickPx * uiScale_;
@@ -342,6 +440,17 @@ App::GizmoHandle App::gizmoHandleAt(float x, float y) const {
     return best;
 }
 
+gizmo_all::Screen App::gizmoAllScreen() const {
+    auto project = [this](const glm::vec3& p, glm::vec2& out) {
+        ImVec2 q;
+        if (!gizmoProject(p, q)) return false;
+        out = glm::vec2(q.x, q.y);
+        return true;
+    };
+    return ga::layout(project, gizmo_.pivot, gizmoFrame(), gizmoWorldSize(), -camera_.forward(), kRadiusPx * uiScale_,
+                      uiScale_);
+}
+
 bool App::gizmoHandleScreen(GizmoHandle h, ImVec2& out) const {
     // Look along the handle for a point where it is the one picked.
     const glm::vec3 c = gizmo_.pivot;
@@ -351,6 +460,24 @@ bool App::gizmoHandleScreen(GizmoHandle h, ImVec2& out) const {
     std::vector<glm::vec3> tries;
     ImVec2 pc;
     if (!gizmoProject(c, pc)) return false;
+    const bool all = gizmo_.mode == GizmoMode::All;
+    if (all && h == H::ScaleUniform) {
+        // Lowest-right tab first: the history strip and the panels sit along the top and the left of the view.
+        const ga::Screen sc = gizmoAllScreen();
+        glm::vec2 tabs[4];
+        for (int k = 0; k < 4; ++k) tabs[k] = ga::tabPoint(sc, k);
+        std::sort(tabs, tabs + 4, [](glm::vec2 a, glm::vec2 b) { return a.x + a.y > b.x + b.y; });
+        for (const glm::vec2& p : tabs) {
+            out = ImVec2(p.x, p.y);
+            if (gizmoHandleAt(out.x, out.y) == h) return true;
+        }
+        return false;
+    }
+    if (all && isScale(h)) {
+        const ga::Screen::Axis& a = gizmoAllScreen().axis[axis];
+        out = ImVec2(a.ballAt.x, a.ballAt.y);
+        return a.ball && gizmoHandleAt(out.x, out.y) == h;
+    }
     if (h == H::MoveView || h == H::ScaleUniform) {
         out = pc;
         return gizmoHandleAt(out.x, out.y) == h;
@@ -358,7 +485,7 @@ bool App::gizmoHandleScreen(GizmoHandle h, ImVec2& out) const {
     if (h == H::RotateView) {
         for (int k = 0; k < 16; ++k) {
             const float t = float(k) / 16.0f * 6.2831853f + 0.4f;
-            const float r = kRadiusPx * kViewRing * uiScale_;
+            const float r = kRadiusPx * (all ? ga::kViewRing : kViewRing) * uiScale_;
             const ImVec2 p(pc.x + r * std::cos(t), pc.y - r * std::sin(t));
             if (gizmoHandleAt(p.x, p.y) == h) {
                 out = p;
@@ -387,9 +514,11 @@ bool App::gizmoHandleScreen(GizmoHandle h, ImVec2& out) const {
     }
     if (h >= H::PlaneYZ && h <= H::PlaneXY) {
         const glm::vec3 u = f[(axis + 1) % 3], v = f[(axis + 2) % 3];
-        return gizmoProject(c + (u + v) * (0.38f * L), out) && gizmoHandleAt(out.x, out.y) == h;
+        const float mid = all ? (ga::kPlaneLo + ga::kPlaneHi) * 0.5f : 0.38f;
+        return gizmoProject(c + (u + v) * (mid * L), out) && gizmoHandleAt(out.x, out.y) == h;
     }
-    for (float s : {0.75f, 0.9f, 0.6f, 0.45f}) {
+    static constexpr float kAlong[2][4] = {{0.75f, 0.9f, 0.6f, 0.45f}, {0.45f, 0.35f, 0.55f, 0.28f}}; // (All: short arrows)
+    for (float s : kAlong[all ? 1 : 0]) {
         if (gizmoProject(c + f[axis] * (s * L), out) && gizmoHandleAt(out.x, out.y) == h) return true;
     }
     return false;
@@ -400,23 +529,23 @@ bool App::gizmoHandleScreen(GizmoHandle h, ImVec2& out) const {
 // ---------------------------------------------------------------------------
 
 bool App::gizmoMouseDown(float x, float y, SDL_Keymod mod) {
-    if (!gizmoActive() || ctrlDown(mod)) return false; // Ctrl still masks, as in ZBrush
+    if (!gizmoActive() || ctrlDown(mod)) return false; // Ctrl still masks, as 
     if (previewLod_ >= 0) clearLods();
     updateGizmoPivot();
     const bool alt = (mod & SDL_KMOD_ALT) != 0;
     const GizmoHandle h = gizmoHandleAt(x, y);
     if (h == H::None) {
         RayHit hit;
-        const int st = pickSubtool(x, y, &hit);
+        const int st = alt ? pickPartNear(x, y, &hit) : pickPart(x, y, &hit); // (Alt+click picks as the Part click does)
         if (st >= 0 && gizmo_.snapNext) {
             snapGizmoPivot(hit, st);
             return true;
         }
-        if (alt && st >= 0 && st != doc_.activeSubtool) return false; // Alt+click selects another SubTool
+        if (alt && st >= 0 && st != doc_.activePart) return false; // Alt+click selects another Part
         if (alt && st >= 0) { // a click puts the pivot here, a drag pans
             gizmo_.pendingSnap = true;
             gizmo_.snapHit = hit;
-            gizmo_.snapSubtool = st;
+            gizmo_.snapPart = st;
             gizmo_.startMouse = ImVec2(x, y);
         }
         // Off the handles the mouse navigates, wherever it is.
@@ -475,24 +604,37 @@ bool App::gizmoMouseDown(float x, float y, SDL_Keymod mod) {
         }
     }
 
-    gizmo_.subtools.clear();
+    gizmo_.parts.clear();
     gizmo_.sessions.clear();
+    gizmo_.wholeParts.clear();
+    gizmo_.wholeStart.clear();
     if (!gizmo_.pivotOnly) {
+        std::vector<const PartData*> meshes; // a mesh linked Parts share is edited once
         for (int i : gizmoTargets()) {
-            Mesh& m = doc_.subtoolMesh(i);
-            SubTool& s = doc_.subtools[size_t(i)];
-            if (i != doc_.activeSubtool && s.bvhDirty) {
-                s.bvh.build(s.mesh);
-                s.bvhDirty = false;
-            }
-            TransformSession session;
-            if (!session.begin(m, transformWeights(m, gizmo_.useMask, gizmo_.falloff), symmetry_, gizmo_.pivot))
+            Mesh& m = doc_.partMesh(i);
+            const Part& s = doc_.parts[size_t(i)];
+            if (partMovesWhole(doc_, i, gizmo_.useMask)) { // a linked copy: its transform (#94)
+                if (m.vertexCount() == 0) continue;
+                gizmo_.wholeParts.push_back(i);
+                gizmo_.wholeStart.push_back(s.transform);
                 continue;
-            gizmo_.subtools.push_back(i);
+            }
+            if (std::find(meshes.begin(), meshes.end(), s.data.get()) != meshes.end()) continue;
+            meshes.push_back(s.data.get());
+            doc_.partBvh(i);
+            // The active Part's mesh records into its active sculpt layer, as strokes do.
+            const int layer = s.data == doc_.activePartInfo().data ? doc_.activeLayer : -1;
+            TransformSession session;
+            const glm::vec3 pivot = s.moved() ? glm::vec3(glm::inverse(s.transform) * glm::vec4(gizmo_.pivot, 1.0f)) : gizmo_.pivot;
+            if (!session.begin(m, transformWeights(m, gizmo_.useMask, gizmo_.falloff), symmetry_, pivot, layer)) continue;
+            if (i == doc_.activePart && figurePoseEditing(doc_)) session.keepOp(); // a Pose Mesh move (core/FigurePose.h)
+            gizmo_.parts.push_back(i);
             gizmo_.sessions.push_back(std::move(session));
         }
-        if (gizmo_.sessions.empty()) {
-            status_ = gizmo_.useMask && doc_.mesh.hasMask() ? "Nothing to move: everything is masked (Ctrl+click the "
+        if (gizmo_.sessions.empty() && gizmo_.wholeParts.empty()) {
+            status_ = TransformSession::layerWeightZero(doc_.mesh, doc_.activeLayer)
+                          ? "Active layer weight is 0 - raise it to transform into the layer"
+                      : gizmo_.useMask && doc_.mesh.hasMask() ? "Nothing to move: everything is masked (Ctrl+click the "
                                                               "background to invert the mask)"
                                                             : "Nothing to move: the Part is hidden or empty";
             gizmo_.handle = H::None;
@@ -509,13 +651,14 @@ void App::gizmoDragTo(float x, float y) {
     if (h == H::None) return;
     glm::vec3 o, d;
     canvasRay(x, y, o, d);
-    const bool snap = (inputMods() & SDL_KMOD_SHIFT) != 0;
+    const bool snap = (inputMods(false) & SDL_KMOD_SHIFT) != 0;
     const glm::mat3& f = gizmo_.startFrame;
     const glm::vec3 c = gizmo_.startPivot;
     const int axis = axisOf(h);
     float size = 0.0f;
-    for (int i : gizmo_.subtools.empty() ? gizmoTargets() : gizmo_.subtools)
-        size = std::max(size, glm::length(doc_.subtoolMesh(i).bounds().extent()));
+    for (int i : gizmo_.parts.empty() && gizmo_.wholeParts.empty() ? gizmoTargets() : gizmo_.parts)
+        size = std::max(size, glm::length(doc_.partBounds(i).extent()));
+    for (int i : gizmo_.wholeParts) size = std::max(size, glm::length(doc_.partBounds(i).extent()));
     const float grid = gridStep(size);
     MeshTransform t;
     t.pivot = c;
@@ -593,35 +736,50 @@ void App::gizmoDragTo(float x, float y) {
         return;
     }
     gizmo_.current = t;
-    for (size_t i = 0; i < gizmo_.sessions.size(); ++i) gizmo_.sessions[i].apply(doc_.subtoolMesh(gizmo_.subtools[i]), t);
+    for (size_t i = 0; i < gizmo_.sessions.size(); ++i) {
+        const Part& s = doc_.parts[size_t(gizmo_.parts[i])];
+        gizmo_.sessions[i].apply(doc_.partMesh(gizmo_.parts[i]), s.moved() ? t.inSpaceOf(s.transform) : t);
+    }
+    if (!gizmo_.wholeParts.empty()) {
+        const glm::mat4 m = t.evenScale().matrix(); // (a linked copy scales evenly: it stays a similarity)
+        for (size_t i = 0; i < gizmo_.wholeParts.size(); ++i)
+            doc_.parts[size_t(gizmo_.wholeParts[i])].transform = m * gizmo_.wholeStart[i];
+    }
 }
 
 void App::gizmoRelease() {
     if (gizmo_.pendingSnap) {
         gizmo_.pendingSnap = false;
-        if (dist2(gizmo_.startMouse, ImVec2(mouseX_, mouseY_)) < 16.0f && gizmo_.snapSubtool == doc_.activeSubtool)
-            snapGizmoPivot(gizmo_.snapHit, gizmo_.snapSubtool);
+        if (dist2(gizmo_.startMouse, ImVec2(mouseX_, mouseY_)) < 16.0f && gizmo_.snapPart == doc_.activePart)
+            snapGizmoPivot(gizmo_.snapHit, gizmo_.snapPart);
     }
     if (drag_ != Drag::Gizmo) return;
     const GizmoHandle h = gizmo_.handle;
     const std::string readout = std::move(gizmo_.readout);
     gizmo_.handle = H::None;
     gizmo_.readout.clear();
-    if (gizmo_.pivotOnly || gizmo_.sessions.empty()) return;
+    if (gizmo_.pivotOnly || (gizmo_.sessions.empty() && gizmo_.wholeParts.empty())) return;
     const char* label = isRotate(h) ? "Gizmo Rotate" : isScale(h) ? "Gizmo Scale" : "Gizmo Move";
     size_t moved = 0;
     for (size_t i = 0; i < gizmo_.sessions.size(); ++i) {
-        const int st = gizmo_.subtools[i];
-        const bool active = st == doc_.activeSubtool;
-        SubTool& s = doc_.subtools[size_t(st)];
+        const int st = gizmo_.parts[i];
         const size_t n = gizmo_.sessions[i].movingVertices();
-        UndoRecord r = gizmo_.sessions[i].finish(active ? doc_.mesh : s.mesh, active ? doc_.bvh : s.bvh, label);
+        UndoRecord r = gizmo_.sessions[i].finish(doc_.partMesh(st), doc_.partBvh(st), label);
         if (r.empty()) continue;
-        (active ? doc_.undo : s.undo).push(std::move(r));
+        doc_.partUndo(st).push(std::move(r));
         moved += n;
     }
+    for (size_t i = 0; i < gizmo_.wholeParts.size(); ++i) { // linked copies: one transform step each
+        Part& s = doc_.parts[size_t(gizmo_.wholeParts[i])];
+        const glm::mat4 now = s.transform;
+        s.transform = gizmo_.wholeStart[i];
+        doc_.setPartTransform(gizmo_.wholeParts[i], now, label);
+        moved += now != gizmo_.wholeStart[i] ? doc_.partMesh(gizmo_.wholeParts[i]).vertexCount() : 0;
+    }
     gizmo_.sessions.clear();
-    gizmo_.subtools.clear();
+    gizmo_.parts.clear();
+    gizmo_.wholeParts.clear();
+    gizmo_.wholeStart.clear();
     if (moved == 0) return;
     // The gizmo moves and turns with what it moved.
     const MeshTransform& t = gizmo_.current;
@@ -649,14 +807,15 @@ void App::gizmoRelease() {
     if (symmetry_.z) sym += 'z';
     if (!sym.empty() && doc_.mesh.hasMask() && gizmo_.useMask) args["symmetry"] = sym;
     if (gizmo_.all) args["all"] = true;
-    status_ = std::string(label) + " " + readout + ": " + std::to_string(moved) + " vertices";
+    else if (gizmo_.folder && doc_.activePartInfo().folder) args["folder"] = true;
+    status_ = std::string(label) + " " + readout + ": " + vertexCountText(moved);
     consoleEcho("transform", args, {true, status_});
     updateTitle();
 }
 
 void App::rememberGizmoStep(const glm::vec3& before, const glm::mat3& frameBefore, bool surfaceBefore) {
     GizmoState::Step st;
-    st.subtool = doc_.activeSubtoolInfo().id;
+    st.part = doc_.activePartInfo().id;
     st.depth = doc_.undo.undoCount();
     st.before = before;
     st.after = gizmo_.pivot;
@@ -670,12 +829,12 @@ void App::rememberGizmoStep(const glm::vec3& before, const glm::mat3& frameBefor
 }
 
 void App::gizmoAfterUndo(bool redo) {
-    const uint32_t id = doc_.activeSubtoolInfo().id;
+    const uint32_t id = doc_.activePartInfo().id;
     const size_t depth = doc_.undo.undoCount();
     auto& from = redo ? gizmo_.redoSteps : gizmo_.undoSteps;
     auto& to = redo ? gizmo_.undoSteps : gizmo_.redoSteps;
     // Undo took the stack from st.depth to st.depth - 1; redo brought it back to st.depth.
-    if (from.empty() || from.back().subtool != id || from.back().depth != (redo ? depth : depth + 1)) return;
+    if (from.empty() || from.back().part != id || from.back().depth != (redo ? depth : depth + 1)) return;
     const GizmoState::Step st = from.back();
     from.pop_back();
     to.push_back(st);
@@ -709,6 +868,7 @@ void App::applyGizmoNumbers() {
     if (symmetry_.z) sym += 'z';
     if (!sym.empty()) args["symmetry"] = sym;
     if (gizmo_.all) args["all"] = true;
+    else if (gizmo_.folder && doc_.activePartInfo().folder) args["folder"] = true;
     const glm::vec3 pivot = gizmo_.pivot;
     const glm::mat3 frameBefore = gizmo_.frame;
     const bool surfaceBefore = gizmo_.orientSurface;
@@ -728,11 +888,11 @@ void App::drawGizmo() {
     if (!gizmoActive()) return;
     if (drag_ != Drag::Gizmo) updateGizmoPivot();
     drawGizmoPanel();
-    if (!doc_.activeSubtoolInfo().visible) return;
+    if (!doc_.activePartInfo().visible) return;
     const ImVec2 mouse(mouseX_, mouseY_);
     const bool overCanvas = !ImGui::GetIO().WantCaptureMouse && canvasRect().contains(mouse.x, mouse.y);
     gizmo_.hover = drag_ == Drag::Gizmo ? gizmo_.handle
-                   : drag_ == Drag::None && overCanvas && !ctrlDown(inputMods()) ? gizmoHandleAt(mouse.x, mouse.y)
+                   : drag_ == Drag::None && overCanvas && !ctrlDown(inputMods(false)) ? gizmoHandleAt(mouse.x, mouse.y)
                                                                                  : H::None;
     ImDrawList* dl = ImGui::GetBackgroundDrawList(); // under the panels, over the model
     const CanvasRect cr = canvasRect();
@@ -752,7 +912,29 @@ void App::drawGizmo() {
         return axisColor(axis, dragging ? 0.45f : 1.0f);
     };
     const float thick = 2.6f * s;
-    const ImU32 shadow = IM_COL32(0, 0, 0, 110);
+    const ImU32 shadow = kOutline;
+    const bool all = gizmo_.mode == GizmoMode::All;
+    const float viewRing = all ? ga::kViewRing : kViewRing;
+    // The handles that aren't one axis (centre, view ring, even-scale tabs) are light grey, so the hover's yellow
+    // stands out on them too; charcoal on a light flat background.
+    const glm::vec3 bg = renderSettings_.backgroundColor;
+    const bool lightBg = !renderSettings_.gradientBackground && glm::dot(bg, glm::vec3(0.2126f, 0.7152f, 0.0722f)) > 0.45f;
+    const ImU32 plain = lightBg ? IM_COL32(48, 48, 52, dragging ? 130 : 240) : IM_COL32(236, 236, 236, dragging ? 130 : 240);
+    auto neutral = [&](H h) { return gizmo_.hover == h ? kHot : plain; };
+    auto planeSquare = [&](const ImVec2 q[4], int i) {
+        const H h = H(int(H::PlaneYZ) + i);
+        const bool hot = gizmo_.hover == h;
+        const ImU32 col = colorFor(h, i);
+        dl->AddConvexPolyFilled(q, 4, withAlpha(col, hot ? 0.6f : 0.3f));
+        dl->AddPolyline(q, 4, withAlpha(shadow, 0.5f), ImDrawFlags_Closed, 2.5f * s);
+        dl->AddPolyline(q, 4, withAlpha(col, hot ? 1.0f : 0.8f), ImDrawFlags_Closed, 1.2f * s);
+    };
+    auto axisLabel = [&](ImVec2 at, ImVec2 dir, float px, ImU32 col, int i) {
+        const ImVec2 p(at.x + dir.x * px * s - 3.5f * s, at.y + dir.y * px * s - 7.0f * s);
+        const char* name = i == 0 ? "X" : i == 1 ? "Y" : "Z";
+        dl->AddText(smallFont(), 12.0f * s, ImVec2(p.x + 1.0f * s, p.y + 1.0f * s), shadow, name);
+        dl->AddText(smallFont(), 12.0f * s, p, col, name);
+    };
 
     if (gizmo_.mode == GizmoMode::Move || gizmo_.mode == GizmoMode::Scale) {
         const bool move = gizmo_.mode == GizmoMode::Move;
@@ -765,12 +947,9 @@ void App::drawGizmo() {
                 if (!gizmoProject(c + u * lo + v * lo, q[0]) || !gizmoProject(c + u * hi + v * lo, q[1]) ||
                     !gizmoProject(c + u * hi + v * hi, q[2]) || !gizmoProject(c + u * lo + v * hi, q[3]))
                     continue;
-                const H h = H(int(H::PlaneYZ) + i);
-                const ImU32 col = colorFor(h, i);
-                dl->AddConvexPolyFilled(q, 4, (col & 0x00ffffff) | (gizmo_.hover == h ? 0x90000000u : 0x50000000u));
-                dl->AddPolyline(q, 4, col, ImDrawFlags_Closed, 1.5f * s);
+                planeSquare(q, i);
             }
-        // Arrows / boxes, far ones first.
+        // Shafts with a cone (Move) or a ball (Scale) at the end, far ones first.
         int order[3] = {0, 1, 2};
         std::sort(order, order + 3, [&](int a, int b) { return glm::dot(f[a], toEye) < glm::dot(f[b], toEye); });
         for (int i : order) {
@@ -779,38 +958,38 @@ void App::drawGizmo() {
             const float len = std::sqrt(dist2(a, b));
             if (len < 10.0f * s) continue;
             const H h = H(int(move ? H::MoveX : H::ScaleX) + i);
+            const bool hot = gizmo_.hover == h;
             const ImU32 col = colorFor(h, i);
-            const ImVec2 dir((b.x - a.x) / len, (b.y - a.y) / len), nrm(-dir.y, dir.x);
-            dl->AddLine(a, b, shadow, thick + 2.0f * s);
-            dl->AddLine(a, b, col, thick);
+            const ImVec2 dir((b.x - a.x) / len, (b.y - a.y) / len);
+            drawShaft(dl, a, b, col, s);
             if (move) {
-                const float head = 15.0f * s, w = 6.0f * s;
-                const ImVec2 tip(b.x + dir.x * head, b.y + dir.y * head);
-                dl->AddTriangleFilled(tip, ImVec2(b.x + nrm.x * w, b.y + nrm.y * w), ImVec2(b.x - nrm.x * w, b.y - nrm.y * w), col);
+                const float head = 16.0f * s;
+                drawCone(dl, b, ImVec2(b.x + dir.x * head, b.y + dir.y * head), (hot ? 6.5f : 5.5f) * s, col, s);
             } else {
-                const float h2 = 6.0f * s;
-                dl->AddRectFilled(ImVec2(b.x - h2, b.y - h2), ImVec2(b.x + h2, b.y + h2), col);
-                dl->AddRect(ImVec2(b.x - h2, b.y - h2), ImVec2(b.x + h2, b.y + h2), shadow, 0.0f, 0, 1.0f);
+                drawBall(dl, b, (hot ? 7.5f : 6.5f) * s, col, s);
             }
-            dl->AddText(smallFont(), 12.0f * s, ImVec2(b.x + dir.x * (move ? 20.0f : 11.0f) * s - 3.0f * s,
-                                                       b.y + dir.y * (move ? 20.0f : 11.0f) * s - 7.0f * s),
-                        col, i == 0 ? "X" : i == 1 ? "Y" : "Z");
+            axisLabel(b, dir, move ? 24.0f : 15.0f, col, i);
         }
         const H centre = move ? H::MoveView : H::ScaleUniform;
-        const ImU32 cc = gizmo_.hover == centre ? kHot : IM_COL32(240, 206, 96, dragging ? 140 : 255);
+        const ImU32 cc = neutral(centre);
         if (move) {
             dl->AddCircle(pc, 10.0f * s, shadow, 32, thick + 2.0f * s);
-            dl->AddCircle(pc, 10.0f * s, cc, 32, thick);
+            dl->AddCircle(pc, 10.0f * s, cc, 32, gizmo_.hover == centre ? thick : 2.0f * s);
         } else {
-            dl->AddCircleFilled(pc, 9.0f * s, cc, 32);
-            dl->AddCircle(pc, 9.0f * s, shadow, 32, 1.0f * s);
+            drawBall(dl, pc, 9.0f * s, cc, s);
         }
     } else {
-        // Rotate: rings with their back halves dimmed, the view ring outside them.
+        // Rotate: rings with their back halves dimmed, the view ring outside them. In All, a ring seen nearly
+        // edge-on (a line through the centre, over the shafts) and the back halves fade further: the shafts own it.
         for (int i = 0; i < 3; ++i) {
             const glm::vec3 u = f[(i + 1) % 3], v = f[(i + 2) % 3];
             const H h = H(int(H::RotateX) + i);
+            const bool hot = gizmo_.hover == h;
             const ImU32 col = colorFor(h, i);
+            const float face = std::abs(glm::dot(f[i], toEye));
+            const float fade = all && !hot ? std::clamp(0.35f + face * 3.25f, 0.35f, 1.0f) : 1.0f;
+            const ImU32 front = withAlpha(col, fade), back = withAlpha(col, all ? 0.18f : 0.28f);
+            const float w = hot ? thick + 0.8f * s : all ? 2.2f * s : thick;
             ImVec2 prev;
             bool havePrev = false, prevFront = true;
             for (int k = 0; k <= 96; ++k) {
@@ -821,23 +1000,24 @@ void App::drawGizmo() {
                     havePrev = false;
                     continue;
                 }
-                const bool front = glm::dot(r, toEye) > -0.02f;
+                const bool isFront = glm::dot(r, toEye) > -0.02f;
                 if (havePrev) {
-                    if (front && prevFront) {
-                        dl->AddLine(prev, p, shadow, thick + 2.0f * s);
-                        dl->AddLine(prev, p, col, thick);
+                    if (isFront && prevFront) {
+                        dl->AddLine(prev, p, withAlpha(shadow, fade * 0.8f), w + 2.0f * s);
+                        dl->AddLine(prev, p, front, w);
                     } else {
-                        dl->AddLine(prev, p, (col & 0x00ffffff) | 0x48000000u, 1.5f * s);
+                        dl->AddLine(prev, p, back, 1.4f * s);
                     }
                 }
                 prev = p;
-                prevFront = front;
+                prevFront = isFront;
                 havePrev = true;
             }
         }
-        const ImU32 vc = gizmo_.hover == H::RotateView ? kHot : IM_COL32(222, 222, 222, dragging ? 110 : 220);
-        dl->AddCircle(pc, kRadiusPx * kViewRing * s, shadow, 96, thick + 2.0f * s);
-        dl->AddCircle(pc, kRadiusPx * kViewRing * s, vc, 96, thick);
+        const ImU32 vc = neutral(H::RotateView);
+        const float vw = gizmo_.hover == H::RotateView ? thick + 0.8f * s : 2.0f * s;
+        dl->AddCircle(pc, kRadiusPx * viewRing * s, withAlpha(shadow, 0.8f), 96, vw + 2.0f * s);
+        dl->AddCircle(pc, kRadiusPx * viewRing * s, vc, 96, vw);
         if (dragging && isRotate(gizmo_.handle) && !gizmo_.tangent) {
             // The swept angle as a pie, so the turn reads at a glance.
             const glm::vec3 a = gizmo_.handle == H::RotateView ? camera_.forward() : f[axisOf(gizmo_.handle)];
@@ -845,7 +1025,7 @@ void App::drawGizmo() {
             const float signedAng = glm::dot(glm::vec3(gizmo_.current.rotate.x, gizmo_.current.rotate.y, gizmo_.current.rotate.z), a) < 0 ? -ang : ang;
             std::vector<ImVec2> pie{pc};
             const int steps = std::max(2, int(std::abs(signedAng) / 4.0f));
-            const float radius = gizmo_.handle == H::RotateView ? L * kViewRing : L;
+            const float radius = gizmo_.handle == H::RotateView ? L * viewRing : L;
             for (int k = 0; k <= steps; ++k) {
                 const glm::quat q = glm::angleAxis(glm::radians(signedAng) * float(k) / float(steps), a);
                 ImVec2 p;
@@ -858,11 +1038,53 @@ void App::drawGizmo() {
             }
         }
     }
+    if (all) {
+        // Over the rings: plane squares, then each axis (far ones first) as a thin shaft with its scale ball and, past
+        // a gap, its move cone, ending well inside the rings; the even-scale tabs outside the view ring; the centre.
+        const ga::Screen sc = gizmoAllScreen();
+        auto im = [](glm::vec2 p) { return ImVec2(p.x, p.y); };
+        int planes[3] = {0, 1, 2}; // far ones first, as ga::pick stacks them
+        std::sort(planes, planes + 3, [&](int a, int b) { return sc.axis[a].planeDepth < sc.axis[b].planeDepth; });
+        for (int i : planes) {
+            if (!sc.axis[i].plane) continue;
+            const ImVec2 q[4] = {im(sc.axis[i].quad[0]), im(sc.axis[i].quad[1]), im(sc.axis[i].quad[2]), im(sc.axis[i].quad[3])};
+            planeSquare(q, i);
+        }
+        int order[3] = {0, 1, 2};
+        std::sort(order, order + 3, [&](int a, int b) { return sc.axis[a].depth < sc.axis[b].depth; });
+        for (int i : order) {
+            const ga::Screen::Axis& ax = sc.axis[i];
+            if (!ax.arrow) continue;
+            const H h = H(int(H::MoveX) + i);
+            const ImU32 col = colorFor(h, i);
+            const glm::vec2 dir = glm::normalize(ax.tip - ax.from);
+            const glm::vec2 base = ax.tip - dir * (ga::kHeadPx * s);
+            drawShaft(dl, im(ax.from), im(base), col, s);
+            drawCone(dl, im(base), im(ax.tip), (gizmo_.hover == h ? 6.5f : 5.5f) * s, col, s);
+            if (ax.ball) {
+                const H b = H(int(H::ScaleX) + i);
+                drawBall(dl, im(ax.ballAt), (ga::kBallPx + (gizmo_.hover == b ? 1.0f : 0.0f)) * s, colorFor(b, i), s);
+            }
+        }
+        const float tabR = ga::kTabs * kRadiusPx * s;
+        const ImU32 tc = neutral(H::ScaleUniform);
+        const float tw = gizmo_.hover == H::ScaleUniform ? 5.0f * s : 4.0f * s;
+        for (int k = 0; k < 4; ++k) {
+            const float t = 0.7853982f + float(k) * 1.5707963f; // (screen y points down: the arc about -t)
+            dl->PathArcTo(pc, tabR, -t - ga::kTabHalf, -t + ga::kTabHalf, 12);
+            dl->PathStroke(shadow, 0, tw + 2.5f * s);
+            dl->PathArcTo(pc, tabR, -t - ga::kTabHalf, -t + ga::kTabHalf, 12);
+            dl->PathStroke(tc, 0, tw);
+        }
+        const ImU32 cc = neutral(H::MoveView);
+        dl->AddCircle(pc, 10.0f * s, shadow, 32, thick + 2.0f * s);
+        dl->AddCircle(pc, 10.0f * s, cc, 32, gizmo_.hover == H::MoveView ? thick : 2.0f * s);
+    }
     // The pivot.
     dl->AddCircleFilled(pc, 3.5f * s, IM_COL32(255, 255, 255, 230), 16);
     dl->AddCircle(pc, 3.5f * s, shadow, 16, 1.0f);
     if (!gizmo_.readout.empty()) {
-        const ImVec2 at(pc.x + 18.0f * s, pc.y + kRadiusPx * s * 0.55f);
+        const ImVec2 at(pc.x + 18.0f * s, pc.y + kRadiusPx * s * (all ? ga::kTabs + 0.12f : 0.55f)); // (All: below it all)
         const ImVec2 size = ImGui::CalcTextSize(gizmo_.readout.c_str());
         dl->AddRectFilled(ImVec2(at.x - 5 * s, at.y - 3 * s), ImVec2(at.x + size.x + 5 * s, at.y + size.y + 3 * s),
                           IM_COL32(20, 20, 22, 210), 4.0f * s);
@@ -880,16 +1102,16 @@ void App::drawGizmoPanel() {
     ImGui::SetNextWindowPos(ImVec2(c.x + 12.0f * uiScale_, c.y + c.h - 12.0f * uiScale_), ImGuiCond_FirstUseEver,
                             ImVec2(0.0f, 1.0f));
     ImGui::SetNextWindowSize(ImVec2(270.0f * uiScale_, 0.0f), ImGuiCond_Always);
-    if (ImGui::Begin("Gizmo", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
+    if (ImGui::Begin(tr("Gizmo"), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
         drawGizmoContents(true);
     }
     ImGui::End();
 }
 
 void App::drawGizmoContents(bool compact) {
-    ui::Segmented(*this, {"tool.draw", "tool.move", "tool.scale", "tool.rotate"});
+    ui::Segmented(*this, {"tool.draw", "tool.move", "tool.scale", "tool.rotate", "tool.gizmo_all"});
     if (!compact && !gizmoActive()) {
-        ImGui::TextDisabled("Q W E R: Draw, Move, Scale, Rotate");
+        ImGui::TextDisabled("%s", tr("Q W E R: Draw, Move, Scale, Rotate; Shift+W: All"));
         return;
     }
     // Pivot.
@@ -904,8 +1126,9 @@ void App::drawGizmoContents(bool compact) {
                  "moves until you place it: Alt+drag the gizmo, Alt+click the model, To Surface, or type here.",
                  kPath);
     ui::Segmented(*this, {"gizmo.reset_pivot", "gizmo.snap_pivot"});
+    ui::Segmented(*this, {"gizmo.center_origin", "gizmo.drop_floor"}); // Origin tools
     ui::Segmented(*this, {"gizmo.orient_world", "gizmo.orient_surface"});
-    ui::Segmented(*this, {"gizmo.use_mask", "gizmo.all"});
+    ui::Segmented(*this, {"gizmo.use_mask", "gizmo.folder", "gizmo.all"});
     float pct = gizmo_.falloff * 100.0f;
     ImGui::SetNextItemWidth(-1.0f);
     if (ui::SliderInside("##gizmo_falloff", &pct, 0.0f, 50.0f, "Falloff %.0f%%")) gizmo_.falloff = pct / 100.0f;
@@ -930,25 +1153,25 @@ void App::drawGizmoContents(bool compact) {
             ui::HelpText(label, nullptr, help, kPath);
         }
     };
-    row("Move", "gizmo_move", gizmo_.move, 3, "%.3g", "Distance to move along X, Y and Z (the gizmo's axes) when you press Apply.");
-    row("Rotate", "gizmo_rotate", gizmo_.rotate, 3, "%.3g",
+    row(tr("Move"), "gizmo_move", gizmo_.move, 3, "%.3g", "Distance to move along X, Y and Z (the gizmo's axes) when you press Apply.");
+    row(tr("Rotate"), "gizmo_rotate", gizmo_.rotate, 3, "%.3g",
         "Degrees to turn about X, then Y, then Z (the gizmo's axes, through the pivot) when you press Apply.");
-    row("Scale", "gizmo_scale", &gizmo_.scale, 1, "%.1f%%", "Size to scale to about the pivot when you press Apply (100% = unchanged).");
+    row(tr("Scale"), "gizmo_scale", &gizmo_.scale, 1, "%.1f%%", "Size to scale to about the pivot when you press Apply (100% = unchanged).");
     const float w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-    if (ImGui::Button("Apply", ImVec2(w, 0))) applyGizmoNumbers();
+    if (ImGui::Button(tr("Apply"), ImVec2(w, 0))) applyGizmoNumbers();
     ui::HelpText("Apply", nullptr,
                  "Move, rotate and scale by the numbers above, about the pivot, as one undo step (the transform "
                  "command). Masked parts stay; with symmetry on, a masked transform is mirrored.",
                  kPath);
     ImGui::SameLine();
-    if (ImGui::Button("Clear", ImVec2(w, 0))) {
+    if (ImGui::Button(tr("Clear"), ImVec2(w, 0))) {
         std::fill(gizmo_.move, gizmo_.move + 3, 0.0f);
         std::fill(gizmo_.rotate, gizmo_.rotate + 3, 0.0f);
         gizmo_.scale = 100.0f;
     }
     ui::HelpText("Clear", nullptr, "Set Move and Rotate back to 0 and Scale to 100%.", kPath);
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
-    ImGui::TextWrapped("Shift snaps (15 deg, grid, 10%%). Alt+drag the gizmo: move it only. Alt+click the model: pivot there.");
+    ImGui::TextWrapped("%s", tr("Shift snaps (15 deg, grid, 10%). Alt+drag the gizmo: move it only. Alt+click the model: pivot there."));
     ImGui::PopStyleColor();
 }
 

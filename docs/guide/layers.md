@@ -1,5 +1,12 @@
 # Sculpt layers and blend shapes
 
+![A sculpt layer blended in with its weight](images/hero-layer-weight.jpg)
+
+> **In short:**
+> - Sculpt layers hold changes on top of the base mesh, each with its own weight.
+> - Use them for a smile, a blink, a corrective shape or a variation.
+> - Each layer exports as a blend shape (morph target).
+
 Sculpt layers hold changes on top of the base mesh, each with its own weight: a smile, a blink, a corrective shape
 or a variation you want to dial in and out. Because a layer is a set of per-vertex offsets, it exports straight
 to game engines and DCC tools as a blend shape (morph target). This chapter covers creating, sculpting into,
@@ -13,7 +20,7 @@ weighting, playing and exporting layers.
 - Layers belong to a [Part](parts.md): each Part has its own list of layers.
 - A weight of 0 turns a layer off, 1 shows it as sculpted. Scripts can also set negative weights or weights
   above 1 to exaggerate a shape.
-- Layers work on every [subdivision level](subdivision-levels.md), like ZBrush's 3D Layers: see
+- Layers work on every [subdivision level](subdivision-levels.md): see
   [Layers and subdivision levels](#layers-and-subdivision-levels).
 - Layers survive [subdividing](geometry.md#subdivide), [decimating](geometry.md#decimate) and
   [LOD chains](geometry.md#lod-chains). A [voxel remesh](geometry.md#voxel-remesh) bakes them into the surface
@@ -35,13 +42,15 @@ From top to bottom:
   (delete) and a **weight** slider from 0 to 1.
 - A name field and **+ Add** at the bottom.
 
-The title strip shows the active layer (`Layer Smile`, or `Layer Base`).
+The Layers list highlights the active layer; in the Classic layout the title strip also shows it (`Layer Smile`,
+or `Layer Base`).
 
 ## Add a layer and sculpt into it
 
 1. Type a name in the field at the bottom of **Tool > Layers**, for example `Smile` or `BlinkL`.
 2. Click **+ Add** (or press <kbd>Enter</kbd> in the field). The new layer becomes the active one.
-3. Sculpt. Every stroke goes into the layer until you select another layer or **Base mesh**.
+3. Sculpt. Every stroke goes into the layer until you select another layer or **Base mesh**. Moving, scaling and
+   rotating with the [Transform gizmo](gizmo.md) (or the `transform` command) goes into the layer too, masked or not.
 
 A layer whose weight is 0 can't be sculpted into: SculptForge tells you to raise the weight first.
 
@@ -64,10 +73,10 @@ Deleting a layer is undoable.
 
 ## Layers and subdivision levels
 
-With [subdivision levels](subdivision-levels.md) a layer works the way ZBrush's 3D Layers do: record it at the
+With [subdivision levels](subdivision-levels.md) a layer works the way 3D Layers do: record it at the
 top level for the fine detail of an expression, and it stays with the Part whatever level you work on.
 
-- **Each layer has its own detail on every level.** Step down with **Lower Res** (<kbd>Shift</kbd>+<kbd>D</kbd>)
+- **Each layer has its own detail on every level.** Step down with **Lower Level** (<kbd>Shift</kbd>+<kbd>D</kbd>)
   and a lower level shows the broad part of the layer, exactly as it would show the same strokes made in the base.
   Step back up and the layer is there as you recorded it, to the last vertex.
 - **Weights are shared by all levels.** Turn a layer off (weight 0) or blend it at a low level and the top shows
@@ -77,8 +86,8 @@ top level for the fine detail of an expression, and it stays with the Part whate
   level above it too.
 - **Reshape the base at a low level** (or turn it with the [Gizmo](gizmo.md)) and each layer's detail rides on
   the new shape: its offsets turn with the surface instead of pointing the old way.
-- **Divide** carries the layers to the new level. **Reconstruct Subdiv** keeps them, exact at the top. **Del Lower**
-  and **Del Higher** keep the current level's layers as they are.
+- **Add Level** carries the layers to the new level. **Rebuild Lower Levels** keeps them, exact at the top. **Remove Below**
+  and **Remove Above** keep the current level's layers as they are.
 - **Deleting a layer** removes it from every level. Undo steps back through strokes, level changes and divisions
   with their layers.
 - **Projects** keep every level's layers. **Exports** write the current level with its layers as blend shapes, so
@@ -103,10 +112,6 @@ into the surface.
 
 Importing works the other way: glTF morph targets and FBX or USD blend shapes open as sculpt layers. See
 [Exporting](exporting.md).
-
-> **ZBrush:** Layers here are close to ZBrush's 3D Layers with the slider used as a morph, and they follow
-> subdivision levels the same way. Selecting a layer is its REC; a weight of 0 is its eye. There are no layer
-> folders and no per-layer mask yet.
 
 ## Scripting
 

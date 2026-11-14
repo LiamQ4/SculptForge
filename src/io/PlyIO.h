@@ -21,8 +21,9 @@ enum class PlyContent { Mesh, Splats };
 bool loadPly(const std::string& path, Mesh& mesh, SplatCloud& splats, PlyContent& content, std::string& error);
 
 // Writes splats in the standard binary 3DGS layout (log scales, logit
-// opacity). The cloud's transform is baked in.
-bool saveSplatPly(const std::string& path, const SplatCloud& splats, std::string& error);
+// opacity). The cloud's transform is baked in, unless `bakePlacement` is false:
+// then the splats are written as they are (the Blender bridge sends the placement beside the file).
+bool saveSplatPly(const std::string& path, const SplatCloud& splats, std::string& error, bool bakePlacement = true);
 
 // The compact ".splat" format used by many web viewers (antimatter15/splat):
 // 32 bytes per splat - position, linear scale, RGBA8 colour/opacity and an
@@ -31,8 +32,8 @@ bool loadDotSplat(const std::string& path, SplatCloud& splats, std::string& erro
 bool saveDotSplat(const std::string& path, const SplatCloud& splats, std::string& error);
 
 // Writes a mesh (binary little-endian: positions, normals and, when the mesh
-// has polypaint, uchar red/green/blue in sRGB; quads where Mesh::quadPartners
-// keeps them, else triangles) that loadPly reads back.
-bool savePlyMesh(const std::string& path, const Mesh& mesh, std::string& error);
+// has vertex paint, uchar red/green/blue in sRGB; quads where Mesh::quadPartners
+// keeps them, else triangles) that loadPly reads back. `scale`: file units per SculptForge unit, as saveObj.
+bool savePlyMesh(const std::string& path, const Mesh& mesh, std::string& error, double scale = 1.0);
 
 } // namespace sf

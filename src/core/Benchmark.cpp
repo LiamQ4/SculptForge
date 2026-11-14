@@ -6,8 +6,9 @@
 #include "core/Commands.h"
 #include "core/Document.h"
 #include "core/Micro.h"
+#include "core/FocusDetail.h"
 #include "core/Multires.h"
-#include "core/Polypaint.h"
+#include "core/VertexPaint.h"
 #include "core/Primitives.h"
 #include "core/Project.h"
 #include "core/Texture.h"
@@ -26,7 +27,17 @@
 #if defined(__linux__)
 #include <unistd.h>
 #include <fstream>
+#elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
 #endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <psapi.h> // (K32GetProcessMemoryInfo lives in kernel32: no extra library)
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#endif
+#include <atomic>
 
 namespace sf {
 
@@ -42,19 +53,40 @@ std::string millions(double n) { return n >= 1e6 ? fmt("%.1fM", n / 1e6) : fmt("
 
 } // namespace
 
+namespace {
+// Windows and macOS can't reset the process's peak: after resetPeakResidentBytes the peak is the most any
+// residentBytes() call saw since (proof mode samples it every frame), before it the system's own peak.
+std::atomic<size_t> g_sampledPeak{0};
+std::atomic<bool> g_peakReset{false};
+} // namespace
+
 size_t residentBytes() {
+    size_t bytes = 0;
 #if defined(__linux__)
     std::ifstream f("/proc/self/statm");
     size_t pages = 0, resident = 0;
-    if (f >> pages >> resident) return resident * size_t(sysconf(_SC_PAGESIZE));
+    if (f >> pages >> resident) bytes = resident * size_t(sysconf(_SC_PAGESIZE));
+#elif defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS pmc{};
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc)) bytes = size_t(pmc.WorkingSetSize);
+#elif defined(__APPLE__)
+    mach_task_basic_info info{};
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, task_info_t(&info), &count) == KERN_SUCCESS)
+        bytes = size_t(info.resident_size);
 #endif
-    return 0;
+    for (size_t peak = g_sampledPeak.load(std::memory_order_relaxed);
+         bytes > peak && !g_sampledPeak.compare_exchange_weak(peak, bytes, std::memory_order_relaxed);) {
+    }
+    return bytes;
 }
 
 size_t resetPeakResidentBytes() {
 #if defined(__linux__)
     std::ofstream("/proc/self/clear_refs") << "5"; // resets the peak (VmHWM) to the current RSS
 #endif
+    g_sampledPeak.store(0, std::memory_order_relaxed);
+    g_peakReset.store(true, std::memory_order_relaxed);
     return residentBytes();
 }
 
@@ -63,31 +95,47 @@ size_t peakResidentBytes() {
     std::ifstream f("/proc/self/status");
     for (std::string line; std::getline(f, line);)
         if (line.rfind("VmHWM:", 0) == 0) return size_t(std::atoll(line.c_str() + 6)) * 1024;
-#endif
     return 0;
+#else
+    const size_t now = residentBytes();
+    if (g_peakReset.load(std::memory_order_relaxed)) return std::max(now, g_sampledPeak.load(std::memory_order_relaxed));
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS pmc{};
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc)) return size_t(pmc.PeakWorkingSetSize);
+#elif defined(__APPLE__)
+    mach_task_basic_info info{};
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, task_info_t(&info), &count) == KERN_SUCCESS)
+        return size_t(info.resident_size_max);
+#endif
+    return now;
+#endif
 }
 
 MemoryUse documentMemory(const Document& doc) {
     MemoryUse u;
-    std::vector<const PaintTexture*> seen; // textures shared between SubTools count once
-    for (int i = 0; i < doc.subtoolCount(); ++i) {
-        const bool active = i == doc.activeSubtool;
-        const SubTool& st = doc.subtools[size_t(i)];
-        const Mesh& m = doc.subtoolMesh(i);
+    std::vector<const PaintTexture*> seen; // textures shared between Parts count once
+    std::vector<const PartData*> meshes;   // and meshes shared by linked Parts (#94): one mesh, one GPU slot
+    for (int i = 0; i < doc.partCount(); ++i) {
+        const bool active = doc.checkedOut(i);
+        const Part& st = doc.parts[size_t(i)];
+        if (std::find(meshes.begin(), meshes.end(), st.data.get()) != meshes.end()) continue;
+        meshes.push_back(st.data.get());
+        const Mesh& m = doc.partMesh(i);
         u.mesh += m.memoryBytes();
         if (m.texture && std::find(seen.begin(), seen.end(), m.texture.get()) == seen.end()) {
             seen.push_back(m.texture.get());
             u.textures += m.texture->colourBytes();
         }
-        u.bvh += (active ? doc.bvh : st.bvh).memoryBytes();
+        u.bvh += (active ? doc.bvh : st.data->bvh).memoryBytes();
         u.levels += subdivBytes(m);
-        u.undo += (active ? doc.undo : st.undo).undoBytes();
+        u.undo += (active ? doc.undo : st.data->undo).undoBytes();
         u.triangles += m.triangleCount();
         u.vertices += m.vertexCount();
         if (st.visible) // the renderer's cluster layout (core/UploadOrder.h): packed vertices (12 bytes, + colour 4,
-                        // mask 1), about a tenth more for the copies on cluster seams; 16-bit indices and polygroups
+                        // mask 1), about a tenth more for the copies on cluster seams; 16-bit indices and face groups
             u.gpu += m.vertexCount() * (12 + (m.hasColors() ? 4 : 0) + (m.hasMask() ? 1 : 0)) * 11 / 10 +
-                     m.triangleCount() * (6 + (m.hasPolygroups() ? 2 : 0));
+                     m.triangleCount() * (6 + (m.hasFaceGroups() ? 2 : 0));
     }
     // Material channel tiles from the atomic count (every texture, copies and undo steps): no tile walk here, so
     // the readout is safe whatever else is painting.
@@ -195,6 +243,42 @@ Mesh benchMesh(size_t triangles, bool head) {
 Mesh makeBenchSphere(size_t triangles) { return benchMesh(triangles, false); }
 Mesh makeBenchHead(size_t triangles) { return benchMesh(triangles, true); }
 
+Mesh makeCore200mMesh(size_t baseTriangles, int level) {
+    Mesh m = makeBenchHead(baseTriangles);
+    std::string err;
+    if (!microDivide(m, level, err, 0)) return m; // (in memory: phase 1 is the memory-only prototype)
+    microNoise(m, 0.004f, 40.0f, 1);  // forms the size of wrinkles
+    microNoise(m, 0.0008f, 400.0f, 2); // and pores
+    m.micro->clearDirty();
+    m.micro->markAllDirty();
+    return m;
+}
+
+std::string core200mScenePath(std::string& error, const std::function<void(const std::string&)>& log, int millions) {
+    namespace fs = std::filesystem;
+    const fs::path dir = MicroStore::swapFolder();
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    const std::string name = "core-" + std::to_string(millions) + "m";
+    const fs::path path = dir / (name + "-v1.sfproj");
+    if (fs::exists(path, ec)) return path.string(); // (renamed into place when whole)
+    if (log) log("Writing the " + name + " scene (once): " + path.string());
+    Document doc;
+    doc.mesh = makeCore200mMesh(size_t(millions) * 1000000 / 1024); // micro level 5: 1,024 micro triangles a base one
+    if (!doc.mesh.micro) {
+        error = name + ": couldn't divide to micro level 5";
+        return {};
+    }
+    const fs::path tmp = fs::path(path.string() + ".tmp.sfproj");
+    if (!saveProject(tmp.string(), doc, error)) return {};
+    fs::rename(tmp, path, ec);
+    if (ec) {
+        error = "Can't write " + path.string();
+        return {};
+    }
+    return path.string();
+}
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
@@ -226,7 +310,7 @@ StrokeStats runStroke(Document& doc, const BenchBrush& b, int dabs, const BenchG
     const std::vector<BrushRecipe> recipes = builtinBrushRecipes();
     const BrushRecipe* recipe = nullptr;
     for (const auto& r : recipes)
-        if (r.pattern != BrushRecipe::Pattern::None) recipe = &r;
+        if (r.pattern != BrushRecipe::Pattern::None && r.origin.pack.empty()) recipe = &r; // (the classic seven)
     if (!recipe && !recipes.empty()) recipe = &recipes.front();
     if (b.kind == Kind::Paint) m.ensureColors();
     sc.beginStroke(m, b.name);
@@ -328,6 +412,12 @@ bool parseBenchArg(int argc, char** argv, int& i, BenchCommandLine& cl) {
     } else if (a == "--bench-micro-level") {
         cl.options.micro = true;
         cl.options.microLevel = std::clamp(std::atoi(next().c_str()), 1, 7);
+    } else if (a == "--bench-focus") {
+        cl.run = true;
+        cl.options.focus = true;
+    } else if (a == "--bench-focus-base") {
+        cl.options.focus = true;
+        cl.options.focusBase = size_t(std::max(100, std::atoi(next().c_str())));
     } else if (a == "--bench-out") {
         cl.outPath = next();
     } else {
@@ -366,7 +456,7 @@ int runBenchCommandLine(BenchCommandLine cl, const std::string& heading, const B
 namespace {
 
 // Dynamic topology (core/Dyntopo.h): strokes that remesh as they go, on spheres without subdivision levels
-// (Sculptris Pro works on such meshes only). Each row starts from the same sphere.
+// (dynamic topology works on such meshes only). Each row starts from the same sphere.
 std::string runDyntopoBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
     auto log = [&](const std::string& s) {
         if (o.log) o.log(s);
@@ -384,7 +474,7 @@ std::string runDyntopoBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         {{"Standard, Detail 50%", Kind::Brush, BrushType::Standard}, 0.5f},
         {{"Standard, Detail 100%", Kind::Brush, BrushType::Standard}, 1.0f},
         {{"Tendril, Detail 50%", Kind::Brush, BrushType::SnakeHook}, 0.5f},
-        {{"Clay Block, Detail 75%", Kind::Brush, BrushType::ClayBuildup}, 0.75f},
+        {{"Clay Block, Detail 75%", Kind::Brush, BrushType::ClayBlock}, 0.75f},
         {{"Smooth (simplifies), Detail 50%", Kind::Brush, BrushType::Smooth}, 0.5f},
         {{"Standard (large, r 0.4), Detail 50%", Kind::Brush, BrushType::Standard, 0.4f}, 0.5f},
     };
@@ -393,7 +483,7 @@ std::string runDyntopoBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         log("Building a " + millions(double(target)) + " triangle sphere...");
         Document doc;
         doc.mesh = makeBenchSphere(target);
-        doc.mesh.multires.reset(); // (as after Delete Lower)
+        doc.mesh.multires.reset(); // (as after Remove Below)
         doc.mesh.rebuildTopology();
         doc.bvh.build(doc.mesh);
         Mesh& m = doc.mesh;
@@ -449,7 +539,7 @@ std::string runMicroBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         {"Standard (large, r 0.4)", Kind::Brush, BrushType::Standard, 0.4f},
         {"Standard (300 px, r 0.56)", Kind::Brush, BrushType::Standard, 0.56f},
         {"Clay", Kind::Brush, BrushType::Clay},
-        {"Clay Block", Kind::Brush, BrushType::ClayBuildup},
+        {"Clay Block", Kind::Brush, BrushType::ClayBlock},
         {"Smooth", Kind::Brush, BrushType::Smooth},
         {"Smooth (large, r 0.4)", Kind::Brush, BrushType::Smooth, 0.4f},
         {"Inflate", Kind::Brush, BrushType::Inflate},
@@ -661,7 +751,8 @@ std::string runMicroBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
 
 std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
     if (o.dyntopo) return runDyntopoBenchmark(o, gpu);
-    if (o.micro) return runMicroBenchmark(o, gpu);
+    if (o.micro && !o.focus) return runMicroBenchmark(o, gpu);
+    if (o.focus) return runFocusBenchmark(o);
     auto log = [&](const std::string& s) {
         if (o.log) o.log(s);
     };
@@ -675,11 +766,11 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
         {"Standard", Kind::Brush, BrushType::Standard},
         {"Standard (large, r 0.4)", Kind::Brush, BrushType::Standard, 0.4f},
         {"Clay", Kind::Brush, BrushType::Clay},
-        {"Clay Block", Kind::Brush, BrushType::ClayBuildup},
+        {"Clay Block", Kind::Brush, BrushType::ClayBlock},
         {"Smooth", Kind::Brush, BrushType::Smooth},
         {"Smooth (large, r 0.4)", Kind::Brush, BrushType::Smooth, 0.4f},
         {"Inflate", Kind::Brush, BrushType::Inflate},
-        {"Sharp Crease", Kind::Brush, BrushType::DamStandard},
+        {"Sharp Crease", Kind::Brush, BrushType::SharpCrease},
         {"Layer", Kind::Brush, BrushType::Layer},
         {"Move", Kind::Move, BrushType::Move},
         {"Move (large, r 0.4)", Kind::Move, BrushType::Move, 0.4f},
@@ -754,18 +845,18 @@ std::string runBenchmark(const BenchOptions& o, const BenchGpu* gpu) {
             log("  subdivision levels");
             t = Clock::now();
             subdivSetLevel(m, top - 1, err, &doc.bvh);
-            md << "| Lower Res (to " << millions(double(m.triangleCount())) << ", after edits) | " << fmt("%.0f", msSince(t)) << " |\n";
+            md << "| Lower Level (to " << millions(double(m.triangleCount())) << ", after edits) | " << fmt("%.0f", msSince(t)) << " |\n";
             if (gpu && gpu->upload) gpu->upload(m);
             t = Clock::now();
             subdivSetLevel(m, top, err, &doc.bvh);
-            md << "| Higher Res (back up) | " << fmt("%.0f", msSince(t)) << " |\n";
+            md << "| Higher Level (back up) | " << fmt("%.0f", msSince(t)) << " |\n";
             if (gpu && gpu->upload) gpu->upload(m);
             t = Clock::now();
             subdivSetLevel(m, top - 1, err, &doc.bvh);
-            md << "| Lower Res again (no edits) | " << fmt("%.0f", msSince(t)) << " |\n";
+            md << "| Lower Level again (no edits) | " << fmt("%.0f", msSince(t)) << " |\n";
             t = Clock::now();
             subdivSetLevel(m, top, err, &doc.bvh);
-            md << "| Higher Res again (no edits) | " << fmt("%.0f", msSince(t)) << " |\n";
+            md << "| Higher Level again (no edits) | " << fmt("%.0f", msSince(t)) << " |\n";
             if (gpu && gpu->upload) gpu->upload(m);
         }
         if (o.projectRoundTrip) {

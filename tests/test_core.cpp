@@ -29,6 +29,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
 #include <cstdio>
@@ -601,8 +602,11 @@ TEST(ai_free_provider_is_the_default) {
     Json missing = Json::object();
     CHECK(AiSettings::fromJson(missing).provider == AiSettings::Provider::Free);
     if (!std::getenv("ANTHROPIC_API_KEY")) {
-        AiSettings old = AiSettings::defaults(AiSettings::Provider::Anthropic);
-        AiSettings migrated = AiSettings::fromJson(old.toJson());
+        Json old = Json::object(); // an ai.json from before the free tier (and before presets)
+        old.set("provider", "anthropic");
+        old.set("endpoint", "https://api.anthropic.com/v1/messages");
+        old.set("model", "claude-opus-5-5");
+        AiSettings migrated = AiSettings::fromJson(old);
         CHECK(migrated.provider == AiSettings::Provider::Free && migrated.model == "openai");
     }
     AiSettings keyed = AiSettings::defaults(AiSettings::Provider::Anthropic);
@@ -811,6 +815,14 @@ TEST(voxel_remesh) {
     CHECK(reg.execute(d, "remesh", {{"resolution", 48.0}}).ok);
     CHECK(reg.execute(d, "undo").ok && d.mesh.triangleCount() == 1280);
     CHECK(!voxelRemesh(Mesh(), 64, &err).triangleCount() && !err.empty());
+
+    // Progress rises to 1; returning false cancels with an empty result (the app's background job).
+    std::vector<float> steps;
+    CHECK(voxelRemesh(sphere, 48, &err, [&](float f) { steps.push_back(f); return true; }).triangleCount() > 0);
+    CHECK(steps.size() >= 3 && std::is_sorted(steps.begin(), steps.end()) && steps.back() == 1.0f);
+    err.clear();
+    CHECK(voxelRemesh(sphere, 48, &err, [](float) { return false; }).triangleCount() == 0);
+    CHECK(err.find("cancelled") != std::string::npos);
 }
 
 TEST(splats_mesh_conversions) {
@@ -1119,8 +1131,8 @@ TEST(splat_commands) {
     CHECK(reg.execute(d, "splat_transform", {{"rotate_x", 180.0}, {"fit", true}}).ok);
     CHECK(reg.execute(d, "splat_clean", {{"min_opacity", 0.5}}).ok);
     CHECK(reg.execute(d, "splat_to_mesh", {{"resolution", 48.0}}).ok && isClosedManifold(d.mesh));
-    // Make sculptable adds SubTools (the hidden scan, the result) and leaves the sculpt as it was.
-    CHECK(d.subtoolCount() == 3 && d.subtoolMesh(0).triangleCount() == 1280);
+    // Make sculptable adds Parts (the hidden scan, the result) and leaves the sculpt as it was.
+    CHECK(d.partCount() == 3 && d.partMesh(0).triangleCount() == 1280);
     for (const char* ext : {".ply", ".splat", ".glb", ".usda", ".usdz"}) {
         const std::string path = tempPath((std::string("sculptforge_cmd_splats") + ext).c_str());
         CHECK(reg.execute(d, "splat_save", {{"path", path}}).ok);
@@ -1154,10 +1166,13 @@ TEST(mcp_server_protocol) {
     for (const auto& t : list["result"]["tools"].items()) {
         hasRemesh = hasRemesh || t["name"].asString() == "remesh";
         schemasOk = schemasOk && t["inputSchema"]["type"].asString() == "object";
-        packTools = packTools || t["name"].asString() == "pack_install" || t["name"].asString() == "pack_remove";
+        packTools = packTools || t["name"].asString() == "pack_install" || t["name"].asString() == "pack_remove" ||
+                    t["name"].asString().rfind("plugin_", 0) == 0;
     }
-    // Every command but installing, removing and switching packs (the user's decision, never an agent's).
-    CHECK(hasRemesh && schemasOk && !packTools && list["result"]["tools"].size() == reg.all().size() - 4);
+    // Every command but installing, removing and switching packs (the user's decision, never an agent's) and the three
+    // plugin commands (plugins run only when the user runs them), plus viewport_image and view_closeup (cli/McpTools.h).
+    CHECK(hasRemesh && schemasOk && !packTools && list["result"]["tools"].size() == reg.all().size() - 4 - 3 + 2);
+    CHECK(call(R"({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"plugin_run","arguments":{"id":"x"}}})").has("error"));
     Json refused = call(R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"pack_install","arguments":{"path":"x.sfpack"}}})");
     CHECK(refused.has("error"));
     Json ok = call(R"({"jsonrpc":"2.0","id":"a","method":"tools/call","params":{"name":"new_sphere","arguments":{"subdivisions":2}}})");
@@ -1334,7 +1349,15 @@ TEST(free_huggingface_models) {
     for (const auto& p : presets) {
         wellFormed = wellFormed && std::string(p.space).rfind("https://", 0) == 0 && !p.steps.empty();
         bool image = false;
-        for (const auto& step : p.steps)
+        for (const auto& step : p.steps) {
+            for (const auto& sl : step.slots) {
+                image = image || std::string(sl.arg) == "$IMG";
+                if (std::string(sl.arg) != "$IMG" && std::string(sl.arg).rfind("$OUT", 0) != 0) {
+                    Json v;
+                    std::string err;
+                    wellFormed = wellFormed && Json::parse(sl.arg, v, err);
+                }
+            }
             for (const auto& a : step.args) {
                 image = image || a == "$IMG";
                 if (a != "$IMG" && a.rfind("$OUT", 0) != 0) {
@@ -1343,30 +1366,119 @@ TEST(free_huggingface_models) {
                     wellFormed = wellFormed && Json::parse(a, v, err); // literal args must be valid JSON
                 }
             }
+        }
         usesImage = usesImage && image;
     }
     CHECK(wellFormed && usesImage);
     ai::AiSettings defaults;
     CHECK(defaults.generatorService == "huggingface" && defaults.hfModel == presets[0].id);
-    CHECK(defaults.hfModel == "trellis-2"); // MIT, the default; Hunyuan3D carries its licence note
-    CHECK(!ai::hunyuanModel(defaults.hfModel) && ai::hunyuanModel("hunyuan3d-2.1") && ai::hunyuanModel("fal-ai/hunyuan-3d/v3.1/pro/image-to-3d"));
-    defaults.hfModel = "hunyuan3d-2.1";
-    defaults.hfToken = "hf_test";
-    ai::AiSettings loaded = ai::AiSettings::fromJson(defaults.toJson());
-    CHECK(loaded.hfModel == "hunyuan3d-2.1" && loaded.resolvedHfToken() == "hf_test");
+    CHECK(defaults.hfModel == "hunyuan3d-2.1" && !defaults.hfModelChosen); // free, works with no token
+    CHECK(ai::hunyuanModel(defaults.hfModel) && !ai::hunyuanModel("trellis-2") && ai::hunyuanModel("fal-ai/hunyuan-3d/v3.1/pro/image-to-3d"));
+    {
+        // Default selection: an explicit choice is kept; a model the user never chose follows the default.
+        ai::AiSettings chosen;
+        chosen.hfModel = "hunyuan3d-2-turbo";
+        chosen.hfModelChosen = true;
+        chosen.hfToken = "hf_test";
+        ai::AiSettings loaded = ai::AiSettings::fromJson(chosen.toJson());
+        // (the token itself goes to the keychain, never ai.json: test_studio_policy.cpp)
+        CHECK(loaded.hfModel == "hunyuan3d-2-turbo" && loaded.hfModelChosen && loaded.hfToken.empty());
+        ai::AiSettings unchosen;
+        unchosen.hfModel = "trellis-2"; // saved by "Save settings" without picking a model
+        CHECK(ai::AiSettings::fromJson(unchosen.toJson()).hfModel == "hunyuan3d-2.1");
+        CHECK(ai::AiSettings::fromJson(Json::object()).hfModel == "hunyuan3d-2.1"); // new install
+        // ai.json from 0.10.8 and earlier (no hfModelChosen): TRELLIS.2 was the default, kept only with a token.
+        Json old = Json::object();
+        old.set("hfModel", "trellis-2");
+        CHECK(ai::AiSettings::fromJson(old).hfModel == "hunyuan3d-2.1" && !ai::AiSettings::fromJson(old).hfModelChosen);
+        old.set("hfToken", "hf_x");
+        CHECK(ai::AiSettings::fromJson(old).hfModel == "trellis-2");
+        Json picked = Json::object();
+        picked.set("hfModel", "stable-fast-3d");
+        CHECK(ai::AiSettings::fromJson(picked).hfModel == "stable-fast-3d");
+        // The licence notice is shown once, ever.
+        CHECK(!ai::AiSettings::fromJson(old).hunyuanNoticeShown);
+        ai::AiSettings noticed;
+        noticed.hunyuanNoticeShown = true;
+        CHECK(ai::AiSettings::fromJson(noticed.toJson()).hunyuanNoticeShown);
+    }
+    {
+        // TRELLIS.2 without a token falls back to Hunyuan3D 2.1 with a note; with one it runs. No token from the
+        // environment either, for the length of this block.
+        std::vector<std::pair<std::string, std::string>> savedEnv;
+        for (const char* name : {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"}) {
+            if (const char* v = std::getenv(name)) savedEnv.emplace_back(name, v);
+#ifdef _WIN32
+            _putenv_s(name, "");
+#else
+            unsetenv(name);
+#endif
+        }
+        ai::AiSettings s;
+        std::string note;
+        CHECK(std::string(ai::resolveHfPreset(s, false, &note).id) == "hunyuan3d-2.1" && note.empty());
+        s.hfModel = "trellis-2";
+        CHECK(std::string(ai::resolveHfPreset(s, false, &note).id) == "hunyuan3d-2.1");
+        CHECK(note == ai::kTrellisNoTokenNote && note.find("Preferences > AI") != std::string::npos);
+        note.clear();
+        s.hfToken = "hf_test";
+        CHECK(std::string(ai::resolveHfPreset(s, false, &note).id) == "trellis-2" && note.empty());
+        s.hfModel = "no-such-model";
+        CHECK(std::string(ai::resolveHfPreset(s, false).id) == ai::hfPresets()[0].id);
+        s.hfModel = "hunyuan3d-2.1"; // not a text model: text uses the first text preset
+        CHECK(std::string(ai::resolveHfPreset(s, true).id) == ai::hfTextPresets()[0].id);
+        for (const auto& [name, value] : savedEnv) {
+#ifdef _WIN32
+            _putenv_s(name.c_str(), value.c_str());
+#else
+            setenv(name.c_str(), value.c_str(), 1);
+#endif
+        }
+    }
+    CHECK(std::string(ai::kHunyuanLicenceNote).find("EU, UK or South Korea") != std::string::npos);
     CHECK(ai::friendlyGradioError("You have exceeded your ZeroGPU quota (120s requested vs. 0s left).").find("free GPU time") !=
           std::string::npos);
     CHECK(ai::friendlyGradioError("some other failure") == "some other failure");
     std::string png, err;
     CHECK(!ai::prepareImagePng(tempPath("missing_sculptforge.png"), png, err));
 
+    // Recorded Gradio replies (hunyuan3d-2mini-turbo, shape_generation; 11-09): text-only is refused by the Space, and the
+    // model comes back as FileData, a bare URL, or a list.
+    {
+        Json cfg, msg;
+        CHECK(Json::parse(R"({"components":[{"id":21,"type":"file"},{"id":57,"type":"html"}],
+            "dependencies":[{"api_name":"shape_generation","outputs":[21,57]}]})", cfg, err));
+        std::vector<Json> outs;
+        std::string failure;
+        CHECK(Json::parse(R"({"msg":"process_completed","output":{"error":"'Text to 3D is disable. Please enable it by `python gradio_app.py --enable_t23d`.'","duration":10,"visible":true},"success":false})", msg, err));
+        CHECK(!ai::gradioCompleted(msg, outs, failure) && failure.find("switched Text to 3D off") != std::string::npos);
+        const char* shapes[] = {
+            R"({"path":"/tmp/gradio/a/white_mesh.glb","url":"https://x.hf.space/gradio_api/file=/tmp/gradio/a/white_mesh.glb","orig_name":"white_mesh.glb"})",
+            R"("https://x.hf.space/gradio_api/file=/tmp/gradio/a/white_mesh.glb")",
+            R"([{"path":"/tmp/gradio/a/white_mesh.glb","orig_name":"white_mesh.glb"}])",
+            R"({"__type__":"update","value":{"path":"/tmp/gradio/a/white_mesh.glb"}})"};
+        for (const char* shape : shapes) {
+            std::string reply = std::string(R"({"msg":"process_completed","success":true,"output":{"data":[)") + shape + R"(,null]}})";
+            outs.clear();
+            CHECK(Json::parse(reply, msg, err) && ai::gradioCompleted(msg, outs, failure));
+            CHECK(ai::gradioModelUrl(cfg, "shape_generation", outs, "https://x.hf.space").find("white_mesh.glb") != std::string::npos);
+        }
+        for (const char* none : {R"({"msg":"process_completed","success":true,"output":{"data":[null,"<div/>"]}})",
+                                 R"({"msg":"process_completed","success":true,"output":{"data":[]}})"}) {
+            outs.clear();
+            CHECK(Json::parse(none, msg, err) && ai::gradioCompleted(msg, outs, failure));
+            CHECK(ai::gradioModelUrl(cfg, "shape_generation", outs, "https://x.hf.space").empty()); // -> "finished without a model"
+        }
+    }
     // Text to 3D.
     CHECK(!ai::hfTextPresets().empty());
     bool usesPrompt = true;
     for (const auto& p : ai::hfTextPresets()) {
         bool prompt = false;
-        for (const auto& step : p.steps)
+        for (const auto& step : p.steps) {
             for (const auto& a : step.args) prompt = prompt || a == "$PROMPT";
+            for (const auto& sl : step.slots) prompt = prompt || std::string(sl.arg) == "$PROMPT";
+        }
         usesPrompt = usesPrompt && prompt;
     }
     CHECK(usesPrompt);

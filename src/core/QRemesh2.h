@@ -10,8 +10,11 @@
 
 #include <glm/glm.hpp>
 
+#include <chrono>
 #include <complex>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <unordered_set>
@@ -29,24 +32,39 @@ inline vec3 safeNormalize(const vec3& v, const vec3& fallback = vec3(0, 0, 1)) {
     return l > 1e-20f ? v / l : fallback;
 }
 
+// Stage times on stderr with SF_QREMESH_TIMING (sf_remesh_bench, tests/tools/remesh_bench.cpp): lap("x") prints the
+// time since the previous lap.
+struct StageClock {
+    const char* scope;
+    bool on = std::getenv("SF_QREMESH_TIMING") != nullptr;
+    std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+    explicit StageClock(const char* s) : scope(s) {}
+    void lap(const char* what) {
+        if (!on) return;
+        const auto now = std::chrono::steady_clock::now();
+        std::fprintf(stderr, "    %s %-22s %7.1f ms\n", scope, what, std::chrono::duration<double, std::milli>(now - last).count());
+        last = now;
+    }
+};
+
 // Runs fn(i) for i in [0, n) on all hardware threads (coarse jobs: one i is a lot of work).
 void parallelJobs(size_t n, const std::function<void(size_t)>& fn);
 
 // --- Proxy surface ----------------------------------------------------------------------------------------------
 
 // The triangle mesh the field and the map are solved on: about three triangle edges per quad edge, even triangles,
-// feature lines (open edges, polygroup borders, hard edges) kept as edge chains on their exact place.
+// feature lines (open edges, face group borders, hard edges) kept as edge chains on their exact place.
 struct Proxy {
     std::vector<vec3> P;
     std::vector<glm::uvec3> T;
     std::vector<uint32_t> group;   // per triangle
     std::vector<uint32_t> opp;     // per corner 3t+k (the edge T[k] -> T[k+1]): the twin corner, kNone when open
     std::vector<uint8_t> feature;  // per corner: the edge is a feature line (open edges included)
-    std::vector<uint8_t> sharp;    // per corner: ... because it is a hard edge (Detect Edges)
+    std::vector<uint8_t> sharp;    // per corner: ... because it is a hard edge (Keep Hard Edges)
     std::vector<uint8_t> guide;    // per corner: ... because a QRemesh Guide runs along it (empty: none)
     std::vector<float> size;       // per vertex: wanted quad edge length
     std::vector<float> fieldSize;  // per vertex: the (relative) size the cross field turns with; empty = none
-    std::vector<vec3> color;       // per vertex polypaint (usePolypaint only)
+    std::vector<vec3> color;       // per vertex vertex paint (useVertex paint only)
     std::vector<vec3> fixedDir;    // per triangle: direction the field is fixed to (a guide's tangent), 0 = from its edges
 
     size_t triangles() const { return T.size(); }

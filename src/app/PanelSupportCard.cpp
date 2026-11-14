@@ -1,259 +1,151 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The support card at launch: a full-window card over the app with a bronze sculpt render (rendered by SculptForge
-// itself, assets/branding/support-card.jpg), the cube mark and the promise, the three memberships with their perks and
-// the one-time Supporter, in the current look's colours (Theme.h). When it may show is decided once while starting
-// (supportCardDue in Support.h): the first start, the first start of each new version, then at most once a week, and
-// not for 30 days after "Maybe later"; never mid-session, never for a supporter, never in tests, renders, demos or CI.
-// No countdowns, no guilt, nothing pre-selected; Close is always there. Every button only
-// opens one of the fixed links in Support.h in the browser. The picture is decoded on a worker thread the first time
-// the card shows, so starting is no slower; the card fades in over a plain backdrop and the picture follows.
+// The membership cards (Support.h). The full card: a full-window card over the app on a calm stage (a warm glow and a
+// faint grid, drawn here, no picture), the cube mark and the promise, the two memberships (Member and Studio) with
+// their perks, in the current look's colours (Theme.h); on the first start only, and from Help > Support. The small
+// card: one line along the bottom of the canvas at a good moment (memberMoment), at most once a week, until someone
+// becomes a member. Never mid-stroke or during a job, never for a member, never in tests, renders, demos or CI.
+// The top bar's quiet heart opens Help > Support SculptForge (a member sees a small badge instead).
+// No countdowns, no guilt, nothing pre-selected; Close is always there. Every button only opens one of the fixed
+// links in Support.h in the browser, except "I'm already a member", which is the member builds' GitHub sign-in.
 #include "app/App.h"
+#include "app/NativeDialog.h"
+#include "app/CardPaint.h"
 #include "app/Theme.h"
 #include "app/Ui.h"
-#include "render/GL.h"
 
+#include <IconsLucide.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_sdl3.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <future>
+#include <ctime>
+#include <utility>
 
 namespace sf {
-
-namespace assets {
-extern const unsigned char supportCard[]; // assets/branding/support-card.jpg (CMakeLists.txt)
-extern const unsigned long long supportCard_size;
-} // namespace assets
 
 struct App::SupportCard {
     SupportCardReason reason = SupportCardReason::None;
     double openedAt = 0.0;          // seconds (ImGui clock)
-    std::future<Image> picture;     // decoded and graded on a worker thread
-    GLuint texture = 0;
-    float pictureAspect = 16.0f / 9.0f;
-    double pictureAt = -1.0;        // when the texture became ready (it fades in)
     ImVec2 parallax{0.0f, 0.0f};    // follows the pointer, eased
-    float hover[3] = {0.0f, 0.0f, 0.0f}; // tier cards lifted under the pointer, eased
+    float hover[2] = {0.0f, 0.0f}; // tier cards lifted under the pointer, eased
     bool closing = false;
     double closingAt = 0.0;
-    bool supporterOnClose = false;
-
-    ~SupportCard() {
-        if (texture) gl::DeleteTextures(1, &texture);
-        if (picture.valid()) picture.wait();
-    }
 };
 
 void App::SupportCardDelete::operator()(SupportCard* c) const { delete c; }
+
+using namespace card;
 
 namespace {
 
 // ImGui's clock: real time in the app, the scripted time in UI tests (so their screenshots show the card settled).
 double nowSeconds() { return ImGui::GetTime(); }
 
-float clamp01(float x) { return std::clamp(x, 0.0f, 1.0f); }
-float easeOut(float x) { // cubic
-    x = 1.0f - clamp01(x);
-    return 1.0f - x * x * x;
-}
-float easeInOut(float x) {
-    x = clamp01(x);
-    return x * x * (3.0f - 2.0f * x);
-}
-float lerp(float a, float b, float t) { return a + (b - a) * t; }
-
-ImU32 col(unsigned hex, float alpha) {
-    return IM_COL32((hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff, int(std::clamp(alpha, 0.0f, 1.0f) * 255.0f + 0.5f));
-}
-// A colour of the current look at an opacity.
-ImU32 tc(const ImVec4& c, float alpha) { return theme::u32(c, std::clamp(alpha, 0.0f, 1.0f)); }
-ImVec4 mix(const ImVec4& x, const ImVec4& y, float t) {
-    return ImVec4(lerp(x.x, y.x, t), lerp(x.y, y.y, t), lerp(x.z, y.z, t), lerp(x.w, y.w, t));
-}
-// The orange of the cube logo: the brand mark, the same in every look.
-constexpr unsigned kBrandOrange = 0xf0882e;
-
-// The picture with the shading for the text baked in (left half and the lower part, under the tier cards), towards the
-// look's background `ink`, so the card draws it as one rounded image.
-Image loadPicture(ImVec4 ink) {
-    Image img;
-    std::string error;
-    if (!Image::decode(assets::supportCard, size_t(assets::supportCard_size), img, error)) return {};
-    const int w = img.width, h = img.height;
-    for (int y = 0; y < h; ++y) {
-        const float v = (float(y) + 0.5f) / float(h);
-        const float bottom = 0.92f * easeInOut((v - 0.42f) / 0.5f);
-        for (int x = 0; x < w; ++x) {
-            const float u = (float(x) + 0.5f) / float(w);
-            const float left = 0.9f * std::pow(1.0f - easeInOut(u / 0.66f), 1.3f);
-            const float dark = 1.0f - (1.0f - left) * (1.0f - bottom);
-            uint8_t* p = &img.rgba[(size_t(y) * size_t(w) + size_t(x)) * 4];
-            const float kInk[3] = {ink.x * 255.0f, ink.y * 255.0f, ink.z * 255.0f};
-            for (int c = 0; c < 3; ++c) p[c] = uint8_t(lerp(float(p[c]), kInk[c], dark) + 0.5f);
-        }
-    }
-    return img;
-}
-
-GLuint uploadPicture(const Image& img) {
-    GLuint tex = 0;
-    gl::GenTextures(1, &tex);
-    gl::BindTexture(GL_TEXTURE_2D, tex);
-    gl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    gl::TexImage2D(GL_TEXTURE_2D, 0, GLint(GL_RGBA8), img.width, img.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
-    gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(GL_LINEAR));
-    gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(GL_LINEAR));
-    gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE));
-    gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE));
-    gl::BindTexture(GL_TEXTURE_2D, 0);
-    return tex;
-}
-
-// Text drawn straight to the draw list, also logged so UI tests can find it (expect_text).
-struct Painter {
-    ImDrawList* dl;
-    float k; // logical pixels to screen pixels (UI scale x fit x the opening zoom)
-
-    ImVec2 measure(ImFont* f, float px, const char* s, float wrap = 0.0f) const {
-        return f->CalcTextSizeA(px * k, FLT_MAX, wrap, s);
-    }
-    ImVec2 text(ImFont* f, float px, ImVec2 at, ImU32 c, const char* s, float wrap = 0.0f) const {
-        dl->AddText(f, px * k, at, c, s, nullptr, wrap);
-        ImGui::LogText("%s\n", s);
-        return measure(f, px, s, wrap);
-    }
-    // Small capitals with letter spacing (the eyebrow and the badge).
-    float spaced(ImFont* f, float px, ImVec2 at, ImU32 c, const char* s, float spacing, bool draw = true) const {
-        float x = at.x;
-        char one[2] = {0, 0};
-        for (const char* p = s; *p; ++p) {
-            one[0] = *p;
-            if (draw) dl->AddText(f, px * k, ImVec2(x, at.y), c, one);
-            x += f->CalcTextSizeA(px * k, FLT_MAX, 0.0f, one).x + spacing * k;
-        }
-        if (draw) ImGui::LogText("%s\n", s);
-        return x - at.x - spacing * k;
-    }
-};
-
-// A soft shadow / glow: rounded rectangles growing outwards, fading.
-void glow(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, float spread, const ImVec4& c, float alpha, int layers = 10) {
-    for (int i = layers; i >= 1; --i) {
-        const float t = float(i) / float(layers), g = spread * t;
-        dl->AddRectFilled(ImVec2(a.x - g, a.y - g), ImVec2(b.x + g, b.y + g), tc(c, alpha * (1.0f - t) * (1.0f - t) * 0.5f),
-                          rounding + g);
-    }
-}
-void glow(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, float spread, unsigned hex, float alpha, int layers = 10) {
-    glow(dl, a, b, rounding, spread, theme::rgb(hex), alpha, layers);
-}
-
-// The cube mark of the logo (assets/branding/sculptforge-icon.svg: Lucide's "box"), `size` wide at `at`.
-void cubeMark(ImDrawList* dl, ImVec2 at, float size, ImU32 c) {
-    const float u = size / 24.0f;
-    auto p = [&](float x, float y) { return ImVec2(at.x + x * u, at.y + y * u); };
-    const ImVec2 outline[6] = {p(12, 2), p(21, 7), p(21, 17), p(12, 22), p(3, 17), p(3, 7)};
-    const float w = 2.2f * u;
-    dl->AddPolyline(outline, 6, c, ImDrawFlags_Closed, w);
-    const ImVec2 top[3] = {p(3.3f, 7), p(12, 12), p(20.7f, 7)};
-    dl->AddPolyline(top, 3, c, 0, w);
-    dl->AddLine(p(12, 22), p(12, 12), c, w);
-}
-
-// A light sweeping across the picture: a soft diagonal band, faded towards the card's edges so it stays inside the
-// rounded corners.
-void lightSweep(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, float x, float width, float alpha) {
+// The stage behind the words: a soft warm light from `center` (`rx` x `ry`, brightest in the middle) and a faint
+// drafting grid that fades out with it, kept inside the card's rounded corners. The same look as the membership page.
+void stageLight(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding, ImVec2 center, float rx, float ry, const ImVec4& tint,
+                float alpha, const ImVec4& gridInk, float gridAlpha, float cell, float hair) {
     if (alpha <= 0.002f) return;
-    const ImVec2 dir = ImVec2(0.34f, 1.0f); // leaning right going down
-    const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
-    const ImVec2 d(dir.x / len, dir.y / len), n(d.y, -d.x);
-    const float h = (b.y - a.y) / d.y; // the band's length across the card
-    const ImVec2 top(x - d.x * h * 0.5f, a.y + (b.y - a.y) * 0.5f - h * 0.5f);
-    constexpr int kSteps = 28;
+    auto falloff = [&](ImVec2 p) {
+        const float dx = (p.x - center.x) / rx, dy = (p.y - center.y) / ry;
+        const float d = clamp01(1.0f - std::sqrt(dx * dx + dy * dy));
+        return d * d;
+    };
     auto edgeFade = [&](ImVec2 p) {
         const float e = std::min({p.x - a.x, b.x - p.x, p.y - a.y, b.y - p.y});
-        return clamp01((e - rounding * 0.4f) / (rounding * 2.0f));
+        return clamp01((e - rounding * 0.3f) / (rounding * 1.5f));
     };
-    const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
-    dl->PrimReserve(kSteps * 12, (kSteps + 1) * 3);
-    const ImDrawIdx base = ImDrawIdx(dl->_VtxCurrentIdx);
-    for (int i = 0; i <= kSteps; ++i) {
-        const float t = float(i) / float(kSteps);
-        const ImVec2 c(top.x + d.x * h * t, top.y + d.y * h * t);
-        const float fall = std::sin(t * 3.14159265f); // brightest in the middle of the card
-        const ImVec2 pts[3] = {ImVec2(c.x - n.x * width, c.y - n.y * width), c, ImVec2(c.x + n.x * width, c.y + n.y * width)};
-        for (int j = 0; j < 3; ++j) {
-            const float aj = j == 1 ? alpha * fall * edgeFade(pts[j]) : 0.0f;
-            dl->PrimWriteVtx(pts[j], uv, col(0xfff3e2, aj));
-        }
+    dl->PushClipRect(a, b, true);
+    { // the light: a fan of rings with the colour per vertex
+        constexpr int kSeg = 64, kRings = 8;
+        const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+        auto ring = [&](int r) { return float(r) / float(kRings); };
+        dl->PrimReserve(kSeg * kRings * 6, kSeg * (kRings + 1));
+        const ImDrawIdx base = ImDrawIdx(dl->_VtxCurrentIdx);
+        for (int r = 0; r <= kRings; ++r)
+            for (int i = 0; i < kSeg; ++i) {
+                const float ang = float(i) / float(kSeg) * 6.28318531f, f = ring(r);
+                const ImVec2 p(center.x + std::cos(ang) * rx * f, center.y + std::sin(ang) * ry * f);
+                dl->PrimWriteVtx(p, uv, tc(tint, alpha * (1.0f - f) * (1.0f - f) * edgeFade(p)));
+            }
+        for (int r = 0; r < kRings; ++r)
+            for (int i = 0; i < kSeg; ++i) {
+                const int j = (i + 1) % kSeg;
+                const ImDrawIdx v0 = ImDrawIdx(base + r * kSeg + i), v1 = ImDrawIdx(base + r * kSeg + j);
+                const ImDrawIdx v2 = ImDrawIdx(v0 + kSeg), v3 = ImDrawIdx(v1 + kSeg);
+                dl->PrimWriteIdx(v0), dl->PrimWriteIdx(v1), dl->PrimWriteIdx(v3);
+                dl->PrimWriteIdx(v0), dl->PrimWriteIdx(v3), dl->PrimWriteIdx(v2);
+            }
     }
-    for (int i = 0; i < kSteps; ++i)
-        for (int j = 0; j < 2; ++j) {
-            const ImDrawIdx v0 = ImDrawIdx(base + i * 3 + j), v1 = ImDrawIdx(v0 + 1), v2 = ImDrawIdx(v0 + 3), v3 = ImDrawIdx(v0 + 4);
-            dl->PrimWriteIdx(v0), dl->PrimWriteIdx(v1), dl->PrimWriteIdx(v3);
-            dl->PrimWriteIdx(v0), dl->PrimWriteIdx(v3), dl->PrimWriteIdx(v2);
+    // The grid, in short pieces so each fades with the light.
+    const float step = cell * 0.5f;
+    for (float x = a.x + cell; x < b.x; x += cell)
+        for (float y = a.y; y < b.y; y += step) {
+            const ImVec2 p(x, y + step * 0.5f);
+            const float w = gridAlpha * alpha * falloff(p) * edgeFade(p);
+            if (w > 0.002f) dl->AddLine(ImVec2(x, y), ImVec2(x, std::min(y + step, b.y)), tc(gridInk, w), hair);
         }
+    for (float y = a.y + cell; y < b.y; y += cell)
+        for (float x = a.x; x < b.x; x += step) {
+            const ImVec2 p(x + step * 0.5f, y);
+            const float w = gridAlpha * alpha * falloff(p) * edgeFade(p);
+            if (w > 0.002f) dl->AddLine(ImVec2(x, y), ImVec2(std::min(x + step, b.x), y), tc(gridInk, w), hair);
+        }
+    dl->PopClipRect();
 }
 
 struct Tier {
     const char* name;
     const char* price;
     const char* per;
-    const char* perks[4];
+    const char* perks[5]; // (unused ones nullptr)
     const char* cta;
     const char* id; // the button's ImGui label (UI tests click it)
     const char* url;
+    const char* note; // under the price (nullptr: none)
 };
 
 } // namespace
 
 bool App::supportCardTestMode() const {
     return !interactive() || !options_.uiTest.empty() || !options_.demo.empty() || !options_.script.empty() ||
-           options_.measureIdle > 0.0f || options_.measureStroke > 0.0f || options_.benchmark ||
+           options_.measureIdle > 0.0f || options_.measureStroke > 0.0f || options_.measureKeyNav || options_.benchmark ||
            !options_.timelapsePath.empty() || std::getenv("SF_NO_SUPPORT_CARD") || std::getenv("CI");
 }
 
 bool App::supportCardOpen() const { return supportCard_ && !supportCard_->closing; }
 
-bool App::supportCardLoading() const { return supportCard_ && !supportCard_->texture && supportCard_->picture.valid(); }
 
 void App::launchSupportCard(bool firstRun, int64_t now, bool testMode) {
-    supportCardNow_ = now;
-    supportCardReason_ = supportCardDue(supportCardPrefs_, firstRun, SCULPTFORGE_VERSION, now, testMode);
-    if (supportCardReason_ == SupportCardReason::None) return;
-    supportCardPrefs_.shownAt = now;
-    supportCardPrefs_.shownVersion = SCULPTFORGE_VERSION;
+    // A studio build is a Studio member's: no membership card in it (core/StudioProfile.h).
+    const SupportCardReason reason =
+        isStudioBuild() ? SupportCardReason::None : supportCardDue(supportCardPrefs_, firstRun, testMode);
+    if (reason == SupportCardReason::None) return;
+    supportCardPrefs_.shownAt = now; // (the week before a small card may show starts now)
     saveProjectPrefs(); // (recorded before it shows: a crash can't bring it back at once)
     if (showWelcome_) { // the first-run welcome follows the card
         showWelcome_ = false;
         welcomeAfterCard_ = true;
     }
-    showSupportCard(supportCardReason_);
+    showSupportCard(reason);
 }
 
 void App::showSupportCard(SupportCardReason reason) {
     supportCard_.reset(new SupportCard);
     supportCard_->reason = reason;
     supportCard_->openedAt = nowSeconds();
-    supportCard_->picture = std::async(std::launch::async, loadPicture, theme::shellBg);
     redrawIn(0.0);
 }
 
-void App::closeSupportCard(bool supporter) {
+void App::closeSupportCard() {
     if (!supportCard_ || supportCard_->closing) return;
     supportCard_->closing = true;
     supportCard_->closingAt = nowSeconds();
-    if (supporter) {
-        supportCardPrefs_.supporter = true;
-        saveProjectPrefs();
-        status_ = "Thank you for supporting SculptForge! The support card won't show again (Preferences > Support).";
-    }
     if (welcomeAfterCard_) {
         welcomeAfterCard_ = false;
         showWelcome_ = true;
@@ -262,12 +154,13 @@ void App::closeSupportCard(bool supporter) {
 }
 
 void App::openSupportLink(const char* url) {
+    if (!url || !supportLinkAllowed(url)) return;
     ++supportPageRequests_;
     if (!interactive()) { // UI tests, renders and demos never start a browser
         status_ = std::string("Support SculptForge: ") + url;
         return;
     }
-    status_ = SDL_OpenURL(url) ? std::string("Opened the Stripe checkout in your browser")
+    status_ = sf::dialogs::openUrl(url) ? std::string("Opened ") + url + " in your browser"
                                : std::string("Couldn't open ") + url + ": " + SDL_GetError();
 }
 
@@ -322,27 +215,19 @@ void App::drawSupportCard() {
     if (!ImGui::IsPopupOpen(kPopup)) ImGui::OpenPopup(kPopup);
     redrawIn(0.0); // animated while open (60 fps with vsync); nothing is drawn for it once closed
 
-    // The picture: decoded off the main thread, uploaded here once ready.
-    if (!card.texture && card.picture.valid() && card.picture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        const Image img = card.picture.get();
-        if (!img.empty()) {
-            card.texture = uploadPicture(img);
-            card.pictureAspect = img.aspect();
-            card.pictureAt = now;
-        }
-    }
-
     // The current look's colours (Theme.h), so the card fits Classic and every other look.
-    const ImVec4 bg = theme::shellBg, tierBg = theme::panelBg, raised = theme::header, accent = theme::accent;
+    // (Its orange is the New role's, Theme.h: the SculptForge orange in every look, the look's accent with Pop-up colours off.)
+    const ImVec4 bg = theme::shellBg, tierBg = theme::panelBg, raised = theme::header,
+                 accent = theme::rolePopups ? theme::edge(theme::Role::New) : theme::accent;
     const ImVec4 ink = theme::textBright, body = theme::text, dim = theme::textDim, line = theme::text;
 
     const float s = uiScale_;
     const ImVec2 view = io.DisplaySize;
-    // Logical size 1100 x 720, fitted to the window; scaled from 96 % while opening.
-    const float fit = std::min({1.0f, (view.x - 40.0f * s) / (1100.0f * s), (view.y - 40.0f * s) / (720.0f * s)});
+    // Logical size 1100 x 740, fitted to the window; scaled from 96 % while opening.
+    const float fit = std::min({1.0f, (view.x - 40.0f * s) / (1100.0f * s), (view.y - 40.0f * s) / (740.0f * s)});
     const float zoom = lerp(0.96f, 1.0f, shown);
     const float k = s * std::max(fit, 0.45f) * zoom;
-    const ImVec2 size(1100.0f * k, 720.0f * k);
+    const ImVec2 size(1100.0f * k, 740.0f * k);
     const ImVec2 a(std::floor((view.x - size.x) * 0.5f), std::floor((view.y - size.y) * 0.5f));
     const ImVec2 b(a.x + size.x, a.y + size.y);
     const float radius = 20.0f * k;
@@ -373,7 +258,7 @@ void App::drawSupportCard() {
     glow(dl, ImVec2(a.x, a.y + 18.0f * k), ImVec2(b.x, b.y + 18.0f * k), radius, 40.0f * k, ImVec4(0, 0, 0, 1), 0.9f * A, 10);
     dl->AddRectFilled(a, b, tc(bg, A), radius);
 
-    // The picture: covers the card, a little larger so the pointer can move it (parallax), fading in once decoded.
+    // The stage: a warm light at the top right that drifts a little with the pointer, and a faint grid under it.
     const ImVec2 mouse = io.MousePos;
     ImVec2 target(0.0f, 0.0f);
     if (ImGui::IsMousePosValid(&mouse)) {
@@ -383,31 +268,9 @@ void App::drawSupportCard() {
     const float follow = 1.0f - std::exp(-dt * 4.0f);
     card.parallax.x = lerp(card.parallax.x, target.x, follow);
     card.parallax.y = lerp(card.parallax.y, target.y, follow);
-    if (card.texture) {
-        const float fade = easeOut(float(now - card.pictureAt) / 0.35f) * A;
-        const float cardAspect = size.x / size.y;
-        float uw = 1.0f, vh = 1.0f; // the part of the picture that covers the card
-        if (cardAspect > card.pictureAspect) vh = card.pictureAspect / cardAspect;
-        else uw = cardAspect / card.pictureAspect;
-        const float margin = 0.94f, drift = 0.025f; // 6 % to spare for the parallax; a slow drift as it opens
-        const float settle = 1.0f + drift * (1.0f - easeOut(float(now - card.pictureAt) / 2.4f));
-        uw *= margin / settle;
-        vh *= margin / settle;
-        const float cu = 0.5f - card.parallax.x * (1.0f - margin) * 0.45f + (1.0f - uw) * 0.06f; // a little right
-        const float cv = 0.5f - card.parallax.y * (1.0f - margin) * 0.45f - (1.0f - vh) * 0.2f;   // a little up
-        dl->AddImageRounded(ImTextureID(uintptr_t(card.texture)), a, b, ImVec2(cu - uw * 0.5f, cv - vh * 0.5f),
-                            ImVec2(cu + uw * 0.5f, cv + vh * 0.5f), col(0xffffff, fade), radius);
-    }
-    // A light passing over the sculpt now and then (every 7 s, the first soon after opening).
     {
-        const float period = 7.0f, run = 1.9f;
-        const float since = t - 0.5f;
-        const float phase = since >= 0.0f ? std::fmod(since, period) : -1.0f;
-        if (phase >= 0.0f && phase < run) {
-            const float u = easeInOut(phase / run);
-            lightSweep(dl, a, b, radius, lerp(a.x + size.x * 0.25f, b.x + size.x * 0.1f, u), 150.0f * k,
-                       0.10f * A * std::sin(u * 3.14159265f));
-        }
+        const ImVec2 c(a.x + size.x * 0.76f + card.parallax.x * 14.0f * k, a.y + size.y * 0.06f + card.parallax.y * 10.0f * k);
+        stageLight(dl, a, b, radius, c, size.x * 0.46f, size.y * 0.62f, accent, 0.22f * A, line, 0.20f, 48.0f * k, hair);
     }
     // A hairline edge, brighter along the top, and a thin accent line across the top.
     dl->AddRect(a, b, tc(line, 0.10f * A), radius, 0, hair);
@@ -422,34 +285,11 @@ void App::drawSupportCard() {
     const float pad = 48.0f * k;
     float y = a.y + 40.0f * k;
     const float colW = size.x * 0.50f;
-    // Updated: a chip that leads to What's New (open behind the card).
-    if (supportCard_->reason == SupportCardReason::Updated) {
-        const std::string chip = std::string("SculptForge ") + SCULPTFORGE_VERSION + "  " + "\xc2\xb7" + "  What's new";
-        const ImVec2 ts = paint.measure(boldUi, 13.0f, chip.c_str());
-        const ImVec2 c0(a.x + pad, y), c1(c0.x + ts.x + 26.0f * k, y + 28.0f * k);
-        ImGui::SetCursorScreenPos(c0);
-        ImGui::InvisibleButton("What's new##card.whatsnew", ImVec2(c1.x - c0.x, c1.y - c0.y));
-        const bool hot = ImGui::IsItemHovered();
-        if (ImGui::IsItemClicked()) {
-            guide_.open("whats-new.md");
-            closeSupportCard(false);
-        }
-        dl->AddRectFilled(c0, c1, tc(raised, (hot ? 1.0f : 0.8f) * A), 14.0f * k);
-        dl->AddRect(c0, c1, tc(line, (hot ? 0.3f : 0.14f) * A), 14.0f * k, 0, hair);
-        paint.text(boldUi, 13.0f, ImVec2(c0.x + 13.0f * k, c0.y + (28.0f * k - ts.y) * 0.5f), tc(ink, A), chip.c_str());
-        y += 42.0f * k;
-    }
-    // Hero: the cube mark on its tile, the eyebrow and the promise.
+    // Hero: the bust, the eyebrow and the promise.
     {
         const float m = 48.0f * k;
         const ImVec2 m0(a.x + pad, y), m1(m0.x + m, m0.y + m);
-        glow(dl, m0, m1, 12.0f * k, 18.0f * k, kBrandOrange, 0.35f * A, 8);
-        const int v0 = dl->VtxBuffer.Size;
-        dl->AddRectFilled(m0, m1, col(0xffffff, A), 12.0f * k);
-        ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, m0, ImVec2(m0.x, m1.y), col(0x23232a, 1.0f),
-                                                      col(0x0e0e11, 1.0f));
-        dl->AddRect(m0, m1, col(kBrandOrange, 0.45f * A), 12.0f * k, 0, hair);
-        cubeMark(dl, ImVec2(m0.x + m * 0.19f, m0.y + m * 0.19f), m * 0.62f, col(kBrandOrange, A));
+        markTile(dl, m0, m, A);
         const float ex = m1.x + 16.0f * k;
         paint.spaced(boldUi, 12.5f, ImVec2(ex, y + 6.0f * k), tc(accent, A), "SCULPTFORGE MEMBERSHIP", 2.2f);
         paint.text(bodyFont, 15.0f, ImVec2(ex, y + 25.0f * k), tc(dim, A), "Thank you for sculpting with SculptForge");
@@ -478,7 +318,7 @@ void App::drawSupportCard() {
         ImGui::SetCursorScreenPos(c0);
         ImGui::InvisibleButton("Close##card.close", ImVec2(d, d));
         const bool hot = ImGui::IsItemHovered();
-        if (ImGui::IsItemClicked()) closeSupportCard(false);
+        if (ImGui::IsItemClicked()) closeSupportCard();
         const ImVec2 c(c0.x + d * 0.5f, c0.y + d * 0.5f);
         dl->AddCircleFilled(c, d * 0.5f, tc(hot ? raised : bg, 0.85f * A));
         dl->AddCircle(c, d * 0.5f, tc(line, (hot ? 0.40f : 0.20f) * A), 0, hair);
@@ -487,29 +327,30 @@ void App::drawSupportCard() {
         dl->AddLine(ImVec2(c.x - x, c.y + x), ImVec2(c.x + x, c.y - x), tc(ink, (hot ? 1.0f : 0.8f) * A), 1.6f * k);
     }
 
-    // The three memberships, with the perks worded as on website/support.html (the full list is there).
-    static const Tier kTiers[3] = {
-        {"Supporter", "$5", "/ month",
-         {"Your name in the credits, in the app and on the website", "The members' channel on Discord",
-          "A vote in the monthly feature vote", "The monthly pack at month end"},
-         "Join as a Supporter", "Join as a Supporter##card.supporter", kSupportUrlSupporter},
-        {"Insider", "$20", "/ month",
-         {"Everything in Supporter, and you propose the vote's options", "A daily drop: a brush, alpha or VDM",
-          "Preview builds of the next release, about a week early", "The monthly dev Q&A"},
-         "Become an Insider", "Become an Insider##card.insider", kSupportUrlInsider},
-        {"Studio", kFoundingStudioOpen ? "$150" : "$300", "/ month",
-         {"Insider for every artist in your company", "Your own build: presets, keymaps, brushes and packs baked in",
-          "Up to 5 custom items a month; your requests go first", "Priority triage, a team channel, your logo"},
-         "Studio membership", "Studio membership##card.studio", kSupportUrlStudio},
+    // The two memberships, with the perks worded as on website/support.html.
+    const bool yearly = kSupportUrlMemberYearly[0] != '\0'; // (the yearly checkout, once it exists)
+    const Tier kTiers[2] = {
+        {"Member", "$5", "/ month",
+         {"Betas and early builds of the next version", "The monthly feature vote: pick what we build next",
+          "Member Requests: one a month, built first, credited to you", "The members' channel on Discord",
+          "Your name in the credits, in the app and on the website"},
+         "Become a member", "Become a member##card.member", kSupportUrlMember, yearly ? "or $48 a year" : nullptr},
+        {"Studio", "$300", "/ month",
+         {"A flat rate for the whole studio: any number of artists, each with everything in Member",
+          "Your studio's own build: brushes, alphas, Lit Spheres, keymaps, logo",
+          "Isolated: a private release channel, no outside connections",
+          "First response within 2 business days; up to 3 custom items a month", nullptr},
+         "Studio membership", "Studio membership##card.studio", kStudioPageUrl, "Founding Studio: $150, first 5 studios"},
     };
-    const float gap = 18.0f * k, footer = 62.0f * k, tierH = 318.0f * k;
-    const float tierW = (size.x - pad * 2.0f - gap * 2.0f) / 3.0f;
+    const float gap = 22.0f * k, footer = 62.0f * k, tierH = 350.0f * k;
+    const float tierW = (size.x - pad * 2.0f - gap) / 2.0f;
     const float tierTop = b.y - footer - tierH;
     const char* clicked = nullptr;
     bool discord = false; // the Discord pill in the footer (opens the invite, keeps the card)
-    for (int i = 0; i < 3; ++i) {
+    bool terms = false;   // Terms & refunds in the footer (opens the terms page, keeps the card)
+    for (int i = 0; i < 2; ++i) {
         const Tier& tier = kTiers[i];
-        const bool featured = i == 1;
+        const bool featured = i == 0;
         const float appear = easeOut((t - 0.04f - 0.04f * float(i)) / 0.2f) * A;
         const float lift = card.hover[i] * 4.0f * k + (featured ? 12.0f * k : 0.0f);
         const ImVec2 p0(a.x + pad + float(i) * (tierW + gap), tierTop - lift + (1.0f - appear) * 14.0f * k);
@@ -521,7 +362,7 @@ void App::drawSupportCard() {
         } else {
             glow(dl, ImVec2(p0.x, p0.y + 8.0f * k), ImVec2(p1.x, p1.y + 8.0f * k), r, 18.0f * k, ImVec4(0, 0, 0, 1), 0.5f * appear, 6);
         }
-        { // glass over the picture; the featured card warmer towards the top
+        { // the tier card; the featured one warmer towards the top
             const int v0 = dl->VtxBuffer.Size;
             dl->AddRectFilled(p0, p1, col(0xffffff, 0.95f * appear), r);
             ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, p0, ImVec2(p0.x, p1.y),
@@ -547,37 +388,19 @@ void App::drawSupportCard() {
                          tc(theme::textOnAccent, appear), badge, 1.6f);
             ty += 4.0f * k;
         }
-        const bool founding = i == 2 && kFoundingStudioOpen; // the launch offer: a quieter outlined badge
-        if (founding) {
-            const char* badge = "FOUNDING STUDIO";
-            const float bw = paint.spaced(boldUi, 11.0f, ImVec2(0, 0), 0, badge, 1.6f, false) + 24.0f * k;
-            const ImVec2 b0(p0.x + (tierW - bw) * 0.5f, p0.y - 12.0f * k), b1(b0.x + bw, b0.y + 24.0f * k);
-            dl->AddRectFilled(b0, b1, tc(tierBg, appear), 12.0f * k);
-            dl->AddRect(b0, b1, tc(accent, appear), 12.0f * k, 0, 1.5f * k);
-            paint.spaced(boldUi, 11.0f, ImVec2(b0.x + 12.0f * k, b0.y + (24.0f * k - 11.0f * k) * 0.5f - 0.5f * k),
-                         tc(theme::accentHover, appear), badge, 1.6f);
-        }
         paint.text(headFont, 21.0f, ImVec2(ix, ty), tc(featured ? theme::accentHover : ink, appear), tier.name);
         ty += 32.0f * k;
         const ImVec2 ps = paint.text(titleFont, 44.0f, ImVec2(ix, ty), tc(ink, appear), tier.price);
         const ImVec2 pe = paint.measure(bodyFont, 16.5f, tier.per);
-        float px = ix + ps.x + 6.0f * k;
-        if (founding) { // the regular price, struck through
-            const ImVec2 at(px, ty + ps.y - pe.y - 7.0f * k);
-            const ImVec2 ws = paint.text(bodyFont, 16.5f, at, tc(dim, appear), "$300");
-            dl->AddLine(ImVec2(at.x - 1.0f * k, at.y + ws.y * 0.55f), ImVec2(at.x + ws.x + 1.0f * k, at.y + ws.y * 0.55f),
-                        tc(dim, appear), 1.5f * k);
-            px += ws.x + 6.0f * k;
-        }
-        paint.text(bodyFont, 16.5f, ImVec2(px, ty + ps.y - pe.y - 7.0f * k), tc(dim, appear), tier.per);
-        ty += ps.y + (founding ? 2.0f : 10.0f) * k;
-        if (founding)
-            ty += paint.text(boldUi, 12.5f, ImVec2(ix, ty), tc(theme::accentHover, appear),
-                             "First 10 studios lock in $150/month for good", iw).y + 6.0f * k;
+        paint.text(bodyFont, 16.5f, ImVec2(ix + ps.x + 6.0f * k, ty + ps.y - pe.y - 7.0f * k), tc(dim, appear), tier.per);
+        ty += ps.y + 2.0f * k;
+        if (tier.note) ty += paint.text(bodyFont, 14.0f, ImVec2(ix, ty), tc(dim, appear), tier.note).y;
+        ty += 10.0f * k;
         dl->AddLine(ImVec2(ix, ty), ImVec2(ix + iw, ty), tc(featured ? accent : line, (featured ? 0.35f : 0.12f) * appear), hair);
         ty += 14.0f * k;
         // The perks, each after a check mark.
         for (const char* perk : tier.perks) {
+            if (!perk) break;
             const float cy = ty + 9.5f * k, cr = 8.0f * k;
             const ImVec2 cc(ix + cr, cy);
             dl->AddCircleFilled(cc, cr, tc(accent, (featured ? 0.28f : 0.16f) * appear));
@@ -614,7 +437,7 @@ void App::drawSupportCard() {
                    tc(featured ? theme::textOnAccent : ink, appear), tier.cta);
     }
 
-    // Footer: the one-time Supporter (pay what you want), the members' Discord, "I'm already a supporter" and "Maybe later".
+    // Footer: Member yearly (once that checkout exists), the members' Discord, "I'm already a member" and "Not now".
     const float fy = b.y - footer * 0.5f;
     const float fa = easeOut((t - 0.1f) / 0.2f) * A;
     auto link = [&](const char* label, const char* id, ImVec2 at, const ImVec4& c, bool underline) {
@@ -638,17 +461,21 @@ void App::drawSupportCard() {
         return std::pair<bool, bool>(hot, ImGui::IsItemClicked());
     };
     {
-        const char* lead = "No subscription?";
-        const ImVec2 ls = paint.measure(bodyFont, 15.0f, lead);
-        const float ly = std::floor(fy - ls.y * 0.5f);
-        paint.text(bodyFont, 15.0f, ImVec2(a.x + pad, ly), tc(dim, fa), lead);
-        if (link("One-time Supporter", "One-time Supporter##card.once", ImVec2(a.x + pad + ls.x + 8.0f * k, ly), accent, true))
-            clicked = kSupportUrlOnce;
+        float x = a.x + pad;
+        if (yearly) {
+            const char* lead = "Prefer yearly?";
+            const ImVec2 ls = paint.measure(bodyFont, 15.0f, lead);
+            const float ly = std::floor(fy - ls.y * 0.5f);
+            paint.text(bodyFont, 15.0f, ImVec2(x, ly), tc(dim, fa), lead);
+            const char* label = "Member, $48 a year";
+            if (link(label, "Member, $48 a year##card.member_yearly", ImVec2(x + ls.x + 8.0f * k, ly), accent, true))
+                clicked = kSupportUrlMemberYearly;
+            x = std::floor(x + ls.x + 8.0f * k + paint.measure(bodyFont, 15.0f, label).x + 28.0f * k);
+        }
         // The members' Discord: a pill with a drawn speech-bubble glyph (no logo asset). It opens the invite and leaves
         // the card open.
-        const ImVec2 gs = paint.measure(bodyFont, 15.0f, "One-time Supporter");
         const float glyph = 18.0f * k;
-        const ImVec2 c0(std::floor(a.x + pad + ls.x + 8.0f * k + gs.x + 28.0f * k), fy - 19.0f * k);
+        const ImVec2 c0(x, fy - 19.0f * k);
         const auto [hot, hit] = pill("Join the members on Discord", "Join the members on Discord##card.discord", c0, glyph + 10.0f * k);
         discord = hit;
         const ImVec2 g0(c0.x + 20.0f * k, fy - glyph * 0.42f), g1(g0.x + glyph, fy + glyph * 0.30f);
@@ -657,54 +484,275 @@ void App::drawSupportCard() {
                               ImVec2(g0.x + 3.0f * k, g1.y + 5.0f * k), tc(hot ? ink : accent, fa));
         const float my = (g0.y + g1.y) * 0.5f, r = 1.6f * k;
         for (int i = -1; i <= 1; ++i) dl->AddCircleFilled(ImVec2((g0.x + g1.x) * 0.5f + float(i) * 4.5f * k, my), r, tc(bg, fa));
+        // The fine print: the membership terms (refunds, cancelling), after the pill.
+        const char* label = tr("Terms & refunds");
+        const float tx = std::floor(c0.x + paint.measure(boldUi, 15.0f, "Join the members on Discord").x + 44.0f * k + glyph +
+                                    10.0f * k + 24.0f * k);
+        terms = link(label, "##card.terms", ImVec2(tx, std::floor(fy - paint.measure(bodyFont, 15.0f, label).y * 0.5f)), dim, true);
     }
     bool later = false, supporter = false;
     {
-        const char* label = "Maybe later";
+        const char* label = "Not now";
         const ImVec2 ls = paint.measure(boldUi, 15.0f, label);
         const ImVec2 c0(b.x - pad - ls.x - 44.0f * k, fy - 19.0f * k);
-        const auto [hot, hit] = pill(label, "Maybe later##card.later", c0, 0.0f);
+        const auto [hot, hit] = pill(label, "Not now##card.later", c0, 0.0f);
         later = hit;
-        if (hot) ImGui::SetTooltip("Hides this card for 30 days.");
-        const char* already = "I'm already a supporter";
+        if (hot) ImGui::SetTooltip("%s", tr("Nothing about memberships for a week."));
+        const char* already = "I'm already a member";
         const ImVec2 as = paint.measure(bodyFont, 15.0f, already);
-        supporter = link(already, "I'm already a supporter##card.supporter_already",
+        supporter = link(already, "I'm already a member##card.supporter_already",
                          ImVec2(c0.x - 24.0f * k - as.x, std::floor(fy - as.y * 0.5f)), dim, false);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Sign in with GitHub (the member builds' sign-in): no more cards."));
     }
 
-    // Esc, or a click outside the card: closed until the next start it's due (Maybe later: 30 days).
+    // Esc, or a click outside the card: closed (the small card may follow in a week).
     const bool outside = ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsWindowHovered() &&
                          !ImRect(a, b).Contains(io.MousePos) && t > 0.3f;
     if (!card.closing) {
         if (clicked) {
             openSupportLink(clicked);
-            closeSupportCard(false);
+            memberCardChoice(MemberCardChoice::Become);
+            closeSupportCard();
         } else if (discord) {
             openDiscordPage(); // the card stays: a membership may still follow
+        } else if (terms) {
+            openSupportLink(kTermsUrl); // the card stays too
         } else if (supporter) {
-            closeSupportCard(true);
+            closeSupportCard();
+            verifyMember(); // the small card shows the sign-in's steps
         } else if (later) {
-            supportCardPrefs_.laterAt = supportCardNow_;
-            saveProjectPrefs();
-            closeSupportCard(false);
+            memberCardChoice(MemberCardChoice::NotNow);
+            closeSupportCard();
         } else if (outside || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-            closeSupportCard(false);
+            closeSupportCard();
         }
     }
     ImGui::EndPopup();
 }
 
 void App::drawSupportPrefs() {
-    if (ImGui::Checkbox("Show the support card at launch", &supportCardPrefs_.enabled)) saveProjectPrefs();
-    ui::HelpText("Show the support card at launch", nullptr,
-                 "A card with the SculptForge memberships, shown while it starts: the first time, after "
-                 "each update, and at most once a week otherwise; Maybe later hides it for 30 days. Never while you work.",
-                 "Preferences > Support");
-    if (ImGui::Checkbox("I'm a supporter", &supportCardPrefs_.supporter)) saveProjectPrefs();
-    ui::HelpText("I'm a supporter", nullptr,
-                 "Thank you! The support card never shows. Kept on this computer only: SculptForge has no accounts.",
-                 "Preferences > Support");
-    if (ImGui::Button("Show the support card", ImVec2(-1, 0))) showSupportCard(SupportCardReason::Weekly);
+    if (supportCardPrefs_.supporter || memberSignedIn()) {
+        ImGui::TextWrapped("%s", "Thank you for being a member! No membership cards show.");
+    } else {
+        ImGui::TextWrapped("%s", "A small membership card shows at most once a week, at a good moment (never mid-stroke), "
+                                 "until you become a member. After a third Not now it waits a month; after a sixth it "
+                                 "only comes with an update.");
+        if (ImGui::Button(tr("I'm already a member##prefs.member_verify"), ImVec2(-1, 0))) verifyMember();
+        ui::HelpText("I'm already a member", nullptr,
+                     "Signs in with GitHub, as member builds do (Preferences > Updates): no more membership cards, "
+                     "and the member builds are on.",
+                     "Preferences > Support");
+    }
+    if (ImGui::Button(tr("Show the memberships"), ImVec2(-1, 0))) showSupportCard(SupportCardReason::Manual);
+}
+
+// --- The small card at good moments ---
+
+int64_t App::memberClock() const { return int64_t(std::time(nullptr)) + memberClockOffset_; }
+
+void App::memberMoment(MemberMoment m) {
+    const bool testMode = supportCardTestMode() && !memberCardTestMode_;
+    if (m == MemberMoment::None || memberCard_ != MemberMoment::None || memberVerifying_) return;
+    if (studioMembership() || !memberMomentAllowed(supportCardPrefs_, memberSignedIn(), memberClock(), testMode, m)) return;
+    memberMomentPending_ = m; // (the latest moment's words)
+    redrawIn(0.0);
+}
+
+void App::memberMilestoneCheck() {
+    if (memberCard_ != MemberMoment::None || memberMomentPending_ != MemberMoment::None || memberVerifying_) return;
+    if (const MemberMoment m = milestoneDue(supportCardPrefs_); m != MemberMoment::None) memberMoment(m);
+}
+
+void App::countMemberSave() {
+    if (supportCardTestMode() && !memberCardTestMode_) return; // (counted on this computer, never sent)
+    supportCardPrefs_.saves = std::min(supportCardPrefs_.saves + 1, 100000000);
+    memberMilestoneCheck();
+}
+
+void App::tickMemberCard(float dt) {
+    const bool stroking = doc_.sculptor.strokeActive();
+    if (stroking) {
+        sessionSculptSeconds_ = addSculptTime(sessionSculptSeconds_, double(dt));
+        if (!supportCardTestMode() || memberCardTestMode_)
+            supportCardPrefs_.sculptSeconds = addSculptTime(supportCardPrefs_.sculptSeconds, double(dt));
+    }
+    if (sculptMomentDue(sessionSculptSeconds_, sculptMomentDone_)) {
+        sculptMomentDone_ = true;
+        memberMoment(MemberMoment::Sculpted);
+    }
+    if (!stroking && ImGui::GetTime() - milestoneCheckedAt_ >= 60.0) { // the sculpting hours: once a minute is plenty
+        milestoneCheckedAt_ = ImGui::GetTime();
+        memberMilestoneCheck();
+    }
+    if (memberMomentPending_ == MemberMoment::None) return;
+    const bool otherCard = supportCard_ || showWelcome_ || quickTourOpen_ || whatsNew_ || showWhatsNew_ ||
+                           ImGui::GetTopMostPopupModal() != nullptr;
+    if (!memberCardMayOpen(stroking, backgroundBusy(), otherCard)) return; // (it waits)
+    memberCard_ = std::exchange(memberMomentPending_, MemberMoment::None);
+    supportCardPrefs_.shownAt = memberClock();
+    // A milestone shows once, with its true number now; the feed's honest lines take turns, card by card.
+    supportCardPrefs_.milestonesShown |= milestoneBit(memberCard_);
+    memberCardMilestone_ = milestoneLine(memberCard_, supportCardPrefs_);
+    memberCardFeedLine_ = supportFeedLine(supportCardPrefs_.feed, supportCardPrefs_.shownCount);
+    supportCardPrefs_.shownCount = std::min(supportCardPrefs_.shownCount + 1, 1000000);
+    saveProjectPrefs(); // (recorded as it shows: a crash can't bring it back at once)
+    redrawIn(0.0);
+}
+
+void App::memberCardChoice(MemberCardChoice c) {
+    applyMemberCardChoice(supportCardPrefs_, c, memberClock());
+    if (c == MemberCardChoice::SignedIn) status_ = "Thank you for being a member! No more membership cards.";
+    if (c == MemberCardChoice::NoSignIn)
+        status_ = "No member sign-in: no membership cards for three months (Preferences > Support signs in later).";
+    memberCard_ = MemberMoment::None;
+    saveProjectPrefs();
+}
+
+void App::verifyMember() {
+    if (memberSignedIn()) { // (already signed in for member builds)
+        memberCardChoice(MemberCardChoice::SignedIn);
+        return;
+    }
+    memberVerifying_ = true;
+    memberMomentPending_ = MemberMoment::None;
+    startMemberSignIn([this](bool member) { memberSignInFinished(member); }); // (PanelUpdate.cpp: the one sign-in)
+    redrawIn(0.0);
+}
+
+void App::memberSignInFinished(bool member) {
+    memberVerifying_ = false;
+    // A member: gone for good (and member builds are on). Not signed in (cancelled, declined, no access): 3 months.
+    memberCardChoice(member ? MemberCardChoice::SignedIn : MemberCardChoice::NoSignIn);
+}
+
+void App::drawMemberCard() {
+    if (memberCard_ == MemberMoment::None && !memberVerifying_) return;
+    const float s = uiScale_;
+    const CanvasRect c = canvasRect();
+    ImGui::SetNextWindowPos(ImVec2(c.x + c.w * 0.5f, c.y + c.h - 16.0f * s), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowSize(ImVec2(std::min(560.0f * s, c.w - 32.0f * s), 0.0f), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f * s, 14.0f * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f * s);
+    ui::PushRole(theme::Role::New); // the lifted surface; its edge stays the full orange
+    ImGui::PushStyleColor(ImGuiCol_Border, theme::rolePopups ? theme::edge(theme::Role::New) : theme::accent);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+    const bool began = ImGui::Begin("##member_card", nullptr, flags);
+    ImGui::PopStyleColor();
+    ui::PopRole();
+    ImGui::PopStyleVar(2);
+    if (began) {
+        ImFont* bold = boldFont();
+        if (memberVerifying_) {
+            if (bold) ImGui::PushFont(bold);
+            ImGui::TextWrapped("%s", "Sign in with the GitHub account that has the members' invitation.");
+            if (bold) ImGui::PopFont();
+            ImGui::TextDisabled("%s", "It can only read the member builds; Preferences > Updates signs out.");
+            ImGui::Spacing();
+            if (memberSignIn_) drawMemberSignInSteps(); // (PanelUpdate.cpp)
+            else memberSignInFinished(memberSignedIn()); // (gone without an answer: Sign out in Preferences meanwhile)
+        } else {
+            std::string line;
+            switch (memberCard_) {
+            case MemberMoment::Sculpted: line = "Twenty minutes of sculpting. Members keep SculptForge free and moving."; break;
+            case MemberMoment::SavedRender: line = "Nice render. Members keep SculptForge free and moving."; break;
+            case MemberMoment::Updated:
+                line = std::string("SculptForge ") + appVersionLabel() + " is here. Members get new versions early, as betas.";
+                break;
+            case MemberMoment::Challenge:
+                line = challengeTitle_.empty() ? std::string("The monthly challenge results are in, on Discord.")
+                                               : "The " + challengeTitle_ + " challenge results are in, on Discord.";
+                break;
+            case MemberMoment::Starts:
+            case MemberMoment::SculptHours:
+            case MemberMoment::Saves: line = formatCardLine(memberCardMilestone_, tr(memberCardMilestone_.format)); break;
+            case MemberMoment::None: break;
+            }
+            if (bold) ImGui::PushFont(bold);
+            ImGui::TextWrapped("%s", line.c_str());
+            if (bold) ImGui::PopFont();
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::textDim);
+            ImGui::TextWrapped("%s", "$5 a month or $48 a year: betas early, the feature vote, Member Requests and your "
+                                     "name in the credits. Nothing in the app is ever paywalled.");
+            ImGui::PopStyleColor();
+            // The feed's honest line in turn (latest.json's "support"), else the Founding Members' offer.
+            const FoundingMembers& founding = foundingMembers();
+            if (memberCardFeedLine_.format) {
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::accentHover);
+                ImGui::TextWrapped("%s", formatCardLine(memberCardFeedLine_, tr(memberCardFeedLine_.format)).c_str());
+                ImGui::PopStyleColor();
+            } else if (founding.open()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::accentHover);
+                ImGui::TextWrapped(tr("The first %d members are Founding Members: a badge, their name in the credits and "
+                                   "their price locked for good."), founding.limit);
+                ImGui::PopStyleColor();
+            }
+            ImGui::Spacing();
+            ImGui::PushStyleColor(ImGuiCol_Button, theme::accent);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::accentHover);
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::textOnAccent);
+            const bool become = ImGui::Button(tr("Become a member##member_card.become"));
+            ImGui::PopStyleColor(3);
+            ImGui::SameLine();
+            const bool notNow = ImGui::Button(tr("Not now##member_card.not_now"));
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Nothing about memberships for a week."));
+            ImGui::SameLine();
+            const bool already = ImGui::Button(tr("I'm already a member##member_card.already"));
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Sign in with GitHub (the member builds' sign-in): no more cards."));
+            { // the fine print: the membership terms (refunds, cancelling), a quiet link after the buttons (or under them)
+                const char* terms = tr("Terms & refunds##member_card.terms");
+                ImGui::SameLine();
+                if (ImGui::GetContentRegionAvail().x < ImGui::CalcTextSize(terms, nullptr, true).x) ImGui::NewLine();
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::textDim);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+                if (ImGui::SmallButton(terms)) openSupportLink(kTermsUrl);
+                if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(4);
+            }
+            if (become) {
+                openSupportPage(); // both choices (monthly, yearly) on the membership page
+                memberCardChoice(MemberCardChoice::Become);
+            } else if (notNow) {
+                memberCardChoice(MemberCardChoice::NotNow);
+            } else if (already) {
+                memberCard_ = MemberMoment::None;
+                verifyMember();
+            }
+        }
+    }
+    ImGui::End();
+}
+
+// --- The top bar's heart ---
+
+bool App::drawSupportHeart(ImVec2 at, float size, ImDrawList* dl) {
+    if (studioMembership()) return false; // (a Studio member's own build)
+    const bool member = supportCardPrefs_.supporter || memberSignedIn();
+    ImGui::SetCursorScreenPos(at);
+    const bool clicked = ImGui::InvisibleButton(member ? "Member##topbar.member" : "Support SculptForge##topbar.heart",
+                                                ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    const ImVec2 b(at.x + size, at.y + size);
+    if (hovered && !member) dl->AddRectFilled(at, b, theme::u32(theme::frameHover), theme::rounding(3.0f * uiScale_));
+    // Quiet: the dim text colour like the window buttons; the accent only under the pointer (a member's badge: the
+    // accent, small and still). No animation, no count.
+    const ImU32 col = theme::u32(member ? theme::accent : hovered ? theme::accentHover : theme::textDim, member ? 0.85f : 1.0f);
+    ui::CentredGlyph(dl, nullptr, at, b, col, member ? ICON_LC_BADGE_CHECK : ICON_LC_HEART);
+    if (member) {
+        ui::HelpText("Member", nullptr, "Thank you for being a member: you keep SculptForge free and growing.", "Top bar");
+    } else {
+        ui::HelpText("Support SculptForge", nullptr,
+                     "SculptForge is free and open source. Members keep it free and growing (Help > Support SculptForge).",
+                     "Top bar");
+        if (clicked) {
+            if (const Action* a = actions_.find("help.support"); a && a->run) a->run();
+        }
+    }
+    return true;
 }
 
 } // namespace sf

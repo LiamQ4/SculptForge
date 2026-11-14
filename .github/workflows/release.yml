@@ -2,19 +2,36 @@ name: Release
 
 # A v* tag publishes a GitHub release (docs/releasing.md has the whole process; scripts/release.sh drives it).
 #
-#   locate   the tagged commit must carry the version the tag names (CMakeLists.txt). If CI and the Packages
-#            workflow (packages.yml) both succeeded on a push to main for exactly this commit, the release uses those
-#            packages: built and tested once, promoted unchanged. Otherwise:
-#   build    the Packages workflow runs here, from the tag (compiler cache restored from main, never saved).
+#   locate   the tagged commit must carry the version the tag names (CMakeLists.txt's version, plus its
+#            SCULPTFORGE_PRERELEASE for a beta: v0.11.0-beta.1 tags 0.11.0 with "beta.1"). When the Packages workflow
+#            (packages.yml) ran on a maintainer's push to `staging` or `main` for this commit, or for one with the same
+#            build-input key (tools/release/build_key.py: every file that goes into the packages identical), the release
+#            promotes that run's packages unchanged: built and tested once. tools/release/staged_run.py picks it (push
+#            event, branch, actor, success, at most 7 days old, artifacts present, the key recomputed from git) and
+#            refuses the release if no such run qualifies; CI must have passed on main for the commit. With none at all:
+#   build    the Packages workflow runs here, from the tag (compiler cache restored from main, never saved): the
+#            --rebuild path.
+#   verify   every package's SHA-256 is the one its run recorded (packages.yml job sums) and its GitHub artifact
+#            attestation names packages.yml, the commit that run built and that run (and, promoted, its push):
+#            tools/release/verify_staged.py. Any mismatch refuses the release.
 #   smoke    every package installed or unpacked on a fresh runner: the app opens a model and sculpts
-#            (tests/ui/release_smoke.sfui), sculptforge-cli opens, sculpts, saves and reopens (tests/release_smoke.py).
-#   publish  only after every smoke test passed: checksums, notes from CHANGELOG.md, the GitHub release.
+#            (tests/ui/release_smoke.sfui), sculptforge-cli opens, sculpts, saves and reopens and its MCP server answers
+#            (tests/release_smoke.py), also through the AppImage (AppRun --cli) and each unpacked .mcpb bundle.
+#   publish  only after verify and every smoke test passed (environment `release`, the only holder of
+#            UPDATE_SIGNING_KEY besides member-release: tags v* only): checksums re-checked, signed, notes from
+#            CHANGELOG.md, the GitHub release. A tag with
+#            a '-' (a beta) is a member perk, published by publish-members instead: a pre-release in the private
+#            repository sculptforge/sculptforge-insiders (INSIDERS_REPO_TOKEN, held only by the environment
+#            member-release: v* tags only, maintainer approval) with CHANGELOG's [Unreleased] notes, and posted in
+#            #members (DISCORD_MEMBERS_WEBHOOK). Nothing public: no release here, no update feed entry.
 #
-# Only publish holds a token that can write (contents: write); every other job reads. Build and smoke jobs take their
+# Only publish holds a GitHub token that can write (contents: write); every other job reads. Every action is pinned
+# to a full commit SHA (scripts/release.sh check enforces it). Build and smoke jobs take their
 # runner from the SF_RUNNER_* repository variables (standard GitHub runners when unset); locate and publish always run
 # on GitHub's own runners.
-# workflow_dispatch rebuilds and republishes an existing tag; dry_run does everything but publish, and promote_run
-# (dry runs only) smoke-tests the packages of any Packages run, so the pipeline can be tried from a branch.
+# workflow_dispatch republishes an existing tag (dispatch it ON the tag, `--ref vX.Y.Z`: the environment takes only
+# tags); dry_run does everything but publish, and promote_run (dry runs only) smoke-tests the packages of any Packages
+# run, unverified, so the pipeline can be tried from a branch.
 
 on:
   push:
@@ -48,10 +65,13 @@ jobs:
     outputs:
       run-id: ${{ steps.find.outputs.run-id }}
       sha: ${{ steps.find.outputs.sha }}
+      built-sha: ${{ steps.find.outputs.built-sha }}
+      built-ref: ${{ steps.find.outputs.built-ref }}
       tag: ${{ steps.find.outputs.tag }}
+      staged: ${{ steps.find.outputs.staged }}
     steps:
-      - uses: actions/checkout@v7
-        with: { ref: '${{ env.TAG }}' }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: '${{ env.TAG }}', fetch-depth: 20 } # the commits before the bump, for the paperwork check
       - id: find
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,12 +82,14 @@ jobs:
           sha=$(git rev-parse HEAD)
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           version=$(sed -n 's/^project(SculptForge VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          pre=$(sed -n 's/^set(SCULPTFORGE_PRERELEASE "\([^"]*\)")$/\1/p' CMakeLists.txt)
+          version=$version${pre:+-$pre} # a beta: 0.11.0-beta.1
           if [ "$DRY_RUN" = true ] && ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
             # A dry run of a branch or commit: its packages are named for the version it carries.
             echo "Dry run of $TAG ($sha), packages named v$version"
             echo "tag=v$version" >> "$GITHUB_OUTPUT"
           elif [ "v$version" != "$TAG" ]; then
-            echo "::error::$TAG tags a commit whose CMakeLists.txt says $version. Fix: delete the tag, bump the version (or tag v$version), tag again."
+            echo "::error::$TAG tags a commit whose CMakeLists.txt says $version (version and SCULPTFORGE_PRERELEASE). Fix: delete the tag, bump the version (scripts/release.sh, or tag v$version), tag again."
             exit 1
           else
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -81,29 +103,98 @@ jobs:
             echo "run-id=$run" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Successful runs on a push to main for exactly this commit, from this repository's own workflow files.
+          # CI: a successful run on a push to main for exactly this commit, from this repository's own workflow file.
           runs() {
             gh api "repos/$REPO/actions/workflows/$1/runs?head_sha=$sha&event=push&branch=main&status=success&per_page=5" \
               --jq '.workflow_runs[] | select(.head_sha == "'"$sha"'" and .head_branch == "main" and .event == "push"
                     and .path == ".github/workflows/'"$1"'" and .head_repository.full_name == "'"$REPO"'") | .id' | head -1
           }
-          ci=$(runs ci.yml || true)
-          pkg=$(runs packages.yml || true)
-          if [ -n "$ci" ] && [ -n "$pkg" ]; then
-            echo "Promoting the packages of Packages run $pkg (CI run $ci passed for $sha)"
-            echo "run-id=$pkg" >> "$GITHUB_OUTPUT"
-          else
-            echo "No successful CI ($ci) and Packages ($pkg) runs on main for $sha: building the packages here"
+          # The packages: only the Packages run of a maintainer's push to `staging` or `main` for this commit or one with
+          # the same build-input key (exit 3: there is none, build here; exit 1: there are runs, none may be promoted: refuse).
+          rc=0
+          found=$(python3 tools/release/staged_run.py --repo "$REPO" --sha "$sha" --full) || rc=$?
+          if [ $rc = 3 ]; then
+            echo "No Packages run on staging or main for $sha or its build inputs: building the packages here (the --rebuild path)"
+            exit 0
+          elif [ $rc != 0 ]; then
+            echo "::error::$sha has Packages runs but none may be promoted (above). Fix: stage the release again (scripts/release.sh X.Y.Z --stage), or delete the tag and use scripts/release.sh X.Y.Z --rebuild."
+            exit 1
           fi
+          read -r pkg built ref <<<"$found"
+          case "$ref" in main|staging) ;; *) echo "::error::run $pkg is from '$ref', not main or staging"; exit 1 ;; esac
+          if [ "$built" != "$sha" ]; then # (staged_run.py checked it; checked again here, from git, where it is logged)
+            keys=$(python3 tools/release/build_key.py "$sha" "$built" | cut -d' ' -f1 | sort -u | wc -l)
+            [ "$keys" = 1 ] || { echo "::error::run $pkg built $built, whose build inputs differ from $sha's"; exit 1; }
+            echo "Run $pkg built $built ($ref), whose build inputs are byte for byte $sha's: $(python3 tools/release/build_key.py "$sha")"
+          fi
+          ci=$(runs ci.yml || true)
+          if [ -z "$ci" ]; then
+            # The bump commit adds only release paperwork (tools/release/paperwork_only.py: version lines, CHANGELOG,
+            # docs, site, fragments) to a main commit whose CI passed: that result stands (scripts/release.sh step ci).
+            for c in $(git rev-list --first-parent -n 8 "$sha~1"); do
+              python3 tools/release/paperwork_only.py "$c" "$sha" || break
+              ci=$(sha=$c; runs ci.yml || true)
+              [ -n "$ci" ] && { echo "CI run $ci on $c stands for $sha (only release paperwork since)"; break; }
+            done
+          fi
+          [ -n "$ci" ] || { echo "::error::no successful CI run on main for $sha: a staged commit lands on main only after CI passed"; exit 1; }
+          echo "Promoting the packages of $ref's Packages run $pkg (CI run $ci passed for $sha)"
+          echo "run-id=$pkg" >> "$GITHUB_OUTPUT"
+          echo "built-sha=$built" >> "$GITHUB_OUTPUT"
+          echo "built-ref=refs/heads/$ref" >> "$GITHUB_OUTPUT"
+          echo "staged=true" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build
     needs: locate
     if: needs.locate.outputs.run-id == ''
+    permissions:
+      contents: read
+      actions: read # packages.yml's reuse job asks for it (it skips itself here: not a push to main)
+      id-token: write # packages.yml attests what it builds
+      attestations: write
     uses: ./.github/workflows/packages.yml
     with:
       ref: ${{ needs.locate.outputs.sha }}
       tag: ${{ needs.locate.outputs.tag }}
+    secrets:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }} # the build from the tag signs too (SIGNING=signpath); unused otherwise
+
+  # Every package against its run's recorded SHA-256 and its attestation (tools/release/verify_staged.py). Dry runs
+  # too; not for promote_run (a dry run's look at any run's packages).
+  verify:
+    name: Verify checksums and attestations
+    needs: [locate, build]
+    if: ${{ !cancelled() && needs.locate.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && !(inputs.dry_run == true && inputs.promote_run != '') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: '${{ needs.locate.outputs.sha }}', persist-credentials: false, sparse-checkout: tools/release }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+          pattern: '{linux,flatpak,vfx,macos,windows}*'
+          run-id: ${{ needs.locate.outputs.run-id || github.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: staged-sums
+          path: sums
+          run-id: ${{ needs.locate.outputs.run-id || github.run_id }}
+          github-token: ${{ github.token }}
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ needs.locate.outputs.run-id || github.run_id }}
+          SHA: ${{ needs.locate.outputs.built-sha || needs.locate.outputs.sha }}
+          STAGED: ${{ needs.locate.outputs.staged }}
+          REF: ${{ needs.locate.outputs.built-ref }}
+          SIGNED: ${{ vars.SIGNING == 'signpath' && '1' || '' }} # signing is on: packages staged unsigned (built before it was turned on) are refused
+        run: python3 tools/release/verify_staged.py dist sums/SHA256SUMS.staged.txt --repo "$GITHUB_REPOSITORY" --run "$RUN" --sha "$SHA" ${STAGED:+--staged --ref "$REF"} ${SIGNED:+--require-signed}
 
   smoke:
     name: Smoke test ${{ matrix.name }}
@@ -127,14 +218,15 @@ jobs:
       - if: matrix.kind == 'rpm'
         run: dnf -y install git tar python3 xorg-x11-server-Xvfb mesa-dri-drivers
       # The smoke scripts and the test model come from the workflow's own commit (the tag, when a tag runs this).
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             tests/release_smoke.py
             tests/ui/release_smoke.sfui
             tests/data/marble-bust.glb
+            packaging/linux/apt-retry.sh
           sparse-checkout-cone-mode: false
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ matrix.artifact }}
           path: pkg
@@ -163,6 +255,10 @@ jobs:
             python tests/release_smoke.py --cli "$bin\sculptforge-cli.exe" --out "smoke-$(Split-Path $bin -Leaf)"
             if ($LASTEXITCODE -ne 0) { throw "the CLI smoke test failed in $bin" }
           }
+          Copy-Item (Get-ChildItem pkg/SculptForge-*-windows-x86_64.mcpb | Select-Object -First 1).FullName mcpb.zip # (Expand-Archive wants .zip)
+          Expand-Archive mcpb.zip -DestinationPath mcpb
+          python tests/release_smoke.py --mcp-only --cli "$PWD\mcpb\server\sculptforge-cli.exe"
+          if ($LASTEXITCODE -ne 0) { throw "the .mcpb bundle's server failed" }
       - name: macOS .dmg
         if: matrix.kind == 'macos'
         run: |
@@ -173,12 +269,13 @@ jobs:
           app="$RUNNER_TEMP/SculptForge.app/Contents/MacOS"
           codesign --verify --deep "$RUNNER_TEMP/SculptForge.app"
           python3 tests/release_smoke.py --cli "$app/sculptforge-cli" --out smoke
+          unzip -q pkg/*.mcpb -d mcpb && python3 tests/release_smoke.py --mcp-only --cli mcpb/server/sculptforge-cli
           "$app/sculptforge" --ui-test "$PWD/tests/ui/release_smoke.sfui" --ui-out "$PWD/shots"
       - name: Linux .deb and AppImage
         if: matrix.kind == 'linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ./pkg/sculptforge_*.deb xvfb libgl1-mesa-dri
+          sudo ./packaging/linux/apt-retry.sh update
+          sudo ./packaging/linux/apt-retry.sh install -y --no-install-recommends ./pkg/sculptforge_*.deb xvfb libgl1-mesa-dri
           ui() { xvfb-run -a -s "-screen 0 1920x1080x24" env LIBGL_ALWAYS_SOFTWARE=1 "$@" \
                    --ui-test "$PWD/tests/ui/release_smoke.sfui"; }
           echo "== .deb"
@@ -189,6 +286,10 @@ jobs:
           (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE"/pkg/*.AppImage --appimage-extract >/dev/null)
           ui "$RUNNER_TEMP/squashfs-root/AppRun" --ui-out "$PWD/shots/appimage"
           python3 tests/release_smoke.py --cli "$RUNNER_TEMP/squashfs-root/usr/bin/sculptforge-cli" --out smoke-appimage
+          echo "== AppRun --cli --mcp (what Help > Connect an AI tool gives AppImage users)"
+          python3 tests/release_smoke.py --mcp-only --cli "$RUNNER_TEMP/squashfs-root/AppRun --cli"
+          echo "== .mcpb"
+          unzip -q pkg/*.mcpb -d mcpb && python3 tests/release_smoke.py --mcp-only --cli mcpb/server/sculptforge-cli
       - name: .rpm
         if: matrix.kind == 'rpm'
         run: |
@@ -199,7 +300,7 @@ jobs:
             --ui-test "$PWD/tests/ui/release_smoke.sfui" --ui-out "$PWD/shots/rpm"
       - name: Screenshots
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-shots-${{ matrix.artifact }}
           path: shots
@@ -207,22 +308,36 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: [locate, build, smoke]
-    if: ${{ !cancelled() && needs.smoke.result == 'success' && inputs.dry_run != true }}
+    needs: [locate, build, verify, smoke]
+    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.smoke.result == 'success' && inputs.dry_run != true && !contains(needs.locate.outputs.tag, '-') }}
     runs-on: ubuntu-24.04
+    environment: release # UPDATE_SIGNING_KEY lives only here (and in member-release): deployments from tags v* only
     permissions:
       contents: write
       actions: read
+    env:
+      HAS_REPO_KEY: ${{ secrets.REPO_SIGNING_KEY != '' }}
     steps:
-      - uses: actions/checkout@v7
-        with: { ref: '${{ env.TAG }}' }
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: '${{ env.TAG }}', persist-credentials: false }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true
           pattern: '{linux,flatpak,vfx,macos,windows}*'
           run-id: ${{ needs.locate.outputs.run-id || github.run_id }}
           github-token: ${{ github.token }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: staged-sums
+          path: sums
+          run-id: ${{ needs.locate.outputs.run-id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: The same bytes job verify checked (SHA-256 as recorded, nothing added or missing)
+        env:
+          RUN: ${{ needs.locate.outputs.run-id || github.run_id }}
+          SHA: ${{ needs.locate.outputs.sha }}
+        run: python3 tools/release/verify_staged.py dist sums/SHA256SUMS.staged.txt --run "$RUN" --sha "$SHA" --sums-only && rm -r sums
       - name: Version-less copies (fixed links such as releases/latest/download/SculptForge-macos.dmg)
         run: |
           cd dist
@@ -238,19 +353,44 @@ jobs:
           cp "sculptforge-$V-1.aarch64.rpm" sculptforge.aarch64.rpm
           cp "SculptForge-$V-x86_64.flatpak" SculptForge-linux-x86_64.flatpak
           cp "SculptForge-$V-aarch64.flatpak" SculptForge-linux-arm64.flatpak
+          cp "SculptForge-$V-windows-x86_64.mcpb" SculptForge-windows-x86_64.mcpb
+          cp "SculptForge-$V-darwin-universal.mcpb" SculptForge-macos.mcpb
+          cp "SculptForge-$V-linux-x86_64.mcpb" SculptForge-linux-x86_64.mcpb
+          cp "SculptForge-$V-linux-arm64.mcpb" SculptForge-linux-arm64.mcpb
+      - name: MCP registry entry (server.json for the .mcpb bundles; publishing it is the maintainer's, docs/releasing.md)
+        run: python3 tools/release/mcp_server_json.py --version "${TAG#v}" --dist dist
+      # The add-on has its own version and lane (tags blender-vX.Y.Z, integrations.yml); each app release carries the
+      # add-on as it is on the tagged commit, under its own version.
       - name: Blender add-on (extension and legacy zips, plus a version-less copy for the website's link)
         run: |
-          python3 addons/blender/build_addon.py --check --version "${TAG#v}" --out dist
-          cp "dist/sculptforge_bridge-${TAG#v}.zip" dist/sculptforge_bridge.zip
+          python3 addons/blender/build_addon.py --check --out dist
+          cp dist/sculptforge_bridge-*[0-9].zip dist/sculptforge_bridge.zip
       - name: Maya shelf script (Python source and its README; nothing to build)
         run: python3 -m zipfile -c dist/sculptforge_maya.zip integrations/maya/sculptforge_maya.py integrations/maya/README.md
-      - name: ZBrush ZTL Export plug-in (ZScript source; ZBrush compiles it)
-        run: cp integrations/zbrush/SculptForgeZToolExport.txt dist/
+      - name: Software bill of materials (CycloneDX; covered by the checksums and their signature)
+        run: python3 tools/release/sbom.py --version "${TAG#v}" --out "dist/SculptForge-${TAG#v}-sbom.cdx.json"
+      # The apt and dnf repositories (sculptforge.app/apt and /rpm, docs/design/package-repos.md): signed metadata for
+      # this release's .deb and .rpm, put on the site by pages.yml. Skipped until the REPO_SIGNING_KEY secret exists
+      # in this environment. The tools are installed in their own step, which never sees the key.
+      - name: Repository tools
+        if: ${{ env.HAS_REPO_KEY == 'true' }}
+        run: sudo ./packaging/linux/apt-retry.sh update -q && sudo ./packaging/linux/apt-retry.sh install -y -q createrepo-c apt-utils
+      - name: Signed apt and dnf repository metadata
+        env:
+          REPO_SIGNING_KEY: ${{ secrets.REPO_SIGNING_KEY }}
+          REPO_SIGNING_PASSPHRASE: ${{ secrets.REPO_SIGNING_PASSPHRASE }}
+        run: |
+          if [ -z "$REPO_SIGNING_KEY" ]; then echo "No REPO_SIGNING_KEY secret: no package repositories for this release"; exit 0; fi
+          tools/publish/package_repos.sh dist dist/sculptforge-package-repos.tar.gz
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Sign the checksums (one-click update checks SHA256SUMS.txt.sig, src/core/SelfUpdate.h)
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: tools/release/sign_sums.sh dist
       - name: Release notes from CHANGELOG
         run: |
-          awk "/^## \[${TAG#v}\]/{flag=1;next} /^## \[/{flag=0} flag" CHANGELOG.md > notes.md
+          awk -v h="## [${TAG#v}]" 'index($0, h) == 1 {flag=1;next} /^## \[/{flag=0} flag' CHANGELOG.md > notes.md
           cat packaging/release-notes-footer.md >> notes.md
       - name: Create or update the release
         env:
@@ -258,3 +398,83 @@ jobs:
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "SculptForge ${TAG#v}" --notes-file notes.md
           gh release upload "$TAG" dist/* --clobber
+
+  # A beta (a tag with a '-') is a member perk, published only in the private repository sculptforge/sculptforge-insiders.
+  # INSIDERS_REPO_TOKEN lives only in the GitHub Environment "member-release" (deployment: tags v* only; the maintainer
+  # approves each run), so no other job, workflow or branch can read it. This job's GitHub token only reads; the
+  # insiders token reaches exactly one step, as an env var. Runs only for the tag push itself (the environment refuses
+  # a workflow_dispatch from a branch); scripts/release.sh check enforces the environment and pinned actions.
+  publish-members:
+    name: Publish members' beta
+    needs: [locate, build, verify, smoke]
+    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.smoke.result == 'success' && inputs.dry_run != true && contains(needs.locate.outputs.tag, '-') }}
+    runs-on: ubuntu-24.04
+    environment: member-release
+    permissions:
+      contents: read
+      actions: read # the packages may be another run's artifacts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { ref: '${{ env.TAG }}', persist-credentials: false }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+          pattern: '{linux,flatpak,vfx,macos,windows}*'
+          run-id: ${{ needs.locate.outputs.run-id || github.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: staged-sums
+          path: sums
+          run-id: ${{ needs.locate.outputs.run-id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: The same bytes job verify checked (SHA-256 as recorded, nothing added or missing)
+        env:
+          RUN: ${{ needs.locate.outputs.run-id || github.run_id }}
+          SHA: ${{ needs.locate.outputs.sha }}
+        run: python3 tools/release/verify_staged.py dist sums/SHA256SUMS.staged.txt --run "$RUN" --sha "$SHA" --sums-only && rm -r sums
+      - name: Blender add-on and Maya shelf script
+        run: |
+          V=${TAG#v}
+          V=${V%%-*} # a beta's packages carry its version without the prerelease (the app shows it)
+          python3 addons/blender/build_addon.py --check --version "$V" --out dist
+          python3 -m zipfile -c dist/sculptforge_maya.zip integrations/maya/sculptforge_maya.py integrations/maya/README.md
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Sign the checksums (one-click update checks SHA256SUMS.txt.sig, src/core/SelfUpdate.h)
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: tools/release/sign_sums.sh dist
+      - name: Release notes (CHANGELOG's [Unreleased])
+        run: |
+          printf '%s\n\n' "**Members' beta.** Thank you for being a member! Please report problems in #members on Discord (or a GitHub issue) with your OS, this version (Help > About) and your graphics card." > notes.md
+          awk -v h="## [Unreleased]" 'index($0, h) == 1 {flag=1;next} /^## \[/{flag=0} flag' CHANGELOG.md >> notes.md
+          cat packaging/release-notes-footer.md >> notes.md
+      - name: Pre-release in sculptforge/sculptforge-insiders
+        env:
+          GH_TOKEN: ${{ secrets.INSIDERS_REPO_TOKEN }}
+          GH_REPO: sculptforge/sculptforge-insiders
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::No INSIDERS_REPO_TOKEN in the member-release environment"; exit 1; }
+          pre=${TAG#*-}
+          title="SculptForge ${TAG%%-*} $(sed -E 's/^rc/RC/; s/^./\U&/; s/\./ /g' <<<"$pre")" # v0.11.0-beta.1: "SculptForge 0.11.0 Beta 1"
+          # This checkout has the tag, the insiders repository does not: --target makes gh create the tag there (at that repository's
+          # default branch) instead of refusing with "tag exists locally but has not been pushed" (v0.12.11-beta.1). Same tag name.
+          branch=$(gh api "repos/$GH_REPO" --jq .default_branch) || { echo "::error::cannot read the default branch of $GH_REPO"; exit 1; }
+          gh release view "$TAG" >/dev/null 2>&1 ||
+            gh release create "$TAG" --target "$branch" --title "${title/SculptForge v/SculptForge }" --notes-file notes.md --prerelease --latest=false
+          gh release upload "$TAG" dist/* --clobber
+      - name: Post the beta in #members
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_MEMBERS_WEBHOOK }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then echo "::warning::No DISCORD_MEMBERS_WEBHOOK secret: post the beta in #members by hand"; exit 0; fi
+          pre=${TAG#*-}
+          label="${TAG%%-*} $(sed -E 's/^rc/RC/; s/^./\U&/; s/\./ /g' <<<"$pre")"
+          url="https://github.com/sculptforge/sculptforge-insiders/releases/tag/$TAG"
+          jq -n --arg c "**SculptForge ${label#v} is up for members:** $url
+          Please report anything that goes wrong here, with your OS and graphics card. Not invited to the repository yet? Reply with your GitHub username." \
+            '{content: $c, allowed_mentions: {parse: []}, flags: 4}' |
+            curl -fsS -H 'Content-Type: application/json' -d @- "$WEBHOOK" >/dev/null
+          echo "Posted to #members"

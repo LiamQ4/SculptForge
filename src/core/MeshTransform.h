@@ -1,7 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Moving, rotating and scaling a SubTool, or only its unmasked part (ZBrush Gizmo 3D / Transpose): the core
+// Moving, rotating and scaling a Part, or only its unmasked part (Transform gizmo): the core
 // of the app's Gizmo mode (W Move, E Scale, R Rotate) and of the `transform` command.
 //
 // A transform is a translation, a rotation and a per-axis scale about a pivot, with the rotation and scale
@@ -11,9 +11,11 @@
 // weight w moves by w * translate, turns by the rotation slerped to w and scales by mix(1, scale, w).
 // Hidden vertices never move.
 //
-// Sculpt layers move with the surface: the base takes the whole transform and every layer's offsets the
-// linear part, so positions == base + sum(weight * offset) still holds and the layers keep working.
-// Topology, UVs, quads, polygroups, polypaint and textures are left as they are.
+// With Base mesh active, sculpt layers move with the surface: the base takes the whole transform and every
+// layer's offsets the linear part, so positions == base + sum(weight * offset) still holds and the layers keep
+// working. With a sculpt layer active, the transform is recorded into that layer like a stroke: its offsets take
+// (moved - current) / weight, the base and the other layers stay, and the layer's weight dials the move in and out.
+// Topology, UVs, quads, face groups, vertex paint and textures are left as they are.
 #pragma once
 
 #include "core/BVH.h"
@@ -43,6 +45,12 @@ struct MeshTransform {
     // The transform at weight `w` (0 = nothing, 1 = all of it) as p' = linear * p + offset.
     void at(float w, glm::mat3& linear, glm::vec3& offset) const;
     glm::vec3 apply(const glm::vec3& p) const; // full weight
+    glm::mat4 matrix() const;                  // full weight
+    // The same transform as seen in the space of a Part placed by `place` (Part::transform, a similarity): what it
+    // does to that Part's own mesh coordinates.
+    MeshTransform inSpaceOf(const glm::mat4& place) const;
+    // With one scale along every axis (the mean): a linked copy's transform stays a similarity.
+    MeshTransform evenScale() const;
 };
 
 // Rotation by Euler angles in degrees about axes[0], then axes[1], then axes[2] (the splat_rotate order).
@@ -61,6 +69,19 @@ glm::vec3 transformCenter(const Mesh& mesh, const std::vector<float>& weights);
 // Bounds of the same vertices.
 AABB transformBounds(const Mesh& mesh, const std::vector<float>& weights);
 
+// What a transform step did, enough to do it again on another mesh (Figure Pose, core/FigurePose.h): the final
+// transform, the symmetry asked for, and the weight of every vertex that moved (verts[i] at levels[i] /
+// TransformSession::kLevels; every other vertex 0).
+struct TransformOp {
+    MeshTransform transform;
+    Symmetry mirror{false, false, false};
+    std::vector<uint32_t> verts;
+    std::vector<uint16_t> levels;
+    // Per-vertex weights of a mesh with `vertexCount` vertices.
+    std::vector<float> weights(size_t vertexCount) const;
+    size_t bytes() const { return verts.size() * (sizeof(uint32_t) + sizeof(uint16_t)); }
+};
+
 // One interactive transform (a gizmo drag) or one command: remembers the vertices that move, then applies
 // any transform to those originals (so a drag never accumulates error), and finishes with one undo step.
 // Only moved vertices are touched: their normals, the GPU dirty range (Mesh::markDirty) and the BVH.
@@ -69,17 +90,22 @@ public:
     // `weights` as from transformWeights (empty = all). `mirror`: with a mask, the parts on the far side of
     // each enabled symmetry plane (through the origin, as for brushes) from the pivot take the mirrored
     // transform, so both arms pose together. Ignored for unmasked transforms and pivots on the plane.
-    // False (and nothing to do) when no vertex can move.
-    bool begin(const Mesh& mesh, std::vector<float> weights, Symmetry mirror, const glm::vec3& pivot);
+    // `layer`: the sculpt layer the transform records into (-1 = Base mesh: move the base and every layer).
+    // False (and nothing to do) when no vertex can move or `layer`'s weight is 0 (see layerWeightZero).
+    bool begin(const Mesh& mesh, std::vector<float> weights, Symmetry mirror, const glm::vec3& pivot, int layer = -1);
     void apply(Mesh& mesh, const MeshTransform& t);
     void restore(Mesh& mesh); // back to the originals (the session stays open)
     // Refits the BVH and returns the undo step (empty when nothing moved). Ends the session.
     UndoRecord finish(Mesh& mesh, BVH& bvh, std::string label);
     void cancel(Mesh& mesh, BVH& bvh); // restore + end without an undo step
+    // After begin: finish() also keeps the step's TransformOp in the undo record (UndoRecord::transformOp).
+    void keepOp() { keepOp_ = true; }
 
     bool active() const { return active_; }
     size_t movingVertices() const { return verts_.size(); }
     bool mirrored() const { return mirrors_.size() > 1; }
+    // True when begin failed because the layer to record into has weight 0 (its offsets would not show).
+    static bool layerWeightZero(const Mesh& mesh, int layer);
 
 private:
     struct Level {
@@ -91,24 +117,36 @@ private:
 
     bool active_ = false;
     bool layered_ = false;
+    int layer_ = -1;                 // the sculpt layer recorded into (-1: base and every layer move)
+    float invWeight_ = 1.0f;         // 1 / that layer's weight
     std::vector<uint32_t> verts_;    // vertices with weight > 0
     std::vector<uint16_t> level_;    // their weight, quantized to kLevels
     std::vector<uint8_t> side_;      // index into mirrors_
     std::vector<uint32_t> boundary_; // vertices whose normals are recomputed (partial weight or a still neighbour)
-    std::vector<glm::vec3> base_, normals_;           // originals: Mesh::layerTarget(-1) and normals
-    std::vector<std::vector<glm::vec3>> deltas_;      // originals of each sculpt layer's offsets
+    std::vector<glm::vec3> base_, normals_;           // originals: Mesh::layerTarget(-1) (positions when
+                                                      // recording into a layer) and normals
+    std::vector<std::vector<glm::vec3>> deltas_;      // originals of each sculpt layer's offsets (only layer_'s)
     std::vector<glm::vec3> mirrors_;                  // sign vectors; [0] = (1,1,1)
     std::vector<uint8_t> usedLevels_;                 // which quantized weights occur
     std::vector<Level> table_;                        // mirrors_.size() * (kLevels + 1)
     bool moved_ = false;
+    bool keepOp_ = false;
+    Symmetry mirror_{false, false, false}; // as asked for in begin
+    MeshTransform last_;                   // the last transform applied
 
 public:
     static constexpr int kLevels = 4096;
 };
 
-// Transforms SubTool `index` of `doc` (active or not) as one undoable step on that SubTool. Returns the number
-// of vertices that moved.
-size_t transformSubtool(Document& doc, int index, const MeshTransform& t, bool useMask, float falloff, Symmetry mirror,
+// True when a transform moves Part `index` as a whole, by its Part::transform: a linked copy (#94) or a Part
+// moved that way before, unless `useMask` and it has a mask (then the mask's part of its mesh moves).
+bool partMovesWhole(const Document& doc, int index, bool useMask);
+// "2,562 vertices" (the count grouped by thousands) for transform status lines.
+std::string vertexCountText(size_t n);
+// Transforms Part `index` of `doc` (active or not) as one undoable step on that Part (a linked copy as a whole
+// unless masked: partMovesWhole); on the active Part's mesh it records into the active sculpt layer
+// (doc.activeLayer). Returns the number of vertices that moved.
+size_t transformPart(Document& doc, int index, const MeshTransform& t, bool useMask, float falloff, Symmetry mirror,
                         const std::string& label);
 
 // transform (translate, rotate, scale, pivot, orient, masked, falloff, symmetry, all).

@@ -119,21 +119,21 @@ TEST(crkw_mesh_sharpen_writes_to_the_active_sculpt_layer) {
     CHECK(maxDistance(doc.mesh.positions, before) < 1e-5f); // all of it went into the layer
 }
 
-// Like ZBrush: it works on the level being sculpted and the levels above keep their detail on top of it.
+// Like Classic: it works on the level being sculpted and the levels above keep their detail on top of it.
 TEST(crkw_mesh_sharpen_works_on_the_current_subdivision_level) {
     sf::CommandRegistry commands;
     auto doc = makeDoc(sf::makeCube(4));
     CHECK(commands.execute(doc, "subdiv_divide").ok);
     CHECK(commands.execute(doc, "subdiv_divide").ok);
     CHECK(commands.execute(doc, "subdiv_level", {{"level", 2.0}}).ok);
-    CHECK(sf::subdivLevelText(doc.mesh) == "SDiv 2/3");
+    CHECK(sf::subdivLevelText(doc.mesh) == "Level 2/3");
     const auto level2 = doc.mesh.positions;
     CHECK(commands.execute(doc, "subdiv_level", {{"level", 3.0}}).ok);
     const auto top = doc.mesh.positions;
     CHECK(commands.execute(doc, "subdiv_level", {{"level", 2.0}}).ok);
 
     CHECK(commands.execute(doc, "crkw_mesh_sharpen").ok);
-    CHECK(sf::subdivLevelText(doc.mesh) == "SDiv 2/3");
+    CHECK(sf::subdivLevelText(doc.mesh) == "Level 2/3");
     const auto sharpened = doc.mesh.positions;
     CHECK(maxDistance(sharpened, level2) > 1e-3f);
     CHECK(commands.execute(doc, "undo").ok);
@@ -141,7 +141,7 @@ TEST(crkw_mesh_sharpen_works_on_the_current_subdivision_level) {
     CHECK(commands.execute(doc, "redo").ok);
     CHECK(maxDistance(doc.mesh.positions, sharpened) < 1e-6f);
     CHECK(commands.execute(doc, "subdiv_level", {{"level", 3.0}}).ok);
-    CHECK(sf::subdivLevelText(doc.mesh) == "SDiv 3/3");
+    CHECK(sf::subdivLevelText(doc.mesh) == "Level 3/3");
     CHECK(maxDistance(doc.mesh.positions, top) > 1e-3f); // the change reached the top level
     CHECK(commands.execute(doc, "subdiv_level", {{"level", 2.0}}).ok);
     CHECK(maxDistance(doc.mesh.positions, sharpened) < 1e-4f);

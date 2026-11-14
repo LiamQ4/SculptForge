@@ -1,17 +1,19 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The script console (the ZBrush "ZScript window", backtick key): every command
+// The script console (the classic "script window", backtick key): every command
 // the app runs is echoed as a script line with its result, and the input line
 // runs script statements (see core/Script.h) with Tab completion and history.
 #pragma once
 
 #include "app/UiLayout.h"
 #include "core/Commands.h"
+#include "core/Script.h"
 
 #include <imgui.h>
 
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,6 +43,7 @@ public:
 
     void loadHistory(const std::string& path);
     void draw(App& app, const CanvasRect& rect);
+    void update(App& app); // every frame: statements held behind a command on a worker go on once it's done
 
 private:
     struct Line {
@@ -48,11 +51,18 @@ private:
         std::string text;
         std::string source;
     };
+    void runStatements(App& app, std::vector<ScriptStatement> statements, size_t from, bool file);
     void addHistory(const std::string& line);
     void complete(App& app, ImGuiInputTextCallbackData* data);
     void printHelp(App& app, const std::string& topic);
     static int inputCallback(ImGuiInputTextCallbackData* data);
 
+    struct Resume {
+        std::vector<ScriptStatement> statements;
+        size_t next = 0;
+        bool file = false; // a script file (its errors name the line)
+    };
+    std::optional<Resume> resume_; // the rest of a line or file, waiting on a command running on a worker
     std::vector<Line> lines_;
     std::vector<std::string> session_;
     std::vector<std::string> history_;

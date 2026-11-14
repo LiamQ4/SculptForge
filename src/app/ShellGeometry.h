@@ -1,7 +1,7 @@
 // SculptForge - open source digital sculpting
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Where every region of the ZBrush-style shell goes for a window size: title
+// Where every region of the classic shell goes for a window size: title
 // strip, palette bar, the four shelves around the canvas, the console, the tray
 // dividers and trays. Pure arithmetic (no ImGui), so it can be unit tested and
 // used by input handling before a frame is drawn. See docs/ui-design.md §2.
@@ -11,6 +11,35 @@
 
 namespace sf {
 
+// Whether a window saved as full screen opens full screen again (#35). Not on macOS (#41, #85): there full screen is a
+// Space of its own, and entered at start-up the traffic lights and menu bar can't be revealed; the window comes back
+// maximised instead.
+#if defined(__APPLE__)
+constexpr bool kMacWindows = true;
+#else
+constexpr bool kMacWindows = false;
+#endif
+constexpr bool restoresFullscreen(bool savedFullscreen, bool mac = kMacWindows) { return savedFullscreen && !mac; }
+
+// Where a new or restored window goes (#105), in the window system's units: inside the display's usable area with
+// its frame (`borders`: the title bar on top), title bar on screen. `scale` is the UI scale Automatic picks there.
+// A window never stored opens 1600x960 logical px, centred, maximised when that doesn't fit; a
+// stored one keeps its logical size: stored at another scale (`storedScale`; files before 0.10.11 have none: 100 %),
+// it grows or shrinks with it (a 1600x960 window at Windows' 200 % was 800 logical px wide and the shelves ran off
+// its right edge), maximised when that doesn't fit.
+struct WindowRect {
+    int x = 0, y = 0, w = 0, h = 0;
+};
+struct WindowBorders {
+    int top = 0, left = 0, bottom = 0, right = 0;
+};
+struct WindowFit {
+    WindowRect rect;
+    bool maximize = false;
+};
+WindowFit fitWindow(WindowRect window, bool stored, bool placed, float storedScale, const WindowRect& usable,
+                    const WindowBorders& borders, float scale);
+
 struct ShellGeometry {
     CanvasRect notchBand;               // h 0 unless the top of the window is unsafe (camera notch)
     CanvasRect title, paletteBar;
@@ -19,7 +48,7 @@ struct ShellGeometry {
     CanvasRect leftDivider, rightDivider; // w 0 when the shelves are hidden
     CanvasRect leftTray, rightTray;     // w 0 when closed
     CanvasRect canvas;                  // the 3D view
-    bool narrow = false;                // < 1280 logical px: right tray collapsed, smaller tiles
+    bool narrow = false;                // < 1280 logical px: one tray at a time, smaller tiles
     bool shelves = true;                // shelves and trays shown (Tab hides them)
     float scale = 1.0f;
 };
@@ -29,6 +58,9 @@ namespace shell {
 constexpr float kTitleH = 24, kPaletteBarH = 22, kTopShelfH = 64, kLeftShelfW = 88, kLeftShelfNarrowW = 72;
 constexpr float kRightShelfW = 52, kDividerW = 8, kTrayMinW = 240, kTrayMaxW = 480;
 constexpr float kConsoleMinH = 100, kConsoleMaxH = 400, kNarrowWidth = 1280, kWideWidth = 1920;
+// A tray on a window narrower than kNarrowWidth is at most 40 % of it and never narrower than this (a phone held upright
+// is 360 logical px at 300 %: the tray, then the 3D view beside it).
+constexpr float kPhoneTrayMinW = 180;
 
 // The bottom shelf for a Shelf tiles setting (UiLayout::shelfTiles): its height and its brush tiles' height and
 // width range (tiles shrink to the minimum, the same for every size, before the shelf scrolls), logical px.
@@ -44,7 +76,7 @@ constexpr BottomShelfSize bottomShelfSize(int tiles) {
 // windows 1920 logical px wide or more.
 float trayWidth(float stored, float logicalWindowWidth);
 
-// The sizes that differ between the ZBrush-style layout (the defaults: shell:: above) and the SculptForge layout,
+// The sizes that differ between the Classic layout (the defaults: shell:: above) and the SculptForge layout,
 // and the gap of a tiled look (Preferences > Interface > Look), logical px.
 struct ShellMetrics {
     float titleH = shell::kTitleH, paletteBarH = shell::kPaletteBarH, topShelfH = shell::kTopShelfH;
@@ -53,11 +85,24 @@ struct ShellMetrics {
                       // (bars and shelves grow by the gap first, so what's inside keeps its size); the dividers
                       // become the gaps beside the trays
     float grow = 0.0f; // (internal) added to the bars' and shelves' sizes
+    float windowW = 0.0f; // (internal) the whole window's width when laying out inside the gaps: narrow and the
+                          // tray width follow the window, not the gap-inset span (#107)
 };
 ShellMetrics sculptForgeMetrics(float gap); // the SculptForge layout: menus in the status bar, a one-row tool shelf
 
 // `topInset` (window px) keeps everything below a camera notch or other unsafe band at the top.
 ShellGeometry computeShell(const UiLayout& layout, float width, float height, float scale, float topInset = 0.0f,
                            const ShellMetrics& metrics = ShellMetrics());
+
+// A circled + (the bottom shelf's Add a brush, #150), drawn from its centre, not a font glyph: the circle's centre
+// and the bars' edges land on the pixel grid at every UI scale, so the + sits exactly in the middle. Window px.
+struct CircledPlus {
+    float cx = 0, cy = 0, r = 0; // the circle (its stroke `stroke` px wide)
+    float stroke = 1;
+    float barX0 = 0, barY0 = 0, barX1 = 0, barY1 = 0; // the horizontal bar
+    float colX0 = 0, colY0 = 0, colX1 = 0, colY1 = 0; // the vertical bar
+};
+// `cx, cy, r`: the wanted circle; `scale`: the UI scale.
+CircledPlus circledPlus(float cx, float cy, float r, float scale);
 
 } // namespace sf

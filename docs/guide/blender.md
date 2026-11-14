@@ -1,9 +1,18 @@
 # Working with Blender
 
+![The Blender menu](images/blender-menu.jpg)
+
+> **In short:**
+> - The **SculptForge Bridge** add-on sends selected objects to SculptForge with one click.
+> - One click sends them back; transforms, materials and modifiers stay as they were.
+> - Works through a shared folder on Linux, Windows and macOS, with Blender 4.2 or newer.
+
 Keep Blender for the scene, rigging, shading and animation, and sculpt in SculptForge: the **SculptForge Bridge**
-add-on sends the selected objects from Blender to SculptForge with one click, and one click in SculptForge sends
-them back. The objects update in place in Blender: their transform, materials and modifiers stay as they were.
-It works like ZBrush's GoZ between ZBrush and other apps, on Linux, Windows and macOS, with Blender 4.2 or newer.
+add-on sends the selected objects from Blender to SculptForge with one click, and one click in SculptForge sends them
+back. The objects update in place in Blender: their transform, materials and modifiers stay as they were.
+
+It works through files in a shared folder, on Linux, Windows and macOS, with Blender 4.2 or newer. Gaussian splats go
+the same way with Blender 5.3 or newer ([Splats with Blender](#splats-with-blender)).
 
 ## Install the add-on
 
@@ -35,8 +44,6 @@ add-on's preferences (**Edit > Preferences > Add-ons > SculptForge Bridge**).
 Sending again from Blender updates the same Parts: each update is one undo step on that Part in
 SculptForge, and each receive in Blender is one undo step there.
 
-![File > Blender in SculptForge](images/blender-menu.jpg)
-
 ## What comes across
 
 | | Blender | SculptForge |
@@ -57,7 +64,7 @@ come across the right way out.
 it had: its n-gons, edges, seams, creases, custom attributes and the other UV maps; only the positions, the active
 UV map, colour, mask and face sets are updated.
 
-**When the topology changes** (Divide, a remesh, Quad Remesh, Subdivide...), the object's mesh is rebuilt from what
+**When the topology changes** (Add Level, a remesh, Quad Remesh, Subdivide...), the object's mesh is rebuilt from what
 SculptForge sent. The object keeps its transform, materials, modifiers and the names of its active UV map and
 colour attribute; things tied to the old faces (material per face, seams, other UV maps, shape keys) can't
 follow and are reset.
@@ -84,39 +91,41 @@ In SculptForge's **File > Blender**:
 
 The add-on's preferences add the path of SculptForge and the exchange folder (below).
 
-## ZBrush-style keys in Sculpt Mode
+## Classic sculpting keys in Sculpt Mode
 
-Sculpting in Blender too? Turn on **ZBrush-style keys in Sculpt Mode** in the add-on's preferences (**Edit >
-Preferences > Add-ons > SculptForge Bridge**) and Blender's Sculpt Mode answers to ZBrush's keys where Blender
-has the same thing. Turning it off removes them again, and Blender's own keys are back; so does disabling the
-add-on. The preferences list every key while it's on.
+Sculpting in Blender too? Turn on **The Classic sculpting keys in Sculpt Mode** in the add-on's preferences
+(**Edit > Preferences > Add-ons > SculptForge Bridge**) and Blender's Sculpt Mode answers to the Classic sculpting
+keys where Blender has the same thing.
 
-| ZBrush key | In Blender's Sculpt Mode |
+Turning it off removes them again, and Blender's own keys are back; so does disabling the add-on. The preferences list
+every key while it's on.
+
+| Classic key | In Blender's Sculpt Mode |
 |---|---|
-| <kbd>S</kbd> / <kbd>U</kbd> / <kbd>O</kbd> | Draw Size / Intensity (Strength) / Falloff (Hardness), dragged at the cursor |
+| <kbd>S</kbd> / <kbd>U</kbd> / <kbd>O</kbd> | Size / Intensity (Strength) / Falloff (Hardness), dragged at the cursor |
 | <kbd>Space</kbd> | Blender's Sculpt quick menu at the cursor (brush, size, strength) |
-| <kbd>B</kbd> | The brush list by ZBrush brush name (Standard, DamStandard, Clay, ClayBuildup, Move, SnakeHook...): type a few letters, <kbd>Enter</kbd> picks |
+| <kbd>B</kbd> | The brush list by name (Standard, Sharp Crease, Clay, Clay Block, Move, Tendril...): type a few letters, <kbd>Enter</kbd> picks |
 | <kbd>Alt</kbd>+drag | Sub: the brush digs in |
 | <kbd>Ctrl</kbd>+drag / <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+drag | Mask / unmask, drawn as a lasso |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+drag / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd>+drag | Show only what's inside / hide what's inside |
 | <kbd>Ctrl</kbd>+<kbd>W</kbd> | Group the masked part as a face set and clear the mask (with nothing masked: the visible part) |
-| <kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>D</kbd> / <kbd>Shift</kbd>+<kbd>D</kbd> | Divide (a Multires level) / SDiv up / SDiv down (never adds a level) |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>D</kbd> / <kbd>Shift</kbd>+<kbd>D</kbd> | Add Level (a Multires level) / Level up / Level down (never adds a level) |
 | <kbd>X</kbd> | Symmetry X |
 | <kbd>Shift</kbd>+<kbd>F</kbd> | Wireframe (the wireframe overlay) |
 | <kbd>F</kbd> / <kbd>P</kbd> | Frame the model / perspective on and off |
-| <kbd>L</kbd> | Lazy Stroke (Blender: Stabilize Stroke) |
+| <kbd>L</kbd> | Steady Stroke (Blender: Stabilize Stroke) |
 | <kbd>W</kbd> / <kbd>E</kbd> / <kbd>R</kbd> | Move / Scale / Rotate |
 | <kbd>Shift</kbd>+drag | Smooth (Blender already does this) |
 
-ZBrush's brushes map to Blender's closest: Standard = Draw, DamStandard = Draw Sharp, ClayBuildup = Clay
-Strips, Move = Grab, Move Elastic = Elastic Grab, TrimDynamic = Trim (Scrape in Blender 4.2), Crease = Crease
+brushes map to Blender's closest: Standard = Draw, Sharp Crease = Draw Sharp, Clay Block = Clay
+Strips, Move = Grab, Move Elastic = Elastic Grab, Plane Trim = Trim (Scrape in Blender 4.2), Crease = Crease
 Sharp, MaskPen = Mask.
 
-What Blender has no key for, or can't do the ZBrush way:
+What Blender has no key for, or can't do:
 
-- <kbd>I</kbd> (RGB Intensity): Blender's sculpt brushes don't paint.
+- <kbd>I</kbd> (Colour intensity): Blender's sculpt brushes don't paint.
 - <kbd>Ctrl</kbd>+drag on the model doesn't paint the mask with a round brush: Blender can't switch to the Mask
-  brush for one stroke, so it draws a mask lasso (pick the Mask brush with <kbd>B</kbd> to paint it).
+  brush for one stroke, so it draws a lasso mask (pick the Mask brush with <kbd>B</kbd> to paint it).
 - Dragging on the empty background doesn't rotate: a keymap can't tell the model from the background. Use the
   middle mouse button, or Blender's *Emulate 3 Button Mouse*.
 - <kbd>Ctrl</kbd>+click on the background (invert or clear the mask) and <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click
@@ -136,18 +145,61 @@ and <kbd>Space</kbd> no longer plays the animation in Sculpt Mode.
 SculptForge's VDM brushes and Blender's use the same maps (see
 [Vector displacement brushes](sculpting.md#vector-displacement-brushes)):
 
-- **From Blender**: a map baked with Blender's *VDM Brush Baker* loads with **Brush > Vector Displacement > Load
+- **From Blender**: a map baked with Blender's *VDM Brush Baker* loads with **Sculpt > Brush > Vector Displacement > Load
   VDM...** as it is.
 - **To Blender**: **Export EXR...** writes the VDM brush's map. In Blender, in Sculpt Mode with a Draw brush:
   in the brush's **Texture** panel add a new image texture and open the EXR (set its Color Space to
   **Non-Color**), set **Mapping** to **Area Plane**, turn on **Vector Displacement**, then set the stroke method
   to **Anchored** and Strength to 1. Drag on the model to stamp it.
 
+## Splats with Blender
+
+Blender 5.3 draws Gaussian splats natively (a point cloud of the type **3D Gaussian Splat**) and imports them, but it
+can't save them. With the add-on, splats go the same way meshes do, both ways, with everything that makes a splat look
+right: positions, sizes, rotations, opacity and colour including the view-dependent colour (spherical harmonics, up to
+degree 3).
+
+It needs Blender 5.3 or newer; on older versions the splat buttons say so and the mesh bridge works as before. The
+file formats and what SculptForge does with a capture are in [Gaussian splats](splats.md).
+
+**From Blender to SculptForge**
+
+1. Select the splat object (import a capture with **File > Import > Stanford PLY (.ply)**, or just drop a `.ply` or
+   `.spz` capture on Blender's viewport).
+2. Click **Send to SculptForge**. The capture loads next to your sculpt, as a reference, exactly as if you had opened
+   the PLY there, placed as it is in the Blender scene. (A scene holds one capture: with several selected, the first
+   goes.)
+
+**From SculptForge to Blender**
+
+1. With splats loaded (a capture, or **Sculpt to splats**), choose **File > Blender > Send to Blender**.
+2. They arrive as a splat object named after the capture. Send again and the same object is updated in place, with
+   its materials and modifiers; **Flip**, **Turn 90** and **Fit** in SculptForge move the object, not the splats.
+
+![Splats in SculptForge, ready to send to Blender](images/splats.jpg)
+
+**Drag and drop**
+
+- Drop a `.ply` or `.spz` capture on **Blender's viewport**: Blender 5.3 imports it as splats by itself. The add-on adds
+  the compact `.splat` format (the one many web viewers use) to that.
+- Drop a `.ply`, `.splat`, `.glb` or OpenUSD splat file on **SculptForge's window**: it loads as a reference.
+
+**Saving splats from Blender**
+
+**File > Export > Gaussian Splats (.ply)** saves the selected splat object as a standard 3D Gaussian Splatting PLY
+(Blender has no splat export of its own), which SculptForge, SuperSplat, Postshot and most tools open. By default it
+applies the object's transform; turn off **Apply Object Transform** to write the splats as they are in the object. A
+turned splat keeps its plain colour but loses its view-dependent colour, because that would point the wrong way.
+
+> **Note:** Blender's own **Apply > All Transforms** doesn't update a splat's rotations and spherical harmonics yet
+> (Blender 5.3 release notes), so move splat objects with their transform and let SculptForge or the export apply it.
+> Blender also assumes splats are in sRGB, so very faint, bright splats can look different from a splat viewer.
+
 ## How it works
 
 The two programs share a folder in your user data: `~/.local/share/SculptForge/SculptForge/blender` on Linux,
 `%APPDATA%\SculptForge\SculptForge\blender` on Windows, `~/Library/Application Support/SculptForge/SculptForge/blender`
-on macOS. Each side writes its meshes there as `.GoZ` files (the format SculptForge also uses with ZBrush) with a
+on macOS. Each side writes its meshes there as Bridge files with a
 small list of the objects, and checks the other side's list once a second. Nothing goes over the network.
 
 To use another folder, set it in the add-on's preferences and start SculptForge with the environment variable
@@ -163,17 +215,19 @@ SculptForge with `--blender` loads what Blender last sent.
   `SCULPTFORGE_BLENDER_EXCHANGE` set to it, and send.
 - **Linked duplicates** (objects sharing one mesh) all show the last one received.
 - **Shape keys**: the Basis and the keys named like SculptForge's layers are updated; other keys keep their shapes.
-- **Subdivision levels** don't go to Blender: it receives the level you're on (like ZBrush's GoZ).
+- **Subdivision levels** don't go to Blender: it receives the level you're on (like Bridge files).
 - **Sculpt layers** arrive as **shape keys** (Basis plus one key per layer, with its name and weight), so the 52
   [facial shapes](facial-shapes.md) keep their ARKit names. Shape keys don't come back from Blender, and textures
   stay in SculptForge.
 - **Nothing arrives in SculptForge?** Check **File > Blender > Receive automatically**, or choose **Receive from
   Blender**. **Nothing arrives in Blender?** Click **Receive from SculptForge**; automatic receiving starts after the
   first send from that Blender session.
+- **Splats** need Blender 5.3 or newer. With several splat objects selected only the first is sent (SculptForge holds one
+  capture); the compact `.splat` format loses a little precision in colour and rotation, and has no view-dependent colour.
 - Objects in Edit Mode or Sculpt Mode are updated too: the add-on switches to Object Mode for the update and back.
 
 ## See also
 
-- [Exporting, Unreal and ZBrush](exporting.md): files, game engines and Send to ZBrush
+- [Exporting, Unreal and Bridge](exporting.md): files, game engines and Bridge
 - [Parts](parts.md): each Blender object is a Part
 - [Face Groups and visibility](face-groups.md): Blender's face sets

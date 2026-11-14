@@ -7,8 +7,8 @@
 // it, macOS, Windows without 3DxWare hiding it). The cap's six axes move the
 // camera every frame about the same pivot the mouse orbits around; the buttons
 // run actions (Frame and Front view by default). The math and the settings are
-// in core/SpaceMouse.h; Preferences > Input > SpaceMouse edits them, Store
-// Config keeps them. User guide: docs/guide/navigation.md.
+// in core/SpaceMouse.h; Preferences > Input > SpaceMouse edits them, and
+// they save themselves. User guide: docs/guide/navigation.md.
 #include "app/App.h"
 #include "app/Ui.h"
 #include "app/I18n.h"
@@ -53,31 +53,46 @@ const char* const kAxisNames[kSmAxes] = {"Pan X", "Zoom", "Pan Y", "Tilt", "Roll
 
 } // namespace
 
-void App::spaceMouseScan() {
+void App::spaceMouseScan(bool retry) {
     if (spaceMouse_) return;
     int count = 0;
     SDL_JoystickID* ids = SDL_GetJoysticks(&count);
+    joysticksSeen_.clear();
+    spaceMouseOpenFailed_ = false;
     if (!ids) return;
     for (int i = 0; i < count && !spaceMouse_; ++i) {
         // UI tests take only their own virtual SpaceMouse, not one plugged into the machine running them.
         if (!options_.uiTest.empty() && !SDL_IsJoystickVirtual(ids[i])) continue;
         const char* name = SDL_GetJoystickNameForID(ids[i]);
-        if (!isSpaceMouseDevice(SDL_GetJoystickVendorForID(ids[i]), SDL_GetJoystickProductForID(ids[i]), name ? name : ""))
+        const uint16_t vendor = SDL_GetJoystickVendorForID(ids[i]), product = SDL_GetJoystickProductForID(ids[i]);
+        char seen[256];
+        std::snprintf(seen, sizeof seen, "%s (%04x:%04x)", name && *name ? name : "?", vendor, product);
+        auto skip = [&](const char* why) {
+            joysticksSeen_.push_back(std::string(seen) + ": " + why);
+            if (!retry) SDL_Log("SpaceMouse: skipped %s", joysticksSeen_.back().c_str()); // (a retry says it once)
+        };
+        if (!isSpaceMouseDevice(vendor, product, name ? name : "")) {
+            skip("not a SpaceMouse");
             continue;
+        }
         SDL_Joystick* j = SDL_OpenJoystick(ids[i]);
-        if (!j) {
-            SDL_Log("SpaceMouse: cannot open %s: %s", name ? name : "?", SDL_GetError());
+        if (!j) { // 3DxWare's DriverKit extension may hold it just now (it lets go when it quits or is suspended)
+            skip((std::string("cannot open: ") + SDL_GetError()).c_str());
+            spaceMouseOpenFailed_ = true;
             continue;
         }
         if (SDL_GetNumJoystickAxes(j) < kSmAxes) { // a 3Dconnexion device without a 6-DoF cap
+            skip((std::to_string(SDL_GetNumJoystickAxes(j)) + " axes, needs 6").c_str());
             SDL_CloseJoystick(j);
             continue;
         }
+        joysticksSeen_.push_back(std::string(seen) + ": in use");
         spaceMouse_ = j;
         spaceMouseId_ = ids[i];
         spaceMouseName_ = name && *name ? name : "SpaceMouse";
         spaceMouseButtonCount_ = std::max(SDL_GetNumJoystickButtons(j), 0);
         spaceMouseAxes_ = {};
+        spaceMouseReported_ = false;
         SDL_Log("SpaceMouse: %s (%04x:%04x, %d buttons)", spaceMouseName_.c_str(), SDL_GetJoystickVendor(j),
                 SDL_GetJoystickProduct(j), spaceMouseButtonCount_);
     }
@@ -91,15 +106,21 @@ void App::spaceMouseClose() {
     spaceMouseName_.clear();
     spaceMouseButtonCount_ = 0;
     spaceMouseAxes_ = {};
-    spaceMouseMoving_ = false;
+    spaceMouseMoving_ = spaceMousePushed_ = false;
 }
+
+namespace {
+std::array<float, kSmAxes> readAxes(SDL_Joystick* j) {
+    std::array<float, kSmAxes> axes{};
+    for (int i = 0; i < kSmAxes; ++i)
+        axes[size_t(i)] = std::clamp(float(SDL_GetJoystickAxis(j, i)) / 32767.0f, -1.0f, 1.0f);
+    return axes;
+}
+} // namespace
 
 bool App::spaceMouseDeflected() const {
     if (!spaceMouse_) return false;
-    std::array<float, kSmAxes> axes{};
-    for (int i = 0; i < kSmAxes; ++i)
-        axes[size_t(i)] = std::clamp(float(SDL_GetJoystickAxis(spaceMouse_, i)) / 32767.0f, -1.0f, 1.0f);
-    return spaceMouseMotion(axes, 1.0f / 60.0f, uiPrefs_.spaceMouse).any();
+    return spaceMouseMotion(readAxes(spaceMouse_), 1.0f / 60.0f, uiPrefs_.spaceMouse).any();
 }
 
 void App::spaceMouseEvent(const SDL_Event& e) {
@@ -118,7 +139,7 @@ void App::spaceMouseEvent(const SDL_Event& e) {
         if (!spaceMouse_ || e.jbutton.which != spaceMouseId_) break;
         spaceMouseLastButton_ = e.jbutton.button;
         const SpaceMouseSettings& s = uiPrefs_.spaceMouse;
-        if (!s.enabled || e.jbutton.button >= s.buttons.size()) break;
+        if (!s.enabled || e.jbutton.button >= s.buttons.size() || spaceMouseHeld()) break;
         const std::string& id = s.buttons[e.jbutton.button];
         if (id.empty()) break;
         const Action* a = actions_.find(id);
@@ -133,13 +154,30 @@ void App::spaceMouseEvent(const SDL_Event& e) {
 void App::updateSpaceMouse(float dt) {
     // The first frame of a move counts as one frame, not the time since the last frame drawn (a loop that sleeps
     // while idle wakes on the axis event: the cap has only just left the centre).
+    spaceMouseQuiet_ = std::min(spaceMouseQuiet_ + std::max(dt, 0.0f), 1e9f);
+    spaceMouseReadNs_ = SDL_GetTicksNS();
     if (!spaceMouseMoving_) dt = std::min(dt, 1.0f / 60.0f);
-    spaceMouseMoving_ = false;
-    if (!spaceMouse_) return;
-    for (int i = 0; i < kSmAxes; ++i)
-        spaceMouseAxes_[size_t(i)] = std::clamp(float(SDL_GetJoystickAxis(spaceMouse_, i)) / 32767.0f, -1.0f, 1.0f);
+    spaceMouseMoving_ = spaceMousePushed_ = false;
+    if (!spaceMouse_) {
+        // A SpaceMouse SDL listed but could not open (another program had it) is tried again every few seconds, so
+        // quitting the driver is enough: no unplugging, no restart (#110). The idle loop wakes for it.
+        if (spaceMouseOpenFailed_ && options_.uiTest.empty()) {
+            const double now = double(SDL_GetTicksNS()) * 1e-9;
+            if (now >= spaceMouseRetryAt_) {
+                spaceMouseRetryAt_ = now + kSpaceMouseRetrySeconds;
+                spaceMouseScan(true);
+            }
+            if (spaceMouseOpenFailed_) redrawIn(std::max(spaceMouseRetryAt_ - now, 0.0));
+        }
+        return;
+    }
+    spaceMouseAxes_ = readAxes(spaceMouse_);
+    if (spaceMouseStirred(spaceMouseAxes_, uiPrefs_.spaceMouse)) spaceMouseQuiet_ = 0.0f;
+    for (float v : spaceMouseAxes_) spaceMouseReported_ = spaceMouseReported_ || v != 0.0f;
     const SpaceMouseSettings& s = uiPrefs_.spaceMouse;
     const SpaceMouseMotion m = spaceMouseMotion(spaceMouseAxes_, dt, s);
+    spaceMousePushed_ = m.any();
+    if (spaceMouseHeld()) return; // (the axes above still show in Preferences)
     if (!m.any()) return;
     spaceMouseMoving_ = true;
     if (m.spin != 0.0f || m.tip != 0.0f || m.roll != 0.0f) {
@@ -159,8 +197,86 @@ void App::updateSpaceMouse(float dt) {
     const float h = canvasHeight();
     if (m.panX != 0.0f || m.panY != 0.0f) camera_.pan(m.panX * h, m.panY * h, h);
     if (m.zoom != 0.0f) camera_.zoom(m.zoom);
-    // A stroke held by the pen carries on: its dabs follow the pen on screen, so the next sample sculpts where the
-    // pen now points on the turned model; nothing else about the stroke changes.
+    // With Hold during strokes off, a stroke held by the pen carries on: its dabs follow the pen on screen, so the
+    // next sample sculpts where the pen now points on the turned model. A grab instead stays where it is: a pen
+    // held still while the view turns moves nothing (fenix, Discord 11-06: the model flew off).
+    regrabAfterViewMove();
+}
+
+bool App::spaceMouseHeld() const {
+    switch (drag_) {
+    case Drag::None:
+    case Drag::Orbit: // the mouse's and the cap's navigation add up
+    case Drag::Pan:
+    case Drag::Zoom:
+    case Drag::Roll:
+        break;
+    case Drag::Stroke:
+        // A stamp dragged out (Drag Rectangle, Drag Dot) is sized and turned in the view it began in.
+        if (strokeType_ == StrokeType::DragRect || strokeType_ == StrokeType::DragDot) return true;
+        [[fallthrough]];
+    case Drag::MaskCanvas:
+    case Drag::AirStroke:
+        return uiPrefs_.spaceMouse.holdWhileStroking;
+    default: // a gizmo, a selection, a Forge Sphere, a guide...: anchored in the view the drag began in
+        return true;
+    }
+    return uiPrefs_.spaceMouse.holdWhileStroking && strokeFinishing_;
+}
+
+bool App::grabStroke() const {
+    if (drag_ != Drag::Stroke || !strokeSculpt_ || strokeRecipe()) return false;
+    return strokeBrush_ == BrushType::Move || strokeBrush_ == BrushType::SnakeHook ||
+           strokeBrush_ == BrushType::KelvinSnake || (strokeBrush_ == BrushType::KelvinGrab && kelvinStrokeBrush());
+}
+
+void App::regrabAfterViewMove() {
+    if (!grabStroke()) return;
+    // Where the grabbed point is on screen now: the pen's next motion moves it from there, by as much as the pen moves.
+    ImVec2 at;
+    if (!partProject(strokeBrush_ == BrushType::KelvinGrab ? kelvinTarget_ : grabLast_, at)) return;
+    grabScreenOffset_ = glm::vec2(at.x, at.y) - grabScreen_;
+}
+
+// A SpaceMouse driver that doesn't know SculptForge (3DxWare's defaults) also moves the system pointer or scrolls the
+// wheel while the cap is pushed: the cursor jumped from the pen to wherever the driver put it, and the wheel zoomed
+// toward it (fenix, Discord 11-06). While the cap moves the view, only the pen and touch move the cursor; a mouse's
+// buttons still click. It starts inside the dead zone and its last scroll events may trail the cap: a slow tilt
+// zoomed the view away (fenix, 11-06), so the echo counts from the cap's first stir, its wheel until kSpaceMouseEchoHold
+// after.
+bool App::spaceMouseEcho(const SDL_Event& e) const {
+    SDL_MouseID which = 0;
+    if (e.type == SDL_EVENT_MOUSE_MOTION) which = e.motion.which;
+    else if (e.type == SDL_EVENT_MOUSE_WHEEL) which = e.wheel.which;
+    else return false;
+    if (which == SDL_PEN_MOUSEID || which == SDL_TOUCH_MOUSEID) return false;
+    // (The cap as it is now, too: the echo of its first push comes in the same batch of events as the push, before
+    // the frame reads the axes.)
+    if (!spaceMouse_) return false;
+    if (spaceMousePushed_ || spaceMouseStirred(readAxes(spaceMouse_), uiPrefs_.spaceMouse)) return true;
+    // Only the scrolling may trail the cap: a mouse picked up as the cap is let go moves the cursor at once.
+    if (e.type != SDL_EVENT_MOUSE_WHEEL) return false;
+    // (Plus the time since that read: a loop that slept while idle reads the cap again only after this event.)
+    const float sinceRead = spaceMouseReadNs_ ? float(double(SDL_GetTicksNS() - spaceMouseReadNs_) * 1e-9) : 0.0f;
+    return spaceMouseQuiet_ + sinceRead < kSpaceMouseEchoHold;
+}
+
+bool App::sixDofPointerEvent(const SDL_Event& e) {
+    SDL_MouseID which = 0;
+    if (e.type == SDL_EVENT_MOUSE_MOTION) which = e.motion.which;
+    else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_UP) which = e.button.which;
+    else if (e.type == SDL_EVENT_MOUSE_WHEEL) which = e.wheel.which;
+    else return false;
+    if (which == 0 || which == SDL_PEN_MOUSEID || which == SDL_TOUCH_MOUSEID) return false; // (0: the system's pointer)
+    auto it = sixDofMice_.find(which);
+    if (it == sixDofMice_.end()) {
+        const char* name = SDL_GetMouseNameForID(which);
+        // By name only (a mouse has no USB ids in SDL): "3Dconnexion ...", "SpaceMouse ...", never a CadMouse.
+        const bool sixDof = name && isSpaceMouseDevice(0, 0, name);
+        if (sixDof) SDL_Log("SpaceMouse: pointer events from \"%s\" ignored (a 6-DoF device, not a mouse)", name);
+        it = sixDofMice_.emplace(which, sixDof).first;
+    }
+    return it->second;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +294,7 @@ void App::drawSpaceMouseSection() {
         ImGui::SameLine();
         ImGui::TextUnformatted(spaceMouseName_.c_str());
     } else {
-        ImGui::TextUnformatted(ICON_LC_JOYSTICK "  No SpaceMouse found");
+        ImGui::TextUnformatted(tr(ICON_LC_JOYSTICK "  No SpaceMouse found"));
         ImGui::PushStyleColor(ImGuiCol_Text, col(ui::color::textDim));
         ImGui::PushTextWrapPos(0.0f);
 #if defined(_WIN32) || defined(__APPLE__)
@@ -190,6 +306,36 @@ void App::drawSpaceMouseSection() {
 #endif
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
+    }
+    // What SDL sees, so a report says why a device wasn't taken (#104); Copy puts it on the clipboard for an issue.
+    if (!spaceMouse_ || !spaceMouseReported_) {
+        ImGui::PushStyleColor(ImGuiCol_Text, col(ui::color::textDim));
+        ImGui::PushTextWrapPos(0.0f);
+        if (spaceMouse_)
+            ImGui::TextUnformatted(tr("Push the cap: if the bars below stay still, another program (3DxWare, spacenavd) "
+                                   "holds the SpaceMouse. See the Navigation page of the guide."));
+        if (joysticksSeen_.empty() && !spaceMouse_) ImGui::TextUnformatted(tr("No joysticks or game controllers seen."));
+        for (const std::string& d : joysticksSeen_) { // (wrapped: a name and its ids can be long)
+            ImGui::Bullet();
+            ImGui::TextUnformatted(d.c_str());
+        }
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        if (ImGui::SmallButton(tr(ICON_LC_COPY "  Copy device report##spacemouse.report"))) {
+            std::string r = std::string("SculptForge ") + SCULPTFORGE_VERSION + ", " + SDL_GetPlatform() + ", SDL " +
+                            std::to_string(SDL_MAJOR_VERSION) + "." + std::to_string(SDL_MINOR_VERSION) + "." +
+                            std::to_string(SDL_MICRO_VERSION) + "\nSpaceMouse: " +
+                            (spaceMouse_ ? spaceMouseName_ + (spaceMouseReported_ ? " (moving)" : " (no motion yet)")
+                                         : std::string("none")) +
+                            "\nJoysticks seen:";
+            for (const std::string& d : joysticksSeen_) r += "\n- " + d;
+            if (joysticksSeen_.empty()) r += " none";
+            SDL_SetClipboardText(r.c_str());
+        }
+        ui::HelpText("Copy device report", nullptr,
+                     "Copies what SculptForge sees (each joystick's name, USB ids and why it was or wasn't used) to "
+                     "paste into a bug report.",
+                     path);
     }
     ui::HelpText("SpaceMouse", nullptr,
                  "Experimental. A 3Dconnexion SpaceMouse moves the view with one hand while the other holds the pen: "
@@ -214,6 +360,11 @@ void App::drawSpaceMouseSection() {
     ui::HelpText("Lock rotation to turntable", nullptr,
                  "The model stays upright: twisting turns it about the world's up axis, tilting looks over or under it, "
                  "and rolling the cap does nothing.",
+                 path);
+    ui::Checkbox("Hold during strokes##spacemouse.hold", &s.holdWhileStroking);
+    ui::HelpText("Hold during strokes", nullptr,
+                 "While you sculpt, paint or mask, the SpaceMouse leaves the view alone and its buttons do nothing, so "
+                 "a hand resting on the cap never moves the model under the pen. Off: the view turns mid-stroke.",
                  path);
     ui::Checkbox("Dominant axis##spacemouse.dominant", &s.dominant);
     ui::HelpText("Dominant axis", nullptr,
@@ -279,11 +430,12 @@ void App::drawSpaceMouseSection() {
                      path);
     }
     if (spaceMouse_ && spaceMouseLastButton_ >= 0)
-        ImGui::TextColored(col(ui::color::textDim), "Last button pressed: %d", spaceMouseLastButton_ + 1);
-    if (ImGui::SmallButton(ICON_LC_ROTATE_CCW "  SpaceMouse defaults##spacemouse.defaults")) s = SpaceMouseSettings();
+        ImGui::TextColored(col(ui::color::textDim), tr("Last button pressed: %d"), spaceMouseLastButton_ + 1);
+    if (ImGui::SmallButton(tr(ICON_LC_ROTATE_CCW "  SpaceMouse defaults##spacemouse.defaults")))
+        s = SpaceMouseSettings();
     ui::HelpText("SpaceMouse defaults", nullptr,
-                 "On, speed 1, dead zone 8%, nothing inverted, free rotation, all axes at once; left button Frame, right "
-                 "button Front view.",
+                 "On, speed 1, dead zone 8%, nothing inverted, free rotation, held during strokes, all axes at once; left "
+                 "button Frame, right button Front view.",
                  path);
 }
 

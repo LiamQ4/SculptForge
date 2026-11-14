@@ -124,9 +124,12 @@ struct SelectionSetsUndo {
     size_t bytes() const; // what only this step keeps alive
 };
 
-// Adding or removing a whole SubTool (Extract's Accept; core/Document.h). Applied by the undo / redo commands,
+// Adding or removing a whole Part (Extract's Accept; core/Document.h). Applied by the undo / redo commands,
 // which see the whole scene: the record itself leaves the mesh alone.
-struct SubtoolStep;
+struct PartStep;
+// The transform and per-vertex weights of a transform step (core/MeshTransform.h), kept on Pose Mesh steps so
+// Figure Pose can replay them at full resolution (core/FigurePose.h).
+struct TransformOp;
 
 // "The active paint layer" for UndoRecord::captureColors.
 inline constexpr int kActivePaintLayer = -2;
@@ -136,18 +139,20 @@ inline constexpr int kActivePaintLayer = -2;
 //  - positions: the stroke's target array (positions, layer base or a layer's
 //    offsets; see Mesh::layerTarget), selected by `layer`; layerOffsets: every
 //    layer's offsets too (transforms). Each lists a vertex at most once.
-//  - mask / colors: per-vertex mask and polypaint. `colors` holds the paint
+//  - mask / colors: per-vertex mask and vertex paint. `colors` holds the paint
 //    target of `paintLayer` (Mesh::colors without paint layers, else Base for
 //    -1 or that layer's colours, with its coverage in `paintAlpha`)
 //  - paint: the whole paint-layer stack (layer add / delete / merge / settings)
-//  - hidden / polygroups: per-triangle visibility and group ids
+//  - hidden / face groups: per-triangle visibility and group ids
 //  - textureTiles / texture: texture-paint tiles of one layer, or the whole texture
 //  - subdiv: a subdivision level step or level edit (core/Multires.h), applied on its own
 //  - topology: the slots a dynamic-topology stroke changed (core/Dyntopo.h), applied before the channels
-//  - subtool: a SubTool added to the scene (Extract), taken out on undo and put back on redo
+//  - part: a Part added to the scene (Extract), taken out on undo and put back on redo
 //  - micro: the grid tiles a stroke on a micro level changed, or a whole micro level (core/Micro.h)
 //  - uvs: per triangle corner texture coordinates (restoring a selection set's UVs)
 //  - sets: the Selection Sets list (core/SelectionSets.h)
+//  - creases: per triangle corner edge creases (core/EdgeSelect.h)
+//  - transformOp / group: see below (bookkeeping only; nothing to apply)
 // Record old values before changing them (ensureX() the attribute first);
 // undo allocates a missing attribute so values can always be restored.
 struct UndoRecord {
@@ -163,25 +168,34 @@ struct UndoRecord {
     UndoChannel<float> paintAlpha;
     std::unique_ptr<PaintStackUndo> paint;
     UndoChannel<uint8_t> hidden;
-    UndoChannel<uint32_t> polygroups;
+    UndoChannel<uint32_t> facegroups;
     std::unique_ptr<TextureTileUndo> textureTiles;
     std::unique_ptr<TextureStackUndo> texture;
     std::unique_ptr<Mesh> mesh;
+    std::unique_ptr<BVH> meshBvh; // with `mesh`: its tree, when the step that made it had one (applying swaps it too)
     std::unique_ptr<SubdivUndo> subdiv;
     std::optional<std::shared_ptr<const Json>> crkwMaskState;
     std::unique_ptr<TopologyUndo> topology;
-    std::shared_ptr<SubtoolStep> subtool; // (shared: SubtoolStep is defined in core/Document.h)
+    std::shared_ptr<PartStep> part; // (shared: PartStep is defined in core/Document.h)
     std::unique_ptr<UvUndo> uv;           // UVs, seams and pins (UV Editor, core/Uv.h)
     std::unique_ptr<MicroUndo> micro;     // micro-displacement tiles of a stroke, or a micro level added / removed (core/Micro.h)
     UndoChannel<glm::vec2> uvs;           // per corner (index = triangle * 3 + corner)
     std::unique_ptr<SelectionSetsUndo> sets;
+    UndoChannel<float> creases;           // per corner, like `uvs`
+    std::shared_ptr<const TransformOp> transformOp; // a Pose Mesh transform (core/FigurePose.h); not applied by undo
+    // Steps pushed together on several Parts' histories (Figure Pose's Apply) share a non-zero id: the undo and
+    // redo commands take every Part's top step with that id as one step.
+    uint64_t group = 0;
 
     bool empty() const {
         return positions.empty() && mask.empty() && colors.empty() && paintAlpha.empty() && hidden.empty() &&
-               polygroups.empty() && !mesh && !paint && !textureTiles && !texture && !subdiv && !topology && !crkwMaskState && !subtool && !micro &&
-               uvs.empty() && !sets && !uv;
+               facegroups.empty() && !mesh && !paint && !textureTiles && !texture && !subdiv && !topology && !part && !crkwMaskState && !micro &&
+               uvs.empty() && !sets && !uv && creases.empty();
     }
     size_t approxBytes() const;
+    // approxBytes() without the kept tree: what the byte budget counts, so a tree (a fifth of a 10M triangle mesh
+    // step) doesn't push the remesh step it saves a rebuild for out of the history.
+    size_t budgetBytes() const { return approxBytes() - (meshBvh ? meshBvh->memoryBytes() : 0); }
 
     // Convenience snapshots of whole attributes (or of `elements` only), e.g.
     // before "mask all", "invert mask", "fill color" or "hide group".
@@ -190,11 +204,11 @@ struct UndoRecord {
     static UndoRecord captureColors(const Mesh& mesh, std::string label, std::span<const uint32_t> verts = {},
                                     int paintLayer = kActivePaintLayer);
     static UndoRecord captureHidden(const Mesh& mesh, std::string label, std::span<const uint32_t> tris = {});
-    static UndoRecord capturePolygroups(const Mesh& mesh, std::string label, std::span<const uint32_t> tris = {});
+    static UndoRecord captureFaceGroups(const Mesh& mesh, std::string label, std::span<const uint32_t> tris = {});
 };
 
 // Watches an UndoStack: the Sculpt Timeline (core/Timeline.h) keeps its history tree in step with it. Held by the
-// stack (UndoStack::listener), so it moves with it (each SubTool's history has its own).
+// stack (UndoStack::listener), so it moves with it (each Part's history has its own).
 struct UndoListener {
     virtual ~UndoListener() = default;
     // A step was pushed (it is the stack's last undo step); `discardedRedo` holds the redo steps the push is about
@@ -238,7 +252,20 @@ public:
     // Memory the undo steps hold (UndoRecord::approxBytes), as counted against byteBudget.
     size_t undoBytes() const;
 
-    size_t byteBudget = size_t(1) << 30; // 1 GiB
+    // What the history may hold. 0 (the default) follows the computer: undoBudgetBytes (core/MemoryGuard.h), asked on
+    // every push; any other value is fixed (the pose history never drops: max).
+    size_t byteBudget = 0;
+    size_t budget() const; // the figure in force now (Preferences > Performance)
+    // What the budget did since the last call, for the status line: steps dropped, and whether the one step left is
+    // over the budget on its own (a whole-mesh step is kept anyway). Empty = nothing to say.
+    struct Notice {
+        size_t dropped = 0;
+        bool lastStepOver = false;
+        bool any() const { return dropped || lastStepOver; }
+    };
+    Notice takeNotice();
+    size_t droppedTotal() const { return droppedTotal_; }
+    bool lastStepOverBudget() const { return lastStepOver_; }
     std::shared_ptr<UndoListener> listener; // the Sculpt Timeline (core/Timeline.h), if one watches this history
 
 private:
@@ -247,6 +274,8 @@ private:
 
     std::deque<UndoRecord> undo_, redo_;
     uint64_t revision_ = 0;
+    size_t droppedPending_ = 0, droppedTotal_ = 0;
+    bool lastStepOver_ = false, overPending_ = false;
 };
 
 } // namespace sf

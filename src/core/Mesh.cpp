@@ -87,9 +87,9 @@ std::vector<glm::vec3>& Mesh::ensureColors(const glm::vec3& fill) {
     return colors;
 }
 
-std::vector<uint32_t>& Mesh::ensurePolygroups(uint32_t fill) {
-    if (polygroups.size() != triangles.size()) polygroups.assign(triangles.size(), fill);
-    return polygroups;
+std::vector<uint32_t>& Mesh::ensureFaceGroups(uint32_t fill) {
+    if (facegroups.size() != triangles.size()) facegroups.assign(triangles.size(), fill);
+    return facegroups;
 }
 
 std::vector<uint8_t>& Mesh::ensureHidden() {
@@ -100,6 +100,11 @@ std::vector<uint8_t>& Mesh::ensureHidden() {
 std::vector<uint32_t>& Mesh::ensureQuadPartners() {
     if (quadPartners.size() != triangles.size()) quadPartners.assign(triangles.size(), kNoQuad);
     return quadPartners;
+}
+
+std::vector<float>& Mesh::ensureCreases() {
+    if (creases.size() != triangles.size() * 3) creases.assign(triangles.size() * 3, 0.0f);
+    return creases;
 }
 
 void Mesh::pairQuad(uint32_t t, uint32_t u) {
@@ -152,10 +157,11 @@ size_t Mesh::quadCount() const {
 void Mesh::sanitizeAttributes() {
     if (!mask.empty() && mask.size() != positions.size()) clearMask();
     if (!colors.empty() && colors.size() != positions.size()) clearColors();
-    if (!polygroups.empty() && polygroups.size() != triangles.size()) clearPolygroups();
+    if (!facegroups.empty() && facegroups.size() != triangles.size()) clearFaceGroups();
     if (!hidden.empty() && hidden.size() != triangles.size()) clearHidden();
     if (!uvs.empty() && uvs.size() != triangles.size() * 3) std::vector<glm::vec2>().swap(uvs);
     if (!uvFlags.empty() && uvFlags.size() != triangles.size() * 3) std::vector<uint8_t>().swap(uvFlags);
+    if (!creases.empty() && creases.size() != triangles.size() * 3) clearCreases();
     if (!quadPartners.empty() && quadPartners.size() != triangles.size()) clearQuads();
     // Quad pairs must be mutual and share an edge: unpair anything an edit or a malformed file left behind.
     bool anyQuad = false;
@@ -821,8 +827,8 @@ AABB Mesh::bounds() const {
 
 size_t Mesh::memoryBytes() const {
     auto bytes = [](const auto& v) { return v.capacity() * sizeof(v[0]); };
-    size_t n = bytes(positions) + bytes(normals) + bytes(triangles) + bytes(mask) + bytes(colors) + bytes(polygroups) +
-               bytes(hidden) + bytes(uvs) + bytes(uvFlags) + bytes(quadPartners) + bytes(base) + bytes(paintBase) + bytes(adjOffsets_) +
+    size_t n = bytes(positions) + bytes(normals) + bytes(triangles) + bytes(mask) + bytes(colors) + bytes(facegroups) +
+               bytes(hidden) + bytes(uvs) + bytes(uvFlags) + bytes(creases) + bytes(quadPartners) + bytes(base) + bytes(paintBase) + bytes(adjOffsets_) +
                bytes(adjList_) + bytes(vtOffsets_) + bytes(vtList_) + bytes(adjEnds_) + bytes(adjCaps_) + bytes(vtEnds_) + bytes(vtCaps_) + normalBits_.memoryBytes() + bytes(scratchVerts_) + bytes(dirtyBlocks) + bytes(dirtyBits);
     for (const auto& l : layers) n += bytes(l.delta);
     for (const auto& l : paintLayers) n += bytes(l.color) + bytes(l.alpha);
@@ -832,17 +838,19 @@ size_t Mesh::memoryBytes() const {
 
 static void laplacianStep(Mesh& m, float lambda, std::vector<glm::vec3>& next) {
     next.resize(m.vertexCount());
-    for (uint32_t v = 0; v < m.vertexCount(); ++v) {
-        auto ring = m.neighbors(v);
-        if (ring.empty()) {
-            next[v] = m.positions[v];
-            continue;
+    poolFor(m.vertexCount(), [&](size_t b, size_t e) {
+        for (uint32_t v = uint32_t(b); v < uint32_t(e); ++v) {
+            auto ring = m.neighbors(v);
+            if (ring.empty()) {
+                next[v] = m.positions[v];
+                continue;
+            }
+            glm::vec3 avg(0.0f);
+            for (uint32_t n : ring) avg += m.positions[n];
+            avg /= float(ring.size());
+            next[v] = glm::mix(m.positions[v], avg, lambda);
         }
-        glm::vec3 avg(0.0f);
-        for (uint32_t n : ring) avg += m.positions[n];
-        avg /= float(ring.size());
-        next[v] = glm::mix(m.positions[v], avg, lambda);
-    }
+    }, 1 << 14);
     m.positions.swap(next);
 }
 
@@ -887,7 +895,8 @@ Mesh weldImported(const Mesh& m, const std::vector<SculptLayer>& layers) {
         if (vColors) welded.colors.push_back(m.colors[v]);
     }
     const size_t nt = m.triangles.size();
-    const bool tGroups = m.polygroups.size() == nt, tHidden = m.hidden.size() == nt, tUvs = m.uvs.size() == nt * 3;
+    const bool tGroups = m.facegroups.size() == nt, tHidden = m.hidden.size() == nt, tUvs = m.uvs.size() == nt * 3;
+    const bool tCreases = m.creases.size() == nt * 3;
     std::vector<uint32_t> newTriangle(m.hasQuads() ? nt : 0, Mesh::kNoQuad);
     for (size_t ti = 0; ti < nt; ++ti) {
         const auto& t = m.triangles[ti];
@@ -895,9 +904,12 @@ Mesh weldImported(const Mesh& m, const std::vector<SculptLayer>& layers) {
         if (nt3.x == nt3.y || nt3.y == nt3.z || nt3.x == nt3.z) continue;
         if (!newTriangle.empty()) newTriangle[ti] = uint32_t(welded.triangles.size());
         welded.triangles.push_back(nt3);
-        if (tGroups) welded.polygroups.push_back(m.polygroups[ti]);
+        if (tGroups) welded.facegroups.push_back(m.facegroups[ti]);
         if (tHidden) welded.hidden.push_back(m.hidden[ti]);
         if (tUvs) welded.uvs.insert(welded.uvs.end(), m.uvs.begin() + std::ptrdiff_t(ti * 3), m.uvs.begin() + std::ptrdiff_t(ti * 3 + 3));
+        if (tCreases)
+            welded.creases.insert(welded.creases.end(), m.creases.begin() + std::ptrdiff_t(ti * 3),
+                                  m.creases.begin() + std::ptrdiff_t(ti * 3 + 3));
     }
     if (!newTriangle.empty()) remapQuads(m, newTriangle, welded);
     if (!layers.empty()) {
@@ -987,35 +999,38 @@ void transferVertexAttributes(const Mesh& src, Mesh& dst) {
 
     if (wantMask) dst.mask.assign(dst.positions.size(), 0.0f);
     if (wantColors) dst.colors.assign(dst.positions.size(), glm::vec3(1.0f));
-    for (size_t i = 0; i < dst.positions.size(); ++i) {
-        const glm::vec3 p = dst.positions[i];
-        const glm::ivec3 c = cellOf(p);
-        const glm::vec3 outside = glm::max(glm::max(box.min - p, p - box.max), glm::vec3(0.0f));
-        const int maxRing = gridCells + int(std::ceil(glm::length(outside) / cell));
-        float best = std::numeric_limits<float>::max();
-        uint32_t bestV = 0;
-        // Search shells of growing Chebyshev radius; stop once nothing closer can remain.
-        for (int r = 0; r <= maxRing; ++r) {
-            for (int dz = -r; dz <= r; ++dz)
-                for (int dy = -r; dy <= r; ++dy)
-                    for (int dx = -r; dx <= r; ++dx) {
-                        if (std::max({std::abs(dx), std::abs(dy), std::abs(dz)}) != r) continue;
-                        auto it = grid.find(key(c + glm::ivec3(dx, dy, dz)));
-                        if (it == grid.end()) continue;
-                        for (uint32_t v : it->second) {
-                            const glm::vec3 d = src.positions[v] - p;
-                            const float d2 = glm::dot(d, d);
-                            if (d2 < best) {
-                                best = d2;
-                                bestV = v;
+    // Each new vertex searches on its own: blocks in parallel.
+    poolFor(dst.positions.size(), [&](size_t b, size_t e) {
+        for (size_t i = b; i < e; ++i) {
+            const glm::vec3 p = dst.positions[i];
+            const glm::ivec3 c = cellOf(p);
+            const glm::vec3 outside = glm::max(glm::max(box.min - p, p - box.max), glm::vec3(0.0f));
+            const int maxRing = gridCells + int(std::ceil(glm::length(outside) / cell));
+            float best = std::numeric_limits<float>::max();
+            uint32_t bestV = 0;
+            // Search shells of growing Chebyshev radius; stop once nothing closer can remain.
+            for (int r = 0; r <= maxRing; ++r) {
+                for (int dz = -r; dz <= r; ++dz)
+                    for (int dy = -r; dy <= r; ++dy)
+                        for (int dx = -r; dx <= r; ++dx) {
+                            if (std::max({std::abs(dx), std::abs(dy), std::abs(dz)}) != r) continue;
+                            auto it = grid.find(key(c + glm::ivec3(dx, dy, dz)));
+                            if (it == grid.end()) continue;
+                            for (uint32_t v : it->second) {
+                                const glm::vec3 d = src.positions[v] - p;
+                                const float d2 = glm::dot(d, d);
+                                if (d2 < best) {
+                                    best = d2;
+                                    bestV = v;
+                                }
                             }
                         }
-                    }
-            if (best < std::numeric_limits<float>::max() && std::sqrt(best) <= float(r) * cell) break;
+                if (best < std::numeric_limits<float>::max() && std::sqrt(best) <= float(r) * cell) break;
+            }
+            if (wantMask) dst.mask[i] = src.mask[bestV];
+            if (wantColors) dst.colors[i] = src.colors[bestV];
         }
-        if (wantMask) dst.mask[i] = src.mask[bestV];
-        if (wantColors) dst.colors[i] = src.colors[bestV];
-    }
+    }, 1 << 13);
     dst.markAllDirty();
 }
 

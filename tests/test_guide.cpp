@@ -5,6 +5,7 @@
 #include "TestHarness.h"
 
 #include "core/Guide.h"
+#include "core/WhatsNew.h"
 
 #include <map>
 
@@ -56,7 +57,7 @@ TEST(guide_slugs) {
     CHECK(slugify("Mask by cavity") == "mask-by-cavity");
     CHECK(slugify("Subdivide, remesh & decimate") == "subdivide-remesh--decimate"); // GitHub keeps both dashes
     CHECK(slugify("Send to Unreal (Ctrl+U)") == "send-to-unreal-ctrlu");
-    CHECK(slugify("GoZ / ZBrush") == "goz--zbrush");
+    CHECK(slugify("Bridge / Classic") == "bridge--classic");
     CHECK(slugify("Image & text to 3D") == "image--text-to-3d");
 }
 
@@ -147,7 +148,7 @@ const std::map<std::string, std::string>& sampleBook() {
         {"welcome.md", "# Welcome to SculptForge\n\nSculpt things. Masking is covered later.\n"},
         {"masking.md", "# Masking\n\nProtect areas from brushes.\n\n## Mask by cavity\n\nMasks the crevices of the "
                        "model, so you can paint dirt into them. Cavity masking needs detail.\n"},
-        {"glossary.md", "# Glossary\n\n| ZBrush | SculptForge |\n|---|---|\n| DynaMesh | Voxel remesh |\n"},
+        {"glossary.md", "# Glossary\n\n| Word | SculptForge |\n|---|---|\n| Blockout | Voxel remesh |\n"},
     };
     return files;
 }
@@ -182,10 +183,134 @@ TEST(guide_book_and_search) {
     // Every word must appear; tables are searchable.
     CHECK(book.search("dirt crevices").size() == 1);
     CHECK(book.search("dirt glossary").empty());
-    CHECK(book.search("dynamesh").size() == 1);
+    CHECK(book.search("blockout").size() == 1);
     CHECK(book.search("   ").empty());
     CHECK(book.search("masking").size() >= 3); // titles and text in two chapters
 
     Book broken;
     CHECK(!broken.load(loadBroken, nullptr, err) && err.find("glossary.md") != std::string::npos);
+}
+
+// What's New as data (core/WhatsNew.h): the ```features block, and the newest three versions in full with the older
+// ones folded into groups, so each release slides the window.
+TEST(guide_whats_new_features) {
+    whatsnew::Version v;
+    std::string err;
+    CHECK(whatsnew::parseFeatures("date: 2026-11-01\ntagline: Short.\nhighlight: Look: a new one\n# a comment\n"
+                                  "title: A new look\nline: One line.\nimage: images/a.jpg\naction: look:new\n"
+                                  "title: Benchmark\nline: Another.\naction: help.benchmark\nlink: performance.md\n",
+                                  v, err));
+    CHECK(v.date == "2026-11-01" && v.tagline == "Short." && v.highlights.size() == 1);
+    CHECK(v.cards.size() == 2 && v.cards[0].title == "A new look" && v.cards[0].image == "images/a.jpg");
+    CHECK(v.cards.size() == 2 && v.cards[1].action == "help.benchmark" && v.cards[1].link == "performance.md");
+    whatsnew::Version bad;
+    CHECK(!whatsnew::parseFeatures("line: before any title\n", bad, err) && err.find("title") != std::string::npos);
+    CHECK(!whatsnew::parseFeatures("colour: red\n", bad, err) && err.find("unknown key") != std::string::npos);
+    CHECK(!whatsnew::parseFeatures("title: No action\nline: x\n", bad, err));
+    // A clip: the website's video and the app's frame sheet (COLSxROWS frames at FPS).
+    whatsnew::Version clip;
+    CHECK(whatsnew::parseFeatures("title: Faster\nline: x\nimage: images/a.jpg\naction: help.benchmark\n"
+                                  "clip: images/a.mp4\nframes: images/a-frames.jpg 8x6 5\n",
+                                  clip, err));
+    CHECK(clip.cards.size() == 1 && clip.cards[0].clip == "images/a.mp4" && clip.cards[0].frames == "images/a-frames.jpg");
+    CHECK(clip.cards.size() == 1 && clip.cards[0].frameCols == 8 && clip.cards[0].frameRows == 6 && clip.cards[0].frameFps == 5);
+    for (const char* f : {"frames: a.jpg\n", "frames: a.jpg 8x6\n", "frames: a.jpg 1x1 5\n", "frames: a.jpg 8x6 0\n",
+                          "frames: a.jpg 8by6 5\n", "frames: a.jpg 8x6 5 extra\n"}) {
+        whatsnew::Version w;
+        CHECK(!whatsnew::parseFeatures(std::string("title: T\nline: x\naction: a\n") + f, w, err));
+    }
+    CHECK(!whatsnew::parseFeatures("clip: before.mp4\n", bad, err) && err.find("title") != std::string::npos);
+    CHECK(whatsnew::splitHighlight("Micro levels: a billion triangles") == std::make_pair(std::string("Micro levels"), std::string("a billion triangles")));
+    CHECK(whatsnew::compareVersions("0.9.7", "0.10.0") < 0 && whatsnew::compareVersions("0.8", "0.8.0") == 0);
+}
+
+TEST(guide_whats_new_groups) {
+    std::string md = "# What's new\n\nIntro.\n\n";
+    const char* versions[] = {"0.10.8", "0.10.7", "0.10.6", "0.10.5", "0.10.4", "0.10.1", "0.9.7", "0.9.0", "0.8", "0.5", "0.1"};
+    for (const char* ver : versions) {
+        md += std::string("## Version ") + ver + "\n\n```features\ndate: 2026-10-01\nhighlight: H" + ver + ": line\n";
+        if (std::string(ver) == "0.10.1") md += "highlight: Second: line\n";
+        if (std::string(ver) == "0.10.7") md += "title: Card\nline: One.\naction: look:new\n";
+        md += "```\n\n- A change in " + std::string(ver) + ".\n\n### Fixes\n\n- A fix.\n\n";
+    }
+    const guide::Document doc = parse(md);
+    // Built as 0.10.7: 0.10.8 is not released yet.
+    const whatsnew::Page p = whatsnew::build(doc, "0.10.7");
+    CHECK(p.problems.empty());
+    CHECK(p.versions.size() == 10 && p.versions[0].version == "0.10.7" && p.detailed == 3);
+    CHECK(p.versions[0].cards.size() == 1 && p.versions[0].anchor == "version-0107");
+    // The detail blocks leave the features block out and stop at the next version.
+    const auto& v0 = p.versions[0];
+    CHECK(doc.blocks[size_t(v0.first)].kind == BlockKind::Bullet && doc.blocks[size_t(v0.end)].kind == BlockKind::Heading);
+    CHECK(p.groups.size() == 3);
+    if (p.groups.size() == 3) {
+        CHECK(p.groups[0].label == "0.10.1 to 0.10.4" && p.groups[0].anchor == "versions-0101-to-0104");
+        CHECK(p.groups[1].label == "0.9.x" && p.groups[2].label == "0.8 and earlier");
+        CHECK(p.groups[2].versions.size() == 3);
+        // Bigger releases pick first, shown newest first: 0.10.4's one, then both of 0.10.1's.
+        CHECK(p.groups[0].highlights.size() == 3 && p.groups[0].highlights[0] == "H0.10.4: line");
+        CHECK(p.groups[0].summary == "H0.10.4, H0.10.1, Second");
+    }
+    // A release later the window slides: 0.10.5 folds into the 0.10 group.
+    const whatsnew::Page next = whatsnew::build(doc, "0.10.8");
+    CHECK(next.versions[0].version == "0.10.8" && !next.groups.empty() && next.groups[0].label == "0.10.1 to 0.10.5");
+}
+
+TEST(guide_whats_new_in_a_beta) {
+    // A beta (0.11.0 Beta 1) is built as 0.11.0 (SCULPTFORGE_VERSION; the prerelease is a separate define) while its
+    // section still says "date: unreleased": Help > What's New shows that section, and the stable app doesn't.
+    const guide::Document doc = parse("# What's new\n\n## Version 0.11.0\n\n```features\ndate: unreleased\n"
+                                      "highlight: Beta: something new\n```\n\n- New.\n\n## Version 0.10.11\n\n"
+                                      "```features\ndate: 2026-11-04\nhighlight: Stable: a fix\n```\n\n- Fixed.\n");
+    const whatsnew::Page beta = whatsnew::build(doc, "0.11.0");
+    CHECK(beta.problems.empty() && !beta.versions.empty() && beta.versions[0].version == "0.11.0");
+    CHECK(!beta.versions.empty() && beta.versions[0].highlights.size() == 1);
+    const whatsnew::Page stable = whatsnew::build(doc, "0.10.11");
+    CHECK(!stable.versions.empty() && stable.versions[0].version == "0.10.11");
+}
+
+TEST(guide_visual_blocks) {
+    // The chapter's hero (the first image before any "##"), an "In short" callout with bullets, menu paths as chips,
+    // a card grid and a folded <details> section.
+    const guide::Document doc = parse("# Masking\n\nIntro.\n\n![A mask](images/masking.jpg)\n\n> **In short:**\n> - Hold <kbd>Ctrl</kbd>\n"
+                               ">   and drag.\n> - See [Parts](parts.md).\n\nOpen **Edit > Preferences > Input** or **Bold**.\n\n"
+                               "```cards\n[First sculpt](first-sculpt.md) | images/library.jpg | Ten minutes.\n"
+                               "[Install](installing.md) | images/export.jpg | Every platform.\n```\n\n"
+                               "## More\n\n![Later](images/later.jpg)\n\n<details>\n<summary>When the card comes</summary>\n\n"
+                               "Once a week.\n\n- Never mid-stroke.\n\n</details>\n\nAfter.\n");
+    std::vector<const Block*> by;
+    for (const auto& b : doc.blocks) by.push_back(&b);
+    const Block* hero = nullptr;
+    const Block* later = nullptr;
+    const Block* callout = nullptr;
+    const Block* cards = nullptr;
+    const Block* path = nullptr;
+    int details = -1;
+    for (size_t i = 0; i < doc.blocks.size(); ++i) {
+        const Block& b = doc.blocks[i];
+        if (b.kind == BlockKind::Image) (hero ? later : hero) = &b;
+        if (b.kind == BlockKind::Callout) callout = &b;
+        if (b.kind == BlockKind::Cards) cards = &b;
+        if (b.kind == BlockKind::Paragraph && plainText(b).find("Edit") != std::string::npos) path = &b;
+        if (b.kind == BlockKind::Details) details = int(i);
+    }
+    CHECK(hero && hero->hero && later && !later->hero);
+    CHECK(callout && plainText(callout->spans) == "In short:" && callout->items.size() == 2);
+    CHECK(callout && callout->items.size() == 2 && plainText(callout->items[0]) == "Hold Ctrl and drag.");
+    CHECK(path && path->spans.size() == 5 && path->spans[1].path && path->spans[1].text == "Edit > Preferences > Input");
+    CHECK(path && path->spans.size() == 5 && path->spans[3].bold && !path->spans[3].path);
+    CHECK(cards && cards->cards.size() == 2 && cards->cards[0].title == "First sculpt" &&
+          cards->cards[0].target == "first-sculpt.md" && cards->cards[1].image == "images/export.jpg" &&
+          plainText(cards->cards[1].blurb) == "Every platform.");
+    CHECK(details >= 0 && plainText(doc.blocks[size_t(details)].spans) == "When the card comes");
+    const int end = details >= 0 ? doc.blocks[size_t(details)].end : -1;
+    CHECK(end == details + 3 && doc.blocks[size_t(end)].kind == BlockKind::DetailsEnd);
+    CHECK(end > 0 && plainText(doc.blocks.back()) == "After.");
+    int images = 0, parts = 0, cardLinks = 0;
+    for (const auto& r : references(doc)) {
+        images += r.image;
+        parts += r.target == "parts.md";
+        cardLinks += r.target == "installing.md";
+    }
+    CHECK(images == 4 && parts == 1 && cardLinks == 1);
 }

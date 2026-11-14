@@ -1,5 +1,5 @@
-run ui_look look=classic layout=zbrush
-input_style zbrush
+run ui_look look=classic layout=classic
+input_style classic
 # Panel is available without distributing MetaHuman template files.
 run new_sphere subdivisions=3
 snapshot

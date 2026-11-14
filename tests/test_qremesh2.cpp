@@ -91,6 +91,18 @@ Mesh hardSurface() {
                     box({0.5f, 0.3f, 0.5f}, {0.6f, 0.0f, 0.75f}, 12)});
 }
 
+// A thin curved horn, 2455 x 691 x 149 like Oslen's Part (Discord): a flat section tapering to a ~4 mm tip.
+Mesh horn(int resolution) {
+    Mesh m = makeQuadSphere(resolution, 2.0f);
+    for (glm::vec3& p : m.positions) {
+        const glm::vec3 n = glm::normalize(p);
+        const float t = 0.5f * (n.y + 1.0f), taper = 1.0f - 0.95f * t;
+        p = {600.0f * t * t + 345.0f * n.x * taper, 2455.0f * t, 75.0f * n.z * taper};
+    }
+    m.recomputeAllNormals();
+    return m;
+}
+
 struct Run {
     Mesh out;
     QRemeshStats st;
@@ -155,6 +167,25 @@ TEST(qremesh2_sphere_has_eight_poles) {
     CHECK(l.st.quality.poles > 4 * r.st.quality.poles);
 }
 
+// Oslen's horn (Discord): the sharp tip used to get one singularity of index +4/4 that a quad mesh can't have, the
+// grid map folded across the whole part (Hausdorff 7 %, thousands of poles, tens of seconds at high targets), and the
+// quads stopped short of the point. Here (30k triangles, 3000 quads): 7.5 % and 1037 poles before, 0.5 % and 264
+// after, about 2 s on the laptop. The thresholds leave room: the exact result moves with the compiler's rounding.
+TEST(qremesh2_thin_horn_stays_clean) {
+    const Mesh m = horn(50);
+    const auto t0 = std::chrono::steady_clock::now();
+    const Run r = run(m, 3000, QRemeshMethod::V2);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(r.ok);
+    std::printf("  horn: %zu tris in, %zu quads, %zu poles, Hausdorff %.3f%%, %.0f ms\n", m.triangleCount(), r.st.quads,
+                r.st.quality.poles, r.st.quality.hausdorff, ms);
+    const TopologyReport t = topologyReport(r.out);
+    CHECK(t.manifold() && t.boundaryEdges == 0);
+    CHECK(r.st.quality.measured && r.st.quality.hausdorff < 2.0f);
+    CHECK(r.st.quality.poles < 600);
+    CHECK(ms < 30000.0); // "takes an eternity" guard only: CI machines differ
+}
+
 TEST(qremesh2_is_deterministic) {
     const Mesh m = creature();
     const Run a = run(m, 3000, QRemeshMethod::V2), b = run(m, 3000, QRemeshMethod::V2);
@@ -204,11 +235,11 @@ TEST(qremesh2_hard_edges_and_groups) {
                 r.st.quality.hausdorff, r.st.fallbackPieces);
     CHECK(topologyReport(r.out).manifold());
     CHECK(r.st.quality.hausdorff < 1.0f); // the corners and the fin stay sharp
-    // Keep Groups on a cube: the result keeps the six groups, each quad in one.
+    // Follow Face Groups on a cube: the result keeps the six groups, each quad in one.
     CommandRegistry reg;
     Document doc;
     doc.setMesh(makeCube(24));
-    CHECK(reg.execute(doc, "polygroup_auto_by_normals", {{"angle", 40.0}}).ok);
+    CHECK(reg.execute(doc, "facegroup_auto_by_normals", {{"angle", 40.0}}).ok);
     QRemeshOptions o;
     o.targetQuads = 1200;
     o.keepGroups = true;
@@ -217,8 +248,8 @@ TEST(qremesh2_hard_edges_and_groups) {
     std::string err;
     QRemeshStats st;
     CHECK(qremesh(doc.mesh, o, out, err, {}, &st));
-    CHECK(out.hasPolygroups());
-    for (size_t t = 0; t + 1 < out.triangleCount(); t += 2) CHECK(out.polygroups[t] == out.polygroups[t + 1]);
+    CHECK(out.hasFaceGroups());
+    for (size_t t = 0; t + 1 < out.triangleCount(); t += 2) CHECK(out.facegroups[t] == out.facegroups[t + 1]);
     CHECK(st.quality.poles == 8); // a cube: one valence-3 pole per corner
 }
 
@@ -233,7 +264,7 @@ TEST(qremesh2_command_method_and_report) {
     CHECK(reg.execute(doc, "undo", {}).ok);
     r = reg.execute(doc, "qremesh", {{"target", 800.0}, {"method", std::string("legacy")}});
     CHECK(r.ok && r.message.find("legacy method") != std::string::npos);
-    CHECK(!reg.execute(doc, "qremesh", {{"method", std::string("zremesher")}}).ok);
+    CHECK(!reg.execute(doc, "qremesh", {{"method", std::string("unknown")}}).ok);
     r = reg.execute(doc, "qremesh", {{"target", 500.0}, {"quality", false}});
     CHECK(r.ok && r.message.find("Quality") == std::string::npos);
 }
@@ -256,7 +287,7 @@ TEST(qremesh2_benchmark) {
     }
     {
         Document doc;
-        if (reg.execute(doc, "new_head", {}).ok) models.push_back({"head", doc.subtoolMesh(0), 0});
+        if (reg.execute(doc, "new_head", {}).ok) models.push_back({"head", doc.partMesh(0), 0});
     }
     models.push_back({"creature", creature(), 0});
     models.push_back({"hardsurface", hardSurface(), -1});

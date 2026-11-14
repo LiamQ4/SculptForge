@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "io/UsdIO.h"
 
+#include "core/Multires.h"
 #include "core/SelectionSets.h"
+#include "core/Units.h"
 #include "io/TextureExport.h"
 #include "io/Zip.h"
 
@@ -22,6 +24,7 @@
 #include <map>
 #include <set>
 #include <string_view>
+#include <unordered_map>
 
 namespace sf {
 
@@ -125,13 +128,13 @@ void writeExtent(Writer& w, const AABB& b) {
 // Selection Sets (core/SelectionSets.h) of the mesh, inside its Mesh prim: their names and channels as
 // `sculptforge:selectionSets` / `sculptforge:selectionSetChannels`, the mask and vertex paint of set k as vertex
 // primvars `sculptforge_set<k>_mask` / `_color`, its shown faces as the GeomSubset `sculptforge_set<k>_visible` and
-// its polygroups as a partition of GeomSubsets `sculptforge_set<k>_group<id>`. UVs and shapes aren't written (they
+// its face groups as a partition of GeomSubsets `sculptforge_set<k>_group<id>`. UVs and shapes aren't written (they
 // travel in projects and .sfsets files). `triFace`: the face each triangle was written in.
 void writeSelectionSets(Writer& w, const Mesh& mesh, std::vector<uint32_t> triFace, size_t faceCount) {
     if (!mesh.selectionSets || mesh.selectionSets->sets.empty()) return;
     for (uint32_t t = 0; t < triFace.size(); ++t) // the second half of a quad is in its partner's face
         if (triFace[t] == ~0u && mesh.quadPartnerAt(t) != Mesh::kNoQuad) triFace[t] = triFace[mesh.quadPartnerAt(t)];
-    constexpr uint32_t kChannels = kSetMask | kSetPaint | kSetVisibility | kSetPolygroups;
+    constexpr uint32_t kChannels = kSetMask | kSetPaint | kSetVisibility | kSetFaceGroups;
     std::vector<std::string> names, channels;
     std::vector<SelectionSetData> data;
     for (const auto& set : mesh.selectionSets->sets) {
@@ -184,20 +187,37 @@ void writeSelectionSets(Writer& w, const Mesh& mesh, std::vector<uint32_t> triFa
         if (!d.hidden.empty())
             faceSubset(base + "_visible", "sculptforge:set" + std::to_string(k) + ":visibility",
                        [&](uint32_t t) { return d.hidden[t] == 0; }, false);
-        if (!d.polygroups.empty()) {
-            std::vector<uint32_t> ids = d.polygroups;
+        if (!d.facegroups.empty()) {
+            std::vector<uint32_t> ids = d.facegroups;
             std::sort(ids.begin(), ids.end());
             ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
             for (uint32_t id : ids)
-                faceSubset(base + "_group" + std::to_string(id), "sculptforge:set" + std::to_string(k) + ":polygroups",
-                           [&](uint32_t t) { return d.polygroups[t] == id; }, true);
+                faceSubset(base + "_group" + std::to_string(id), "sculptforge:set" + std::to_string(k) + ":facegroups",
+                           [&](uint32_t t) { return d.facegroups[t] == id; }, true);
         }
     }
 }
 
 // One mesh prim `prim` under the root (a SkelRoot holding the Mesh when it has blend shapes).
+// xformOp:transform and its order for a prim placed by `m` (nothing for the identity).
+void writeTransform(Writer& w, const glm::mat4& m, bool always = false) {
+    if (m == glm::mat4(1.0f) && !always) return;
+    w.indent();
+    w.s += "matrix4d xformOp:transform = (";
+    for (int col = 0; col < 4; ++col) { // USD rows are glm columns (row-vector convention)
+        w.s += col ? ", (" : "(";
+        for (int r = 0; r < 4; ++r) {
+            if (r) w.s += ", ";
+            w.num(m[col][r]);
+        }
+        w.s += ')';
+    }
+    w.s += ")\n";
+    w.line("uniform token[] xformOpOrder = [\"xformOp:transform\"]");
+}
+
 void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::string& prim, const std::string& material,
-               const MorphAnimation* animation) {
+               const MorphAnimation* animation, const glm::mat4& transform = glm::mat4(1.0f)) {
     const bool skinned = !mesh.layers.empty();
     const std::string meshPath = skinned ? "/" + root + "/" + prim + "/Mesh" : "/" + root + "/" + prim;
     // Unique, valid names for the blend shapes.
@@ -216,13 +236,17 @@ void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::
     base.rebuildTopology();
     base.recomputeAllNormals();
 
-    if (skinned) w.open("def SkelRoot \"" + prim + "\"");
+    if (skinned) {
+        w.open("def SkelRoot \"" + prim + "\"");
+        writeTransform(w, transform);
+    }
     w.line("def Mesh \"" + (skinned ? std::string("Mesh") : prim) + "\" (");
     w.line(skinned ? "    prepend apiSchemas = [\"SkelBindingAPI\", \"MaterialBindingAPI\"]"
                    : "    prepend apiSchemas = [\"MaterialBindingAPI\"]");
     w.line(")");
     w.line("{");
     ++w.depth;
+    if (!skinned) writeTransform(w, transform);
     writeExtent(w, base.bounds());
     // Quads where the mesh keeps them (Mesh::quadPartners), else triangles; UVs per face corner in the same
     // order (a quad split by a UV seam along its diagonal is written as two triangles).
@@ -263,14 +287,37 @@ void writeMesh(Writer& w, const Mesh& mesh, const std::string& root, const std::
         w.line(")");
     }
     if (mesh.hasColors() && mesh.colors.size() == mesh.vertexCount()) {
-        // Polypaint (linear, as USD expects); the material reads it through a primvar reader.
+        // Vertex paint (linear, as USD expects); the material reads it through a primvar reader.
         w.array("color3f[] primvars:displayColor", mesh.colors, [&](const glm::vec3& c) { w.vec3(c); });
         w.s.pop_back();
         w.s += " (\n";
         w.line("    interpolation = \"vertex\"");
         w.line(")");
     }
-    w.line("uniform token subdivisionScheme = \"none\"");
+    // Edge creases (#108): one two-point crease per creased edge, its sharpness as in subdivision (10 = sharp on
+    // every level, USD's "infinitely sharp"). A creased mesh is a cage to subdivide, so it says which scheme.
+    const std::vector<float> creases = subdivCornerCreases(mesh);
+    std::vector<std::pair<glm::uvec2, float>> creased;
+    for (size_t c = 0; c < creases.size() && creases.size() == mesh.triangleCount() * 3; ++c) {
+        if (!(creases[c] > 0.0f)) continue;
+        const glm::uvec3& t = mesh.triangles[c / 3];
+        const uint32_t a = t[int(c % 3)], b = t[int((c + 1) % 3)];
+        creased.push_back({glm::uvec2(std::min(a, b), std::max(a, b)), creaseSharpness(creases[c])});
+    }
+    std::sort(creased.begin(), creased.end(), [](const auto& x, const auto& y) {
+        return x.first.x != y.first.x ? x.first.x < y.first.x : x.first.y != y.first.y ? x.first.y < y.first.y : x.second > y.second;
+    });
+    creased.erase(std::unique(creased.begin(), creased.end(), [](const auto& x, const auto& y) { return x.first == y.first; }),
+                  creased.end());
+    if (!creased.empty()) {
+        w.array("int[] creaseIndices", creased, [&](const auto& e) {
+            w.s += std::to_string(e.first.x) + ", " + std::to_string(e.first.y);
+        });
+        w.array("int[] creaseLengths", creased, [&](const auto&) { w.s += "2"; });
+        w.array("float[] creaseSharpnesses", creased, [&](const auto& e) { w.num(e.second); });
+    }
+    w.line(std::string("uniform token subdivisionScheme = \"") +
+           (creased.empty() ? "none" : mesh.hasQuads() ? "catmullClark" : "loop") + "\"");
     writeSelectionSets(w, mesh, triFace, faces.size());
     if (skinned) {
         w.array("uniform token[] skel:blendShapes", shapeNames, [&](const std::string& n) { w.s += quoted(n); });
@@ -352,31 +399,18 @@ void writeSplats(Writer& w, const SplatCloud& c) {
     w.line("uniform int radiance:sphericalHarmonicsDegree = " + std::to_string(c.shDegree));
     w.array("float3[] scales", c.scales, [&](const glm::vec3& v) { w.vec3(v); });
     w.line("uniform token sortingModeHint = \"zDepth\"");
-    if (c.transform != glm::mat4(1.0f)) {
-        w.indent();
-        w.s += "matrix4d xformOp:transform = (";
-        for (int col = 0; col < 4; ++col) { // USD rows are glm columns (row-vector convention)
-            w.s += col ? ", (" : "(";
-            for (int r = 0; r < 4; ++r) {
-                if (r) w.s += ", ";
-                w.num(c.transform[col][r]);
-            }
-            w.s += ')';
-        }
-        w.s += ")\n";
-        w.line("uniform token[] xformOpOrder = [\"xformOp:transform\"]");
-    }
+    writeTransform(w, c.transform);
     w.close();
 }
 
-// A UsdPreviewSurface clay material; `painted` reads the polypaint primvar for its colour.
+// A UsdPreviewSurface clay material; `painted` reads the vertex paint primvar for its colour.
 void writeMaterial(Writer& w, const std::string& path, const std::string& name, bool painted) {
     w.open("def Material " + quoted(name));
     w.line("token outputs:surface.connect = <" + path + "/PreviewSurface.outputs:surface>");
     w.s += '\n';
     w.open("def Shader \"PreviewSurface\"");
     w.line("uniform token info:id = \"UsdPreviewSurface\"");
-    if (painted) w.line("color3f inputs:diffuseColor.connect = <" + path + "/Polypaint.outputs:result>");
+    if (painted) w.line("color3f inputs:diffuseColor.connect = <" + path + "/VertexPaint.outputs:result>");
     else w.line("color3f inputs:diffuseColor = (0.72, 0.68, 0.62)");
     w.line("float inputs:metallic = 0");
     w.line("float inputs:roughness = 0.65");
@@ -384,7 +418,7 @@ void writeMaterial(Writer& w, const std::string& path, const std::string& name, 
     w.close();
     if (painted) {
         w.s += '\n';
-        w.open("def Shader \"Polypaint\"");
+        w.open("def Shader \"VertexPaint\"");
         w.line("uniform token info:id = \"UsdPrimvarReader_float3\"");
         w.line("string inputs:varname = \"displayColor\"");
         w.line("float3 outputs:result");
@@ -468,7 +502,7 @@ std::string buildUsda(const std::vector<MeshObjectRef>& meshes, const std::vecto
                       const SplatCloud* splats, const std::string& name, const MorphAnimation* animation,
                       const std::vector<std::vector<std::pair<std::string, std::string>>>& pbr) {
     const std::string root = usdIdentifier(name.empty() ? "Sculpt" : name);
-    // Textured meshes bind a material of their own. Of the others, polypainted ones bind a material that
+    // Textured meshes bind a material of their own. Of the others, vertex painted ones bind a material that
     // reads their colours; with a mix, plain ones bind "Clay".
     size_t painted = 0, plain = 0;
     for (size_t i = 0; i < meshes.size(); ++i) {
@@ -513,6 +547,7 @@ std::string buildUsda(const std::vector<MeshObjectRef>& meshes, const std::vecto
         std::set<std::string> used = {"Materials", "Splats"};
         std::vector<std::pair<std::string, std::string>> textured; // material name, texture
         std::vector<size_t> texturedMesh;                         // which mesh each textured material is for
+        std::vector<std::string> prims;                           // by mesh
         for (size_t i = 0; i < meshes.size(); ++i) {
             const MeshObjectRef& m = meshes[i];
             std::string prim = "Sculpt";
@@ -522,13 +557,28 @@ std::string buildUsda(const std::vector<MeshObjectRef>& meshes, const std::vecto
                 for (int k = 2; used.count(prim); ++k) prim = base + "_" + std::to_string(k);
             }
             used.insert(prim);
+            prims.push_back(prim);
+            // A linked copy (#94): an instanceable prim referencing the first one's (its mesh, material and
+            // blend shapes), placed by its own transform. Readers that instance load the mesh once.
+            if (m.instanceOf >= 0 && size_t(m.instanceOf) < i) {
+                w.line("def \"" + prim + "\" (");
+                w.line("    instanceable = true");
+                w.line("    prepend references = </" + root + "/" + prims[size_t(m.instanceOf)] + ">");
+                w.line(")");
+                w.line("{");
+                ++w.depth;
+                writeTransform(w, m.transform, true); // (always: else the referenced prim's own would apply)
+                w.close();
+                w.s += '\n';
+                continue;
+            }
             std::string material = mixed && m.mesh->hasColors() ? paintedClay : clay;
             if (!textures[i].empty()) {
                 textured.push_back({prim + "_Material", textures[i]});
                 texturedMesh.push_back(i);
                 material = "/" + root + "/Materials/" + textured.back().first;
             }
-            writeMesh(w, *m.mesh, root, prim, material, animation);
+            writeMesh(w, *m.mesh, root, prim, material, animation, m.transform);
             w.s += '\n';
         }
         w.open("def Scope \"Materials\"");
@@ -648,6 +698,7 @@ struct Value {
 
 struct Prim {
     std::string type, path;
+    std::string reference; // an internal reference's target path (metadata `references = </path>`)
     bool abstract = false;
     int parent = -1;
     std::map<std::string, Value> attrs;
@@ -663,6 +714,7 @@ public:
 
     std::vector<Prim> prims;
     std::string upAxis = "Y";
+    double metersPerUnit = 1.0; // the stage's unit (0.01: centimetres, as Maya and Houdini often write)
     std::string error;
 
     bool parse() {
@@ -701,6 +753,31 @@ private:
         } while (level > 0);
     }
 
+    // A prim's metadata: only an internal reference is kept (`[prepend] references = </path>` or `[</path>]`).
+    void parsePrimMetadata(Prim& prim) {
+        advance();
+        while (tok_.kind != Token::End && !isPunct(")")) {
+            if (isIdent("references")) {
+                advance();
+                if (isPunct("=")) advance();
+                if (isPunct("[")) {
+                    advance();
+                    if (tok_.kind == Token::Path) prim.reference = std::string(tok_.text);
+                    while (tok_.kind != Token::End && !isPunct("]")) advance();
+                    advance();
+                } else {
+                    if (tok_.kind == Token::Path) prim.reference = std::string(tok_.text);
+                    advance();
+                }
+            } else if (isPunct("(") || isPunct("[") || isPunct("{")) {
+                skipBalanced();
+            } else {
+                advance();
+            }
+        }
+        advance(); // ')'
+    }
+
     void parseLayerMetadata() {
         advance();
         while (tok_.kind != Token::End && !isPunct(")")) {
@@ -708,6 +785,11 @@ private:
                 advance();
                 if (isPunct("=")) advance();
                 if (tok_.kind == Token::String) upAxis = std::string(tok_.text);
+                advance();
+            } else if (isIdent("metersPerUnit")) {
+                advance();
+                if (isPunct("=")) advance();
+                if (tok_.kind == Token::Number && tok_.number > 0.0 && std::isfinite(tok_.number)) metersPerUnit = tok_.number;
                 advance();
             } else if (isPunct("(") || isPunct("[") || isPunct("{")) {
                 skipBalanced();
@@ -783,7 +865,7 @@ private:
         prim.parent = parent;
         prim.abstract = abstract;
         advance();
-        if (isPunct("(")) skipBalanced();
+        if (isPunct("(")) parsePrimMetadata(prim);
         if (!expect("{")) return false;
         const int index = int(prims.size());
         prims.push_back(std::move(prim));
@@ -877,7 +959,7 @@ void readSelectionSets(const std::vector<Prim>& prims, size_t mesh, size_t verti
         uint32_t channels = 0;
         std::string error;
         if (!parseSetChannels(channelList->strs[k], channels, error)) continue;
-        channels &= kSetMask | kSetPaint | kSetVisibility | kSetPolygroups;
+        channels &= kSetMask | kSetPaint | kSetVisibility | kSetFaceGroups;
         const std::string base = "sculptforge_set" + std::to_string(k);
         SelectionSetData d;
         d.channels = channels;
@@ -894,7 +976,7 @@ void readSelectionSets(const std::vector<Prim>& prims, size_t mesh, size_t verti
                 d.colors[i] = glm::vec3(float(v->nums[i * 3]), float(v->nums[i * 3 + 1]), float(v->nums[i * 3 + 2]));
         }
         if (channels & kSetVisibility) d.hidden.assign(triangles, 1);
-        if (channels & kSetPolygroups) d.polygroups.assign(triangles, 0u);
+        if (channels & kSetFaceGroups) d.facegroups.assign(triangles, 0u);
         bool visibleFound = false;
         for (const Prim& c : prims) {
             if (c.parent != int(mesh) || c.type != "GeomSubset") continue;
@@ -904,7 +986,7 @@ void readSelectionSets(const std::vector<Prim>& prims, size_t mesh, size_t verti
             const bool visible = rest == "visible";
             const bool group = rest.rfind("group", 0) == 0 && rest.size() > 5 && rest.size() < 16 &&
                                std::all_of(rest.begin() + 5, rest.end(), [](char ch) { return ch >= '0' && ch <= '9'; });
-            if ((!visible || !(channels & kSetVisibility)) && (!group || !(channels & kSetPolygroups))) continue;
+            if ((!visible || !(channels & kSetVisibility)) && (!group || !(channels & kSetFaceGroups))) continue;
             const uint32_t id = group ? uint32_t(std::min<unsigned long long>(std::stoull(rest.substr(5)), 0xFFFFFFFFull)) : 0u;
             visibleFound |= visible;
             if (const Value* idx = c.get("indices"))
@@ -913,7 +995,7 @@ void readSelectionSets(const std::vector<Prim>& prims, size_t mesh, size_t verti
                     const glm::uvec2 ft = faceTris[size_t(f)];
                     for (uint32_t t = ft.x; t < ft.x + ft.y && t < triangles; ++t) {
                         if (visible) d.hidden[t] = 0;
-                        else d.polygroups[t] = id;
+                        else d.facegroups[t] = id;
                     }
                 }
         }
@@ -994,9 +1076,104 @@ const Prim* skelAnimation(const std::vector<Prim>& prims, const std::map<std::st
     return nullptr;
 }
 
+// Internal references (SculptForge writes linked copies, #94, as instanceable prims referencing the first one): a
+// referencing prim gets the referenced prim's type, properties (its own win) and children, with paths inside it
+// moved under the referencing prim. One level; a reference to itself, an ancestor or a descendant is ignored.
+// Edge creases (creaseIndices: chains of points, creaseLengths: points per chain, creaseSharpnesses: one per
+// chain or one per edge) onto the corners of the prim's triangles (from `firstTri`, points from `baseIndex`) as
+// Mesh::creases. Imported files are untrusted: all or nothing per prim. Every length a whole number >= 2, their
+// sum exactly the index count (summed with a bound, so it can't overflow), every index a whole number < `points`,
+// a sharpness per chain or per edge and each finite (clamped to 0..10, USD's "infinitely sharp"), and at most
+// kMaxCreaseIndices indices. Anything else skips the prim's creases and returns why (the import goes on);
+// edges named twice keep the sharper value, edges the faces don't have are ignored.
+constexpr size_t kMaxCreaseIndices = size_t(1) << 26; // 64M points of crease chains: far beyond any real cage
+std::string readCreases(const Prim& p, size_t points, uint32_t baseIndex, size_t firstTri, Mesh& m) {
+    const Value* idx = p.get("creaseIndices");
+    const Value* len = p.get("creaseLengths");
+    const Value* sh = p.get("creaseSharpnesses");
+    if (!idx && !len && !sh) return {};
+    const std::string head = "Edge creases of " + p.path + " skipped: ";
+    if (!idx || !len || !sh) return head + "creaseIndices, creaseLengths and creaseSharpnesses must all be given";
+    if (idx->nums.empty() && len->nums.empty() && sh->nums.empty()) return {};
+    const size_t ni = idx->nums.size(), nl = len->nums.size(), ns = sh->nums.size();
+    if (ni > kMaxCreaseIndices || ni > points * 16 + 16) return head + "too many crease indices";
+    auto whole = [](double v, double limit) { return std::isfinite(v) && v >= 0.0 && v < limit && v == std::floor(v); };
+    size_t sum = 0, edges = 0;
+    for (double l : len->nums) {
+        if (!whole(l, double(ni) + 1.0) || l < 2.0) return head + "a crease length is not a whole number of at least 2";
+        if (size_t(l) > ni - std::min(sum, ni)) return head + "creaseLengths add up to more than creaseIndices";
+        sum += size_t(l);
+        edges += size_t(l) - 1;
+    }
+    if (sum != ni) return head + "creaseLengths don't add up to the number of creaseIndices";
+    if (ns != nl && ns != edges) return head + "creaseSharpnesses needs one value per crease or per crease edge";
+    for (double v : idx->nums)
+        if (!whole(v, double(points))) return head + "a crease index is out of range";
+    for (double s : sh->nums)
+        if (!std::isfinite(s)) return head + "a crease sharpness is not a finite number";
+    const bool perEdge = ns == edges && ns != nl;
+    std::unordered_map<uint64_t, float> crease; // (a << 32 | b), a < b, offset by baseIndex: the crease value
+    size_t cursor = 0, edge = 0;
+    for (size_t c = 0; c < nl; ++c) {
+        const size_t n = size_t(len->nums[c]);
+        for (size_t k = 0; k + 1 < n; ++k, ++edge) {
+            const float s = float(std::clamp(perEdge ? sh->nums[edge] : sh->nums[c], 0.0, 10.0));
+            const uint64_t a = uint64_t(idx->nums[cursor + k]), b = uint64_t(idx->nums[cursor + k + 1]);
+            if (a == b || s <= 0.0f) continue;
+            float& v = crease[(baseIndex + std::min(a, b)) << 32 | (baseIndex + std::max(a, b))];
+            v = std::max(v, sharpnessCrease(s));
+        }
+        cursor += n;
+    }
+    if (crease.empty()) return {};
+    for (size_t t = firstTri; t < m.triangles.size(); ++t)
+        for (int k = 0; k < 3; ++k) {
+            const uint64_t a = m.triangles[t][k], b = m.triangles[t][(k + 1) % 3];
+            const auto it = crease.find(std::min(a, b) << 32 | std::max(a, b));
+            if (it == crease.end()) continue;
+            m.creases.resize(m.triangles.size() * 3, 0.0f);
+            m.creases[t * 3 + size_t(k)] = it->second;
+        }
+    return {};
+}
+
+void expandInternalReferences(std::vector<Prim>& prims, std::map<std::string, size_t>& byPath) {
+    const size_t original = prims.size();
+    for (size_t i = 0; i < original; ++i) {
+        if (prims[i].reference.empty()) continue;
+        const auto it = byPath.find(prims[i].reference);
+        if (it == byPath.end() || it->second >= original) continue;
+        const size_t r = it->second;
+        const std::string from = prims[r].path, to = prims[i].path;
+        if (from == to || to.rfind(from + "/", 0) == 0 || from.rfind(to + "/", 0) == 0) continue;
+        auto moved = [&](Value v) {
+            for (auto& s : v.strs)
+                if (s == from || s.rfind(from + "/", 0) == 0) s = to + s.substr(from.size());
+            return v;
+        };
+        if (prims[i].type.empty()) prims[i].type = prims[r].type;
+        for (const auto& [name, value] : prims[r].attrs) prims[i].attrs.try_emplace(name, moved(value));
+        std::map<size_t, size_t> cloneOf{{r, i}}; // referenced prim -> its copy
+        for (size_t q = r + 1; q < original && prims[q].path.rfind(from + "/", 0) == 0; ++q) {
+            const auto parent = cloneOf.find(size_t(prims[q].parent));
+            if (parent == cloneOf.end()) continue;
+            Prim c;
+            c.type = prims[q].type;
+            c.path = to + prims[q].path.substr(from.size());
+            c.abstract = prims[q].abstract || prims[i].abstract;
+            c.parent = int(parent->second);
+            for (const auto& [name, value] : prims[q].attrs) c.attrs.emplace(name, moved(value));
+            if (byPath.count(c.path)) continue; // (the referencing prim has a child of that name already)
+            cloneOf[q] = prims.size();
+            byPath[c.path] = prims.size();
+            prims.push_back(std::move(c));
+        }
+    }
+}
+
 // Merges every Mesh prim into one object, or (split) makes one object per prim.
 bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& outMeshes, SplatCloud& outSplats,
-                  std::string& error) {
+                  std::string& error, std::string* warnings) {
     Parser parser(text);
     if (!parser.parse()) {
         error = parser.error;
@@ -1005,10 +1182,16 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
     auto& prims = parser.prims;
     std::map<std::string, size_t> byPath;
     for (size_t i = 0; i < prims.size(); ++i) byPath[prims[i].path] = i;
+    expandInternalReferences(prims, byPath);
 
-    // World transforms (parents come first in `prims`).
+    // World transforms (parents come first in `prims`), Y up, in the stage's unit. Mesh points go to metres through
+    // double (fromFileUnits), so 12.7 cm is the float nearest 0.127 m; splats take the unit in their transform.
     const glm::mat4 up = parser.upAxis == "Z" ? glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1, 0, 0))
                                               : glm::mat4(1.0f);
+    const double perUnit = 1.0 / parser.metersPerUnit; // file numbers per metre
+    const auto toMetres = [perUnit](glm::vec3 v) {
+        return glm::vec3(fromFileUnits(v.x, perUnit), fromFileUnits(v.y, perUnit), fromFileUnits(v.z, perUnit));
+    };
     std::vector<glm::mat4> world(prims.size());
     for (size_t i = 0; i < prims.size(); ++i) {
         bool reset = false;
@@ -1075,7 +1258,7 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
                 return layers.back();
             };
             const uint32_t baseIndex = uint32_t(m.positions.size());
-            for (const auto& q : pts) m.positions.push_back(glm::vec3(world[i] * glm::vec4(q, 1.0f)));
+            for (const auto& q : pts) m.positions.push_back(toMetres(glm::vec3(world[i] * glm::vec4(q, 1.0f))));
             // Texture coordinates: primvars:st, else the first texCoord2 primvar; face-varying (per face corner)
             // or per point, optionally indexed (<name>:indices).
             std::string stName = "primvars:st";
@@ -1106,6 +1289,7 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
                 return e < st->nums.size() / 2 ? glm::vec2(float(st->nums[e * 2]), float(st->nums[e * 2 + 1])) : glm::vec2(0.0f);
             };
             size_t cursor = 0;
+            const size_t firstPrimTri = m.triangles.size();
             std::vector<glm::uvec2> faceTris; // per face: its first triangle and how many (selection sets)
             for (double c : counts->nums) {
                 const size_t n = size_t(std::max(0.0, c));
@@ -1134,6 +1318,9 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
                 faceTris.push_back({firstTri, uint32_t(m.triangles.size()) - firstTri});
                 cursor += n;
             }
+            if (std::string w = readCreases(p, pts.size(), baseIndex, firstPrimTri, m); !w.empty() && warnings)
+                *warnings += (warnings->empty() ? "" : "; ") + w;
+            if (m.hasCreases()) m.creases.resize(m.triangles.size() * 3, 0.0f); // (prims before or after without)
             ++objects.back().meshPrims;
             readSelectionSets(prims, i, pts.size(), m.triangles.size(), faceTris, objects.back().sets);
             if (m.hasQuads()) m.quadPartners.resize(m.triangles.size(), Mesh::kNoQuad);
@@ -1156,7 +1343,7 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
                     for (size_t o = 0; o < offsets.size(); ++o) {
                         const size_t v = pointIndices ? (o < pointIndices->nums.size() ? indexValue(pointIndices->nums[o], pts.size()) : pts.size())
                                                       : o;
-                        if (v < pts.size()) layer.delta[baseIndex + v] = linear * offsets[o];
+                        if (v < pts.size()) layer.delta[baseIndex + v] = toMetres(linear * offsets[o]);
                     }
                 }
             }
@@ -1183,7 +1370,7 @@ bool readUsdaText(const std::string& text, bool split, std::vector<MeshObject>& 
                     const float len = glm::length(r);
                     cloud.rotations[k] = len > 0.0f ? r / len : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
                 }
-            cloud.transform = world[i];
+            cloud.transform = glm::scale(glm::mat4(1.0f), glm::vec3(float(parser.metersPerUnit))) * world[i];
             cloud.name = p.path.substr(p.path.rfind('/') + 1);
             splatsFound = true;
         }
@@ -1237,8 +1424,14 @@ bool saveUsd(const std::string& path, const Mesh* mesh, const SplatCloud* splats
 bool saveUsd(const std::string& path, const std::vector<MeshObjectRef>& meshesIn, const SplatCloud* splats,
              const std::string& name, std::string& error, const MorphAnimation* animation) {
     std::vector<MeshObjectRef> meshes;
-    for (const auto& m : meshesIn)
-        if (m.mesh && m.mesh->triangleCount() > 0) meshes.push_back(m);
+    std::vector<int> kept(meshesIn.size(), -1); // (instanceOf names an index of meshesIn)
+    for (size_t i = 0; i < meshesIn.size(); ++i) {
+        const auto& m = meshesIn[i];
+        if (!m.mesh || m.mesh->triangleCount() == 0) continue;
+        kept[i] = int(meshes.size());
+        meshes.push_back(m);
+        if (m.instanceOf >= 0) meshes.back().instanceOf = size_t(m.instanceOf) < i ? kept[size_t(m.instanceOf)] : -1;
+    }
     const bool hasSplats = splats && !splats->empty();
     if (meshes.empty() && !hasSplats) {
         error = "Nothing to export";
@@ -1256,7 +1449,9 @@ bool saveUsd(const std::string& path, const std::vector<MeshObjectRef>& meshesIn
         return false;
     }
     // Textures: PNGs inside a .usdz package, else beside the layer; asset paths are relative to the layer.
-    const std::vector<std::string> pngs = textureFileNames(path, meshes);
+    std::vector<std::string> pngs = textureFileNames(path, meshes);
+    for (size_t i = 0; i < meshes.size(); ++i)
+        if (meshes[i].instanceOf >= 0) pngs[i].clear(); // (a linked copy uses the first one's material)
     // Material channel maps (PBR slots) per textured mesh, named after its colour PNG.
     std::vector<std::vector<PbrPng>> pbrPngs(meshes.size());
     std::vector<std::vector<std::pair<std::string, std::string>>> pbr(meshes.size());
@@ -1299,7 +1494,7 @@ bool saveUsd(const std::string& path, const std::vector<MeshObjectRef>& meshesIn
 namespace {
 
 bool readUsdFile(const std::string& path, bool split, std::vector<MeshObject>& meshes, SplatCloud& splats,
-                 std::string& error) {
+                 std::string& error, std::string* warnings) {
     std::string text;
     if (lowerExtension(path) == ".usdz") {
         std::vector<ZipEntry> entries;
@@ -1325,20 +1520,21 @@ bool readUsdFile(const std::string& path, bool split, std::vector<MeshObject>& m
         error = path + " is not a text USD layer";
         return false;
     }
-    return readUsdaText(text, split, meshes, splats, error);
+    return readUsdaText(text, split, meshes, splats, error, warnings);
 }
 
 } // namespace
 
-bool loadUsd(const std::string& path, Mesh& mesh, SplatCloud& splats, std::string& error) {
+bool loadUsd(const std::string& path, Mesh& mesh, SplatCloud& splats, std::string& error, std::string* warnings) {
     std::vector<MeshObject> meshes;
-    if (!readUsdFile(path, false, meshes, splats, error)) return false;
+    if (!readUsdFile(path, false, meshes, splats, error, warnings)) return false;
     mesh = meshes.empty() ? Mesh() : std::move(meshes.front().mesh);
     return true;
 }
 
-bool loadUsd(const std::string& path, std::vector<MeshObject>& meshes, SplatCloud& splats, std::string& error) {
-    return readUsdFile(path, true, meshes, splats, error);
+bool loadUsd(const std::string& path, std::vector<MeshObject>& meshes, SplatCloud& splats, std::string& error,
+             std::string* warnings) {
+    return readUsdFile(path, true, meshes, splats, error, warnings);
 }
 
 } // namespace sf

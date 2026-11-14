@@ -2,11 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "app/Demo.h"
 
+#include <utility>
+
 #include "app/App.h"
+#include "app/UiServe.h"
+#include "app/Ui.h"
 
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cmath>
 #include <cstdarg>
@@ -14,6 +19,7 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <set>
 
 // ---------------------------------------------------------------------------
 // Dear ImGui test-engine hooks: record where every labelled item was drawn.
@@ -39,6 +45,20 @@ struct ItemTable {
     };
     std::vector<Seeded> frame;
     std::vector<std::string> scopes; // Demo::pushScope: panels drawn inside the shell's trays and drop-downs
+    // Items whose visible part runs past the window's edge this frame (#105): "window/label".
+    std::map<ImGuiID, std::string> offscreen;
+    // Items that run past their window's inner right edge, scrollable or not (a button cut off at a panel's edge):
+    // "window/label" by ID, the window without its "##" part.
+    std::map<ImGuiID, std::string> pastRight;
+    // Controls whose label didn't fit them this frame, with the scopes open then.
+    std::vector<std::pair<std::string, std::vector<std::string>>> clipped;
+    // Every labelled item drawn inside a pushScope this frame, by its full label ("Adjust##stencil.adjust").
+    struct Labelled {
+        std::string text;
+        Placed placed;
+        std::vector<std::string> scopes;
+    };
+    std::vector<Labelled> labelled;
 };
 ItemTable& items() {
     static ItemTable t;
@@ -48,9 +68,31 @@ ItemTable& items() {
 } // namespace
 
 void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb, const ImGuiLastItemData*) {
+    sf::ui::NoteItem(ctx, id, bb.Min, bb.Max); // the hover and focus rings (Ui.cpp)
     ImRect clip = bb;
     if (ctx && ctx->CurrentWindow) {
         clip = ctx->CurrentWindow->ClipRect;
+        // Out of reach: past the screen, or cut off by its window where that window can't scroll to it (#105).
+        const ImGuiWindow* win = ctx->CurrentWindow;
+        ImRect bounds = win->Rect();
+        bounds.ClipWith(ImRect(ImVec2(0, 0), ctx->IO.DisplaySize));
+        const bool wheel = !(win->Flags & ImGuiWindowFlags_NoScrollWithMouse);
+        const bool scrollX = win->ScrollMax.x > 0.0f && (win->ScrollbarX || wheel);
+        const bool scrollY = win->ScrollMax.y > 0.0f && (win->ScrollbarY || wheel);
+        constexpr float kSlack = 4.0f; // a spacer's padding over the edge hides nothing
+        const bool outX = bb.Min.x < bounds.Min.x - kSlack || bb.Max.x > bounds.Max.x + kSlack;
+        const bool outY = bb.Min.y < bounds.Min.y - kSlack || bb.Max.y > bounds.Max.y + kSlack;
+        const bool offScreen = bb.Min.x < -kSlack || bb.Min.y < -kSlack || bb.Max.x > ctx->IO.DisplaySize.x + kSlack ||
+                               bb.Max.y > ctx->IO.DisplaySize.y + kSlack;
+        if (bb.GetWidth() > 1.0f && bb.GetHeight() > 1.0f && ((outX && !scrollX) || (outY && !scrollY) || (offScreen && !scrollX && !scrollY)))
+            items().offscreen[id] = std::string(win->RootWindow->Name) + "/(unlabelled at " + std::to_string(int(bb.Min.x)) +
+                                    "," + std::to_string(int(bb.Min.y)) + ")";
+        if (!win->ScrollbarX && bb.GetWidth() > 1.0f && bb.Max.x > win->InnerRect.Max.x + 1.0f) {
+            std::string root = win->RootWindow->Name; // (in a pushScope panel: the panel's name)
+            if (const size_t hash = root.find("##"); hash != std::string::npos) root.resize(hash);
+            if (!items().scopes.empty()) root = items().scopes.back();
+            items().pastRight[id] = root + "/(unlabelled at " + std::to_string(int(bb.Min.x)) + "," + std::to_string(int(bb.Min.y)) + ")";
+        }
         clip.ClipWith(ImRect(ImVec2(0, 0), ctx->IO.DisplaySize));
     }
     items().rects[id] = {bb, clip};
@@ -62,17 +104,22 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
 }
 
 void ImGuiTestEngineHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* label, ImGuiItemStatusFlags) {
+    sf::ui::NoteItemLabel(id);
     auto it = items().rects.find(id);
     if (!label || it == items().rects.end()) return;
     std::string text(label);
     std::string window = ctx && ctx->CurrentWindow ? ctx->CurrentWindow->RootWindow->Name : "";
+    if (auto off = items().offscreen.find(id); off != items().offscreen.end()) off->second = window + "/" + text;
     if (const size_t hash = window.find("##"); hash != std::string::npos) window.resize(hash);
+    if (auto past = items().pastRight.find(id); past != items().pastRight.end())
+        past->second = (items().scopes.empty() ? window : items().scopes.back()) + "/" + text;
     auto add = [&](const std::string& key) {
         items().byLabel[key] = it->second;
         if (!window.empty()) items().byLabel[window + "/" + key] = it->second;
         for (const auto& scope : items().scopes) items().byLabel[scope + "/" + key] = it->second;
     };
     add(text);
+    if (!items().scopes.empty()) items().labelled.push_back({text, it->second, items().scopes});
     if (const size_t hash = text.find("##"); hash != std::string::npos && hash > 0) add(text.substr(0, hash));
     // Labels that start with an icon (ICON_LC_*: UTF-8 private-use characters, U+E000-U+F8FF) are also found
     // by their words: "AI Brush" for "<sparkles> AI Brush".
@@ -111,8 +158,14 @@ glm::vec3 onSphere(float latDeg, float lonDeg, float r = 1.0f) {
 
 } // namespace
 
+void resetDemoGlobals() { items() = {}; }
+
 void Demo::beginFrame() {
     items().byLabel.clear();
+    items().offscreen.clear();
+    items().pastRight.clear();
+    items().clipped.clear();
+    items().labelled.clear();
     items().frame.clear();
     items().scopes.clear();
 }
@@ -136,9 +189,43 @@ std::vector<std::string> Demo::similarItems(const std::string& label) {
     return out;
 }
 
-bool Demo::findItem(const std::string& label, ImVec2& center, bool* visible, ImVec4* clipOut) const {
+std::vector<std::string> Demo::offscreenItems() {
+    std::vector<std::string> out;
+    for (const auto& [id, name] : items().offscreen) out.push_back(name);
+    return out;
+}
+
+std::vector<std::string> Demo::pastRightEdge(const std::string& window) {
+    std::vector<std::string> out;
+    for (const auto& [id, name] : items().pastRight)
+        if (name.compare(0, window.size() + 1, window + "/") == 0) out.push_back(name);
+    return out;
+}
+
+std::vector<std::string> Demo::scopeItems(const std::string& scope) {
+    std::set<std::string> out;
+    for (const auto& item : items().labelled) {
+        if (std::find(item.scopes.begin(), item.scopes.end(), scope) == item.scopes.end()) continue;
+        const float x = item.placed.rect.GetCenter().x; // (a control pushed past its panel's side can't be reached)
+        if (x >= item.placed.clip.Min.x && x <= item.placed.clip.Max.x) out.insert(item.text);
+    }
+    return {out.begin(), out.end()};
+}
+
+void Demo::noteClippedLabel(const std::string& label) { items().clipped.push_back({label.substr(0, label.find("##")), items().scopes}); }
+
+std::vector<std::string> Demo::clippedLabels(const std::string& scope) {
+    std::vector<std::string> out;
+    for (const auto& [label, scopes] : items().clipped)
+        if (scope.empty() || std::find(scopes.begin(), scopes.end(), scope) != scopes.end())
+            out.push_back((scopes.empty() ? std::string() : scopes.back() + "/") + label);
+    return out;
+}
+
+bool Demo::findItem(const std::string& label, ImVec2& center, bool* visible, ImVec4* clipOut, ImVec4* rectOut) const {
     auto found = [&](const Placed& p) {
         center = p.rect.GetCenter();
+        if (rectOut) *rectOut = ImVec4(p.rect.Min.x, p.rect.Min.y, p.rect.Max.x, p.rect.Max.y);
         if (visible) *visible = p.clip.Contains(center);
         if (clipOut) *clipOut = ImVec4(p.clip.Min.x, p.clip.Min.y, p.clip.Max.x, p.clip.Max.y);
         return true;
@@ -183,10 +270,35 @@ void Demo::update(float dt) {
         SDL_Log("t=%.2f step=%zu brushlab=(%.0f,%.0f) mouse=(%.0f,%.0f) down=%d", clock_, step_, w->Pos.x, w->Pos.y, mouse_.x,
                 mouse_.y, int(buttonDown_));
     stride_ = 1;
+    if (penResting_) penRestNoise(); // (UiTest.cpp)
+    if (spaceMouseEcho_ || spaceMouseScrollEcho_) spaceMouseEchoFrame(dt);
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (lastFrame_.time_since_epoch().count() != 0)
+            longestFrameMs_ = std::max(longestFrameMs_, std::chrono::duration<double, std::milli>(now - lastFrame_).count());
+        lastFrame_ = now;
+    }
+    if (!stepLines_.empty()) { // SF_UI_PROFILE: the frame just drawn belongs to the step that was running
+        const auto now = std::chrono::steady_clock::now();
+        if (lastUpdate_.time_since_epoch().count() != 0 && step_ < stepLines_.size())
+            lineSeconds_[size_t(stepLines_[step_])] += std::chrono::duration<double>(now - lastUpdate_).count();
+        lastUpdate_ = now;
+    }
     while (step_ < steps_.size()) {
-        if (!steps_[step_](stepTime_)) {
+        const bool done = steps_[step_](stepTime_);
+        if (std::exchange(jumped_, false)) { // a generated case skipped or failed: on from its end (UiTestModes.cpp)
+            stepTime_ = 0.0f;
+            continue;
+        }
+        if (!done) {
             stepTime_ += dt;
             return;
+        }
+        // (a step that finishes here, like a run line, is charged its own time: not the next line's frame)
+        if (step_ < stepLines_.size()) {
+            const auto now = std::chrono::steady_clock::now();
+            lineSeconds_[size_t(stepLines_[step_])] += std::chrono::duration<double>(now - lastUpdate_).count();
+            lastUpdate_ = now;
         }
         ++step_;
         stepTime_ = 0.0f;
@@ -207,6 +319,7 @@ void Demo::mouseMotion(float x, float y, SDL_MouseID which) {
     e.motion.state = buttonDown_ ? SDL_BUTTON_LMASK : 0;
     mouse_ = ImVec2(x, y);
     app_.handleEvent(e);
+    if (pointerHook) pointerHook(x, y);
 }
 
 void Demo::mouseButton(bool down, int button, SDL_MouseID which, int clicks) {
@@ -231,7 +344,7 @@ ImVec2 Demo::project(const glm::vec3& p) const {
 }
 
 ImVec2 Demo::onModel(float u, float v) const {
-    const AABB b = app_.doc_.mesh.bounds();
+    const AABB b = app_.doc_.partBounds(app_.doc_.activePart); // (where it is: a moved linked copy, #94)
     ImVec2 lo(1e9f, 1e9f), hi(-1e9f, -1e9f);
     for (int i = 0; i < 8; ++i) {
         const glm::vec3 c((i & 1) ? b.max.x : b.min.x, (i & 2) ? b.max.y : b.min.y, (i & 4) ? b.max.z : b.min.z);
@@ -321,6 +434,23 @@ float Demo::fade() const {
 
 // ---------------------------------------------------------------- building blocks
 
+void Demo::printProfile() const {
+    if (stepLines_.empty()) return;
+    std::vector<int> order;
+    double total = 0;
+    for (size_t i = 0; i < lineSeconds_.size(); ++i) {
+        total += lineSeconds_[i];
+        if (lineSeconds_[i] > 0) order.push_back(int(i));
+    }
+    std::sort(order.begin(), order.end(), [this](int a, int b) { return lineSeconds_[size_t(a)] > lineSeconds_[size_t(b)]; });
+    std::printf("profile %s: %.2f s in script lines; slowest:\n", scriptName_.c_str(), total);
+    for (size_t k = 0; k < order.size() && k < 12; ++k) {
+        const int n = order[k];
+        std::printf("profile %6.2f s  line %d: %s\n", lineSeconds_[size_t(n)], n,
+                    size_t(n) < scriptLines_.size() ? scriptLines_[size_t(n)].c_str() : "(start or end)");
+    }
+}
+
 void Demo::wait(float seconds) {
     steps_.push_back([seconds](float t) { return t >= seconds; });
 }
@@ -370,9 +500,10 @@ void Demo::click(const std::string& label) {
     wait(0.25f);
 }
 
-void Demo::stroke(std::function<ImVec2(float u)> path, float seconds, bool invert) {
+void Demo::stroke(std::function<ImVec2(float u)> path, float seconds, bool invert, bool hold) {
     // Glide to the start, press, follow the path, release.
     auto started = std::make_shared<bool>(false);
+    auto sent = std::make_shared<float>(0.0f); // a take: the stroke's time its last pointer sample was sent at
     auto from = std::make_shared<ImVec2>();
     steps_.push_back([this, path, from](float t) {
         const ImVec2 p = path(0.0f);
@@ -381,16 +512,25 @@ void Demo::stroke(std::function<ImVec2(float u)> path, float seconds, bool inver
         mouseMotion(from->x + (p.x - from->x) * u, from->y + (p.y - from->y) * u);
         return t >= 0.35f;
     });
-    steps_.push_back([this, path, seconds, invert, started](float t) {
+    steps_.push_back([this, path, seconds, invert, hold, started, sent](float t) {
         if (!*started) {
             app_.invertToggle_ = invert;
             mouseButton(true, SDL_BUTTON_LEFT);
             *started = true;
+            *sent = 0.0f;
+        }
+        if (take_) { // a take (real time): the samples since the last frame, 240 a second, as a tablet sends them
+            constexpr float kHz = 240.0f;
+            for (float s = (std::floor(*sent * kHz) + 1.0f) / kHz; s < std::min(t, seconds); s += 1.0f / kHz) {
+                const ImVec2 q = path(s / seconds);
+                mouseMotion(q.x, q.y);
+            }
+            *sent = t;
         }
         const ImVec2 p = path(std::min(t / seconds, 1.0f));
         mouseMotion(p.x, p.y);
         if (t >= seconds) {
-            mouseButton(false, SDL_BUTTON_LEFT);
+            if (!hold) mouseButton(false, SDL_BUTTON_LEFT); // (held: a later release lets go)
             app_.invertToggle_ = false;
             *started = false;
             return true;
@@ -414,6 +554,7 @@ void Demo::orbit(float dx, float dy, float seconds) {
             e.button.x = at->x;
             e.button.y = at->y;
             app_.handleEvent(e);
+            if (down) app_.orbitPivotPicked_ = true; // a scripted orbit turns about the target, wherever the cursor is
         };
         if (t == 0.0f) {
             const CanvasRect r = app_.canvasRect();
@@ -532,15 +673,19 @@ void Demo::drawOverlay() {
         dl->AddText(f, fs * iz, P(p.x, p.y), IM_COL32(255, 200, 150, 255), text);
     }
 
-    // Cursor arrow (it zooms with the picture, but less, so it never looms).
-    const float s = size.y / 1080.0f * 1.15f / std::sqrt(vz);
-    const ImVec2 m = mouse_;
-    const ImVec2 pts[] = {ImVec2(m.x, m.y), ImVec2(m.x, m.y + 22 * s), ImVec2(m.x + 5.5f * s, m.y + 16.5f * s),
-                          ImVec2(m.x + 9.5f * s, m.y + 25 * s), ImVec2(m.x + 13 * s, m.y + 23.5f * s),
-                          ImVec2(m.x + 9 * s, m.y + 15 * s), ImVec2(m.x + 16 * s, m.y + 15 * s)};
-    dl->AddConcavePolyFilled(pts, 7, IM_COL32(255, 255, 255, 255));
-    dl->AddPolyline(pts, 7, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.5f * s);
-    if (buttonDown_) dl->AddCircle(m, 14.0f * s, IM_COL32(255, 160, 80, 220), 32, 2.5f * s);
+    // Cursor arrow (it zooms with the picture, but less, so it never looms). SF_DEMO_NO_POINTER=1 leaves it out (launch
+    // reels and stills show only the app).
+    static const bool noPointer = std::getenv("SF_DEMO_NO_POINTER") != nullptr;
+    if (!noPointer) {
+        const float s = size.y / 1080.0f * 1.15f / std::sqrt(vz);
+        const ImVec2 m = mouse_;
+        const ImVec2 pts[] = {ImVec2(m.x, m.y), ImVec2(m.x, m.y + 22 * s), ImVec2(m.x + 5.5f * s, m.y + 16.5f * s),
+                              ImVec2(m.x + 9.5f * s, m.y + 25 * s), ImVec2(m.x + 13 * s, m.y + 23.5f * s),
+                              ImVec2(m.x + 9 * s, m.y + 15 * s), ImVec2(m.x + 16 * s, m.y + 15 * s)};
+        dl->AddConcavePolyFilled(pts, 7, IM_COL32(255, 255, 255, 255));
+        dl->AddPolyline(pts, 7, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.5f * s);
+        if (buttonDown_) dl->AddCircle(m, 14.0f * s, IM_COL32(255, 160, 80, 220), 32, 2.5f * s);
+    }
 
     // Fade to and from black (seamless loops on the website).
     if (const float f = fade(); f > 0.001f)
@@ -563,7 +708,7 @@ void Demo::buildShowcase() {
         app_.camera_.distance *= 0.86f;
         mouse_ = ImVec2(-50.0f, -50.0f); // cursor off screen for the beauty shot
     });
-    caption("SculptForge", "The free, open-source alternative to ZBrush", 4.2f);
+    caption("SculptForge", "The free, open-source sculpting app", 4.2f);
     // Orbiting turns 0.008 rad per pixel: 240 px glides from profile to a three-quarter front view.
     orbit(240.0f, 0.0f, 4.5f);
     run([this] {
@@ -615,7 +760,7 @@ void Demo::buildSculpt() {
         app_.camera_.distance *= 0.78f;
         app_.showBrushLab_ = false;
     });
-    caption("Sculpt the way you already do", "ZBrush-style brushes, symmetry, tablet pressure", 4.5f);
+    caption("Sculpt the way you already do", "Familiar brushes, symmetry, tablet pressure", 4.5f);
     wait(1.0f);
     auto arc = [this](float lat0, float lon0, float lat1, float lon1) {
         return [this, lat0, lon0, lat1, lon1](float u) {
@@ -696,8 +841,9 @@ void Demo::buildImageTo3D() {
         app_.showBrushLab_ = false;
         app_.aiSettings_.generatorService = "huggingface";
         app_.aiSettings_.hfModel = "hunyuan3d-2.1";
-        app_.remeshGenerated_ = true;
+        app_.generatedRemesh_ = int(GeneratedRemesh::Quad);
         app_.remeshResolution_ = 256;
+        app_.candidateCount_ = 1; // one take: it lands at once
         app_.openPath(app_.options_.demoAsset); // opens the Generate 3D panel with the drawing
         fadeFrom_ = fadeTo_ = 1.0f;
         mouse_ = ImVec2(1000.0f * float(app_.options_.height) / 1080.0f, 760.0f * float(app_.options_.height) / 1080.0f);
@@ -720,7 +866,12 @@ void Demo::buildImageTo3D() {
         click("Generate 3D/Generate 3D model");
         waitUntil([this] { return ready(app_.pendingGenerator_); }, 600.0f, 10);
         run([this] {
-            app_.pollGenerator();
+            app_.pollGenerator(); // (one candidate: picked at once)
+            app_.useAsSculptingBase();
+        });
+        waitUntil([this] { return ready(app_.pendingBase_); }, 600.0f, 10);
+        run([this] {
+            app_.pollSculptingBase();
             if (!app_.options_.demoOutput.empty()) { // keep a copy for rehearsals; the status bar keeps its message
                 const std::string status = app_.status_;
                 app_.runCommand("export_glb", {{"path", app_.options_.demoOutput}});

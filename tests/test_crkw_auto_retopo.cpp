@@ -20,24 +20,24 @@ TEST(crkw_auto_retopo_preserves_history_and_projects_only_frozen_source) {
     const auto positions = doc.mesh.positions;
     const auto triangles = doc.mesh.triangles;
     const size_t history = doc.undo.undoCount();
-    const uint32_t sourceId = doc.activeSubtoolInfo().id;
-    doc.addSubtool(makeIcosphere(2, 10), "Unrelated source", false);
+    const uint32_t sourceId = doc.activePartInfo().id;
+    doc.addPart(makeIcosphere(2, 10), "Unrelated source", false);
     const auto result = commands.execute(doc, "crkw_retopo_project", {{"target", 100.0}, {"distance", .1}});
     std::printf("%s\n", result.message.c_str());
     CHECK(result.ok);
     if (!result.ok) return;
-    CHECK(doc.subtoolCount() == 3);
-    CHECK(doc.activeSubtool == 2);
-    CHECK(doc.subtools[0].id == sourceId);
-    CHECK(!doc.subtools[0].visible);
-    CHECK(doc.subtoolMesh(0).positions == positions);
-    CHECK(doc.subtoolMesh(0).triangles == triangles);
-    CHECK(doc.subtools[0].undo.undoCount() == history);
+    CHECK(doc.partCount() == 3);
+    CHECK(doc.activePart == 2);
+    CHECK(doc.parts[0].id == sourceId);
+    CHECK(!doc.parts[0].visible);
+    CHECK(doc.partMesh(0).positions == positions);
+    CHECK(doc.partMesh(0).triangles == triangles);
+    CHECK(doc.parts[0].data->undo.undoCount() == history);
     CHECK(doc.mesh.mask.empty());
     CHECK(subdivLevelCount(doc.mesh) >= 2);
     CHECK(doc.mesh.vertexCount() > positions.size() / 2);
     CHECK(doc.mesh.vertexCount() < positions.size() * 2);
-    TriangleBVH reference; reference.build(doc.subtoolMesh(0));
+    TriangleBVH reference; reference.build(doc.partMesh(0));
     for (size_t i = 0; i < doc.mesh.vertexCount(); i += 97) {
         SurfaceHit hit;
         CHECK(reference.closestPoint(doc.mesh.positions[i], .02f, hit));
@@ -50,7 +50,7 @@ TEST(crkw_auto_retopo_preserves_history_and_projects_only_frozen_source) {
     CHECK(doc.mesh.vertexCount() < positions.size() / 2);
     CHECK(subdivSetLevel(doc.mesh, highest, error));
     CHECK(doc.mesh.positions == projected);
-    doc.selectSubtool(0);
+    doc.selectPart(0);
     CHECK(doc.undo.undoCount() == history);
     CHECK(commands.execute(doc, "undo").ok);
     CHECK(std::all_of(doc.mesh.mask.begin(), doc.mesh.mask.end(), [](float value) { return value == 0; }));
@@ -63,7 +63,7 @@ TEST(crkw_auto_retopo_invalid_parameters_leave_source_unchanged) {
     CHECK(!commands.execute(doc, "crkw_retopo_project", {{"target", -1.0}}).ok);
     CHECK(!commands.execute(doc, "crkw_retopo_project", {{"max_points", 128.0}}).ok);
     CHECK(doc.mesh.positions == original);
-    CHECK(doc.subtoolCount() == 1);
+    CHECK(doc.partCount() == 1);
     CHECK(!doc.undo.canUndo());
 }
 
@@ -84,7 +84,7 @@ TEST(crkw_auto_retopo_transfers_texture_onto_subdivision_uvs) {
     CHECK(hasTexture(doc.mesh));
     CHECK(doc.mesh.hasUvs());
     CHECK(doc.mesh.texture != sourceTexture);
-    CHECK(doc.subtoolMesh(0).texture == sourceTexture);
+    CHECK(doc.partMesh(0).texture == sourceTexture);
     CHECK(doc.mesh.texture->width == 64);
     bool transferred = false;
     for (size_t i = 0; i < doc.mesh.texture->pixels.size(); i += 4)
@@ -92,29 +92,29 @@ TEST(crkw_auto_retopo_transfers_texture_onto_subdivision_uvs) {
     CHECK(transferred);
 }
 
-TEST(crkw_auto_retopo_keeps_polygroups_by_default_at_every_level) {
+TEST(crkw_auto_retopo_keeps_facegroups_by_default_at_every_level) {
     CommandRegistry commands;
     Document doc = makeDoc(makeCube(12));
-    CHECK(commands.execute(doc, "polygroup_auto_by_normals", {{"angle", 40.0}}).ok);
-    const auto sourceGroups = doc.mesh.polygroups;
+    CHECK(commands.execute(doc, "facegroup_auto_by_normals", {{"angle", 40.0}}).ok);
+    const auto sourceGroups = doc.mesh.facegroups;
     const std::set<uint32_t> expected(sourceGroups.begin(), sourceGroups.end());
     CHECK(expected.size() == 6);
     const auto result = commands.execute(doc, "crkw_retopo_project", {{"target", 150.0}, {"distance", .1}});
     std::printf("%s\n", result.message.c_str());
     CHECK(result.ok);
     if (!result.ok) return;
-    CHECK(doc.subtoolMesh(0).polygroups == sourceGroups);
+    CHECK(doc.partMesh(0).facegroups == sourceGroups);
     CHECK(subdivLevelCount(doc.mesh) >= 2);
     const int highest = subdivCurrentLevel(doc.mesh);
     for (int level = 0; level <= highest; ++level) {
         std::string error;
         CHECK(subdivSetLevel(doc.mesh, level, error));
-        CHECK(doc.mesh.hasPolygroups());
-        const std::set<uint32_t> actual(doc.mesh.polygroups.begin(), doc.mesh.polygroups.end());
+        CHECK(doc.mesh.hasFaceGroups());
+        const std::set<uint32_t> actual(doc.mesh.facegroups.begin(), doc.mesh.facegroups.end());
         CHECK(actual == expected);
         for (size_t t = 0; t < doc.mesh.triangleCount(); ++t) {
             const uint32_t partner = doc.mesh.quadPartners.empty() ? Mesh::kNoQuad : doc.mesh.quadPartners[t];
-            if (partner != Mesh::kNoQuad) CHECK(doc.mesh.polygroups[t] == doc.mesh.polygroups[partner]);
+            if (partner != Mesh::kNoQuad) CHECK(doc.mesh.facegroups[t] == doc.mesh.facegroups[partner]);
         }
     }
 }

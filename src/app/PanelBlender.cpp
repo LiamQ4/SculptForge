@@ -67,21 +67,21 @@ void App::receiveFromBlender() {
         blenderSeenRevision_ = bridgeRevision(blenderInbox(root));
     }
     runCommand("blender_receive");
-    if (status_.rfind("Received", 0) == 0) camera_.frame(sceneBounds());
+    if (status_.rfind("Received", 0) == 0) frameView(sceneBounds());
 }
 
 void App::drawBlenderMenu() {
-    if (!ImGui::BeginMenu("Blender")) return;
+    if (!ImGui::BeginMenu(tr("Blender"))) return;
     menuAction(*this, "file.send_blender");
     menuAction(*this, "file.receive_blender");
-    ImGui::MenuItem("Receive automatically##blender", nullptr, &blenderAutoReceive_);
+    ImGui::MenuItem(tr("Receive automatically##blender"), nullptr, &blenderAutoReceive_);
     ui::HelpText("Receive automatically", nullptr,
                  "Load what Blender sends as soon as it arrives (checked once a second). Off: use Receive from "
                  "Blender.",
                  "File > Blender");
     const std::string root = blenderExchangeRoot();
-    ImGui::TextDisabled("Needs the SculptForge add-on in Blender\n(Help > User Guide > Working with Blender).");
-    if (ImGui::IsItemHovered() && !root.empty()) ImGui::SetTooltip("Exchange folder: %s", root.c_str());
+    ImGui::TextDisabled("%s", tr("Needs the SculptForge add-on in Blender\n(Help > User Guide > Working with Blender)."));
+    if (ImGui::IsItemHovered() && !root.empty()) ImGui::SetTooltip(tr("Exchange folder: %s"), root.c_str());
     ImGui::EndMenu();
 }
 

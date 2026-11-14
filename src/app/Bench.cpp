@@ -10,6 +10,7 @@
 #include "render/Renderer.h"
 
 #include "core/Image.h"
+#include "core/TierConfig.h"
 
 #include <SDL3/SDL.h>
 
@@ -62,6 +63,13 @@ int runAppBenchmark(BenchCommandLine cl) {
     } else if (!renderer.init(error)) {
         std::fprintf(stderr, "%s\n", error.c_str());
     } else {
+        // SF_BENCH_STROKE_SHADE_MS=N: a micro stroke's shading per frame held to N ms (TierConfig::strokeShadeMs; 0 = the
+        // points budget only, as before 11-04).
+        if (const char* e = std::getenv("SF_BENCH_STROKE_SHADE_MS")) {
+            TierConfig t = currentTierConfig();
+            t.strokeShadeMs = std::atof(e);
+            setCurrentTierConfig(t);
+        }
         BenchGpu gpu;
         gpu.description = std::string(reinterpret_cast<const char*>(gl::GetString(GL_RENDERER))) + ", OpenGL " +
                           reinterpret_cast<const char*>(gl::GetString(GL_VERSION));
@@ -84,8 +92,11 @@ int runAppBenchmark(BenchCommandLine cl) {
             camera.frame(m.bounds());
             RenderSettings settings;
             settings.motionProxy = moving;
-            // SF_BENCH_CULL=1: Tool > Display > Backface culling on (#68).
+            // SF_BENCH_CULL=1: Tool > Viewport Look > Backface culling on (#68).
             settings.backfaceCulling = std::getenv("SF_BENCH_CULL") && std::string(std::getenv("SF_BENCH_CULL")) == "1";
+            // SF_BENCH_FLOOR_GRID=1: View > Display > Floor grid on (#115).
+            const char* grid = std::getenv("SF_BENCH_FLOOR_GRID");
+            settings.floorGrid = grid && std::string(grid) == "1";
             renderer.syncScene(scene(m));
             const int warmup = 5, frames = 120;
             Clock::time_point t;
@@ -141,6 +152,7 @@ int runAppBenchmark(BenchCommandLine cl) {
             gl::Finish();
             const auto t = Clock::now();
             renderer.syncScene(scene(m));
+            while (renderer.proxiesPending()) renderer.syncScene(scene(m)); // (built a few ms a frame: all of them)
             gl::Finish();
             return msSince(t);
         };

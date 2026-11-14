@@ -1,0 +1,44 @@
+# Interface strings that stay in English in every language (tools/i18n/coverage.py): names of brushes, tools
+# and products, file formats, units. One visible label per line, exactly as the code has it.
+AI
+Kelvinlet
+PNG
+JPG
+Rgb
+Mask Pen
+Lasso Mask
+Rectangle Mask
+Select Rectangle
+Select Lasso
+Cut Line
+Cut Lasso
+Cut Rectangle
+Cut Polyline
+VDM
+SpaceMouse
+Lit Sphere
+PBR
+%.0f / %.0f ms, %.0f / %.0f px
+%.0f ms
+%.1f ms
+30 fps
+60 fps
+120 fps
+144 fps
+Bridge
+COLMAP
+Esc
+Hunyuan3D 3.1 Pro (Tencent)
+Meshy 6
+Rodin 2.5 (Hyper3D)
+Unreal Engine
+Unreal, Unity, Godot, Blender, three.js
+ffmpeg
+http://%s
+Gen-2.5 Low
+Gen-2.5 Medium
+Gen-2.5 High
+Tube
+CPU
+GPU
+Turbo

@@ -1,0 +1,42 @@
+# What a 0.10.6 video review and a Discord tester hit, part 1 (part 2: review_fixes_mask_views.sfui): Dynamic on
+# the divided default sphere was a dead end (now Freeze Levels), and Remove Below / Remove Above deleting levels
+# without asking.
+run new_sphere
+run subdiv_divide
+run subdiv_divide
+expect_value sdiv_levels == 3
+remember triangles top
+key f
+camera 0 0
+
+# Dynamic on a Part with levels: the offer, not a dead end. Cancel leaves everything as it was.
+click "Dynamic##draw.dynamic"
+expect_value dynamic == 0
+expect_text "subdivision levels"
+shot dynamic_offer
+click "Dynamic/Cancel"
+expect_value sdiv_levels == 3
+click "Dynamic##draw.dynamic"
+click "Dynamic/Freeze Levels and Turn On Dynamic"
+expect_value dynamic == 1
+expect_value sdiv_levels == 0
+expect_value triangles == $top
+expect_status "Dynamic topology on"
+# Small Clay and Standard strokes with X symmetry, at Size 19 (the review's settings).
+expect_value symmetry_x == 1                  # (X symmetry is on by default)
+brush_size 19
+click "Clay##brush.clay"
+stroke 0.30 0.40 0.45 0.45
+click "Standard##brush.standard"
+stroke 0.30 0.60 0.45 0.62
+expect_value triangles != $top            # (Dynamic resized the triangles under the strokes)
+zoom 2.5
+shot small_strokes_dynamic
+key f
+# Ctrl+Z: the strokes, then the levels come back.
+key ctrl+z
+key ctrl+z
+key ctrl+z
+expect_value sdiv_levels == 3
+click "Dynamic##draw.dynamic"
+expect_value dynamic == 0

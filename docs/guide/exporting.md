@@ -1,8 +1,15 @@
-# Exporting, Unreal and ZBrush
+# Exporting, Unreal and Bridge
+
+![A game-ready lion bust](images/hero-game-ready.jpg)
+
+> **In short:**
+> - Export to glTF, FBX, OpenUSD, OBJ, STL and PLY; every visible Part is written.
+> - Make LOD chains for games, or send a mesh straight into a running Unreal Editor.
+> - To keep everything (Parts, layers, mask, paint), save a project instead.
 
 This chapter covers getting your sculpt out of SculptForge: the export formats and what each one keeps, LOD
-chains for games, sending a mesh straight into a running Unreal Editor, and exchanging models with ZBrush
-with Send to ZBrush. To keep everything (Parts, layers, mask, vertex paint, brushes) use a project file instead; see
+chains for games, sending a mesh straight into a running Unreal Editor, and exchanging models with another sculpting
+application through the Bridge. To keep everything (Parts, layers, mask, vertex paint, brushes) use a project file instead; see
 [Projects, autosave and snapshots](projects.md).
 
 ## Export formats at a glance
@@ -16,9 +23,9 @@ or mark it saved, so your next <kbd>Ctrl</kbd>+<kbd>S</kbd> still saves the proj
 | LOD chain (`.glb` per level) | **File > Export LOD Chain...** | As GLB, one file per level, blend shapes on every level | Game engines |
 | OpenUSD (`.usda`, `.usdz`) | **File > Export USD / USDZ...** | One Mesh prim per Part, quads, layers as UsdSkel blend shapes, vertex paint as `displayColor`, UVs (`primvars:st`) and the painted texture through a preview material (inside a USDZ), loaded splats | Film pipelines, Omniverse, Apple AR Quick Look |
 | FBX for Unreal (`.fbx`) | **File > Export FBX for Unreal...** | Unreal naming and scale, quads, UVs, LOD group, layers as blend shapes, the painted texture as a PNG beside it | Unreal Engine (by hand) |
-| Wavefront OBJ (`.obj`) | **File > Export OBJ...** | One `o` object per Part, quads, face groups as `g` groups, vertex paint as vertex colour, UVs, the painted texture through a `.mtl` (`map_Kd`) and a PNG beside it. Layers are baked into the current blend | Any 3D app, ZBrush |
-| ZBrush GoZ-compatible (`.GoZ`) | **File > Send to ZBrush > Export GoZ-compatible file...** | Quads, face groups, mask, vertex paint, UVs, the painted texture as a PNG beside it | ZBrush |
-| STL (`.stl`) | **File > Send to ZBrush > Export STL...** | Geometry only (triangles), visible Parts merged, in millimetres with Z up | [3D printing](#3d-printing) |
+| Wavefront OBJ (`.obj`) | **File > Export OBJ...** | One `o` object per Part, quads, face groups as `g` groups, vertex paint as vertex colour, UVs, the painted texture through a `.mtl` (`map_Kd`) and a PNG beside it. Layers are baked into the current blend | Any 3D app |
+| Bridge file | **File > Bridge > Export Bridge file...** | Quads, face groups, mask, vertex paint, UVs, the painted texture as a PNG beside it | The [Bridge](#exchange-models-through-the-bridge) |
+| STL (`.stl`) | **File > Export STL...** | Geometry only (triangles), visible Parts merged, in millimetres with Z up | [3D printing](#3d-printing) |
 | PLY (`.ply`) | `export_ply` command | Geometry, quads and vertex paint, visible Parts merged | Scan tools, MeshLab, Blender |
 | FBX (general) | `export_fbx` command | One model per Part, quads, UVs, blend shapes, optional LOD groups, the painted texture | Other FBX pipelines |
 
@@ -31,13 +38,18 @@ only hold triangles.
 
 ![The Tool > Export sub-palette with a generated LOD chain and the Unreal Engine settings](images/export.jpg)
 
-UVs are kept through OBJ, FBX, USD, glTF and GoZ-compatible files, in and out. A Part with a painted
-[texture](texture-painting.md) is exported with it: the PNG is written next to the file as
-`<name>_color.png` (`<name>_<SubTool>_color.png` with several Parts) and referenced by the model, or embedded
-in GLB and USDZ files. Spaces in the file name become `_` in the names of the files written beside it
-(`my scene.obj` gets `my_scene.mtl` and `my_scene_color.png`), because OBJ and MTL separate file names with
-spaces. **Tool > Texture Map > Auto UV** gives any sculpt UVs before export. Normal, displacement and other maps
-come from [Tool > Bake](baking.md) as separate image files.
+UVs are kept through OBJ, FBX, USD, glTF and Bridge files, in and out. A Part with a painted
+[texture](texture-painting.md) is exported with it: the PNG is written next to the file as `<name>_color.png`
+(`<name>_<Part>_color.png` with several Parts) and referenced by the model, or embedded in GLB and USDZ files. Spaces
+in the file name become `_` in the names of the files written beside it (`my scene.obj` gets `my_scene.mtl` and
+`my_scene_color.png`), because OBJ and MTL separate file names with spaces.
+
+**Tool > Texture Image > Auto UV** gives any sculpt UVs before export. Normal, displacement and other maps come from
+[Tool > Bake](baking.md) as separate image files.
+
+[Edge creases](edges.md#creases) go out and come back in through USD only (`creaseIndices`, `creaseLengths`,
+`creaseSharpnesses`, with `subdivisionScheme` set so other apps subdivide the cage with them). glTF, OBJ, FBX, PLY
+and STL have no creases: export Level 1 to USD to keep them, or add levels first to bake them into the shape.
 
 Textured exports are checked against other tools, not only read back by SculptForge: GLB files pass the Khronos
 glTF validator with no errors or warnings; USD and USDZ files pass OpenUSD's validators (the USDZ files are
@@ -55,7 +67,22 @@ UV convention), checked colour by colour against SculptForge's own sampling. The
   Opening an STL converts back, so a downloaded print model comes in upright and at its real size. STL files
   from SculptForge 0.5 and earlier (metres, Y up) are recognised and open as they were saved.
 - PLY keeps positions as they are (no unit conversion).
+- USD files in other units (`metersPerUnit`, e.g. centimetres from Maya or Houdini) open at their real size.
 - For Unreal, **Height** sets the real-world size directly (see below).
+
+### Real-world size and units
+
+A part keeps the size it was opened with through every export:
+
+- OBJ, PLY and STL have no units. A scene opened from one of them remembers its unit: exporting OBJ or PLY writes
+  that unit back (an STL opened in millimetres exports a 50 mm OBJ, not 0.05), and an STL written from an STL
+  keeps its numbers. Decimal sizes come back exactly (12.7 stays 12.7). Projects remember the unit.
+- **Edit > Preferences > Interface > OBJ/PLY in** says what OBJ and PLY numbers mean: **m** (the default; Blender and game
+  tools), or **mm** for files made for 3D printing, **cm** or **in**. STL is always read as millimetres. From
+  scripts: `open path=part.obj unit=mm` (`open_obj` and `part_append` take `unit=` too; `unit=in` reads an inch STL).
+- **Edit > Preferences > Interface > Units** picks the unit sizes show in: mm, cm, m or in. The active Part's width x
+  height x depth shows under its name in **Tool**, the size the exports write in **File** (Import / Export), and the
+  brush size by the brush ring.
 
 ## Export a model
 
@@ -78,7 +105,7 @@ sculptforge-cli -c 'open path=bust.sfproj; export_stl path=bust.stl; export_ply 
 
 ## 3D printing
 
-**File > Send to ZBrush > Export STL...** writes every visible Part as one binary STL, ready for a slicer
+**File > Export STL...** writes every visible Part as one binary STL, ready for a slicer
 (PrusaSlicer, Cura, Bambu Studio, OrcaSlicer ...). The status line gives the printed size, for example
 "Exported lion.stl (47214 triangles, 320.8 x 206.6 x 436.4 mm)": width, depth and height as the slicer shows them.
 
@@ -184,47 +211,38 @@ sculptforge-cli -c 'open path=statue.obj; export_unreal folder=out height_cm=200
 > stand-in editor that speaks the same protocol but not yet against every Unreal version. If an import fails,
 > Unreal's **Output Log** shows the importer's messages.
 
-## Exchange models with ZBrush (Send to ZBrush)
+## Exchange models through the Bridge
 
-SculptForge reads and writes ZBrush's GoZ format and can talk to a running ZBrush through the **Send to ZBrush** on
-Windows and macOS. The commands are in **File > Send to ZBrush**:
+The **Bridge** exchanges Parts with another sculpting application through a shared bridge folder, the way that
+application's own exchange plug-in does, on Windows and macOS. The commands are in **File > Bridge**:
 
 | Item | What it does |
 |---|---|
-| **Send to ZBrush** | Writes every visible Part to the shared bridge folder and tells ZBrush (starting it if needed). Each Part arrives as its own ZBrush SubTool. Turns on **Receive automatically** |
-| **Receive from ZBrush** | Loads what ZBrush last sent. Each object updates the Part it was sent from (one undo step), or becomes a new Part |
-| **Receive automatically** | Checks once a second for a new send from ZBrush and receives it |
+| **Send** | Writes every visible Part to the bridge folder and tells the other application (starting it if needed). Each Part arrives as its own object. Turns on **Receive automatically** |
+| **Receive** | Loads what the other application last sent. Each object updates the Part it was sent from (one undo step), or becomes a new Part |
+| **Receive automatically** | Checks once a second for a new send and receives it |
 | **Custom bridge folder (optional)** | Use another bridge folder, for example inside a Wine prefix |
-| **Import GoZ-compatible file...** | Opens a `.GoZ` file, replacing the scene |
-| **Export GoZ-compatible file...** | Writes a `.GoZ` file. With several visible Parts, one file per Part next to the path |
-| **Export STL...** | Writes a binary STL of the visible Parts |
+| **Import Bridge file...** | Opens a Bridge file, replacing the scene |
+| **Export Bridge file...** | Writes a Bridge file. With several visible Parts, one file per Part next to the path |
 
-The default bridge folder is `C:\Users\Public\Pixologic` on Windows and `/Users/Shared/Pixologic` on macOS.
-ZBrush doesn't run on Linux, so there the bridge needs a custom folder; GoZ-compatible files still import and export.
+On Windows and macOS the Bridge finds the shared exchange folder by itself; nothing to install. On Linux it needs a
+custom folder; Bridge files still import and export.
 
 ### A round trip
 
-1. In SculptForge, choose **File > Send to ZBrush > Send**. ZBrush starts or comes forward with the
-   Parts. If ZBrush was not running and does not import them, press **GoZ** in ZBrush.
-2. Work in ZBrush, then press **GoZ** there to send the model back.
+1. In SculptForge, choose **File > Bridge > Send**. The other application starts or comes forward with the
+   Parts. If it was not running and does not import them, use its own import from the bridge.
+2. Work there, then send the model back with its exchange plug-in.
 3. SculptForge receives it automatically and updates the matching Parts. Each update is an undo step on
    that Part.
 
-The bridge keeps face groups, mask, vertex paint and UVs. Quads from ZBrush stay quads: Wire shows them as quads, and
-they go back to ZBrush as the same quads. The format has no hidden-face flag, so hidden faces are sent like
-any others.
+The Bridge keeps face groups, mask, vertex paint and UVs. Quads stay quads both ways: Wire shows them as quads. The
+format has no hidden-face flag, so hidden faces are sent like any others.
 
-> **ZBrush:** SculptForge can't read ZBrush's own `.ZTL` and `.ZPR` files (they are proprietary and
-> undocumented). Bring models over with Send to ZBrush, export OBJ or FBX from ZBrush, or convert your ZTools once with the
-> **SculptForge ZTL Export** plug-in for ZBrush, after which SculptForge opens the `.ZTL` itself (see
-> [Coming from ZBrush](coming-from-zbrush.md#bring-your-ztools-over)). Subdivision levels don't come across:
-> SculptForge receives the mesh at the level you sent.
+> **Note:** the Bridge is tested with files, not yet against every version of a live application. If a send does
+> not arrive, export a Bridge file and import it by hand, and please report it (**Help > Report a problem**).
 
-> **Note:** Send to ZBrush follows the format of the open-source Blender GoZ add-on (GoB) and is tested with
-> files, but has not yet been tested against a live ZBrush. If a send does not arrive, export a `.GoZ` file
-> and import it in ZBrush by hand, and please report it (**Help > Report a problem**).
-
-From scripts: `goz_export path=`, `goz_import path=`, `goz_send`, `goz_receive` and `export_stl path=` (see
+From scripts: `bridge_export path=`, `bridge_import path=`, `bridge_send`, `bridge_receive` and `export_stl path=` (see
 [3D printing](#3d-printing) for its options).
 
 ## Blender

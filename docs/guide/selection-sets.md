@@ -1,5 +1,12 @@
 # Selection sets and morph targets
 
+![A sculpted head, before and after](images/mirror-weld.jpg)
+
+> **In short:**
+> - A selection set is a named snapshot of a Part's mask, groups, paint, visibility, UVs and shape.
+> - Store, restore, rename and combine sets in **Tool > Selection Sets**.
+> - Sets work across subdivision levels; a stored shape can drive the **Morph** brush.
+
 A selection set is a named snapshot of a Part's mask, face groups, vertex paint, visibility (which faces are
 hidden), UVs and shape. Store as many as you like, bring any of them back later, combine them, and use a stored
 shape as the target of the **Morph** brush. Sets belong to the Part, travel with the project, and work across its
@@ -15,7 +22,7 @@ Open **Tool > Selection Sets**.
    | Channel | What it keeps | Command name |
    |---|---|---|
    | **Mask** | The mask, soft edges included. | `mask` |
-   | **Groups** | The face groups. | `polygroups` |
+   | **Groups** | The face groups. | `facegroups` |
    | **Visibility** | Which faces are shown and which are hidden. | `visibility` |
    | **Vertex Paint** | The vertex colours. | `paint` |
    | **UVs** | The UV layout (only when the Part has UVs). | `uvs` |
@@ -52,7 +59,7 @@ The menu next to **From Visible** sets how **Restore** meets what you have now, 
 Every store, restore, rename, delete and combine is one undo step.
 
 A set greyed out in the list no longer fits the Part: its topology changed since (a remesh, Dynamic topology,
-Delete hidden). Undo the change, or delete the set.
+Remove Hidden). Undo the change, or delete the set.
 
 ## Combine sets
 
@@ -71,9 +78,9 @@ A set remembers the level it was stored at, and restores at any level of the sam
 - a shape travels as its difference from that level's own surface, so the detail of the levels in between stays
   where it is.
 
-So you can store a mask at SDiv 1, sculpt at SDiv 5 and restore the mask there, or keep a high-resolution face group
-set and use it at the base cage. Sets survive **Divide**, **Del Lower**, **Del Higher** and **Reconstruct
-Subdiv** as long as the level they were stored at still exists.
+So you can store a mask at Level 1, sculpt at Level 5 and restore the mask there, or keep a high-resolution face group
+set and use it at the base cage. Sets survive **Add Level**, **Remove Below**, **Remove Above** and **Rebuild
+Lower Levels** as long as the level they were stored at still exists.
 
 ## Morph targets
 
@@ -117,7 +124,7 @@ Every button is a command, so scripts, `sculptforge-cli`, the MCP server and the
 
 | Command | What it does |
 |---|---|
-| `selection_set_store name=Head channels=mask,visibility` | Store (or replace) a set. `channels` takes `mask`, `polygroups`, `paint`, `visibility`, `uvs`, `morph` or `all`. |
+| `selection_set_store name=Head channels=mask,visibility` | Store (or replace) a set. `channels` takes `mask`, `facegroups`, `paint`, `visibility`, `uvs`, `morph` or `all`. |
 | `selection_set_restore name=Head mode=union` | Restore; `channels=` restores some of them (add `morph` to restore the shape). |
 | `selection_set_rename name=Head to=Face` | Rename. |
 | `selection_set_delete name=Head` | Delete. |

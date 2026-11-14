@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/Project.h"
 #include "core/CrkwMetaHuman.h"
+#include "core/LegacyNames.h"
+#include "core/FocusDetail.h"
 #include "core/Micro.h"
 #include "core/Timeline.h"
 
@@ -12,13 +14,16 @@
 #include "core/SelectionSets.h"
 #include "core/Texture.h"
 #include "core/ThreadPool.h"
-#include "core/ZSpheres.h"
+#include "core/FigurePose.h"
+#include "core/ForgeSpheres.h"
+#include "core/Tube.h"
 #include "io/Zip.h"
 
 #include <algorithm>
 #include <atomic>
 #include <bit>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <deque>
 #include <filesystem>
@@ -55,13 +60,18 @@ ProjectThumbnailProvider& thumbnailProvider() {
 // version 1); every other key belongs to
 // Document::projectSettings (camera, render, brush, symmetry, ...).
 const char* const kCoreKeys[] = {"format", "version", "app_version", "mesh", "layers", "active_layer",
-                                 "subtools", "active_subtool", "brushes", "active_brush", "splats", "attachments"};
+                                 "parts", "active_part", "part_folders", "brushes", "active_brush", "splats", "attachments",
+                                 "references", "unitless_scale", "unitless_format"};
 
 std::filesystem::path fsPath(const std::string& p) { return std::filesystem::path(std::u8string(p.begin(), p.end())); }
+std::string utf8(const std::filesystem::path& p) {
+    const std::u8string u = p.u8string();
+    return std::string(u.begin(), u.end());
+}
 
 constexpr size_t kMaxAttachmentSize = size_t(64) << 20;
 
-// Document::projectFiles names: "matcaps/Gold.png" - letters, digits, space . _ - and '/' between parts.
+// Document::projectFiles names: "lit spheres/Gold.png" - letters, digits, space . _ - and '/' between parts.
 bool validAttachmentName(const std::string& name) {
     if (name.empty() || name.size() > 200 || name.front() == '/' || name.back() == '/' || name.find("..") != std::string::npos)
         return false;
@@ -189,6 +199,7 @@ class Reader {
 public:
     std::map<std::string, ZipFileEntry> files;
     std::string error;
+    std::string skipped; // optional data left out as unreadable (Document::notice after loading)
     // Big blobs are read on the shared thread pool, except while a BVH builds on another thread (it gets the pool).
     bool parallelReads = true;
 
@@ -217,6 +228,15 @@ public:
         if (it == files.end() || it->second.size > (uint64_t(1) << 32)) return false;
         out.resize(size_t(it->second.size));
         return readAt(it->second.offset, out.size(), out.data());
+    }
+    // True when `desc` describes a blob of this layout that is in the archive whole (no error either way): for
+    // optional data a damaged file may leave out without failing the load.
+    bool fits(const Json& desc, Scalar type, int components, size_t count) const {
+        if (!desc.isObject() || desc["type"].asString() != scalarName(type) || desc["components"].asNumber() != double(components) ||
+            desc["count"].asNumber(-1) != double(count))
+            return false;
+        auto it = files.find(desc["file"].asString());
+        return it != files.end() && it->second.size == uint64_t(count) * uint64_t(components) * scalarSize(type);
     }
     // Validates `desc` against the expected layout and reads its bytes into `out` (false + error on mismatch).
     bool read(const Json& desc, const char* what, Scalar type, int components, size_t count, void* out) {
@@ -332,7 +352,7 @@ size_t countOf(const Json& j) {
 }
 
 
-// Writes a mesh's blobs under `prefix` ("subtools/0/") and sets `mesh` and `layers` in `out`. `generatedTriangles`:
+// Writes a mesh's blobs under `prefix` ("parts/0/") and sets `mesh` and `layers` in `out`. `generatedTriangles`:
 // a generated subdivision level's triangle count; its triangles aren't written (format 6).
 void writeMesh(Writer& w, const std::string& prefix, const Mesh& m, Json& out, size_t generatedTriangles = 0) {
     Json mesh = Json::object();
@@ -348,12 +368,13 @@ void writeMesh(Writer& w, const std::string& prefix, const Mesh& m, Json& out, s
     if (!m.layers.empty()) mesh.set("base", w.vec3s(prefix + "mesh/base.bin", m.base));
     if (m.hasMask()) mesh.set("mask", w.floats(prefix + "mesh/mask.bin", m.mask.data(), m.mask.size(), 1));
     if (m.hasColors()) mesh.set("colors", w.vec3s(prefix + "mesh/colors.bin", m.colors));
-    if (m.hasPolygroups())
-        mesh.set("polygroups", w.uints(prefix + "mesh/polygroups.bin", m.polygroups.data(), m.polygroups.size(), 1));
+    if (m.hasFaceGroups())
+        mesh.set("facegroups", w.uints(prefix + "mesh/facegroups.bin", m.facegroups.data(), m.facegroups.size(), 1));
     if (m.hasHidden()) mesh.set("hidden", w.bytes(prefix + "mesh/hidden.bin", m.hidden));
     if (m.hasUvs()) mesh.set("uvs", w.floats(prefix + "mesh/uvs.bin", &m.uvs[0].x, m.uvs.size(), 2));
     if (m.hasUvFlags()) mesh.set("uv_flags", w.bytes(prefix + "mesh/uv_flags.bin", m.uvFlags)); // seams, pins (core/Uv.h)
     // Optional and ignored by older readers, so no format version bump.
+    if (m.hasCreases()) mesh.set("creases", w.floats(prefix + "mesh/creases.bin", m.creases.data(), m.creases.size(), 1));
     if (m.hasQuads())
         mesh.set("quad_partners", w.uints(prefix + "mesh/quad_partners.bin", m.quadPartners.data(), m.quadPartners.size(), 1));
     out.set("mesh", std::move(mesh));
@@ -397,9 +418,9 @@ bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& e
         r.floats(mj["mask"], "mask", nv, 1, m.mask.data());
     }
     if (mj.has("colors")) r.vec3s(mj["colors"], "colors", nv, m.colors);
-    if (mj.has("polygroups")) {
-        m.polygroups.resize(nt);
-        r.uints(mj["polygroups"], "polygroups", nt, 1, m.polygroups.data());
+    if (mj.has("facegroups")) {
+        m.facegroups.resize(nt);
+        r.uints(mj["facegroups"], "facegroups", nt, 1, m.facegroups.data());
     }
     if (mj.has("hidden")) {
         if (!r.bytes(mj["hidden"], "hidden flags", nt, m.hidden)) m.hidden.clear();
@@ -410,6 +431,18 @@ bool readMesh(Reader& r, const Json& mj, const Json& lj, Mesh& m, std::string& e
     }
     if (mj.has("uv_flags")) {
         if (!r.bytes(mj["uv_flags"], "UV seams", nt * 3, m.uvFlags)) m.uvFlags.clear();
+    }
+    if (mj.has("creases")) { // edge creases (core/EdgeSelect.h), 0..1 per corner, optional: a damaged blob is left out
+        const Json& cj = mj["creases"];
+        if (cj.isObject() && r.fits(cj, Scalar::F32, 1, nt * 3)) {
+            m.creases.resize(nt * 3);
+            if (!r.floats(cj, "edge creases", nt * 3, 1, nt ? m.creases.data() : nullptr)) m.creases.clear();
+            // NaN, infinities and anything outside 0..1 can't come from SculptForge: clamped (NaN -> no crease).
+            for (float& c : m.creases) c = std::isfinite(c) ? std::clamp(c, 0.0f, 1.0f) : c > 0.0f ? 1.0f : 0.0f;
+            if (std::none_of(m.creases.begin(), m.creases.end(), [](float c) { return c > 0.0f; })) m.creases.clear();
+        } else if (cj.isObject()) {
+            r.skipped += (r.skipped.empty() ? "" : ", ") + std::string("edge creases");
+        }
     }
     if (mj.has("quad_partners")) { // rebuildTopology() unpairs anything that isn't a valid pair
         m.quadPartners.resize(nt);
@@ -445,7 +478,7 @@ void finishMesh(Mesh& m) {
     m.recomputeAllNormals();
 }
 
-// Paint layers (core/PaintLayer.h) are their own SubTool key, "paint_layers", next to "mesh":
+// Paint layers (core/PaintLayer.h) are their own Part key, "paint_layers", next to "mesh":
 // readers that don't know it load `mesh.colors`, the composited (flattened) paint.
 Json writePaintLayers(Writer& w, const std::string& prefix, const Mesh& m) {
     Json out = Json::object();
@@ -496,7 +529,7 @@ bool readPaintLayers(Reader& r, const Json& pj, Mesh& m, std::string& error) {
     return true;
 }
 
-// Texture painting (core/Texture.h) is the SubTool key "texture" (format 3): the size, where paint goes,
+// Texture painting (core/Texture.h) is the Part key "texture" (format 3): the size, where paint goes,
 // and every layer as a PNG blob (top row = v 1, as image files are). Without layers "base" is the texture.
 Json pngBlob(Writer& w, const std::string& file, int width, int height, const std::vector<uint8_t>& rgba) {
     Image img;
@@ -622,9 +655,9 @@ bool readTexture(Reader& r, const Json& tj, Mesh& m, std::string& error) {
     return true;
 }
 
-// Subdivision levels (core/Multires.h) are the SubTool key "subdiv" (format 4; sculpt-layer details in local
+// Subdivision levels (core/Multires.h) are the Part key "subdiv" (format 4; sculpt-layer details in local
 // frames from format 5): the current level and every level's mesh (as "mesh" / "layers" / "paint_layers"),
-// details and topology (scheme, Smt, quad pairing and child maps). The SubTool's own "mesh" is the current level,
+// details and topology (scheme, Smooth, quad pairing and child maps). The Part's own "mesh" is the current level,
 // so readers that don't know levels load what was shown. A current level identical to that mesh is not written
 // twice ("same_as_mesh"). Format 6: a generated level (made by Divide, SubdivTopology::generated) has no
 // triangles and no child maps ("generated"), and a level without "detail" that isn't stale takes the detail that
@@ -684,7 +717,7 @@ bool readUintList(Reader& r, const Json& desc, const char* what, std::vector<uin
     return r.uints(desc, what, n, 1, out.data());
 }
 
-// Reads "subdiv" into `m` (the SubTool's current level). Levels that don't fit are an error. Format 4 kept the
+// Reads "subdiv" into `m` (the Part's current level). Levels that don't fit are an error. Format 4 kept the
 // sculpt-layer details in world space (`worldLayerDetail`): they're converted to local frames.
 bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error, bool worldLayerDetail) {
     if (!sj.isObject()) return true;
@@ -715,7 +748,7 @@ bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error, bool wor
             data->positions = m.positions;
             data->mask = m.mask;
             data->colors = m.colors;
-            data->polygroups = m.polygroups;
+            data->facegroups = m.facegroups;
             data->hidden = m.hidden;
             data->uvs = m.uvs;
             data->quadPartners = m.quadPartners;
@@ -796,7 +829,7 @@ bool readSubdiv(Reader& r, const Json& sj, Mesh& m, std::string& error, bool wor
 }
 
 // Selection Sets (core/SelectionSets.h): `selection_sets` = {"version", "morph_target", "sets": [summary + "data"]},
-// each set one packed u8 blob under subtools/i/sets/. Optional, so no format version bump: older readers ignore it.
+// each set one packed u8 blob under parts/i/sets/. Optional, so no format version bump: older readers ignore it.
 constexpr int kSelectionSetsVersion = 1;
 
 Json writeSelectionSets(Writer& w, const std::string& prefix, const SelectionSetList& list) {
@@ -843,22 +876,27 @@ void readSelectionSets(Reader& r, const Json& j, Mesh& m, std::string& skipped) 
     if (!list->sets.empty()) m.selectionSets = std::move(list);
 }
 
-// A SubTool read from a project, before it joins the document.
-struct LoadedSubtool {
+// A Part read from a project, before it joins the document.
+struct LoadedPart {
     Json crkwMetaHuman;
-    std::string name, gozName;
+    std::string name, bridgeName;
     std::vector<QRemeshGuide> qremeshGuides;
     bool visible = true;
+    int8_t shownBeforeSolo = -1;
     Shading shading = Shading::Default;
+    PartBoolean boolean = PartBoolean::None;
+    int folder = -1; // index into the manifest's part_folders (#96)
     int activeLayer = -1;
+    int link = -1;              // a linked copy of this earlier Part (#94): no mesh of its own
+    glm::mat4 transform{1.0f};  // Part::transform
     Mesh mesh;
     // A big mesh's BVH is built on its own thread once the positions and triangles are read (they don't change
     // after that), while the subdivision levels, topology and normals load.
     BVH bvh;
     std::thread bvhBuilder;
-    LoadedSubtool() = default;
-    LoadedSubtool(const LoadedSubtool&) = delete;
-    ~LoadedSubtool() { finishBvh(); }
+    LoadedPart() = default;
+    LoadedPart(const LoadedPart&) = delete;
+    ~LoadedPart() { finishBvh(); }
     void startBvh() {
         if (mesh.triangleCount() >= 1'000'000) bvhBuilder = std::thread([this] { bvh.build(mesh); });
     }
@@ -873,7 +911,7 @@ struct LoadedSubtool {
     bool built = false;
 };
 
-constexpr size_t kMaxProjectSubtools = 100000;
+constexpr size_t kMaxProjectParts = 100000;
 } // namespace
 
 bool isProjectPath(const std::string& path) {
@@ -882,64 +920,150 @@ bool isProjectPath(const std::string& path) {
     return ext == kProjectExtension;
 }
 
-bool saveProject(const std::string& path, const Document& doc, std::string& error) {
+bool saveProject(const std::string& path, const Document& doc, std::string& error, bool autosave, bool visibleOnly) {
     Writer w;
     Json manifest = Json::object();
     manifest.set("format", kFormatName);
-    ProjectVersionNeed version; // the lowest format the content needs (set again once the SubTools are written)
+    ProjectVersionNeed version; // the lowest format the content needs (set again once the Parts are written)
     manifest.set("version", version.version);
     manifest.set("app_version", SCULPTFORGE_VERSION);
 
-    // Every SubTool with its mesh, layers and state; blobs live under subtools/<i>/.
-    Json subtools = Json::array();
-    for (int i = 0; i < doc.subtoolCount(); ++i) {
-        const SubTool& s = doc.subtools[size_t(i)];
-        const bool active = i == doc.activeSubtool;
+    // Every Part with its mesh, layers and state; blobs live under parts/<i>/.
+    Json parts = Json::array();
+    int streamed = 0; // Parts with a streamed micro level so far (their detail files' names)
+    // During a Figure Pose the Parts are saved shown as before it, and the Pose Mesh hidden (core/FigurePose.h).
+    const auto savedVisible = [&doc](const Part& s) {
+        if (!doc.figurePose || doc.partIndex(doc.figurePose->poseMesh) < 0) return s.visible;
+        bool visible = false;
+        for (const auto& [id, was] : doc.figurePose->visibility)
+            if (id == s.id) visible = was;
+        return visible;
+    };
+    // The Parts written, as indices into doc.parts (all of them, or only the visible ones for Save Visible Parts);
+    // `newIndex` is where each lands in the file, for links, folders and the active Part.
+    std::vector<int> kept, newIndex(size_t(doc.partCount()), -1);
+    for (int i = 0; i < doc.partCount(); ++i)
+        if (!visibleOnly || savedVisible(doc.parts[size_t(i)])) {
+            newIndex[size_t(i)] = int(kept.size());
+            kept.push_back(i);
+        }
+    if (kept.empty()) {
+        error = "No visible Parts to save";
+        return false;
+    }
+    std::vector<int> folderIndex(doc.partFolders.size(), -1); // the folders those Parts are in
+    std::vector<const PartFolder*> keptFolders;
+    if (!visibleOnly) // (a full save keeps every folder, empty ones too)
+        for (size_t f = 0; f < doc.partFolders.size(); ++f) {
+            folderIndex[f] = int(f);
+            keptFolders.push_back(&doc.partFolders[f]);
+        }
+    else
+        for (int i : kept)
+            if (const int f = doc.partFolderIndex(doc.parts[size_t(i)].folder); f >= 0 && folderIndex[size_t(f)] < 0) {
+                folderIndex[size_t(f)] = int(keptFolders.size());
+                keptFolders.push_back(&doc.partFolders[size_t(f)]);
+            }
+    for (int i : kept) {
+        const Part& s = doc.parts[size_t(i)];
+        const bool active = doc.checkedOut(i);
         Json st = Json::object();
         st.set("name", s.name);
-        st.set("visible", s.visible);
+        st.set("visible", savedVisible(s));
+        if (s.shownBeforeSolo >= 0) st.set("shown_before_solo", s.shownBeforeSolo != 0); // (optional: Solo in progress)
         if (s.crkwMetaHuman.isObject()) st.set("crkw_metahuman", s.crkwMetaHuman);
-        if (doc.subtoolMesh(i).crkwMaskState) st.set("crkw_mask_manager", *doc.subtoolMesh(i).crkwMaskState);
+        if (doc.partMesh(i).crkwMaskState) st.set("crkw_mask_manager", *doc.partMesh(i).crkwMaskState);
         if (s.shading != Shading::Default) st.set("shading", shadingName(s.shading)); // (no format change: optional)
-        writeMesh(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i), st);
-        st.set("active_layer", active ? doc.activeLayer : s.activeLayer);
-        if (hasPaintLayers(doc.subtoolMesh(i)))
-            st.set("paint_layers", writePaintLayers(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
-        if (doc.subtoolMesh(i).texture && doc.subtoolMesh(i).texture->width > 0) {
-            st.set("texture", writeTexture(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
-            version.need(textureFormatVersion(*doc.subtoolMesh(i).texture));
+        if (s.boolean != PartBoolean::None) st.set("boolean", partBooleanName(s.boolean)); // (optional, as shading)
+        if (const int f = doc.partFolderIndex(s.folder); f >= 0) st.set("folder", folderIndex[size_t(f)]); // (#96: optional, as shading)
+        if (s.moved()) {
+            st.set("transform", matrixJson(s.transform));
+            version.need(8);
         }
-        if (subdivLevelCount(doc.subtoolMesh(i)))
-            st.set("subdiv", writeSubdiv(w, "subtools/" + std::to_string(i) + "/", doc.subtoolMesh(i)));
-        if (const Mesh& m = doc.subtoolMesh(i); m.micro && microMatches(m)) { // format 7: the micro level (core/Micro.h)
+        int link = -1; // a linked copy (#94): the first Part with its mesh holds it
+        for (int k = 0; k < i && link < 0; ++k)
+            if (newIndex[size_t(k)] >= 0 && doc.parts[size_t(k)].data == s.data) link = newIndex[size_t(k)];
+        if (link >= 0) {
+            st.set("link", link);
+            version.need(8);
+            parts.push(std::move(st));
+            continue;
+        }
+        writeMesh(w, "parts/" + std::to_string(i) + "/", doc.partMesh(i), st);
+        st.set("active_layer", active ? doc.activeLayer : s.data->activeLayer);
+        if (hasPaintLayers(doc.partMesh(i)))
+            st.set("paint_layers", writePaintLayers(w, "parts/" + std::to_string(i) + "/", doc.partMesh(i)));
+        if (doc.partMesh(i).texture && doc.partMesh(i).texture->width > 0) {
+            st.set("texture", writeTexture(w, "parts/" + std::to_string(i) + "/", doc.partMesh(i)));
+            version.need(textureFormatVersion(*doc.partMesh(i).texture));
+        }
+        if (subdivLevelCount(doc.partMesh(i)))
+            st.set("subdiv", writeSubdiv(w, "parts/" + std::to_string(i) + "/", doc.partMesh(i)));
+        if (const Mesh& m = doc.partMesh(i); m.micro && microMatches(m)) { // format 7: the micro level (core/Micro.h)
             const MicroMesh& mm = *m.micro;
-            const std::string p = "subtools/" + std::to_string(i) + "/micro/";
+            const std::string p = "parts/" + std::to_string(i) + "/micro/";
             Json mj = Json::object();
             mj.set("level", mm.level);
             mj.set("step", double(mm.step));
-            // Tiles packed (delta + per-tile range, core/MicroStore.h): untouched tiles are 3 bytes.
-            std::vector<uint8_t> packed;
-            microPackTiles(mm.disp.data(), mm.baseTriangles, mm.samples, packed);
-            const size_t packedBytes = packed.size();
-            mj.set("displacement_packed", w.add(p + "displacement.pack", Scalar::U8, 1, packedBytes, std::move(packed)));
+            if (mm.focus) { // format 9: streamed from a detail file (core/FocusDetail.h); the file holds the level
+                FocusDetail& fd = *mm.focus;
+                std::string ref = fd.path();
+                if (visibleOnly) { // (saving it elsewhere would move the open project's detail file along)
+                    error = s.name + " has streamed detail; use Save As to keep it";
+                    return false;
+                }
+                if (!autosave) {
+                    std::filesystem::path target = fsPath(path);
+                    const std::string stem = utf8(target.stem());
+                    target.replace_filename(fsPath(stem + (streamed ? "-" + std::to_string(streamed + 1) : std::string()) + ".sfdetail"));
+                    ++streamed;
+                    std::error_code ec;
+                    const bool same = std::filesystem::equivalent(fsPath(fd.path()), target, ec);
+                    std::string why;
+                    if (!(same ? fd.save(m, why) : fd.saveAs(m, utf8(target), why))) {
+                        error = "Saving the detail of " + s.name + " failed: " + why;
+                        return false;
+                    }
+                    ref = utf8(target.filename());
+                }
+                mj.set("detail", ref);
+                version.need(9);
+            } else {
+                // Tiles packed (delta + per-tile range, core/MicroStore.h): untouched tiles are 3 bytes.
+                std::vector<uint8_t> packed;
+                microPackTiles(mm.disp.data(), mm.baseTriangles, mm.samples, packed);
+                const size_t packedBytes = packed.size();
+                mj.set("displacement_packed", w.add(p + "displacement.pack", Scalar::U8, 1, packedBytes, std::move(packed)));
+            }
             if (mm.hasMask()) mj.set("mask", w.externalBytes(p + "mask.bin", mm.mask));
             st.set("micro", std::move(mj));
             version.need(7);
         }
-        const std::string& gozName = active ? doc.gozName : s.gozName;
-        if (!gozName.empty()) st.set("goz_name", gozName);
-        const std::vector<QRemeshGuide>& guides = active ? doc.qremeshGuides : s.qremeshGuides;
+        const std::string& bridgeName = active ? doc.bridgeName : s.data->bridgeName;
+        if (!bridgeName.empty()) st.set("bridge_name", bridgeName);
+        const std::vector<QRemeshGuide>& guides = active ? doc.qremeshGuides : s.data->qremeshGuides;
         if (!guides.empty()) st.set("qremesh_guides", qremeshGuidesToJson(guides)); // (no format change: optional)
-        if (const Mesh& m = doc.subtoolMesh(i); m.selectionSets && !m.selectionSets->sets.empty())
-            st.set("selection_sets", writeSelectionSets(w, "subtools/" + std::to_string(i) + "/", *m.selectionSets));
-        if (const Mesh& m = doc.subtoolMesh(i); !m.zspheres.empty()) { // a ZSphere SubTool (core/ZSpheres.h); optional
-            st.set("zspheres", zspheresToJson(m.zspheres));
-            if (m.zspherePreview) st.set("zsphere_preview", true);
+        if (const Mesh& m = doc.partMesh(i); m.selectionSets && !m.selectionSets->sets.empty())
+            st.set("selection_sets", writeSelectionSets(w, "parts/" + std::to_string(i) + "/", *m.selectionSets));
+        if (const Mesh& m = doc.partMesh(i); !m.forgespheres.empty()) { // a Forge Sphere Part (core/Forge Spheres.h); optional
+            st.set("forgespheres", forgespheresToJson(m.forgespheres));
+            if (m.forgespherePreview) st.set("forgesphere_preview", true);
         }
-        subtools.push(std::move(st));
+        if (const Mesh& m = doc.partMesh(i); !m.tube.empty()) st.set("tube", tubeToJson(m.tube)); // a Tube Part (core/Tube.h); optional
+        parts.push(std::move(st));
     }
-    manifest.set("subtools", std::move(subtools));
-    manifest.set("active_subtool", doc.activeSubtool);
+    manifest.set("parts", std::move(parts));
+    manifest.set("active_part", std::max(0, newIndex[size_t(doc.activePart)])); // (a hidden active Part: the first)
+    if (!keptFolders.empty()) { // Parts list folders (#96); no format change: older readers ignore them
+        Json folders = Json::array();
+        for (const PartFolder* f : keptFolders) {
+            Json fj = Json::object();
+            fj.set("name", f->name);
+            if (f->collapsed) fj.set("collapsed", true);
+            folders.push(std::move(fj));
+        }
+        manifest.set("part_folders", std::move(folders));
+    }
 
     Json brushes = Json::array();
     for (const auto& b : doc.brushes) brushes.push(b.toJson());
@@ -981,9 +1105,26 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
         manifest.set("attachments", std::move(files));
     }
 
+    if (!doc.references.empty()) { // View > Reference images (no format change: optional, older readers ignore it)
+        Json refs = Json::array();
+        for (size_t i = 0; i < doc.references.size() && i < size_t(kMaxReferences); ++i) {
+            const ReferenceImage& ref = doc.references[i];
+            Json r = referenceToJson(ref);
+            if (std::vector<uint8_t> bytes; ref.embed && referenceEmbedBytes(ref, bytes))
+                r.set("image", w.bytes("references/" + std::to_string(i) + ".bin", bytes));
+            refs.push(std::move(r));
+        }
+        manifest.set("references", std::move(refs));
+    }
+
     if (doc.projectSettings.isObject())
         for (const auto& [key, value] : doc.projectSettings.members())
             if (!isCoreKey(key)) manifest.set(key, value);
+    // The unit-less file the scene came from (Document::unitlessScale). Optional: older readers ignore it.
+    if (doc.unitlessScale > 0.0) {
+        manifest.set("unitless_scale", doc.unitlessScale);
+        manifest.set("unitless_format", doc.unitlessFormat);
+    }
 
     manifest.set("version", version.version);
     const std::string text = manifest.dump(true);
@@ -1009,6 +1150,35 @@ bool saveProject(const std::string& path, const Document& doc, std::string& erro
     return true;
 }
 
+namespace {
+
+std::string& autosaveFolder() {
+    static std::string folder;
+    return folder;
+}
+
+// A project's micro "detail" name -> the file (see setProjectAutosaveFolder).
+bool detailFileOf(const std::string& project, const std::string& name, std::filesystem::path& file) {
+    const std::filesystem::path p = fsPath(project), n = fsPath(name);
+    if (n.extension() != ".sfdetail" || n.stem().empty()) return false;
+    if (n.is_absolute()) { // only our own autosave
+        std::error_code ec;
+        const std::string& folder = autosaveFolder();
+        if (folder.empty() || p.filename() != "autosave.sfproj" ||
+            !std::filesystem::equivalent(p.parent_path(), fsPath(folder), ec))
+            return false;
+        file = n;
+        return true;
+    }
+    if (name.find_first_of("/\\:") != std::string::npos || name == "." || name == ".." || n.has_root_path()) return false;
+    file = p.parent_path() / n;
+    return true;
+}
+
+} // namespace
+
+void setProjectAutosaveFolder(const std::string& folder) { autosaveFolder() = folder; }
+
 bool loadProject(const std::string& path, Document& doc, std::string& error) {
     Reader r;
     if (!r.open(path, error)) return false;
@@ -1023,6 +1193,7 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
         error = path + " is not a SculptForge project" + (error.empty() ? "" : " (" + error + ")");
         return false;
     }
+    manifest = legacy::modernizeKeys(manifest); // keys an older version wrote
     const double version = manifest["version"].asNumber(0);
     if (version > kProjectVersion) {
         error = path + " was saved by a newer SculptForge (" + manifest["app_version"].asString() +
@@ -1035,33 +1206,50 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
         return false;
     }
 
-    // SubTools: version 1 has one mesh at the top level, version 2 a "subtools" list.
-    std::deque<LoadedSubtool> subtools; // (stable addresses: BVH threads use them)
+    // Parts: version 1 has one mesh at the top level, version 2 a "parts" list.
+    std::deque<LoadedPart> parts; // (stable addresses: BVH threads use them)
     std::string skippedSets;            // selection sets that couldn't be read
-    int activeSubtool = 0;
+    int activePart = 0;
     if (version < 2) {
-        LoadedSubtool& s = subtools.emplace_back();
+        LoadedPart& s = parts.emplace_back();
         s.name = "Sculpt";
         if (!readMesh(r, manifest["mesh"], manifest["layers"], s.mesh, error)) return false;
         s.activeLayer = int(manifest["active_layer"].asNumber(-1));
     } else {
-        const Json& list = manifest["subtools"];
-        if (!list.isArray() || list.size() == 0 || list.size() > kMaxProjectSubtools) {
+        const Json& list = manifest["parts"];
+        if (!list.isArray() || list.size() > kMaxProjectParts) {
             error = "Project has no valid Part list";
             return false;
         }
+        // An empty list is an empty scene (settings, lights, cameras, views and shelves still load): a Document
+        // always holds one Part, so it becomes one empty "Sculpt" Part, which saves back as the same scene.
+        if (list.size() == 0) parts.emplace_back().name = "Sculpt";
         for (const Json& sj : list.items()) {
-            LoadedSubtool& s = subtools.emplace_back();
+            LoadedPart& s = parts.emplace_back();
             s.name = sj["name"].asString();
             if (s.name.empty()) s.name = "Part";
             s.visible = sj["visible"].asBool(true);
+            if (sj["shown_before_solo"].isBool()) s.shownBeforeSolo = sj["shown_before_solo"].asBool(true) ? 1 : 0;
             if (sj["shading"].isString()) parseShading(sj["shading"].asString(), s.shading); // unknown: Default
-            s.gozName = sj["goz_name"].asString();
+            if (sj["boolean"].isString()) parsePartBoolean(sj["boolean"].asString(), s.boolean); // unknown: None
+            s.folder = int(sj["folder"].asNumber(-1));
+            s.bridgeName = sj["bridge_name"].asString();
             s.crkwMetaHuman = sj["crkw_metahuman"];
             s.qremeshGuides = qremeshGuidesFromJson(sj["qremesh_guides"]);
+            if (sj["transform"].isArray()) s.transform = matrixFromJson(sj["transform"]);
+            if (const Json& lj = sj["link"]; lj.isNumber()) {
+                const double l = lj.asNumber(-1);
+                if (!(l >= 0 && l < double(parts.size() - 1)) || parts[size_t(l)].link >= 0) {
+                    error = "Project Part link is invalid";
+                    return false;
+                }
+                s.link = int(l);
+                continue;
+            }
             if (!readMesh(r, sj["mesh"], sj["layers"], s.mesh, error, false, false)) return false;
-            s.mesh.zspheres = zspheresFromJson(sj["zspheres"]);
-            s.mesh.zspherePreview = !s.mesh.zspheres.empty() && sj["zsphere_preview"].asBool(false);
+            s.mesh.forgespheres = forgespheresFromJson(sj["forgespheres"]);
+            s.mesh.forgespherePreview = !s.mesh.forgespheres.empty() && sj["forgesphere_preview"].asBool(false);
+            s.mesh.tube = tubeFromJson(sj["tube"]);
             readSelectionSets(r, sj["selection_sets"], s.mesh, skippedSets);
             // The BVH builds (on the pool) while the levels and topology load (off it), then the normals.
             s.startBvh();
@@ -1085,7 +1273,24 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
                 const uint32_t samples = (n + 1) * (n + 2) / 2;
                 MicroStore disp;
                 std::vector<uint8_t> mask;
-                if (const Json& pj = mj["displacement_packed"]; pj.isObject()) { // tiles packed (MicroStore.h)
+                if (const Json& dj = mj["detail"]; dj.isString() && version >= 9) { // streamed (core/FocusDetail.h)
+                    if (mj["mask"].isObject() && !r.bytes(mj["mask"], "micro mask", count, mask)) {
+                        error = r.error;
+                        return false;
+                    }
+                    std::filesystem::path file;
+                    if (!detailFileOf(path, dj.asString(), file)) {
+                        error = "Detail file name is invalid";
+                        return false;
+                    }
+                    std::error_code ec;
+                    if (!std::filesystem::exists(file, ec)) {
+                        error = "The detail file " + utf8(file.filename()) + " is missing: keep it beside " +
+                                utf8(fsPath(path).filename()) + " (Focus Detail streams the micro level from it)";
+                        return false;
+                    }
+                    if (!FocusDetail::attach(utf8(file), s.mesh, std::move(mask), error)) return false;
+                } else if (const Json& pj = mj["displacement_packed"]; pj.isObject()) { // tiles packed (MicroStore.h)
                     std::vector<uint8_t> packed;
                     const size_t bytes = countOf(pj["count"]);
                     if (bytes == size_t(-1) || !r.bytes(pj, "micro displacement", bytes, packed)) {
@@ -1107,16 +1312,19 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
                     }
                     disp = std::move(plain);
                 }
-                if (mj["mask"].isObject() && !r.bytes(mj["mask"], "micro mask", count, mask)) {
-                    error = r.error;
-                    return false;
+                if (!mj["detail"].isString() || version < 9) {
+                    if (mj["mask"].isObject() && !r.bytes(mj["mask"], "micro mask", count, mask)) {
+                        error = r.error;
+                        return false;
+                    }
+                    if (!microAttach(s.mesh, level, float(mj["step"].asNumber(0)), std::move(disp), std::move(mask), error))
+                        return false;
                 }
-                if (!microAttach(s.mesh, level, float(mj["step"].asNumber(0)), std::move(disp), std::move(mask), error)) return false;
             }
             s.activeLayer = int(sj["active_layer"].asNumber(-1));
         }
-        const double active = manifest["active_subtool"].asNumber(0);
-        activeSubtool = active >= 0 && active < double(subtools.size()) ? int(active) : 0;
+        const double active = manifest["active_part"].asNumber(0);
+        activePart = active >= 0 && active < double(parts.size()) ? int(active) : 0;
     }
 
     // Splats
@@ -1144,33 +1352,64 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
         for (size_t i = 0; i < n; ++i) splats.rotations[i] = glm::quat(rot[i * 4 + 3], rot[i * 4], rot[i * 4 + 1], rot[i * 4 + 2]);
     }
 
-    // Everything parsed: replace the scene. SubTool 0 is checked out first; the others are added
-    // behind it, given their layer and GoZ name, and the saved active SubTool is selected last.
+    // Everything parsed: replace the scene. Part 0 is checked out first; the others are added
+    // behind it, given their layer and Bridge name, and the saved active Part is selected last.
     auto validLayer = [](int layer, const Mesh& m) { return layer >= 0 && layer < int(m.layers.size()) ? layer : -1; };
-    BVH* built = subtools[0].finishBvh();
-    doc.setMesh(std::move(subtools[0].mesh), subtools[0].name, built);
-    doc.activeLayer = validLayer(subtools[0].activeLayer, doc.mesh);
-    doc.gozName = subtools[0].gozName;
-    doc.qremeshGuides = std::move(subtools[0].qremeshGuides);
-    doc.subtools[0].visible = subtools[0].visible;
-    doc.subtools[0].crkwMetaHuman = std::move(subtools[0].crkwMetaHuman);
-    doc.subtools[0].shading = subtools[0].shading;
-    for (size_t i = 1; i < subtools.size(); ++i) {
-        BVH* builtI = subtools[i].finishBvh();
-        const int at = doc.addSubtool(std::move(subtools[i].mesh), subtools[i].name, false, -1, builtI);
-        SubTool& s = doc.subtools[size_t(at)];
-        s.visible = subtools[i].visible;
-        s.crkwMetaHuman = std::move(subtools[i].crkwMetaHuman);
-        s.shading = subtools[i].shading;
-        s.activeLayer = validLayer(subtools[i].activeLayer, s.mesh);
-        s.gozName = subtools[i].gozName;
-        s.qremeshGuides = std::move(subtools[i].qremeshGuides);
+    BVH* built = parts[0].finishBvh();
+    doc.setMesh(std::move(parts[0].mesh), parts[0].name, built);
+    doc.activeLayer = validLayer(parts[0].activeLayer, doc.mesh);
+    doc.bridgeName = parts[0].bridgeName;
+    doc.qremeshGuides = std::move(parts[0].qremeshGuides);
+    doc.parts[0].crkwMetaHuman = std::move(parts[0].crkwMetaHuman);
+    doc.parts[0].visible = parts[0].visible;
+    doc.parts[0].shownBeforeSolo = parts[0].shownBeforeSolo;
+    doc.parts[0].shading = parts[0].shading;
+    doc.parts[0].boolean = parts[0].boolean;
+    doc.parts[0].transform = parts[0].transform;
+    for (size_t i = 1; i < parts.size(); ++i) {
+        if (parts[i].link >= 0) { // shares an earlier Part's mesh (Parts load in order: index i is i here too)
+            const int at = doc.addLink(parts[i].link, parts[i].name, parts[i].transform);
+            doc.parts[size_t(at)].crkwMetaHuman = std::move(parts[i].crkwMetaHuman);
+            doc.parts[size_t(at)].visible = parts[i].visible;
+            doc.parts[size_t(at)].shownBeforeSolo = parts[i].shownBeforeSolo;
+            doc.parts[size_t(at)].shading = parts[i].shading;
+            doc.parts[size_t(at)].boolean = parts[i].boolean;
+            continue;
+        }
+        BVH* builtI = parts[i].finishBvh();
+        const int at = doc.addPart(std::move(parts[i].mesh), parts[i].name, false, -1, builtI);
+        Part& s = doc.parts[size_t(at)];
+        s.crkwMetaHuman = std::move(parts[i].crkwMetaHuman);
+        s.visible = parts[i].visible;
+        s.shownBeforeSolo = parts[i].shownBeforeSolo;
+        s.shading = parts[i].shading;
+        s.boolean = parts[i].boolean;
+        s.transform = parts[i].transform;
+        s.data->activeLayer = validLayer(parts[i].activeLayer, s.data->mesh);
+        s.data->bridgeName = parts[i].bridgeName;
+        s.data->qremeshGuides = std::move(parts[i].qremeshGuides);
     }
-    doc.selectSubtool(activeSubtool);
+    // Folders (#96): a Part pointing at a folder that isn't there is simply outside any folder.
+    if (const Json& folders = manifest["part_folders"]; folders.isArray() && folders.size() <= kMaxProjectParts) {
+        std::vector<uint32_t> ids;
+        for (const Json& fj : folders.items()) {
+            ids.push_back(doc.addPartFolder(fj["name"].isString() ? fj["name"].asString() : std::string("Folder")));
+            doc.partFolders.back().collapsed = fj["collapsed"].asBool(false);
+        }
+        for (size_t i = 0; i < parts.size(); ++i)
+            if (parts[i].folder >= 0 && parts[i].folder < int(ids.size())) doc.parts[i].folder = ids[size_t(parts[i].folder)];
+    }
+    doc.selectPart(activePart);
+    if (const double scale = manifest["unitless_scale"].asNumber(0.0); scale > 0.0 && std::isfinite(scale)) {
+        doc.unitlessScale = scale;
+        const std::string& format = manifest["unitless_format"].asString();
+        doc.unitlessFormat = format == "stl" || format == "obj" || format == "ply" ? format : "";
+    }
     doc.splats = std::move(splats);
     doc.splatsChanged();
     if (!skippedSets.empty())
         doc.notice += (doc.notice.empty() ? "" : "; ") + std::string("Selection sets left out (unreadable): ") + skippedSets;
+    if (!r.skipped.empty()) doc.notice += (doc.notice.empty() ? "" : "; ") + std::string("Left out (unreadable): ") + r.skipped;
     for (const auto& b : manifest["brushes"].items()) {
         if (!b.isObject()) continue;
         // Brushes the library already has, unchanged, stay library brushes; the rest are the project's own.
@@ -1190,10 +1429,10 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
     doc.projectSettings = Json::object();
     for (const auto& [key, value] : manifest.members())
         if (!isCoreKey(key)) doc.projectSettings.set(key, value);
-    // Attachments are extras (an embedded MatCap): one that can't be read is left out rather than failing the file.
+    // Attachments are extras (an embedded Lit Sphere): one that can't be read is left out rather than failing the file.
     doc.projectFiles.clear();
     for (const Json& f : manifest["attachments"].items()) {
-        const std::string name = f["name"].asString();
+        const std::string name = legacy::modernize(f["name"].asString()); // our own folder names, e.g. Lit Spheres
         const size_t n = countOf(f["data"]["count"]);
         if (!validAttachmentName(name) || n == size_t(-1) || n > kMaxAttachmentSize || doc.projectFiles.size() >= 64) continue;
         std::vector<uint8_t> bytes;
@@ -1201,6 +1440,17 @@ bool loadProject(const std::string& path, Document& doc, std::string& error) {
         if (r.bytes(f["data"], "attachment", n, bytes)) doc.projectFiles[name] = std::move(bytes);
     }
     r.error.clear();
+    // Reference images: like attachments, one that can't be read is left out rather than failing the file.
+    doc.references.clear();
+    for (const Json& j : manifest["references"].items()) {
+        if (doc.references.size() >= size_t(kMaxReferences)) break;
+        std::vector<uint8_t> bytes;
+        const size_t n = countOf(j["image"]["count"]);
+        const bool embedded = j["image"].isObject() && n != size_t(-1) && n <= kReferenceMaxFileBytes &&
+                              r.bytes(j["image"], "reference image", n, bytes);
+        r.error.clear();
+        if (ReferenceImage ref; referenceFromJson(j, embedded ? &bytes : nullptr, ref)) doc.references.push_back(std::move(ref));
+    }
     doc.path = path;
     restoreCrkwMetaHumanPreviews(doc);
     doc.markClean();
@@ -1243,11 +1493,11 @@ CommandResult openProjectCommand(Document& doc, const std::string& path) {
     std::string msg = "Opened project " + std::filesystem::path(path).filename().string() + " (";
     // The Sculpt Timeline saved beside it, if it matches (only into the app's own scene: not thumbnails, scratch opens).
     const int histories = &doc == Timeline::historyDocument ? loadHistorySidecar(doc, path) : 0;
-    if (doc.subtoolCount() > 1) msg += std::to_string(doc.subtoolCount()) + " Parts, ";
+    if (doc.partCount() > 1) msg += std::to_string(doc.partCount()) + " Parts, ";
     size_t tris = 0, layers = 0;
-    for (int i = 0; i < doc.subtoolCount(); ++i) {
-        tris += doc.subtoolMesh(i).triangleCount();
-        layers += doc.subtoolMesh(i).layers.size();
+    for (int i = 0; i < doc.partCount(); ++i) {
+        tris += doc.partMesh(i).triangleCount();
+        layers += doc.partMesh(i).layers.size();
     }
     msg += std::to_string(tris) + " triangles";
     if (layers) msg += ", " + std::to_string(layers) + " layers";
@@ -1278,6 +1528,19 @@ void registerProjectCommands(CommandRegistry& registry) {
                       if (Timeline::saveWithProject && &doc == Timeline::historyDocument && !saveHistorySidecar(doc, path, &err))
                           return {true, "Saved project " + path + " (the history wasn't saved: " + err + ")"};
                       return {true, "Saved project " + path};
+                  }});
+    registry.add({"save_visible_parts",
+                  "Save a copy of the project (.sfproj) with only the visible Parts (their materials, layers and the scene's "
+                  "cameras and settings); the open project and its path stay as they are.",
+                  {{"path", T::String, "Output .sfproj path (UTF-8).", true}},
+                  [](Document& doc, const Args& a) -> CommandResult {
+                      std::string path = argString(a, "path");
+                      if (path.empty()) return {false, "No path given"};
+                      if (!isProjectPath(path)) path += kProjectExtension;
+                      std::string err;
+                      subdivCommit(doc.mesh);
+                      if (!saveProject(path, doc, err, false, /*visibleOnly*/ true)) return {false, err};
+                      return {true, "Saved the visible Parts to " + path};
                   }});
     registry.add({"open_project", "Open a SculptForge project (.sfproj), replacing the current scene.",
                   {{"path", T::String, ".sfproj path (UTF-8).", true}},

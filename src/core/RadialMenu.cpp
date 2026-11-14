@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstdint>
 
+#include "core/LegacyNames.h"
+
 namespace sf {
 
 namespace {
@@ -31,7 +33,7 @@ constexpr ButtonName kButtons[int(RadialButton::Count)] = {
 // An id from a file: a string of sensible length the vocabulary knows, or "".
 std::string knownId(const Json& j, const std::function<bool(std::string_view)>& known) {
     if (!j.isString()) return {};
-    const std::string& s = j.asString();
+    std::string s = legacy::modernize(j.asString());
     if (s.empty() || s.size() > kRadialIdMax || !known || !known(s)) return {};
     return s;
 }

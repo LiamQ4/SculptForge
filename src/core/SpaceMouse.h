@@ -28,8 +28,12 @@ enum SpaceMouseAxis { kSmTx, kSmTy, kSmTz, kSmRx, kSmRy, kSmRz, kSmAxes };
 // vendor id 0x046D (SpaceNavigator, SpacePilot, SpaceExplorer...). SDL itself has no list of them (its
 // controller_list.h only knows gamepads), so this is ours, from the ids spacenavd and Linux's hid-ids.h use.
 // The CadMouse and the 3Dconnexion keyboards / numpads share the vendor id but are not SpaceMice.
-// `name` is the device's name: a Logitech-id device with an unknown product counts when it calls itself one.
+// `name` is the device's name: a Logitech-id or vendor-0 device with an unknown product counts when it calls itself
+// a SpaceMouse (SpaceNavigator...), any vendor when the name says 3Dconnexion (#104).
 bool isSpaceMouseDevice(uint16_t vendor, uint16_t product, const std::string& name = {});
+
+// A SpaceMouse the system lists but SDL cannot open (3DxWare holds it) is tried again this often (#110).
+constexpr float kSpaceMouseRetrySeconds = 3.0f;
 
 constexpr int kSpaceMouseButtonSlots = 8; // buttons whose action Preferences lists (an Enterprise has 31)
 
@@ -40,6 +44,9 @@ struct SpaceMouseSettings {
     std::array<bool, kSmAxes> invert{};
     bool turntable = false; // lock rotation to a turntable: no roll, the world's up stays up
     bool dominant = false;  // only the axis pushed furthest moves the view (no accidental diagonal moves)
+    // While a pen or mouse stroke runs the view holds still and the buttons do nothing, so a hand on the cap (or a
+    // noisy cap) never moves the model under the pen (phoenix, Discord 11-05). Off: the view turns mid-stroke.
+    bool holdWhileStroking = true;
     // The action each button runs ("" = nothing): the two side buttons default to Frame and Front view.
     std::array<std::string, kSpaceMouseButtonSlots> buttons{"view.frame", "view.front"};
 };
@@ -64,6 +71,16 @@ constexpr float kSpaceMouseTurnRate = 2.0f;  // radians
 constexpr float kSpaceMousePanRate = 1.0f;   // viewport heights
 constexpr float kSpaceMouseZoomRate = 6.0f;  // Camera::zoom steps (x0.46 of the distance)
 constexpr float kSpaceMouseMaxStep = 0.1f;   // seconds: a stalled frame doesn't throw the view
+
+// A SpaceMouse driver that doesn't know the app (3DxWare's defaults) scrolls the wheel and moves the system pointer
+// from the cap's first stir, well inside our dead zone, and its last scroll events may come just after the cap is
+// let go: a slow tilt zoomed the view away (fenix, Discord 11-06). The cap counts as stirred past half the dead
+// zone (a cap that rests a little off centre has its dead zone raised, so its own noise never counts): pointer and
+// wheel events from anything but the pen are the driver's echo meanwhile, the wheel also for this long after.
+// Short: a real wheel turned this soon after the cap is dropped too (SDL gives the driver's scroll and the mouse's the
+// same id). Longer only if a real driver's scroll is seen to go on after the cap rests.
+constexpr float kSpaceMouseEchoHold = 0.3f; // seconds
+bool spaceMouseStirred(const std::array<float, kSmAxes>& axes, const SpaceMouseSettings& s);
 
 // An axis value (-1 .. 1) after the dead zone: 0 inside it, rescaled so the rest of the travel still reaches 1.
 float spaceMouseDeadZone(float value, float deadZone);

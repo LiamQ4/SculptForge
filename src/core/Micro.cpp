@@ -5,6 +5,8 @@
 // shading, baking down and displacement maps. The brushes are in MicroSculpt.cpp, the commands in
 // MicroCommands.cpp.
 #include "core/Micro.h"
+#include "core/AtomicRef.h"
+#include "core/FocusDetail.h"
 
 #include "core/BakeImage.h"
 #include "core/BVH.h"
@@ -14,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -73,6 +76,8 @@ int MicroMesh::widen(float need) {
     rangeMax = uint16_t(std::min(int(rangeMax) / div + 1, 32767));
     step *= float(div);
     rescaled = true;
+    reach.all = true;
+    if (focus) focus->rescale(*this, doublings); // (the tiles not in disp: core/FocusDetail.h)
     ++revision;
     return div;
 }
@@ -192,7 +197,12 @@ bool microMatches(const Mesh& m) {
 }
 
 MicroMesh& mutableMicro(Mesh& m) {
-    if (m.micro.use_count() > 1) m.micro = std::make_shared<MicroMesh>(*m.micro);
+    if (m.micro.use_count() > 1) {
+        std::shared_ptr<MicroMesh> kept = m.micro;
+        if (kept->focus) kept->focus->ensureAllFull(*kept, false); // the copy left behind stands alone: every tile full,
+        m.micro = std::make_shared<MicroMesh>(*kept);
+        kept->focus.reset(); // and the stream goes on with this Mesh
+    }
     return *m.micro;
 }
 
@@ -293,6 +303,24 @@ float triangleBulge(const MicroTriangle& T) {
 
 } // namespace
 
+void microRaiseBulge(Mesh& m) {
+    if (!m.micro) return;
+    MicroMesh& mm = *m.micro;
+    const uint32_t nt = mm.baseTriangles, n = mm.n;
+    const size_t block = 1 << 14;
+    std::vector<float> bulge((nt + block - 1) / block, 0.0f);
+    poolFor(nt, [&](size_t b, size_t e) {
+        MicroTriangle T;
+        float g = 0.0f;
+        for (size_t t = b; t < e; ++t) {
+            T.set(m, uint32_t(t), n);
+            g = std::max(g, triangleBulge(T));
+        }
+        bulge[b / block] = g;
+    }, block);
+    for (float g : bulge) mm.bulgeMax = std::max(mm.bulgeMax, g);
+}
+
 bool microWantsOutOfCore(size_t points) {
     if (const char* e = std::getenv("SF_MICRO_OUT_OF_CORE"); e && *e) return std::string(e) == "1";
     if (const size_t limit = currentTierConfig().outOfCorePoints) return points > limit;
@@ -322,8 +350,12 @@ bool microDivide(Mesh& m, int level, std::string& error, int outOfCore) {
         error = "Go to the highest subdivision level first: the micro level goes on top of it";
         return false;
     }
-    if (!m.zspheres.empty()) {
+    if (!m.forgespheres.empty()) {
         error = "Forge Sphere Parts can't have a micro level (make an adaptive skin first)";
+        return false;
+    }
+    if (!m.tube.empty()) {
+        error = "Tube Parts can't have a micro level (Bake the tube first)";
         return false;
     }
     if (!m.layers.empty()) {
@@ -385,7 +417,7 @@ bool microDivide(Mesh& m, int level, std::string& error, int outOfCore) {
     // level 4). Brushes widen the range when they need more (MicroStroke).
     mm->step = std::max(avgEdge / 4096.0f, 1e-12f);
     mm->serial = MicroMesh::newSerial();
-    mm->allDirty = true;
+    mm->markAllDirty();
     m.micro = std::move(mm);
     m.topologyDirty = true; // the renderer draws it differently
     return true;
@@ -442,7 +474,7 @@ bool microAttach(Mesh& m, int level, float step, MicroStore disp, std::vector<ui
     for (uint16_t r : mm->triRange) mm->rangeMax = std::max(mm->rangeMax, r);
     mm->ensureTopology(m);
     mm->serial = MicroMesh::newSerial();
-    mm->allDirty = true;
+    mm->markAllDirty();
     m.micro = std::move(mm);
     m.topologyDirty = true;
     return true;
@@ -477,14 +509,97 @@ bool rayTriangle(const glm::vec3& o, const glm::vec3& d, const glm::vec3& a, con
 
 } // namespace
 
+namespace {
+
+// Brings m's Reach up to date with `bvh` (call with reach.lock held): a full pass when the BVH, the step or
+// everything changed, else the triangles marked since raise their leaves and ancestors.
+void syncReach(const Mesh& m, const BVH& bvh) {
+    const MicroMesh& mm = *m.micro;
+    MicroMesh::Reach& r = mm.reach;
+    const size_t words = (size_t(mm.baseTriangles) + 63) / 64;
+    const bool full = r.all || r.bvh != &bvh || r.structure != bvh.structureSerial() || r.step != mm.step ||
+                      r.pad.size() != bvh.nodeCount() || r.bits.size() != words;
+    if (full) {
+        r.bvh = &bvh, r.structure = bvh.structureSerial(), r.step = mm.step, r.all = false;
+        r.bits.assign(words, 0);
+        const size_t nodes = bvh.nodeCount();
+        r.pad.assign(nodes, 0.0f);
+        poolFor(nodes, [&](size_t b, size_t e) {
+            for (size_t i = b; i < e; ++i) {
+                uint16_t most = 0;
+                for (uint32_t t : bvh.leafTriangles(uint32_t(i)))
+                    if (t < mm.triRange.size()) most = std::max(most, mm.triRange[t]);
+                r.pad[i] = float(most) * mm.step;
+            }
+        }, 1 << 12);
+        for (size_t i = nodes; i-- > 0;)
+            if (bvh.isInner(uint32_t(i))) {
+                const uint32_t c = bvh.leftChild(uint32_t(i));
+                r.pad[i] = std::max(r.pad[c], r.pad[c + 1]);
+            }
+        return;
+    }
+    for (size_t w = 0; w < words; ++w) {
+        if (!r.bits[w]) continue;
+        const uint64_t bits = AtomicRef<uint64_t>(r.bits[w]).exchange(0);
+        for (uint64_t b = bits; b; b &= b - 1) {
+            const uint32_t t = uint32_t(w * 64 + size_t(std::countr_zero(b)));
+            const float v = float(mm.triRange[t]) * mm.step;
+            for (uint32_t node = bvh.leafOf(t); node != ~0u && r.pad[node] < v; node = bvh.parentOf(node)) {
+                r.pad[node] = v;
+                if (node == 0) break;
+            }
+        }
+    }
+}
+
+} // namespace
+
+void microQueryTriangles(const Mesh& m, const BVH& bvh, const glm::vec3& center, float radius, std::vector<uint32_t>& out) {
+    const MicroMesh& mm = *m.micro;
+    std::lock_guard<std::mutex> hold(mm.reach.lock);
+    syncReach(m, bvh);
+    bvh.queryTrianglesPadded(m, center, radius, mm.reach.pad, mm.bulgeMax, out);
+}
+
+bool microMaskNear(const Mesh& m, const BVH& bvh, const glm::vec3& center, float radius) {
+    if (!m.micro || (!m.micro->hasMask() && !m.hasMask())) return false;
+    const MicroMesh& mm = *m.micro;
+    std::vector<uint32_t> tris;
+    microQueryTriangles(m, bvh, center, radius + 2.0f * mm.baseEdge, tris);
+    for (uint32_t t : tris) {
+        if (mm.hasMask()) {
+            const uint8_t* k = mm.mask.data() + size_t(t) * mm.samples;
+            if (std::any_of(k, k + mm.samples, [](uint8_t v) { return v != 0; })) return true;
+        }
+        if (m.hasMask()) {
+            const glm::uvec3 tr = m.triangles[t];
+            if (m.maskAt(tr.x) > 0.0f || m.maskAt(tr.y) > 0.0f || m.maskAt(tr.z) > 0.0f) return true;
+        }
+    }
+    return false;
+}
+
+void microRayTriangles(const Mesh& m, const BVH& bvh, const glm::vec3& origin, const glm::vec3& dir, std::vector<uint32_t>& out) {
+    const MicroMesh& mm = *m.micro;
+    std::lock_guard<std::mutex> hold(mm.reach.lock);
+    syncReach(m, bvh);
+    bvh.rayTrianglesPadded(m, origin, dir, mm.reach.pad, mm.bulgeMax, out);
+}
+
 bool microRaycast(const Mesh& m, const BVH& bvh, const glm::vec3& origin, const glm::vec3& dir, RayHit& hit) {
     if (!microMatches(m)) return bvh.raycast(m, origin, dir, hit);
     const MicroMesh& mm = *m.micro;
     RayHit base;
     if (!bvh.raycast(m, origin, dir, base)) return false;
-    const float reach = mm.bulgeMax + float(mm.rangeMax) * mm.step;
     std::vector<uint32_t> cand;
-    bvh.queryTriangles(m, base.position, 2.0f * reach + 1e-7f, cand);
+    const auto traceStart = std::chrono::steady_clock::now();
+    microRayTriangles(m, bvh, origin, dir, cand);
+    static const bool trace = [] { const char* e = std::getenv("SF_MICRO_TRACE"); return e && e[0] == '1'; }();
+    if (trace)
+        std::fprintf(stderr, "micropick %zu candidates in %.1f ms (pad root %.4f, bulgeMax %.4f)\n", cand.size(),
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - traceStart).count(),
+                     mm.reach.pad.empty() ? 0.0 : double(mm.reach.pad[0]), double(mm.bulgeMax));
     // Only the triangles whose own reach (their bulge and displacement range) the ray passes through.
     const glm::vec3 inv(1.0f / (std::abs(dir.x) > 1e-20f ? dir.x : 1e-20f), 1.0f / (std::abs(dir.y) > 1e-20f ? dir.y : 1e-20f),
                         1.0f / (std::abs(dir.z) > 1e-20f ? dir.z : 1e-20f));
@@ -604,10 +719,11 @@ uint32_t encodeShade(glm::vec3 nrm, float curvature, uint8_t mask) {
             e = glm::vec2((1.0f - std::abs(nrm.y)) * (nrm.x >= 0.0f ? 1.0f : -1.0f),
                           (1.0f - std::abs(nrm.x)) * (nrm.y >= 0.0f ? 1.0f : -1.0f));
     }
-    auto q = [](float v) { return uint32_t(std::clamp(std::lround((v * 0.5f + 0.5f) * 255.0f), 0L, 255L)); };
+    // (rounding by +0.5 and truncation: the values are >= 0 there, and lround costs more than the rest of a point)
+    auto q = [](float v) { return uint32_t(std::clamp((v * 0.5f + 0.5f) * 255.0f + 0.5f, 0.0f, 255.0f)); };
     const float c = std::clamp(curvature, -1.0f, 1.0f);
     const float s = (c >= 0.0f ? 1.0f : -1.0f) * std::sqrt(std::abs(c));
-    const uint32_t cq = uint32_t(std::clamp(std::lround(s * 127.0f) + 128L, 1L, 255L));
+    const uint32_t cq = uint32_t(std::clamp(s * 127.0f + 128.5f, 1.0f, 255.0f));
     return q(e.x) | q(e.y) << 8 | cq << 16 | uint32_t(mask) << 24;
 }
 
@@ -636,35 +752,81 @@ struct GridWork {
             const uint32_t row = MicroMesh::index(0, j, n), next = MicroMesh::index(0, j + 1, n);
             for (uint32_t i = 0; i + j < n; ++i) {
                 const uint32_t a = row + i, b = row + i + 1, c = next + i;
-                const glm::vec3 f = glm::cross(pos[b] - pos[a], pos[c] - pos[a]);
-                nsum[a] += f, nsum[b] += f, nsum[c] += f;
-                // the lattice edges a-b, a-c, b-c (each once: every edge belongs to one upward triangle)
-                const float da = g[a], db = g[b], dc = g[c];
-                dsum[a] += db + dc, dsum[b] += da + dc, dsum[c] += da + db;
-                cnt[a] += 2.0f, cnt[b] += 2.0f, cnt[c] += 2.0f;
-                if (i + j + 1 < n) {
-                    const uint32_t d = next + i + 1;
-                    const glm::vec3 f2 = glm::cross(pos[d] - pos[b], pos[c] - pos[b]);
-                    nsum[b] += f2, nsum[d] += f2, nsum[c] += f2;
-                }
+                face(a, b, c, g, true);
+                if (i + j + 1 < n) face(b, next + i + 1, c, g, false);
             }
         }
+    }
+    // The sums at some edge points only (a triangle of the outer ring: the points it shares with the ones written):
+    // edges e (bit e: its points between the corners) and corners c (bit 3 + c). The micro triangles touching
+    // them alone, added in the same order as compute(), so those sums come out bit-identical to a whole grid's
+    // at a fraction of its cost.
+    void computePart(const Mesh& m, const MicroMesh& mm, uint32_t tri, unsigned parts) {
+        const uint32_t n = mm.n, S = mm.samples;
+        pos.resize(S);
+        nsum.resize(S);
+        dsum.resize(S);
+        cnt.resize(S);
+        need.assign(S, 0);
+        for (int e = 0; e < 3; ++e) {
+            uint32_t i, j;
+            if (parts & (8u << e)) MicroMesh::edgePoint(e, 0, n, i, j), need[MicroMesh::index(i, j, n)] = 1;
+            if (parts & (1u << e))
+                for (uint32_t k = 1; k < n; ++k) MicroMesh::edgePoint(e, k, n, i, j), need[MicroMesh::index(i, j, n)] = 1;
+        }
+        MicroTriangle T;
+        T.set(m, tri, n);
+        const int16_t* g = mm.disp.data() + size_t(tri) * S;
+        auto at = [&](uint32_t i, uint32_t j) { // (each point once, the first time a triangle needs it)
+            const uint32_t idx = MicroMesh::index(i, j, n);
+            if (need[idx] & 2) return idx;
+            need[idx] |= 2;
+            glm::vec3 s, nn;
+            T.eval(i, j, s, nn);
+            pos[idx] = s + nn * (float(g[idx]) * mm.step);
+            nsum[idx] = glm::vec3(0.0f), dsum[idx] = 0.0f, cnt[idx] = 0.0f; // (the others aren't read)
+            return idx;
+        };
+        // (the micro triangles that can touch an edge: row 0, and the first and the last two of every other row)
+        for (uint32_t j = 0; j < n; ++j) {
+            const uint32_t row = MicroMesh::index(0, j, n), next = MicroMesh::index(0, j + 1, n), last = n - j;
+            for (uint32_t i = 0; i < last; i = j == 0 || i + 3 >= last ? i + 1 : last - 2) {
+                const uint32_t a = row + i, b = row + i + 1, c = next + i;
+                if ((need[a] | need[b] | need[c]) & 1) face(at(i, j), at(i + 1, j), at(i, j + 1), g, true);
+                if (i + j + 1 < n && ((need[b] | need[next + i + 1] | need[c]) & 1)) face(at(i + 1, j), at(i + 1, j + 1), at(i, j + 1), g, false);
+            }
+        }
+    }
+
+private:
+    std::vector<uint8_t> need; // computePart: 1 = a wanted sum, 2 = its position computed
+    // Micro triangle a b c (counter-clockwise) into the sums of its corners; `up` also adds its lattice edges a-b,
+    // a-c, b-c (each once: every edge belongs to one upward triangle).
+    void face(uint32_t a, uint32_t b, uint32_t c, const int16_t* g, bool up) {
+        const glm::vec3 f = glm::cross(pos[b] - pos[a], pos[c] - pos[a]);
+        nsum[a] += f, nsum[b] += f, nsum[c] += f;
+        if (!up) return;
+        const float da = g[a], db = g[b], dc = g[c];
+        dsum[a] += db + dc, dsum[b] += da + dc, dsum[c] += da + db;
+        cnt[a] += 2.0f, cnt[b] += 2.0f, cnt[c] += 2.0f;
     }
 };
 
 } // namespace
 
 void MicroShader::shade(const Mesh& m, std::span<const uint32_t> dirty, bool all, std::vector<uint32_t>& written,
-                        const std::function<uint32_t*(uint32_t tri)>& out, const Prepare& prepare) {
+                        const std::function<uint32_t*(uint32_t tri)>& out, const Prepare& prepare, bool grow,
+                        std::vector<uint32_t>* outer) {
     written.clear();
-    if (!m.micro) return;
+    if (outer) outer->clear();
+    if (!m.micro && !level_) return;
     if (!all) {
-        shadeSet(m, dirty, true, written, out, prepare);
+        shadeSet(m, dirty, grow, written, out, prepare, grow ? nullptr : outer);
         return;
     }
     // Everything: in runs of triangles (neighbours by index on levels made by Divide), each with the ring its
     // shared points need, so the edge sums stay a few MB instead of 20 bytes per edge point of the whole mesh.
-    const uint32_t nt = m.micro->baseTriangles;
+    const uint32_t nt = (level_ ? level_ : m.micro.get())->baseTriangles;
     constexpr uint32_t kRun = 1u << 16;
     std::vector<uint32_t> run;
     for (uint32_t b = 0; b < nt; b += kRun) {
@@ -674,9 +836,16 @@ void MicroShader::shade(const Mesh& m, std::span<const uint32_t> dirty, bool all
     }
 }
 
+void MicroShader::shadeLevel(const Mesh& base, const MicroMesh& level, std::span<const uint32_t> dirty, bool all,
+                             std::vector<uint32_t>& written, const std::function<uint32_t*(uint32_t tri)>& out, bool grow) {
+    level_ = &level;
+    shade(base, dirty, all, written, out, {}, grow);
+    level_ = nullptr;
+}
+
 void MicroShader::shadeSet(const Mesh& m, std::span<const uint32_t> dirty, bool grow, std::vector<uint32_t>& written,
-                           const std::function<uint32_t*(uint32_t tri)>& out, const Prepare& prepare) {
-    const MicroMesh& mm = *m.micro;
+                           const std::function<uint32_t*(uint32_t tri)>& out, const Prepare& prepare, std::vector<uint32_t>* outer) {
+    const MicroMesh& mm = level_ ? *level_ : *m.micro;
     const uint32_t n = mm.n, S = mm.samples, nt = mm.baseTriangles;
     if (mm.edgeNeighbor.size() != size_t(nt) * 3) return; // (ensureTopology first)
     if (stamp_.size() != nt) {
@@ -721,6 +890,7 @@ void MicroShader::shadeSet(const Mesh& m, std::span<const uint32_t> dirty, bool 
     }
     const uint32_t v2 = ++epoch_;
     vertexRing(ring_, ring2_, inR2, v2);
+    if (outer) outer->insert(outer->end(), ring2_.begin(), ring2_.end());
     for (size_t i = 0; i < ring_.size(); ++i) slot_[ring_[i]] = uint32_t(i);
     for (size_t i = 0; i < ring2_.size(); ++i) slot_[ring2_[i]] = uint32_t(ring_.size() + i);
     if (prepare) prepare(ring_);
@@ -735,17 +905,25 @@ void MicroShader::shadeSet(const Mesh& m, std::span<const uint32_t> dirty, bool 
         return std::max(e / (3.0f * float(n)), 1e-20f);
     };
     auto finish = [&](const glm::vec3& ns, float ds, float c, float d, float h, uint8_t mk) {
-        const float len = glm::length(ns);
-        const glm::vec3 nn = len > 0.0f ? ns / len : glm::vec3(0.0f, 0.0f, 1.0f);
         const float curv = c > 0.0f ? (ds / c - d) * mm.step / h : 0.0f;
-        return encodeShade(nn, curv, mk);
+        return encodeShade(ns, curv, mk); // (unnormalized: the encoding divides by its L1 length; zero = +z either way)
     };
     // Phase 1: every R2 triangle's edge partials; R triangles' interior points written.
     poolFor(slots, [&](size_t b, size_t e) {
         thread_local GridWork w;
         for (size_t s = b; s < e; ++s) {
             const uint32_t tri = tileOf(s);
-            w.compute(m, mm, tri);
+            if (s < ring_.size()) {
+                w.compute(m, mm, tri);
+            } else { // the outer ring: the sums at the points it shares with R (whose vertices are marked v2)
+                const glm::uvec3 tv = m.triangles[tri];
+                unsigned parts = 0;
+                for (int k = 0; k < 3; ++k) {
+                    const bool here = vstamp_[tv[k]] == v2, next = vstamp_[tv[(k + 1) % 3]] == v2;
+                    parts |= (here ? 8u << k : 0u) | (here && next ? 1u << k : 0u);
+                }
+                w.computePart(m, mm, tri, parts);
+            }
             float* part = partial_.data() + s * edgePoints * kPartialFloats;
             for (int ed = 0; ed < 3; ++ed)
                 for (uint32_t k = 0; k < n; ++k) {
@@ -834,7 +1012,7 @@ void MicroUndo::swapWith(Mesh& m) {
     if (swapWhole) {
         std::swap(m.micro, whole);
         if (m.micro) {
-            m.micro->allDirty = true;
+            m.micro->markAllDirty();
             m.micro->ensureTopology(m);
             if (m.micro->dirtyBits.size() != (size_t(m.micro->baseTriangles) + 63) / 64)
                 m.micro->dirtyBits.assign((size_t(m.micro->baseTriangles) + 63) / 64, 0);
@@ -844,6 +1022,7 @@ void MicroUndo::swapWith(Mesh& m) {
     }
     if (!m.micro || !microMatches(m) || m.micro->samples != samples) return;
     MicroMesh& mm = mutableMicro(m);
+    if (mm.focus) mm.focus->ensureFull(mm, tris, true); // (undo writes full tiles only)
     const size_t S = samples;
     // Values kept in another step size (the range grew since): convert to the current one.
     if (!journal && step != mm.step && step > 0.0f) {
@@ -941,6 +1120,7 @@ bool microBakeMesh(const Mesh& m, int level, Mesh& out, std::string& error, size
         error = "This Part has no micro level";
         return false;
     }
+    if (m.micro->focus) m.micro->focus->ensureAllFull(*m.micro, false); // (streamed: every tile at full detail)
     const MicroMesh& mm = *m.micro;
     if (level < 0 || level > mm.level) level = mm.level;
     if (mm.edgeNeighbor.size() != size_t(mm.baseTriangles) * 3) {
@@ -983,9 +1163,9 @@ bool microBakeMesh(const Mesh& m, int level, Mesh& out, std::string& error, size
     out = Mesh();
     out.positions.resize(verts);
     out.triangles.resize(tris);
-    const bool uvs = m.hasUvs(), groups = m.hasPolygroups(), hidden = m.hasHidden(), masked = mm.hasMask();
+    const bool uvs = m.hasUvs(), groups = m.hasFaceGroups(), hidden = m.hasHidden(), masked = mm.hasMask();
     if (uvs) out.uvs.resize(tris * 3);
-    if (groups) out.polygroups.resize(tris);
+    if (groups) out.facegroups.resize(tris);
     if (hidden) out.hidden.resize(tris);
     if (masked) out.mask.assign(verts, 0.0f);
     // The vertex of grid point (a, b) (bake level) of triangle t.
@@ -1052,7 +1232,7 @@ bool microBakeMesh(const Mesh& m, int level, Mesh& out, std::string& error, size
                     }
                 }
             for (size_t k = first; k < o; ++k) {
-                if (groups) out.polygroups[k] = m.polygroups[t];
+                if (groups) out.facegroups[k] = m.facegroups[t];
                 if (hidden) out.hidden[k] = m.hidden[t];
             }
         }
@@ -1078,6 +1258,7 @@ bool microExportDisplacement(const Mesh& m, const std::string& path, int size, b
         error = "Displacement maps need UVs on the base (Tool > UV Map, at the lowest level)";
         return false;
     }
+    if (m.micro->focus) m.micro->focus->ensureAllFull(*m.micro, false); // (streamed: every tile at full detail)
     if (size < 16 || size > 16384) {
         error = "Map size must be 16 to 16384";
         return false;
@@ -1205,6 +1386,7 @@ void microNoise(Mesh& m, float amplitude, float frequency, uint32_t seed) {
     if (!m.micro) return;
     MicroMesh& mm = mutableMicro(m);
     mm.ensureTopology(m);
+    if (mm.focus) mm.focus->ensureAllFull(mm, true);
     mm.widen(float(mm.rangeMax) * mm.step + std::abs(amplitude) * 1.5f);
     const uint32_t n = mm.n, S = mm.samples;
     poolFor(mm.baseTriangles, [&](size_t b0, size_t e0) {
@@ -1235,7 +1417,7 @@ void microNoise(Mesh& m, float amplitude, float frequency, uint32_t seed) {
         }
     }, 256);
     for (uint16_t r : mm.triRange) mm.rangeMax = std::max(mm.rangeMax, r);
-    mm.allDirty = true;
+    mm.markAllDirty();
     ++mm.revision;
 }
 

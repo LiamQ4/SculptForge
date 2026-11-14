@@ -3,11 +3,12 @@
 #include "render/Renderer.h"
 #include "render/MicroRenderer.h"
 
-#include "core/Matcap.h"
+#include "core/LitSphere.h"
 #include "core/Tangents.h"
 #include "core/Texture.h"
 #include "core/TextureChannels.h"
 #include "core/ThreadPool.h"
+#include "core/HardwareProfile.h"
 #include "core/TierConfig.h"
 #include "core/UploadOrder.h"
 
@@ -19,7 +20,10 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <cmath>
 #include <thread>
+#include <unordered_map>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <vector>
@@ -30,7 +34,7 @@ namespace {
 
 // Mesh vertices are PackedVertex (render/Clusters.h): the position on the slot's grid (21 bits per axis in two
 // words), an octahedral normal and the (companded) curvature in a third. Decoded here exactly as Clusters.cpp does.
-// Compiled per feature set: PAINT (polypaint colour and mask attributes), PRIM (per-triangle data: the first
+// Compiled per feature set: PAINT (vertex paint colour and mask attributes), PRIM (per-triangle data: the first
 // drawn triangle of the vertex's cluster, from a per-block table indexed by gl_VertexID, or uPrimBase when the
 // clusters are drawn one by one), TEXTURED and NORMALMAP (with a geometry shader, below), and FLAT (flat
 // shading: the view-space position goes along, so the fragment shader takes each triangle's own normal from it).
@@ -38,7 +42,7 @@ const char* kMeshVS = R"(
 layout(location = 0) in uvec2 aPos;
 layout(location = 1) in uint aNormal;
 #ifdef PAINT
-layout(location = 2) in vec4 aColor; // polypaint, gamma 2.2 encoded (constant white when the mesh has none)
+layout(location = 2) in vec4 aColor; // vertex paint, gamma 2.2 encoded (constant white when the mesh has none)
 layout(location = 3) in float aMask; // constant 0 when the mesh has no mask
 out vec4 vPaint;                     // linear colour, mask
 #endif
@@ -69,13 +73,15 @@ vec3 decodeNormal(uint a) {
 uniform vec4 uGhostA[64];    // centre, radius
 uniform vec4 uGhostB[64];    // area normal, strength x pressure
 uniform vec4 uGhostC[64];    // area centre, weight
+uniform vec4 uGhostD[64];    // Clay Block: the square tip's top edge (0: round)
 uniform int uGhostGroups;    // runs of dabs (one per mirror), each with a sphere holding its dabs
 uniform vec4 uGhostBound[8];
 uniform ivec2 uGhostRange[8]; // [first, end) of each run
 uniform ivec2 uGhostKind;    // kernel (sf::GhostKind), inverted
 uniform float uGhostFocal;
 uniform float uGhostEdge;    // the mesh's edge length under the brush (the cavity term's scale)
-// The falloff and its first two derivatives in the distance (brushFalloff with Focal Shift).
+vec3 ghostStart;             // the vertex as uploaded (Live Move measures its falloff there)
+// The falloff and its first two derivatives in the distance (brushFalloff with Falloff).
 vec3 ghostFalloff(float d, float r) {
     float u = clamp(1.0 - d / r, 0.0, 1.0);
     if (u <= 0.0) return vec3(0.0);
@@ -86,6 +92,8 @@ vec3 ghostFalloff(float d, float r) {
     return vec3(t * t * (3.0 - 2.0 * t), 6.0 * t * (1.0 - t) * dt, (6.0 - 12.0 * t) * dt * dt + 6.0 * t * (1.0 - t) * ddt);
 }
 vec3 onPlane(vec3 v, vec3 n) { return v - n * dot(v, n); }
+// How far a Clay / Clay Block dab pulls (sf::clayPull, core/Sculpt.h): all the way from Intensity 0.5 up, less below.
+float clayPull(float s) { return s >= 0.5 ? 1.0 : 2.0 * max(s, 0.0); }
 // Moves x as the dabs [first, end) would, and follows what the moves do to the surface seen as a height field
 // over the vertex's tangent plane (normal n): the height's gradient g (in that plane) and its Laplacian lap
 // (forward differentiation of each kernel's height change; lateral moves don't count). The shading normal is
@@ -96,8 +104,8 @@ vec3 ghostMove(vec3 x, vec3 n, int first, int end, inout vec3 g, inout float lap
     for (int i = first; i < end; ++i) {
         vec3 c = uGhostA[i].xyz;
         float r = uGhostA[i].w;
-        float dist = length(x - c);
-        if (dist >= r) continue;
+        float dist = length((kind == 10 ? ghostStart : x) - c);
+        if (dist >= (kind == 4 ? 1.3 * r : r)) continue; // (Clay Block's square corners reach 1.3 radii)
         float w = uGhostC[i].w;
         vec3 F = ghostFalloff(dist, r) * w; // f, f', f'' in the distance
         float f = F.x;
@@ -117,13 +125,26 @@ vec3 ghostMove(vec3 x, vec3 n, int first, int end, inout vec3 g, inout float lap
             x += (kind == 1 ? an : n) * (a * f);
             g += radial * (k * a * F.y);
             lap += k * a * radialLap;
-        } else if (kind == 3 || kind == 4) { // Clay, Clay Buildup: everything below a plane pulled up to it
-            float h = dot(x - (ac + an * (sgn * r * (kind == 3 ? 0.05 : 0.08) * s)), an);
+        } else if (kind == 3 || kind == 4) { // Clay, Clay Block: everything below a plane pulled up to it
+            float standoff = r * (kind == 3 ? 0.05 : 0.08) * s, lift = standoff, pull = clayPull(s);
+            if (kind == 3) { // (PlaneKernel::clayPlaneAt: the plane reaches the cursor, the pull shrinks by how much higher that is)
+                lift = max(standoff, sgn * dot(c - ac, an));
+                if (lift > 1e-12) pull *= standoff / lift;
+            }
+            float h = dot(x - (ac + an * (sgn * lift)), an);
             if (sgn * h < 0.0) {
-                vec3 W = F; // the pull's profile and its derivatives
+                vec3 W = F * pull; // the pull's profile and its derivatives
                 if (kind == 4) {
-                    float e = clamp((1.0 - dist / r) / 0.35, 0.0, 1.0), de = e > 0.0 && e < 1.0 ? -1.0 / (0.35 * r) : 0.0;
-                    W = vec3(e * e * (3.0 - 2.0 * e), 6.0 * e * (1.0 - e) * de, (6.0 - 12.0 * e) * de * de) * w;
+                    // (the round tip, its edge measured in the brush's plane, the corners in space: Ghost.cpp)
+                    float lat = length(onPlane(x - c, an));
+                    vec3 tipUp = onPlane(uGhostD[i].xyz, an);
+                    if (dot(tipUp, tipUp) > 1e-12) {
+                        tipUp = normalize(tipUp);
+                        lat = max(abs(dot(x - c, tipUp)), abs(dot(x - c, cross(tipUp, an))));
+                    }
+                    float e = clamp((1.0 - lat / r) / 0.35, 0.0, 1.0), de = e > 0.0 && e < 1.0 ? -1.0 / (0.35 * r) : 0.0;
+                    float corner = clamp((1.3 - dist / r) / 0.3, 0.0, 1.0);
+                    W = vec3(e * e * (3.0 - 2.0 * e), 6.0 * e * (1.0 - e) * de, (6.0 - 12.0 * e) * de * de) * (w * pull * corner);
                 }
                 x -= an * (h * W.x);
                 lap -= cn * (2.0 * W.y * dot(radial, dh) + W.x * cn * lap + h * (W.z + W.y * inv));
@@ -142,12 +163,17 @@ vec3 ghostMove(vec3 x, vec3 n, int first, int end, inout vec3 g, inout float lap
             lap += cn * a * (2.0 * (F.y * F.y + f * F.z) + 2.0 * f * F.y * inv);
         } else if (kind == 7) { // Pinch: sideways only
             x += onPlane(c - x, an) * (sgn * 0.2 * s * f);
-        } else if (kind == 8) { // Dam Standard: f^4, the sides pinched in
+        } else if (kind == 8) { // Sharp Crease: f^4, the sides pinched in
             float a = -sgn * s * r * 0.08;
             float f3 = f * f * f;
             x += an * (a * f3 * f) + onPlane(c - x, an) * (0.3 * s * f);
             g += radial * (cn * a * 4.0 * f3 * F.y);
             lap += cn * a * (12.0 * f * f * F.y * F.y + 4.0 * f3 * F.z + 4.0 * f3 * F.y * inv);
+        } else if (kind == 10) { // Live Move: x0 + d w(x0) (dist from x0), normals by the inverse transpose
+            vec3 gw = (ghostStart - c) * (s * F.y * inv);
+            x += an * (s * f);
+            g += gw * (cn / max(1.0 + dot(gw, an), 1e-3));
+            lap += cn * s * radialLap; // (the height change along the normal, as Standard's)
         } else if (kind == 9) { // Trim: what sticks out above a plane cut off
             float h = dot(x - (ac - an * (sgn * r * 0.02 * s)), an);
             if (sgn * h > 0.0) {
@@ -171,8 +197,9 @@ void main() {
 #ifdef GHOST
     // The moved position, normal and cavity term (one evaluation per vertex, no extra varyings: a tiled GPU
     // writes every vertex's outputs to memory and reads them back).
+    ghostStart = world;
     for (int k = 0; k < uGhostGroups; ++k) {
-        if (distance(world, uGhostBound[k].xyz) >= uGhostBound[k].w) continue;
+        if (distance(uGhostKind.x == 10 ? ghostStart : world, uGhostBound[k].xyz) >= uGhostBound[k].w) continue;
         vec3 g = vec3(0.0);
         float lap = 0.0;
         world = ghostMove(world, normal, uGhostRange[k].x, uGhostRange[k].y, g, lap);
@@ -310,14 +337,29 @@ flat in int vPrimBase;
 // Micro-displacement levels (render/MicroRenderer.cpp): the full-resolution shading grid of the base triangle,
 // interpolated on the micro triangle under the pixel (normal, curvature, mask), whatever level the geometry drew.
 flat in int vSlot;
+flat in int vEdges;
 in vec2 vIJ;
 uniform samplerBuffer uShade;
 uniform int uN;
 uniform int uSamples;
 uniform mat4 uView;
+uniform int uMicroWire; // 1: the wireframe of the base (the level below the micro level) on the micro surface
 vec4 gNC;
 float gMask;
+float gWire = 0.0;
+#ifdef FOCUS
+// A streamed level (Focus Detail, render/MicroFocus.h; its own program, so levels in memory run the plain shader)
+flat in int vPage; // the page with the full shading grid (-1: uShade holds the coarse one)
+uniform samplerBuffer uPoolShade;
+uniform int uCN, uCSamples;
+bool gCoarse = false;
+vec4 shadeAt(int i, int j) {
+    if (gCoarse) return texelFetch(uShade, vSlot * uCSamples + j * (uCN + 1) - (j * (j - 1)) / 2 + i);
+    return texelFetch(uPoolShade, vPage * uSamples + j * (uN + 1) - (j * (j - 1)) / 2 + i);
+}
+#else
 vec4 shadeAt(int i, int j) { return texelFetch(uShade, vSlot * uSamples + j * (uN + 1) - (j * (j - 1)) / 2 + i); }
+#endif
 vec3 octNormal(vec2 v) {
     vec2 e = v * 2.0 - 1.0;
     vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
@@ -327,16 +369,25 @@ vec3 octNormal(vec2 v) {
     return normalize(n);
 }
 void microFetch() {
-    float fi = clamp(vIJ.x, 0.0, float(uN)), fj = clamp(vIJ.y, 0.0, float(uN));
-    int i0 = min(int(fi), uN - 1), j0 = min(int(fj), uN - 1);
-    if (i0 + j0 > uN - 1) {
-        if (fi >= fj) i0 = uN - 1 - j0;
-        else j0 = uN - 1 - i0;
+#ifdef FOCUS
+    // (a tile without its full shading interpolates the coarse grid's, gn segments)
+    gCoarse = vPage < 0;
+    int gn = gCoarse ? uCN : uN;
+    vec2 gij = gCoarse ? vIJ * (float(uCN) / float(uN)) : vIJ;
+#else
+    int gn = uN;
+    vec2 gij = vIJ;
+#endif
+    float fi = clamp(gij.x, 0.0, float(gn)), fj = clamp(gij.y, 0.0, float(gn));
+    int i0 = min(int(fi), gn - 1), j0 = min(int(fj), gn - 1);
+    if (i0 + j0 > gn - 1) {
+        if (fi >= fj) i0 = gn - 1 - j0;
+        else j0 = gn - 1 - i0;
     }
     float a = fi - float(i0), b = fj - float(j0);
     vec4 s0, s1, s2;
     vec3 w;
-    if (a + b <= 1.0 || i0 + j0 + 2 > uN) {
+    if (a + b <= 1.0 || i0 + j0 + 2 > gn) {
         s0 = shadeAt(i0, j0); s1 = shadeAt(i0 + 1, j0); s2 = shadeAt(i0, j0 + 1);
         w = vec3(1.0 - a - b, a, b);
     } else {
@@ -349,6 +400,16 @@ void microFetch() {
     float c = dot(c3, w);
     gNC = vec4(mat3(uView) * normalize(n), c * abs(c));
     gMask = dot(vec3(s0.w, s1.w, s2.w), w);
+    if (uMicroWire == 1) {
+        // The base triangle's barycentric weights, in pixels from each edge: about a pixel wide line on its edges.
+        vec3 b = vec3(float(uN) - vIJ.x - vIJ.y, vIJ.x, vIJ.y) / float(uN);
+        vec3 px = b / max(fwidth(b), vec3(1e-6));
+        float d = 1e9;
+        if ((vEdges & 1) != 0) d = min(d, px.z); // edge 0: corners 0 -> 1
+        if ((vEdges & 2) != 0) d = min(d, px.x); // edge 1: 1 -> 2
+        if ((vEdges & 4) != 0) d = min(d, px.y); // edge 2: 2 -> 0
+        gWire = 1.0 - smoothstep(0.0, 1.0, d);
+    }
 }
 #define vNormalCurv gNC
 #undef V_MASK
@@ -358,25 +419,44 @@ uniform vec4 uViewport;  // the view's rectangle in window pixels
 uniform vec2 uProjScale; // projection x and y scale
 uniform vec3 uBaseColor;
 uniform int uSilhouette;
+uniform vec3 uTintShift; // the material tint less 1 (0, the default, is no tint): the active colour, no vertex paint
 uniform int uPaint;      // 1: vertex colours replace the base colour
 uniform int uShowMask;   // 1: darken masked areas
+uniform float uMaskDarkness; // RenderSettings::maskDarkness, 0..1
+uniform vec4 uMaskColor;     // RenderSettings::maskColor (linear), w = 1 when the user picked one
 uniform int uGroups;     // 0: off, 1: per-triangle ids from uGroupIds, 2: everything is group 0, 3: per-triangle
                          // colours (0xBBGGRR) from uGroupIds (the UV Editor's overlay)
 uniform usamplerBuffer uGroupIds;
 uniform int uChecker;        // 1: a checker on the UVs (TEXTURED), tinted per UDIM tile
 uniform float uCheckerScale; // checker squares per UV unit
-uniform int uMatcap;          // 1: shade with the matcap texture instead of the studio lights
-uniform sampler2D uMatcapTex; // sRGB-encoded lit sphere (core/Matcap.h)
-uniform vec2 uMatcapCavity;   // crease darkening, ridge lift (sf::matcapCavity)
-uniform int uDim;             // 1: an inactive SubTool, shown a little darker and greyer
+uniform int uUnlit;              // 1: the colour as it is, no lighting (RenderSettings::unlit)
+uniform int uLitSphere;          // 1: shade with the lit sphere texture instead of the studio lights
+uniform sampler2D uLitSphereTex; // sRGB-encoded lit sphere (core/Lit Sphere.h)
+uniform vec2 uLitSphereCavity;   // crease darkening, ridge lift (sf::lit sphereCavity)
+uniform int uDim;             // 1: an inactive Part, shown a little darker and greyer
+uniform mat3 uLightRot;       // turns the light (Lit Sphere and studio) in view space (RenderSettings::lightYaw / Pitch)
+uniform vec2 uLightLevels;    // light intensity, ambient
+uniform float uAlpha;         // X-Ray: the see-through Parts' opacity (1 = opaque)
 uniform int uTwoSided;        // 1: back faces shade with the normal turned towards the viewer; 0: the motion proxy,
                               // whose folds face backwards on the outside of the surface
 out vec4 fragColor;
+// Masked areas: a cool dark tint that keeps the form readable (darkest at 1). The vertex mask is eased so its
+// edge is a soft band rather than a hard, stepped one along the triangles.
+vec3 maskTint(vec3 c, float m) {
+    float k = smoothstep(0.0, 1.0, clamp(m, 0.0, 1.0)) * uMaskDarkness;
+    vec3 tinted = uMaskColor.w > 0.5 ? uMaskColor.rgb : c * vec3(0.20, 0.22, 0.30) + vec3(0.006, 0.008, 0.016);
+    return mix(c, tinted, k);
+}
 vec4 finish(vec3 c) {
     if (uDim == 1) c = mix(c, vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), 0.25) * 0.72;
-    return vec4(pow(c, vec3(1.0 / 2.2)), 1.0);
+    vec3 g = pow(c, vec3(1.0 / 2.2));
+#ifdef MICRO
+    g = mix(g, vec3(0.05, 0.05, 0.08), 0.5775 * gWire); // (the wireframe program's colour and opacity)
+#endif
+    return vec4(g, uAlpha);
 }
-// Keep in sync with sf::polygroupColor.
+)" // (two literals: MSVC stops at ~16K characters a literal, C2026; tools/dev/check_literals.py)
+R"(// Keep in sync with sf::face groupColor.
 vec3 groupColor(uint id) {
     uint h = id * 0x9E3779B1u;
     h ^= h >> 15;
@@ -474,9 +554,9 @@ void main() {
 #ifdef MICRO
     microFetch();
 #endif
-    vec3 albedo = uBaseColor;
     if (uSilhouette != 0) { fragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-    vec3 tint = vec3(1.0); // multiplies a matcap: polypaint or polygroup colours
+    vec3 tint = vec3(1.0) + uTintShift; // multiplies a lit sphere: vertex paint or face group colours, or the active colour
+    vec3 albedo = uBaseColor * tint;
 #ifdef PRIM
     if (uGroups == 3) albedo = tint = faceColor(texelFetch(uGroupIds, vPrimBase + gl_PrimitiveID).r);
     else if (uGroups == 1) albedo = tint = groupColor(texelFetch(uGroupIds, vPrimBase + gl_PrimitiveID).r);
@@ -516,6 +596,12 @@ void main() {
 #ifndef FLAT
     if (!gl_FrontFacing && uTwoSided == 1) n = -n;
 #endif
+    if (uUnlit == 1) { // the base colour alone: vertex paint, texture or face groups, plus the mask tint
+        vec3 c = albedo;
+        if (uShowMask == 1) c = maskTint(c, V_MASK);
+        fragColor = finish(c);
+        return;
+    }
     vec3 v = viewRay();
 #ifdef PBR
     {
@@ -531,28 +617,29 @@ void main() {
         if (uHasEmissive == 1) emissive = texture(uEmissiveTex, vUv).rgb;
 #endif
         vec3 c = toneMapped(pbrShade(albedo, n, v, rough, metal, ao, curvature, emissive));
-        if (uShowMask == 1) c *= 1.0 - 0.75 * clamp(V_MASK, 0.0, 1.0);
+        if (uShowMask == 1) c = maskTint(c, V_MASK);
         fragColor = finish(c);
         return;
     }
 #endif
-    if (uMatcap == 1) {
+    if (uLitSphere == 1) {
         // View-aligned basis so the material stays put towards the edges of a perspective view.
         vec3 bx = normalize(vec3(v.z, 0.0, -v.x));
         vec3 by = cross(v, bx);
-        vec2 uv = vec2(dot(bx, n), dot(by, n)) * 0.495 + 0.5;
-        vec3 mc = pow(texture(uMatcapTex, uv).rgb, vec3(2.2));
+        vec3 ln = transpose(uLightRot) * n; // the normal turned against the light: the material's light turns
+        vec2 uv = vec2(dot(bx, ln), dot(by, ln)) * 0.495 + 0.5;
+        vec3 mc = pow(texture(uLitSphereTex, uv).rgb, vec3(2.2)) * uLightLevels.x + uLightLevels.y * 0.6;
         // Starts above the curvature of a smooth sphere's own facets, so only real creases darken and a broad
         // stroke doesn't pool into a smear.
         float mcrease = smoothstep(0.03, 0.18, curvature);
         float mridge = smoothstep(0.03, 0.2, -curvature);
-        vec3 c = mc * tint * (1.0 - uMatcapCavity.x * mcrease) * (1.0 + uMatcapCavity.y * mridge);
-        if (uShowMask == 1) c *= 1.0 - 0.75 * clamp(V_MASK, 0.0, 1.0);
+        vec3 c = mc * tint * (1.0 - uLitSphereCavity.x * mcrease) * (1.0 + uLitSphereCavity.y * mridge);
+        if (uShowMask == 1) c = maskTint(c, V_MASK);
         fragColor = finish(c);
         return;
     }
-    vec3 key = normalize(vec3(0.45, 0.65, 0.6));
-    vec3 fill = normalize(vec3(-0.7, -0.1, 0.4));
+    vec3 key = uLightRot * normalize(vec3(0.45, 0.65, 0.6));
+    vec3 fill = uLightRot * normalize(vec3(-0.7, -0.1, 0.4));
     float diff = max((dot(n, key) + 0.25) / 1.25, 0.0);
     float fillL = max(dot(n, fill), 0.0) * 0.25;
     float hemi = 0.5 + 0.5 * n.y;
@@ -568,7 +655,8 @@ void main() {
     c *= mix(vec3(1.0), vec3(0.72, 0.55, 0.5), crease * 0.7); // warm, deeper colour in the cracks
     c += albedo * ridge * 0.3 * diff;                           // ridges catch the key light
     c += vec3(spec) * (1.0 - crease) + rim * vec3(0.8, 0.85, 1.0);
-    if (uShowMask == 1) c *= 1.0 - 0.75 * clamp(V_MASK, 0.0, 1.0);
+    c = c * uLightLevels.x + albedo * uLightLevels.y * 0.6;
+    if (uShowMask == 1) c = maskTint(c, V_MASK);
     fragColor = finish(c);
 }
 )";
@@ -591,6 +679,36 @@ const char* kWireFS = R"(#version 330 core
 uniform float uAlpha;
 out vec4 fragColor;
 void main() { fragColor = vec4(0.05, 0.05, 0.08, uAlpha); }
+)";
+
+// The edge list's variant: edges shorter than a few pixels on screen fade out, so a dense mesh (1M+ triangles on a
+// sphere) shows its wireframe as a light veil instead of a dark moire that hides the form and the mask.
+const char* kWireLineGS = R"(#version 330 core
+layout(lines) in;
+layout(line_strip, max_vertices = 2) out;
+uniform vec2 uViewportPx;
+uniform float uAlpha;
+out float gAlpha;
+void main() {
+    vec4 a = gl_in[0].gl_Position, b = gl_in[1].gl_Position;
+    float fade = 1.0;
+    if (a.w > 0.0 && b.w > 0.0) {
+        float px = length((b.xy / b.w - a.xy / a.w) * 0.5 * uViewportPx);
+        fade = mix(0.18, 1.0, smoothstep(2.0, 7.0, px));
+    }
+    gAlpha = uAlpha * fade;
+    gl_Position = a;
+    EmitVertex();
+    gl_Position = b;
+    EmitVertex();
+    EndPrimitive();
+}
+)";
+
+const char* kWireLineFS = R"(#version 330 core
+in float gAlpha;
+out vec4 fragColor;
+void main() { fragColor = vec4(0.05, 0.05, 0.08, gAlpha); }
 )";
 
 // checkVertexIdBase: does gl_VertexID include the base vertex of glDrawElementsBaseVertex (it should)?
@@ -616,6 +734,28 @@ void main() {
 }
 )";
 
+// Reference images (core/Reference.h): one textured quad, its corners given in clip space (perspective-correct).
+const char* kReferenceVS = R"(#version 330 core
+uniform vec4 uClip[4];
+uniform vec4 uUv[4];
+out vec2 vUv;
+void main() {
+    vUv = uUv[gl_VertexID].xy;
+    gl_Position = uClip[gl_VertexID];
+}
+)";
+
+const char* kReferenceFS = R"(#version 330 core
+in vec2 vUv;
+out vec4 fragColor;
+uniform sampler2D uTex;
+uniform float uAlpha;
+void main() {
+    vec4 c = texture(uTex, vUv);
+    fragColor = vec4(c.rgb, c.a * uAlpha);
+}
+)";
+
 const char* kBgFS = R"(#version 330 core
 in vec2 vUv;
 out vec4 fragColor;
@@ -627,6 +767,57 @@ void main() {
     vec3 c = uBackgroundGradient == 0 ? uBackgroundTop :
         mix(uBackgroundBottom, uBackgroundTop, clamp(vUv.y, 0.0, 1.0)) * (1.0 - 0.35 * d);
     fragColor = vec4(c, 1.0);
+}
+)";
+
+// The floor grid (#115, View > Floor grid): one quad on the floor (y = RenderSettings::floorHeight) around the eye,
+// its lines drawn in the fragment shader. Three levels of 10x steps, the finest fading out as the view zooms out
+// (uBlend) so a zoom never pops; cells under a few pixels fade too (no moire at grazing angles), and all of it fades
+// with the distance from the eye. X (red) and Z (blue) mark the axes through the origin.
+const char* kFloorVS = R"(#version 330 core
+uniform mat4 uView;
+uniform mat4 uProj;
+uniform vec2 uCentre;
+uniform float uHalf;
+uniform float uFloor;
+out vec3 vWorld;
+void main() {
+    vec2 c = vec2(gl_VertexID & 1, gl_VertexID >> 1) * 2.0 - 1.0;
+    vWorld = vec3(uCentre.x + c.x * uHalf, uFloor, uCentre.y + c.y * uHalf);
+    gl_Position = uProj * (uView * vec4(vWorld, 1.0));
+}
+)";
+
+const char* kFloorFS = R"(#version 330 core
+in vec3 vWorld;
+out vec4 fragColor;
+uniform vec3 uEye;
+uniform float uStep;  // the finest level's cell
+uniform float uBlend; // 0..1: how far the view has zoomed out of that level
+uniform float uFade;  // the distance from the eye where the grid is gone
+uniform vec3 uLine;
+float lines(vec2 p, float step, float px) {
+    vec2 c = p / step;
+    vec2 w = max(fwidth(c), vec2(1e-6));
+    vec2 g = abs(fract(c - 0.5) - 0.5) / w; // distance to the nearest line, in pixels
+    float l = 1.0 - min(min(g.x, g.y) / px, 1.0);
+    return l * (1.0 - smoothstep(0.08, 0.3, max(w.x, w.y))); // cells under ~12 px fade out
+}
+void main() {
+    vec2 p = vWorld.xz;
+    float a = max(lines(p, uStep, 1.0) * 0.10 * (1.0 - uBlend), lines(p, uStep * 10.0, 1.0) * mix(0.22, 0.10, uBlend));
+    a = max(a, lines(p, uStep * 100.0, 1.2) * 0.22);
+    vec2 w = max(fwidth(p), vec2(1e-6));
+    float onX = 1.0 - min(abs(p.y) / w.y / 1.5, 1.0), onZ = 1.0 - min(abs(p.x) / w.x / 1.5, 1.0);
+    vec3 c = uLine;
+    float axis = max(onX, onZ) * 0.5;
+    if (axis > a) {
+        c = onX >= onZ ? vec3(0.86, 0.36, 0.36) : vec3(0.36, 0.55, 0.92);
+        a = axis;
+    }
+    a *= 1.0 - smoothstep(0.3 * uFade, uFade, distance(vWorld, uEye));
+    if (a < 1.0 / 255.0) discard;
+    fragColor = vec4(c, a);
 }
 )";
 
@@ -732,7 +923,7 @@ void main() {
 )";
 
 constexpr GLenum kTexture7 = 0x84C7; // GL_TEXTURE7 (the cluster table)
-constexpr GLenum kTexture2 = 0x84C2; // GL_TEXTURE2 (matcap)
+constexpr GLenum kTexture2 = 0x84C2; // GL_TEXTURE2 (lit sphere)
 constexpr GLenum kTexture5 = 0x84C5; // kTexture5 (baked normal map)
 constexpr GLenum kTexture6 = 0x84C6; // kTexture6 (its tangents)
 constexpr GLenum kRgb = 0x1907, kRgb8 = 0x8051; // GL_RGB, GL_RGB8
@@ -742,6 +933,10 @@ constexpr GLenum kRgb16f = 0x881B, kRg16f = 0x822F, kRg = 0x8227, kRepeat = 0x29
 
 GLuint compile(GLenum type, const char* src, std::string& error, const char* prefix = nullptr) {
     GLuint s = gl::CreateShader(type);
+    if (!s) { // (0 with no GL error to read: this thread has no current context, or the driver is out of objects)
+        error = "Shader compile error: no current OpenGL context (the graphics driver gave no shader object)";
+        return 0;
+    }
     const char* sources[2] = {prefix, src};
     if (prefix) gl::ShaderSource(s, 2, sources, nullptr);
     else gl::ShaderSource(s, 1, &src, nullptr);
@@ -749,17 +944,42 @@ GLuint compile(GLenum type, const char* src, std::string& error, const char* pre
     GLint ok = 0;
     gl::GetShaderiv(s, GL_COMPILE_STATUS, &ok);
     if (!ok) {
-        char log[2048];
-        gl::GetShaderInfoLog(s, sizeof log, nullptr, log);
-        error = std::string("Shader compile error: ") + log;
+        char log[2048] = {};
+        gl::GetShaderInfoLog(s, sizeof log - 1, nullptr, log);
+        error = std::string("Shader compile error: ") + (*log ? log : "(empty driver log)");
         gl::DeleteShader(s);
         return 0;
     }
     return s;
 }
 
+// Renderer::keepPrograms: every program linked, by its sources, kept for the next Renderer in the same GL context.
+bool g_keepPrograms = false;
+std::unordered_map<std::string, GLuint> g_keptPrograms;
+int g_keptVertexIdBase = -1; // checkVertexIdBase's answer (-1: not asked yet)
+std::vector<GLuint> g_keptLitSpheres; // the built-in lit spheres' textures
+
+GLuint linkNew(const char* vs, const char* fs, std::string& error, const char* fsPrefix, const char* gs);
+
 // `fsPrefix` goes before the fragment source (the #version line and defines); `gs` is an optional geometry shader.
 GLuint link(const char* vs, const char* fs, std::string& error, const char* fsPrefix = nullptr, const char* gs = nullptr) {
+    if (!g_keepPrograms) return linkNew(vs, fs, error, fsPrefix, gs);
+    std::string key = std::string(vs) + '\x1f' + (fsPrefix ? fsPrefix : "") + '\x1f' + fs + '\x1f' + (gs ? gs : "");
+    if (const auto it = g_keptPrograms.find(key); it != g_keptPrograms.end()) return it->second;
+    const GLuint p = linkNew(vs, fs, error, fsPrefix, gs);
+    if (p) g_keptPrograms.emplace(std::move(key), p);
+    return p;
+}
+
+void deleteProgram(GLuint p) {
+    if (!p) return;
+    if (g_keepPrograms)
+        for (const auto& [key, kept] : g_keptPrograms)
+            if (kept == p) return;
+    gl::DeleteProgram(p);
+}
+
+GLuint linkNew(const char* vs, const char* fs, std::string& error, const char* fsPrefix, const char* gs) {
     GLuint v = compile(GL_VERTEX_SHADER, vs, error);
     if (!v) return 0;
     GLuint f = compile(GL_FRAGMENT_SHADER, fs, error, fsPrefix);
@@ -784,9 +1004,9 @@ GLuint link(const char* vs, const char* fs, std::string& error, const char* fsPr
     GLint ok = 0;
     gl::GetProgramiv(p, GL_LINK_STATUS, &ok);
     if (!ok) {
-        char log[2048];
-        gl::GetProgramInfoLog(p, sizeof log, nullptr, log);
-        error = std::string("Shader link error: ") + log;
+        char log[2048] = {};
+        gl::GetProgramInfoLog(p, sizeof log - 1, nullptr, log);
+        error = std::string("Shader link error: ") + (*log ? log : "(empty driver log)");
         gl::DeleteProgram(p);
         return 0;
     }
@@ -795,7 +1015,7 @@ GLuint link(const char* vs, const char* fs, std::string& error, const char* fsPr
 
 } // namespace
 
-glm::vec3 polygroupColor(uint32_t id) {
+glm::vec3 facegroupColor(uint32_t id) {
     uint32_t h = id * 0x9E3779B1u;
     h ^= h >> 15;
     h *= 0x85EBCA77u;
@@ -808,7 +1028,27 @@ glm::vec3 polygroupColor(uint32_t id) {
     return val * glm::mix(glm::vec3(1.0f), rgb, sat);
 }
 
+void Renderer::keepPrograms(bool keep) {
+    g_keepPrograms = keep;
+    if (!keep) {
+        for (const auto& [key, p] : g_keptPrograms) gl::DeleteProgram(p);
+        g_keptPrograms.clear();
+        g_keptVertexIdBase = -1;
+        if (!g_keptLitSpheres.empty()) gl::DeleteTextures(GLsizei(g_keptLitSpheres.size()), g_keptLitSpheres.data());
+        g_keptLitSpheres.clear();
+    }
+}
+
 bool Renderer::init(std::string& error) {
+    {   // (the lines a graphics-driver report needs: who made it, which shader language, the limits the renderer leans on)
+        GLint samples = 0, texels = 0, vecs = 0;
+        gl::GetIntegerv(GL_MAX_SAMPLES, &samples);
+        gl::GetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &texels);
+        gl::GetIntegerv(0x8DFD /* GL_MAX_FRAGMENT_UNIFORM_VECTORS */, &vecs);
+        const auto str = [](GLenum n) { const GLubyte* v = gl::GetString(n); return v ? reinterpret_cast<const char*>(v) : "?"; };
+        SDL_Log("GL vendor %s, GLSL %s, max samples %d, texture buffer %d texels, fragment uniforms %d", str(0x1F00),
+                str(0x8B8C), samples, texels, vecs);
+    }
     for (int f : {0, kPaint}) // the common ones up front, so a broken driver fails here rather than mid-session
         if (!meshProgram(f)) {
             error = programError_;
@@ -816,6 +1056,8 @@ bool Renderer::init(std::string& error) {
         }
     wireProgram_ = link(kWireVS, kWireFS, error);
     if (!wireProgram_) return false;
+    wireLineProgram_ = link(kWireVS, kWireLineFS, error, nullptr, kWireLineGS);
+    if (!wireLineProgram_) return false;
     bgProgram_ = link(kBgVS, kBgFS, error);
     if (!bgProgram_) return false;
     bgTop_ = gl::GetUniformLocation(bgProgram_, "uBackgroundTop");
@@ -837,29 +1079,42 @@ bool Renderer::init(std::string& error) {
 
     gl::GenVertexArrays(1, &emptyVao_);
 
-    // Built-in matcaps, generated once (256 KB each); custom ones upload in syncMatcaps.
-    matcapTextures_.assign(size_t(builtinMatcapCount()), 0);
-    matcapHashes_.assign(size_t(builtinMatcapCount()), 0);
-    gl::GenTextures(GLsizei(matcapTextures_.size()), matcapTextures_.data());
-    for (int i = 0; i < builtinMatcapCount(); ++i) {
-        constexpr int kSize = 256;
-        uploadMatcap(matcapTextures_[size_t(i)], kSize, generateMatcap(i, kSize));
+    // Built-in lit spheres, generated once (256 KB each, together on the thread pool) and uploaded (with keepPrograms,
+    // kept for the next Renderer: an upload is slow on some drivers, WSL's d3d12); custom ones upload in syncLitSpheres.
+    if (g_keepPrograms && !g_keptLitSpheres.empty()) litsphereTextures_ = g_keptLitSpheres;
+    else {
+        constexpr int kLitSphereSize = 256;
+        std::vector<std::vector<uint8_t>> pixels(static_cast<size_t>(builtinLitSphereCount()));
+        poolFor(pixels.size(), [&](size_t b, size_t e) {
+            for (size_t i = b; i < e; ++i) pixels[i] = generateLitSphere(int(i), kLitSphereSize);
+        }, 1, 2);
+        litsphereTextures_.assign(pixels.size(), 0);
+        gl::GenTextures(GLsizei(litsphereTextures_.size()), litsphereTextures_.data());
+        for (size_t i = 0; i < pixels.size(); ++i) uploadLitSphere(litsphereTextures_[i], kLitSphereSize, pixels[i]);
+        if (g_keepPrograms) g_keptLitSpheres = litsphereTextures_;
     }
-    syncMatcaps();
+    litsphereHashes_.assign(size_t(builtinLitSphereCount()), 0);
+    syncLitSpheres();
     // SF_NO_VERTEXID_BASE=1 takes the other path, to check it on drivers that don't need it.
-    vertexIdHasBase_ = checkVertexIdBase() && !std::getenv("SF_NO_VERTEXID_BASE");
+    if (g_keptVertexIdBase < 0 || !g_keepPrograms) g_keptVertexIdBase = checkVertexIdBase() ? 1 : 0;
+    vertexIdHasBase_ = g_keptVertexIdBase == 1 && !std::getenv("SF_NO_VERTEXID_BASE");
     return true;
 }
 
 const Renderer::MeshProgram* Renderer::meshProgram(int features) {
     if (features & (kTextured | kNormalMap)) features |= kTextured | kPrim;
     // (micro levels: no per-vertex paint, per-triangle data or predictive preview)
-    if (features & kMicro) features &= kMicro | kFlat | kPbr;
+    if (features & kMicro) features &= kMicro | kFlat | kPbr | kFocus;
     MeshProgram& p = programs_[features & 255];
     if (p.id) return &p;
+    const auto simpler = [&]() -> const MeshProgram* {
+        const int next = simplerMeshFeatures(features);
+        return next == features ? nullptr : meshProgram(next);
+    };
+    if (p.failed) return simpler(); // (not every frame again)
     std::string prefix = "#version 330 core\n";
-    if (features & kMicro) prefix += "#define MICRO\n";
-    if (features & kPaint) prefix += "#define PAINT\n";
+    if (features & kMicro) prefix += (features & kFocus) ? "#define MICRO\n#define FOCUS\n" : "#define MICRO\n";
+    else if (features & kPaint) prefix += "#define PAINT\n";
     if (features & kPrim) prefix += "#define PRIM\n";
     if (features & kTextured) prefix += "#define TEXTURED\n";
     if (features & kNormalMap) prefix += "#define NORMALMAP\n";
@@ -869,7 +1124,13 @@ const Renderer::MeshProgram* Renderer::meshProgram(int features) {
     const std::string vs = prefix + ((features & kMicro) ? microVertexShaderSource() : kMeshVS), fs = prefix + kMeshFS,
                       gs = prefix + kMeshGS;
     p.id = link(vs.c_str(), fs.c_str(), programError_, nullptr, (features & kTextured) ? gs.c_str() : nullptr);
-    if (!p.id) return nullptr;
+    if (!p.id) {
+        // A mesh variant the driver won't build (a mobile GLSL compiler's limit, say) used to leave the mesh undrawn
+        // with nothing in the log; now it says so once and the next simpler variant draws.
+        p.failed = true;
+        SDL_Log("Mesh shader variant %d failed to build, drawing with a simpler one: %.400s", features, programError_.c_str());
+        return simpler();
+    }
     auto at = [&](const char* name) { return gl::GetUniformLocation(p.id, name); };
     p.view = at("uView");
     p.proj = at("uProj");
@@ -879,12 +1140,20 @@ const Renderer::MeshProgram* Renderer::meshProgram(int features) {
     p.projScale = at("uProjScale");
     p.baseColor = at("uBaseColor");
     p.silhouette = at("uSilhouette");
+    p.tintShift = at("uTintShift");
     p.paint = at("uPaint");
     p.showMask = at("uShowMask");
+    p.maskDarkness = at("uMaskDarkness");
+    p.maskColor = at("uMaskColor");
     p.groups = at("uGroups");
-    p.matcap = at("uMatcap");
-    p.matcapCavity = at("uMatcapCavity");
+    p.litsphere = at("uLitSphere");
+    p.unlit = at("uUnlit");
+    p.litsphereCavity = at("uLitSphereCavity");
     p.dim = at("uDim");
+    p.lightRot = at("uLightRot");
+    p.lightLevels = at("uLightLevels");
+    p.alpha = at("uAlpha");
+    p.microWire = at("uMicroWire");
     p.primBase = at("uPrimBase");
     p.hasPaint = at("uHasPaint");
     p.normalFlipY = at("uNormalFlipY");
@@ -897,6 +1166,7 @@ const Renderer::MeshProgram* Renderer::meshProgram(int features) {
     p.ghostA = at("uGhostA");
     p.ghostB = at("uGhostB");
     p.ghostC = at("uGhostC");
+    p.ghostD = at("uGhostD");
     p.ghostBound = at("uGhostBound");
     p.ghostKind = at("uGhostKind");
     p.ghostFocal = at("uGhostFocal");
@@ -909,10 +1179,10 @@ const Renderer::MeshProgram* Renderer::meshProgram(int features) {
     p.pbrCavity = at("uPbrCavity");
     p.viewToEnv = at("uViewToEnv");
     p.sh = at("uSH");
-    // Texture units: groups 1, matcap 2, UVs 3, painted texture 4, normal map 5, tangents 6, cluster table 7.
+    // Texture units: groups 1, lit sphere 2, UVs 3, painted texture 4, normal map 5, tangents 6, cluster table 7.
     gl::UseProgram(p.id);
     gl::Uniform1i(at("uGroupIds"), 1);
-    gl::Uniform1i(at("uMatcapTex"), 2);
+    gl::Uniform1i(at("uLitSphereTex"), 2);
     gl::Uniform1i(at("uUvs"), 3);
     gl::Uniform1i(at("uPaintTex"), 4);
     gl::Uniform1i(at("uNormalTex"), 5);
@@ -920,15 +1190,21 @@ const Renderer::MeshProgram* Renderer::meshProgram(int features) {
     gl::Uniform1i(at("uClusterPrims"), 7);
     gl::Uniform1i(at("uOrmTex"), 8);
     gl::Uniform1i(at("uEmissiveTex"), 9);
-    gl::Uniform1i(at("uEnvTex"), 10);
-    gl::Uniform1i(at("uBrdfLut"), 11);
+    // A micro level's buffer textures take units 8-15 (render/MicroRenderer.cpp, MicroFocus.cpp): two samplers of
+    // different types on one unit fail every draw, and a micro mesh in the PBR view drew nothing at all. Its program has
+    // no UVs or painted texture, so the environment and BRDF table go on their units (3, 4) there.
+    const bool micro = (features & kMicro) != 0;
+    p.envUnit = micro ? GL_TEXTURE3 : kTexture10;
+    p.brdfUnit = micro ? GL_TEXTURE4 : kTexture11;
+    gl::Uniform1i(at("uEnvTex"), GLint(p.envUnit - GL_TEXTURE0));
+    gl::Uniform1i(at("uBrdfLut"), GLint(p.brdfUnit - GL_TEXTURE0));
     gl::UseProgram(0);
     return &p;
 }
 
 // Draws one point with index 2 and base vertex 1000 into a 1x1 integer target and reads back the gl_VertexID
 // the shader saw: 1002 as the spec says, or 2 on drivers that leave the base out (then the per-triangle data of
-// polygroups and textures is drawn cluster by cluster with the base as a uniform).
+// face groups and textures is drawn cluster by cluster with the base as a uniform).
 bool Renderer::checkVertexIdBase() {
     std::string error;
     const GLuint prog = link(kVertexIdVS, kVertexIdFS, error);
@@ -962,13 +1238,13 @@ bool Renderer::checkVertexIdBase() {
     gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
     gl::DeleteFramebuffers(1, &fbo);
     gl::DeleteRenderbuffers(1, &rb);
-    gl::DeleteProgram(prog);
+    deleteProgram(prog);
     for (int i = 0; i < 16 && gl::GetError() != GL_NO_ERROR; ++i) {
     }
     return id == 1002;
 }
 
-void Renderer::uploadMatcap(GLuint texture, int size, const std::vector<uint8_t>& pixels) {
+void Renderer::uploadLitSphere(GLuint texture, int size, const std::vector<uint8_t>& pixels) {
     gl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
     gl::BindTexture(GL_TEXTURE_2D, texture);
     gl::TexImage2D(GL_TEXTURE_2D, 0, GLint(GL_RGBA8), size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -979,26 +1255,26 @@ void Renderer::uploadMatcap(GLuint texture, int size, const std::vector<uint8_t>
     gl::BindTexture(GL_TEXTURE_2D, 0);
 }
 
-// Custom MatCaps (core/Matcap.h) added or changed since the last call: a texture each, at their own size.
-void Renderer::syncMatcaps() {
-    if (matcapTextures_.empty() || matcapRevision_ == matcapRevision()) return;
-    matcapRevision_ = matcapRevision();
-    for (int i = builtinMatcapCount(); i < matcapCount(); ++i) {
-        const CustomMatcap* c = customMatcap(i);
-        if (size_t(i) >= matcapTextures_.size()) {
+// Custom Lit Spheres (core/Lit Sphere.h) added or changed since the last call: a texture each, at their own size.
+void Renderer::syncLitSpheres() {
+    if (litsphereTextures_.empty() || litsphereRevision_ == litsphereRevision()) return;
+    litsphereRevision_ = litsphereRevision();
+    for (int i = builtinLitSphereCount(); i < litsphereCount(); ++i) {
+        const CustomLitSphere* c = customLitSphere(i);
+        if (size_t(i) >= litsphereTextures_.size()) {
             GLuint t = 0;
             gl::GenTextures(1, &t);
-            matcapTextures_.push_back(t);
-            matcapHashes_.push_back(0);
+            litsphereTextures_.push_back(t);
+            litsphereHashes_.push_back(0);
         }
-        if (matcapHashes_[size_t(i)] == c->hash) continue;
-        uploadMatcap(matcapTextures_[size_t(i)], c->size, c->rgba);
-        matcapHashes_[size_t(i)] = c->hash;
+        if (litsphereHashes_[size_t(i)] == c->hash) continue;
+        uploadLitSphere(litsphereTextures_[size_t(i)], c->size, c->rgba);
+        litsphereHashes_[size_t(i)] = c->hash;
     }
 }
 
-GLuint Renderer::matcapTexture(int index) const {
-    return index >= 0 && index < int(matcapTextures_.size()) ? matcapTextures_[size_t(index)] : 0;
+GLuint Renderer::litsphereTexture(int index) const {
+    return index >= 0 && index < int(litsphereTextures_.size()) ? litsphereTextures_[size_t(index)] : 0;
 }
 
 Renderer::MeshSlot& Renderer::slot(uint32_t id) {
@@ -1060,6 +1336,13 @@ void Renderer::freeSlot(MeshSlot& s) {
     gl::DeleteVertexArrays(1, &s.vao);
     gl::DeleteVertexArrays(1, &s.lineVao);
     gl::DeleteVertexArrays(1, &s.proxyVao);
+    if (s.coarseVao) {
+        gl::DeleteBuffers(1, &s.coarseVertices);
+        gl::DeleteBuffers(1, &s.coarseIndices);
+        gl::DeleteBuffers(1, &s.coarseColors);
+        gl::DeleteBuffers(1, &s.coarseMask);
+        gl::DeleteVertexArrays(1, &s.coarseVao);
+    }
     s.micro.reset();
     if (s.patchVao) {
         for (GLuint* b : {&s.patchVertices, &s.patchIndices, &s.patchLines, &s.patchColors, &s.patchMask, &s.patchGroupData})
@@ -1069,6 +1352,18 @@ void Renderer::freeSlot(MeshSlot& s) {
         gl::DeleteVertexArrays(1, &s.patchLineVao);
     }
     s = MeshSlot();
+}
+
+size_t Renderer::microPendingShading() const {
+    size_t total = 0;
+    for (const MeshSlot& s : slots_)
+        if (s.micro) total += s.micro->pendingShading();
+    return total;
+}
+
+void Renderer::takeFocusSplit(double* out) {
+    for (MeshSlot& s : slots_)
+        if (s.micro && s.micro->focus()) s.micro->focus()->takeSplit(out);
 }
 
 size_t Renderer::gpuBytes() const {
@@ -1089,26 +1384,41 @@ void Renderer::shutdown() {
     if (silhouetteTex_) gl::DeleteTextures(1, &silhouetteTex_);
     if (silhouetteDepth_) gl::DeleteRenderbuffers(1, &silhouetteDepth_);
     silhouetteFbo_ = silhouetteTex_ = silhouetteDepth_ = 0;
+    screenPass_.release();
     for (auto& s : slots_) freeSlot(s);
+    for (Staging& st : persist_) {
+        if (st.fence) gl::DeleteSync(st.fence);
+        if (st.buffer) gl::DeleteBuffers(1, &st.buffer); // (unmaps it)
+        st = Staging();
+    }
     slots_.clear();
     drawList_.clear();
-    if (!matcapTextures_.empty()) gl::DeleteTextures(GLsizei(matcapTextures_.size()), matcapTextures_.data());
-    matcapTextures_.clear();
-    matcapHashes_.clear();
-    matcapRevision_ = 0;
+    for (GLuint& t : litsphereTextures_) // (not the kept built-ins: keepPrograms)
+        if (std::find(g_keptLitSpheres.begin(), g_keptLitSpheres.end(), t) == g_keptLitSpheres.end()) gl::DeleteTextures(1, &t);
+    litsphereTextures_.clear();
+    litsphereHashes_.clear();
+    litsphereRevision_ = 0;
     for (GLuint* t : {&envTexture_, &brdfTexture_})
         if (*t) gl::DeleteTextures(1, t);
     envIndex_ = envFailedIndex_ = -1;
-    if (envBgProgram_) gl::DeleteProgram(envBgProgram_);
+    deleteProgram(envBgProgram_);
     envBgProgram_ = 0;
+    deleteProgram(floorProgram_);
+    floorProgram_ = 0;
+    deleteProgram(referenceProgram_);
+    referenceProgram_ = 0;
+    for (ReferenceTexture& t : referenceTextures_) gl::DeleteTextures(1, &t.tex);
+    referenceTextures_.clear();
+    references_.clear();
     gl::DeleteVertexArrays(1, &emptyVao_);
     for (MeshProgram& p : programs_) {
-        if (p.id) gl::DeleteProgram(p.id);
+        deleteProgram(p.id);
         p = MeshProgram();
     }
-    gl::DeleteProgram(wireProgram_);
-    gl::DeleteProgram(bgProgram_);
-    gl::DeleteProgram(splatProgram_);
+    deleteProgram(wireProgram_);
+    deleteProgram(wireLineProgram_);
+    deleteProgram(bgProgram_);
+    deleteProgram(splatProgram_);
     gl::DeleteBuffers(1, &splatData_);
     gl::DeleteBuffers(1, &splatOrder_);
     gl::DeleteTextures(1, &splatTexture_);
@@ -1118,6 +1428,12 @@ void Renderer::shutdown() {
         gl::DeleteFramebuffers(1, &viewResolveFbo_);
         gl::DeleteRenderbuffers(3, viewRb_);
         viewFbo_ = viewResolveFbo_ = 0;
+    }
+    if (captureFbo_[0]) { // (screenshots and recordings; --ui-serve's context outlives the Renderer)
+        gl::DeleteFramebuffers(2, captureFbo_);
+        gl::DeleteRenderbuffers(3, captureRb_);
+        captureFbo_[0] = captureFbo_[1] = 0;
+        captureW_ = captureH_ = 0;
     }
 }
 
@@ -1333,9 +1649,9 @@ bool Renderer::outOfMemory(uint32_t id) const {
 }
 
 void Renderer::syncScene(const std::vector<SceneMesh>& scene) {
-    syncMatcaps();
+    syncLitSpheres();
     if (envJob_ && envJob_->done) ensureEnvironment(envJob_->index); // (a new environment is ready: upload it)
-    // Free the slots of SubTools that are gone (deleted, merged, a new scene).
+    // Free the slots of Parts that are gone (deleted, merged, a new scene).
     for (auto it = slots_.begin(); it != slots_.end();) {
         const bool live = std::any_of(scene.begin(), scene.end(), [&](const SceneMesh& m) { return m.id == it->id; });
         if (live) {
@@ -1346,13 +1662,36 @@ void Renderer::syncScene(const std::vector<SceneMesh>& scene) {
         it = slots_.erase(it);
     }
     drawList_.clear();
+    proxyPending_ = false;
+    std::vector<uint32_t> synced; // linked Parts (#94): one mesh, uploaded once (as the active one, if it's one of them)
     for (const SceneMesh& m : scene) {
         if (!m.visible || !m.mesh) continue; // hidden: keeps its dirty state until shown
-        MeshSlot& ms = slot(m.id);
-        ms.overlay = m.active ? m.overlay : nullptr;
-        sync(ms, *m.mesh, m.normalMap, m.wireframe && m.active, m.pbr);
-        drawList_.push_back({m.id, m.active, m.flat});
+        if (std::find(synced.begin(), synced.end(), m.id) == synced.end()) {
+            synced.push_back(m.id);
+            const SceneMesh* first = &m;
+            for (const SceneMesh& o : scene)
+                if (o.id == m.id && o.visible && o.active) first = &o;
+            MeshSlot& ms = slot(m.id);
+            ms.overlay = first->active ? first->overlay : nullptr;
+            sync(ms, *first->mesh, first->normalMap, first->wireframe && first->active, first->pbr);
+        }
+        drawList_.push_back({m.id, m.active, m.flat, m.model != glm::mat4(1.0f), m.model});
     }
+}
+
+void Renderer::drawItem(const MeshSlot& s, const DrawItem& item, const RenderSettings& settings) {
+    if (!item.moved) {
+        drawSlot(s, item.active, item.flat, settings);
+        return;
+    }
+    const glm::mat4 view = frameView_;
+    const CullView cull = frameCull_;
+    frameView_ = view * item.model;
+    frameCull_ = CullView::from(frameView_, frameProj_);
+    frameCull_.backfaces = cull.backfaces;
+    drawSlot(s, item.active, item.flat, settings);
+    frameView_ = view;
+    frameCull_ = cull;
 }
 
 // The packed vertices of dirtyRuns_ (all of them when `full`, which also sizes the buffer). A vertex that left
@@ -1364,6 +1703,8 @@ void Renderer::uploadVertices(MeshSlot& s, const Mesh& mesh, bool full) {
     std::atomic<bool> outside{false};
     const bool normals = mesh.normals.size() == mesh.vertexCount();
     const uint32_t nv = uint32_t(mesh.vertexCount());
+    s.sentCurvature.resize(nv);
+    uint16_t* sent = s.sentCurvature.data();
     // Per block, hashes of what it last sent (positions; normals and curvature): a block a dab marked but didn't
     // change (paint, mask) isn't sent again, and a cluster whose positions didn't move keeps its bounds and proxy.
     s.blockHash.resize(nb * 2, 0);
@@ -1382,6 +1723,9 @@ void Renderer::uploadVertices(MeshSlot& s, const Mesh& mesh, bool full) {
             if (v < nv) { // (else a vertex dynamic topology removed, which only patched clusters named)
                 inside &= packVertex(s.grid, mesh.positions[v], normals ? mesh.normals[v] : glm::vec3(0.0f, 0.0f, 1.0f),
                                      curvatureAt(mesh, v), pv);
+                // Only the vertex's first slot writes: its copies in other clusters may be packed on another thread
+                // at the same time (the same value, but a data race; ThreadSanitizer, 11-05).
+                if (s.order.toGpu(v) == i) sent[v] = uint16_t(pv.normal >> 22);
                 box.expand(mesh.positions[v]);
             }
             out[i - b] = pv;
@@ -1437,7 +1781,7 @@ void Renderer::updateBounds(MeshSlot& s, const Mesh& mesh, bool all, bool comput
         }
     }
     s.proxyStale.resize(clusters.size(), 1);
-    for (uint32_t c : cullScratch_) s.proxyStale[c] = 1;
+    for (uint32_t c : cullScratch_) s.proxyStale[c] = 1, markCoarseDirty(s, c);
     if (computed) cullScratch_.clear();
     poolFor(cullScratch_.size(), [&](size_t i0, size_t i1) {
         for (size_t i = i0; i < i1; ++i) {
@@ -1504,14 +1848,14 @@ void Renderer::uploadIndices(MeshSlot& s, const Mesh& mesh) {
     gl::BindVertexArray(0);
 }
 
-// The index buffer (unless `indicesDone`), the first drawn triangle of each cluster, and the polygroup id and
+// The index buffer (unless `indicesDone`), the first drawn triangle of each cluster, and the face group id and
 // UVs of every drawn triangle in draw order (looked up by that plus gl_PrimitiveID). The wireframe's edges and
 // motion proxies are rebuilt on next need.
 void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs, bool indicesDone) {
     const size_t nt = mesh.triangleCount();
     const bool hidden = mesh.hidden.size() == nt && nt > 0;
     const bool overlay = s.overlay && s.overlay->colors.size() == nt && nt > 0;
-    const bool groups = (mesh.polygroups.size() == nt || overlay) && nt > 0;
+    const bool groups = (mesh.facegroups.size() == nt || overlay) && nt > 0;
     const auto clusters = s.order.clusters();
     const size_t nc = clusters.size();
     s.primBase.assign(nc, 0);
@@ -1559,7 +1903,7 @@ void Renderer::uploadFaces(MeshSlot& s, const Mesh& mesh, bool wantUvs, bool ind
     visibleGroups_.resize(groups ? drawn : 0);
     if (groups)
         poolFor(drawn, [&](size_t b, size_t e) {
-            for (size_t i = b; i < e; ++i) visibleGroups_[i] = overlay ? s.overlay->colors[drawnTris[i]] : mesh.polygroups[drawnTris[i]];
+            for (size_t i = b; i < e; ++i) visibleGroups_[i] = overlay ? s.overlay->colors[drawnTris[i]] : mesh.facegroups[drawnTris[i]];
         }, 1 << 16);
     s.hasGroups = groups && !visibleGroups_.empty() && visibleGroups_.size() <= size_t(std::max(maxTexels, 0));
     s.overlayColors = overlay && s.hasGroups;
@@ -1695,23 +2039,45 @@ void Renderer::buildProxies(MeshSlot& s, const Mesh& mesh) {
         gl::BindVertexArray(0);
         s.proxyAllocated = true;
     }
-    std::vector<std::vector<uint16_t>> built(cullScratch_.size());
-    poolFor(cullScratch_.size(), [&](size_t i0, size_t i1) {
-        for (size_t i = i0; i < i1; ++i) {
-            const uint32_t c = cullScratch_[i];
-            ClusterBounds b = s.bounds[c];
-            if (!clusterProxy(mesh, s.order, c, s.order.clusterTriangles(c) / 4, built[i], b)) built[i].clear();
-            s.proxyBounds[c] = b;
-        }
-    }, 1, 2);
+    // A few milliseconds a frame: after a long stroke most of the front is stale, and building all of it in the first
+    // moving frame stalled the view (180-300 ms at 33M). Stale clusters draw in full detail until theirs is built.
+    // Batches are sized from the measured cost per cluster: a fixed 1024 took 157 ms a frame on two slow cores.
+    // Still frames (proxyPrebuild_) get less, as nothing waits for them.
+    const double budgetMs = proxyUsed_ ? 8.0 : 4.0;
+    constexpr size_t kProxyBatchMin = 16, kProxyBatchMax = 1024; // clusters per parallel batch
+    const auto start = std::chrono::steady_clock::now();
+    auto elapsedMs = [&] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); };
+    std::vector<std::vector<uint16_t>> built;
     gl::BindVertexArray(s.proxyVao);
-    for (size_t i = 0; i < cullScratch_.size(); ++i) {
-        const uint32_t c = cullScratch_[i];
-        s.proxyCount[c] = uint32_t(built[i].size());
-        s.proxyStale[c] = 0;
-        if (!built[i].empty())
-            gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(size_t(s.order.firstTriangle(c) / 4) * 3 * sizeof(uint16_t)),
-                              GLsizeiptr(built[i].size() * sizeof(uint16_t)), built[i].data());
+    for (size_t at = 0; at < cullScratch_.size();) {
+        const double left = budgetMs - elapsedMs();
+        if (at > 0 && left <= 0.0) {
+            proxyPending_ = true;
+            break;
+        }
+        const size_t fit = proxyMsPerCluster_ > 0.0 ? size_t(std::max(left, 0.0) / proxyMsPerCluster_) : 64;
+        const size_t n = std::min(std::clamp(fit, kProxyBatchMin, kProxyBatchMax), cullScratch_.size() - at);
+        const double batchStart = elapsedMs();
+        built.assign(n, {});
+        poolFor(n, [&](size_t i0, size_t i1) {
+            for (size_t i = i0; i < i1; ++i) {
+                const uint32_t c = cullScratch_[at + i];
+                ClusterBounds b = s.bounds[c];
+                if (!clusterProxy(mesh, s.order, c, s.order.clusterTriangles(c) / 4, built[i], b)) built[i].clear();
+                s.proxyBounds[c] = b;
+            }
+        }, 1, 2);
+        for (size_t i = 0; i < n; ++i) {
+            const uint32_t c = cullScratch_[at + i];
+            s.proxyCount[c] = uint32_t(built[i].size());
+            s.proxyStale[c] = 0;
+            if (!built[i].empty())
+                gl::BufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(size_t(s.order.firstTriangle(c) / 4) * 3 * sizeof(uint16_t)),
+                                  GLsizeiptr(built[i].size() * sizeof(uint16_t)), built[i].data());
+        }
+        at += n;
+        const double perCluster = (elapsedMs() - batchStart) / double(n);
+        proxyMsPerCluster_ = proxyMsPerCluster_ > 0.0 ? 0.7 * proxyMsPerCluster_ + 0.3 * perCluster : perCluster;
     }
     gl::BindVertexArray(0);
 }
@@ -1788,8 +2154,13 @@ bool Renderer::preparePatches(MeshSlot& s, const Mesh& mesh, bool wireframe) {
     }
     if (wireframe && !s.patchLinesOn)
         for (MeshSlot::Patch& p : s.patches) p.stale = true; // (their edges weren't built)
+    // More patches than the buffers have room for: uploadPatches makes new, empty ones, so every patch's triangles,
+    // edges and face groups go up again, and those already uploaded kept only their vertices (#153: they drew
+    // whatever the new index buffer held, spikes and broken faces until the next full upload).
+    if (s.patches.size() > s.patchParts)
+        for (MeshSlot::Patch& p : s.patches) p.stale = true;
     const bool hidden = mesh.hidden.size() == nt && nt > 0;
-    const bool groups = mesh.polygroups.size() == nt && nt > 0;
+    const bool groups = mesh.facegroups.size() == nt && nt > 0;
     for (MeshSlot::Patch& p : s.patches) {
         if (!p.stale) continue;
         if (++patchStampValue_ == 0) {
@@ -1811,7 +2182,7 @@ bool Renderer::preparePatches(MeshSlot& s, const Mesh& mesh, bool wireframe) {
                 }
                 p.local.push_back(uint16_t(std::min<uint32_t>(patchLocal_[v], 0xFFFF)));
             }
-            if (groups) p.groups.push_back(mesh.polygroups[t]);
+            if (groups) p.groups.push_back(mesh.facegroups[t]);
         };
         if (p.key < kTailPatch) {
             for (uint32_t i = 0; i < s.order.clusterTriangles(p.key); ++i) add(s.order.triangle(p.key, i));
@@ -1971,6 +2342,7 @@ void Renderer::uploadPatches(MeshSlot& s, const Mesh& mesh, bool wireframe) {
             const uint32_t v = p.verts[i];
             const glm::vec3& pos = mesh.positions[v];
             outside |= !packVertex(s.grid, pos, normals ? mesh.normals[v] : glm::vec3(0.0f, 0.0f, 1.0f), curvatureAt(mesh, v), packed[i]);
+            if (v < s.sentCurvature.size()) s.sentCurvature[v] = uint16_t(packed[i].normal >> 22);
             lo = glm::min(lo, pos);
             hi = glm::max(hi, pos);
         }
@@ -2011,15 +2383,15 @@ void Renderer::uploadPatches(MeshSlot& s, const Mesh& mesh, bool wireframe) {
     s.drawnTriangles = drawn;
 }
 
-void Renderer::drawPatches(const MeshSlot& s, GLenum mode, Part part, GLint primBaseLocation) {
+void Renderer::drawPatches(const MeshSlot& s, GLenum mode, DrawPart part, GLint primBaseLocation) {
     for (const MeshSlot::Patch& p : s.patches) {
-        const uint32_t count = part == Part::Lines ? p.lines : p.indices;
+        const uint32_t count = part == DrawPart::Lines ? p.lines : p.indices;
         if (count == 0 || !insideFrustum(frameCull_, p.bounds)) continue;
         if (primBaseLocation >= 0) gl::Uniform1i(primBaseLocation, GLint(p.part * kPatchTriangles));
-        const size_t first = part == Part::Lines ? size_t(p.part) * kPatchLineIndices : size_t(p.part) * kPatchTriangles * 3;
+        const size_t first = part == DrawPart::Lines ? size_t(p.part) * kPatchLineIndices : size_t(p.part) * kPatchTriangles * 3;
         gl::DrawElementsBaseVertex(mode, GLsizei(count), GL_UNSIGNED_SHORT, reinterpret_cast<const void*>(first * sizeof(uint16_t)),
                                    GLint(p.part * kPatchVertices));
-        if (part != Part::Lines) lastDrawn_ += count / 3;
+        if (part != DrawPart::Lines) lastDrawn_ += count / 3;
     }
     if (primBaseLocation >= 0) gl::Uniform1i(primBaseLocation, -1);
 }
@@ -2027,6 +2399,7 @@ void Renderer::drawPatches(const MeshSlot& s, GLenum mode, Part part, GLint prim
 void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, bool wireframe, bool pbr) {
     if (mesh.micro && microMatches(mesh)) { // a micro level draws its own way (render/MicroRenderer.h)
         if (!s.micro) s.micro = std::make_shared<MicroRenderer>();
+        s.micro->viewMoving = proxyUsed_; // (the last draw's: the view moving)
         s.outOfMemory = !s.micro->sync(mesh);
         s.drawnTriangles = s.outOfMemory ? 0 : 1; // (draw() skips empty slots)
         s.fresh = true;                           // (back to a mesh: a full upload)
@@ -2053,6 +2426,7 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
     // The GPU keeps the vertices in the slot's cluster layout (core/UploadOrder.h), so a dab re-sends a few
     // short ranges holding what it changed, gathered from the mesh arrays.
     bool indicesDone = false;
+    if (full) ++fullUploads_;
     if (full) {
         // The index buffer is written while the layout is made (mapped: the build's threads write each
         // cluster's drawn triangles straight into it).
@@ -2100,19 +2474,32 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
     const size_t ns = s.order.size();
     const bool ranged = !full && !dirtyRuns_.empty();
     const std::span<const uint32_t> order = s.order.fromGpu();
+    static const bool syncLog = std::getenv("SF_SYNC_LOG") != nullptr; // where a vertex upload's time went
+    auto lap = std::chrono::steady_clock::now();
+    const auto lapStart = lap;
+    double vertsMs = 0, boundsMs = 0, proxyMs = 0;
+    const auto lapMs = [](std::chrono::steady_clock::time_point& t) {
+        const auto now = std::chrono::steady_clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(now - t).count();
+        t = now;
+        return ms;
+    };
     if (full || ranged) {
         uploadVertices(s, mesh, full);
+        if (syncLog) vertsMs = lapMs(lap);
         updateBounds(s, mesh, full, full); // (a full upload computed them while building)
+        if (syncLog) boundsMs = lapMs(lap);
     }
     if (full) {
         s.proxyAllocated = false; // sized for the old mesh
+        s.coarse.reset(), s.coarseTried = false, s.coarseDirty.clear(), s.coarsePending.clear();
         s.proxyCount.clear();
         // (closedOriented also accepts unwelded seams, the same point twice, which the layout's check doesn't.)
         s.closed = s.order.closed() || closedOriented(mesh);
         uploadFaces(s, mesh, wantUvs, indicesDone);
         s.vertexCapacity = nv;
         // A mesh too big for the GPU's memory isn't drawn (rather than taking the driver down); the next full
-        // upload (e.g. after Lower Res or a decimation) tries again.
+        // upload (e.g. after Lower Level or a decimation) tries again.
         s.outOfMemory = false;
         for (int i = 0; i < 16; ++i) {
             const GLenum e = gl::GetError();
@@ -2134,7 +2521,30 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
     if (wireframe && !s.linesValid && !s.outOfMemory) buildLines(s, mesh);
     // Small meshes draw in full while the view moves too (their proxy would save little).
     constexpr size_t kProxyMinTriangles = size_t(1) << 18;
-    if (proxyUsed_ && !s.outOfMemory && s.drawnTriangles >= kProxyMinTriangles) buildProxies(s, mesh);
+    if (syncLog) lapMs(lap);
+    if ((proxyUsed_ || (proxyPrebuild_ && s.proxyAllocated)) && !s.outOfMemory && s.drawnTriangles >= kProxyMinTriangles)
+        buildProxies(s, mesh);
+    // Colour and mask edits move no point, so they mark the coarse levels here (as moves do in updateBounds): the
+    // edited clusters draw in full until the edits stop, then their cells take the new values. Colours or a mask
+    // appearing or going: every cluster.
+    if (s.coarse && !full) {
+        const bool attributes = (nv > 0 && mesh.colors.size() == nv) || (nv > 0 && mesh.mask.size() == nv) ||
+                                !s.coarse->colors.empty() || !s.coarse->mask.empty();
+        if (!coarseAttributesMatch(*s.coarse, mesh)) {
+            if (s.coarsePending.size() < s.coarseDirty.size()) // (once: then the next quiet sync updates them)
+                for (uint32_t c = 0; c < s.coarseDirty.size(); ++c) markCoarseDirty(s, c);
+        } else if (attributes && ranged) {
+            for (const auto& [b, e] : dirtyRuns_) {
+                if (b >= e) continue;
+                for (uint32_t c = s.order.clusterOfSlot(b), c1 = s.order.clusterOfSlot(e - 1); c <= c1; ++c) markCoarseDirty(s, c);
+            }
+        }
+    }
+    if (coarseLod_ && !s.coarseTried && !s.outOfMemory && s.drawnTriangles > (lodBudget_ ? lodBudget_ : triangleBudget(RenderSettings())))
+        buildCoarse(s, mesh);
+    if (s.coarse && !s.coarsePending.empty() && !s.coarseEdited && !stroking_) updateCoarse(s, mesh); // (the stroke is over)
+    s.coarseEdited = false;
+    if (syncLog) proxyMs = lapMs(lap);
     syncTexture(s, mesh, pbr);
     syncNormalMap(s, mesh, normalMap);
 
@@ -2174,6 +2584,13 @@ void Renderer::sync(MeshSlot& s, Mesh& mesh, const NormalMapView* normalMap, boo
     s.fresh = false;
     uploadPatches(s, mesh, wireframe); // (may ask for a full upload next time)
     mesh.clearDirty();
+    if (syncLog && (full || ranged || proxyMs > 1.0)) {
+        size_t sent = 0;
+        for (const auto& [b0, e0] : dirtyRuns_) sent += e0 - b0;
+        SDL_Log("sync: %s %zu slots in %zu runs, %.1f ms (vertices %.1f, bounds %.1f, proxy %.1f)", full ? "full" : "ranged",
+                sent, dirtyRuns_.size(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lapStart).count(),
+                vertsMs, boundsMs, proxyMs);
+    }
 }
 
 // The painted texture (core/Texture.h): a full upload when it is new or replaced, then only the rectangle
@@ -2423,9 +2840,9 @@ uint32_t Renderer::pbrPlanes(uint32_t id) const {
 
 void Renderer::setPbrUniforms(const MeshProgram& p, const RenderSettings& settings, bool textured, const MeshSlot& s) {
     if (p.envLevels < 0 && p.material < 0) return; // (not a PBR program)
-    gl::ActiveTexture(kTexture10);
+    gl::ActiveTexture(p.envUnit);
     gl::BindTexture(GL_TEXTURE_2D, envTexture_);
-    gl::ActiveTexture(kTexture11);
+    gl::ActiveTexture(p.brdfUnit);
     gl::BindTexture(GL_TEXTURE_2D, brdfTexture_);
     gl::ActiveTexture(kTexture8);
     gl::BindTexture(GL_TEXTURE_2D, textured ? s.ormTexture : 0);
@@ -2470,7 +2887,10 @@ bool Renderer::renderToImage(const Camera& camera, int width, int height, const 
     ok = ok && gl::CheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     if (ok) {
         gl::BindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+        const bool viewReferences = viewReferences_;
+        viewReferences_ = false; // (renders show only the references marked "Show in renders")
         draw(camera, width, height, settings);
+        viewReferences_ = viewReferences;
         gl::BindFramebuffer(GL_READ_FRAMEBUFFER, fbo[0]);
         gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo[1]);
         gl::BlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
@@ -2535,25 +2955,101 @@ bool Renderer::viewTarget(int width, int height, int samples) {
     return true;
 }
 
+
+// What a report needs when the view stays empty on a phone (Mali-G72 tablet, 81.9k triangles in the bar and nothing drawn,
+// 11-13): the first GL error a view draw raised (each code once; the draw's errors are otherwise cleared unlogged), and a line
+// for each of the first frames: the target, the triangles asked for, the draw calls' count.
+static void logViewFrame(const char* what, int width, int height, int samples, float scale, size_t triangles, bool fbo) {
+    static int frames = 0;
+    static unsigned seen = 0;
+    if (frames >= 300) { // (the first seconds only: after that the target's draws clear their errors unlogged, as before)
+        if (fbo)
+            for (int i = 0; i < 16 && gl::GetError() != GL_NO_ERROR; ++i) {
+            }
+        return;
+    }
+    for (int i = 0; i < 16; ++i) {
+        const GLenum e = gl::GetError();
+        if (e == GL_NO_ERROR) break;
+        const unsigned bit = 1u << (e & 15u);
+        if (!(seen & bit)) {
+            seen |= bit;
+            SDL_Log("GL error 0x%04x after drawing the view (%s; logged once per code)", unsigned(e), what);
+        }
+    }
+    if (frames < 4 || frames == 60) // (a few at the start, one a second later)
+        SDL_Log("View frame %d: %dx%d, %d samples, scale %.2f, %zu triangles drawn%s", frames, width, height, samples, double(scale), triangles,
+                fbo ? " (through the view target)" : "");
+    ++frames;
+}
+
 int Renderer::drawView(const Camera& camera, int width, int height, const RenderSettings& settings, const Viewport& viewport,
                        int samples) {
     GLint maxSamples = 1;
     gl::GetIntegerv(GL_MAX_SAMPLES, &maxSamples);
     samples = std::clamp(samples, 1, std::max(1, int(maxSamples)));
     if (directView_) samples = 1;
+    // Resolution scale (#80): the view drawn into a smaller target and scaled up into the window.
+    const float scale = std::clamp(settings.resolutionScale, 0.25f, 1.0f);
+    if (scale < 0.999f && !directView_ && !scaleFailed_) {
+        const int sw = std::max(1, int(std::lround(width * scale))), sh = std::max(1, int(std::lround(height * scale)));
+        const bool inset = viewport.w > 0 && viewport.h > 0;
+        Viewport small = viewport;
+        if (inset) {
+            small.x = int(std::lround(viewport.x * scale));
+            small.y = int(std::lround(viewport.y * scale));
+            small.w = std::max(1, int(std::lround(viewport.w * scale)));
+            small.h = std::max(1, int(std::lround(viewport.h * scale)));
+        }
+        int s = samples;
+        while (s > 1 && !viewTarget(sw, sh, s)) s /= 2;
+        if (s > 1 || viewTarget(sw, sh, 1)) {
+            gl::BindFramebuffer(GL_FRAMEBUFFER, viewFbo_);
+            draw(camera, sw, sh, settings, small);
+            logViewFrame("scaled view", sw, sh, s, scale, lastDrawn_, true);
+            gl::BindFramebuffer(GL_READ_FRAMEBUFFER, viewFbo_);
+            gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, viewResolveFbo_);
+            gl::BlitFramebuffer(0, 0, sw, sh, 0, 0, sw, sh, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+            gl::Disable(GL_SCISSOR_TEST);
+            gl::Viewport(0, 0, width, height);
+            if (inset) { // the window around the view, as draw() leaves it
+                gl::ClearColor(viewport.surround.x, viewport.surround.y, viewport.surround.z, 1.0f);
+                gl::Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            }
+            gl::BindFramebuffer(GL_READ_FRAMEBUFFER, viewResolveFbo_);
+            gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            if (inset)
+                gl::BlitFramebuffer(small.x, small.y, small.x + small.w, small.y + small.h, viewport.x, viewport.y,
+                                    viewport.x + viewport.w, viewport.y + viewport.h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            else gl::BlitFramebuffer(0, 0, sw, sh, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            const GLenum blitError = gl::GetError();
+            gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
+            if (blitError == GL_NO_ERROR) return s;
+            scaleFailed_ = true; // (don't try every frame)
+            SDL_Log("Scaled view copy to the window failed (GL error 0x%04x); drawing at full resolution", unsigned(blitError));
+        }
+    }
     while (samples > 1 && !viewTarget(width, height, samples)) samples /= 2;
-    if (samples <= 1) {
+    screenStrokeDrawn_ = false;
+    // A screen stroke needs the view in a target it can read back: through the single-sample one when no AA.
+    const bool screen = !screenStroke_.dabs.empty() && settings.litsphere >= 0 && !settings.pbr() && !settings.unlit;
+    if (samples <= 1 && !(screen && viewTarget(width, height, 1))) {
         gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
         draw(camera, width, height, settings, viewport);
+        logViewFrame("window", width, height, 1, 1.0f, lastDrawn_, false);
         return 1;
     }
     gl::BindFramebuffer(GL_FRAMEBUFFER, viewFbo_);
     draw(camera, width, height, settings, viewport);
-    for (int i = 0; i < 16 && gl::GetError() != GL_NO_ERROR; ++i) {
-    }
+    logViewFrame("view target", width, height, samples, 1.0f, lastDrawn_, true);
     gl::BindFramebuffer(GL_READ_FRAMEBUFFER, viewFbo_); // resolve: same format and size on both sides
     gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, viewResolveFbo_);
     gl::BlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    if (screen)
+        screenStrokeDrawn_ = screenPass_.apply(screenStroke_, viewFbo_, viewResolveFbo_, width, height, frameView_, frameProj_,
+                                               frameViewport_, litsphereTexture(settings.litsphere),
+                                               lightRotation(settings.lightYaw, settings.lightPitch));
     gl::BindFramebuffer(GL_READ_FRAMEBUFFER, viewResolveFbo_); // single-sample blit: may convert to the window's format
     gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     gl::BlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
@@ -2622,9 +3118,110 @@ void Renderer::endCapture(std::vector<uint8_t>& rgba) {
     gl::BindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+void Renderer::setReferences(const std::vector<ReferenceImage>& refs) {
+    if (refs.empty() && references_.empty() && referenceTextures_.empty()) return; // (every frame: nothing to copy)
+    references_ = refs;
+    for (size_t i = 0; i < referenceTextures_.size();) { // textures of images no longer in the list go
+        const Image* img = referenceTextures_[i].image.get();
+        const bool used = std::any_of(refs.begin(), refs.end(), [&](const ReferenceImage& r) { return r.image.get() == img; });
+        if (used) {
+            ++i;
+            continue;
+        }
+        gl::DeleteTextures(1, &referenceTextures_[i].tex);
+        referenceTextures_.erase(referenceTextures_.begin() + std::ptrdiff_t(i));
+    }
+}
+
+void Renderer::drawReferences(bool behind, const glm::mat4& view, const glm::mat4& proj, bool ortho, float aspect) {
+    if (thumbnailPass_) return;
+    bool started = false;
+    for (const ReferenceImage& r : references_) {
+        if (!r.shown() || behind != (r.mode == ReferenceMode::Behind) || (!viewReferences_ && !r.inRenders)) continue;
+        const float alpha = std::clamp(r.opacity, 0.0f, 1.0f) * r.facing(view, ortho);
+        if (alpha < 1.0f / 255.0f) continue;
+        auto t = std::find_if(referenceTextures_.begin(), referenceTextures_.end(),
+                              [&](const ReferenceTexture& x) { return x.image == r.image; });
+        if (t == referenceTextures_.end()) { // uploaded once per image, with mip levels (zoomed out it stays smooth)
+            ReferenceTexture nt{r.image, 0};
+            gl::GenTextures(1, &nt.tex);
+            gl::BindTexture(GL_TEXTURE_2D, nt.tex);
+            gl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            gl::TexImage2D(GL_TEXTURE_2D, 0, GLint(GL_RGBA8), r.image->width, r.image->height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                           r.image->rgba.data());
+            gl::GenerateMipmap(GL_TEXTURE_2D);
+            gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(GL_LINEAR_MIPMAP_LINEAR));
+            gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(GL_LINEAR));
+            gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE));
+            gl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE));
+            referenceTextures_.push_back(nt);
+            t = referenceTextures_.end() - 1;
+        }
+        if (!started) {
+            if (!referenceProgram_) { // linked when the first reference is drawn: none shown costs nothing
+                std::string error;
+                referenceProgram_ = link(kReferenceVS, kReferenceFS, error);
+                if (!referenceProgram_) {
+                    SDL_Log("reference images: %s", error.c_str());
+                    return;
+                }
+            }
+            started = true;
+            gl::UseProgram(referenceProgram_);
+            gl::BindVertexArray(emptyVao_);
+            gl::Enable(GL_BLEND);
+            gl::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            gl::DepthMask(GL_FALSE); // (never in the depth: nothing it covers is hidden from picks or later passes)
+            if (behind) gl::Disable(GL_DEPTH_TEST);
+            gl::Uniform1i(gl::GetUniformLocation(referenceProgram_, "uTex"), 0);
+            gl::ActiveTexture(GL_TEXTURE0);
+        }
+        const std::array<glm::vec3, 4> c = r.corners(aspect);
+        glm::vec4 clip[4], uv[4];
+        static constexpr int kStrip[4] = {0, 1, 3, 2}; // (the corners as a triangle strip)
+        for (int k = 0; k < 4; ++k) {
+            const glm::vec3& p = c[size_t(kStrip[k])];
+            clip[k] = behind ? glm::vec4(p.x * 2.0f - 1.0f, 1.0f - p.y * 2.0f, 0.0f, 1.0f) : proj * view * glm::vec4(p, 1.0f);
+            uv[k] = glm::vec4(r.cornerUv(kStrip[k]), 0.0f, 0.0f);
+        }
+        gl::Uniform4fv(gl::GetUniformLocation(referenceProgram_, "uClip"), 4, glm::value_ptr(clip[0]));
+        gl::Uniform4fv(gl::GetUniformLocation(referenceProgram_, "uUv"), 4, glm::value_ptr(uv[0]));
+        gl::Uniform1f(gl::GetUniformLocation(referenceProgram_, "uAlpha"), alpha);
+        gl::BindTexture(GL_TEXTURE_2D, t->tex);
+        gl::DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+    if (!started) return;
+    gl::BindTexture(GL_TEXTURE_2D, 0);
+    gl::Disable(GL_BLEND);
+    gl::DepthMask(GL_TRUE);
+    if (behind) gl::Disable(GL_DEPTH_TEST); // (the background pass runs with it off; draw() turns it on next)
+    else gl::Enable(GL_DEPTH_TEST);
+}
+
 void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, const RenderSettings& settings,
                     const Viewport& viewport) {
-    syncMatcaps();
+    if (!settings.motionProxy) lodBudget_ = triangleBudget(settings); // (sync builds coarse levels of meshes over it)
+    // SF_FRAME_LOG=ms (App.cpp): a draw slower than that says where its time went (lit spheres, environment, Parts).
+    static const double drawLogMs = std::getenv("SF_FRAME_LOG") ? std::atof(std::getenv("SF_FRAME_LOG")) : -1.0;
+    const auto drawStart = std::chrono::steady_clock::now();
+    double drawMarks[4] = {};
+    const auto drawMark = [&](int i) {
+        if (drawLogMs >= 0.0) drawMarks[i] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - drawStart).count();
+    };
+    struct DrawLog {
+        const double& limit;
+        const double* marks;
+        std::chrono::steady_clock::time_point start;
+        ~DrawLog() {
+            if (limit < 0.0) return;
+            const double total = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            if (total > limit)
+                SDL_Log("draw %.1f ms: lit spheres %.1f, environment %.1f, Parts %.1f, the rest %.1f", total, marks[0],
+                        marks[1] - marks[0], marks[2] - marks[1], total - marks[2]);
+        }
+    } drawLog{drawLogMs, drawMarks, drawStart};
+    syncLitSpheres();
+    drawMark(0);
     forceBackfaces_ = settings.backfaceCulling && !thumbnailPass_; // (#68; thumbnails show the whole Part)
     // Known state before the clears: a scissor box, colour mask or depth mask left over from another pass (UI,
     // overlays, calibration) makes glClear partial. Some drivers (NVIDIA on Windows, #29) then show old frames
@@ -2659,6 +3256,7 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
     // PBR view: the environment's lighting (built when it first shows), and the rotation from view space into it.
     // (Thumbnails use whatever environment the view has: their settings must not start another build.)
     const bool pbr = settings.pbr() && (thumbnailPass_ ? envTexture_ != 0 : ensureEnvironment(settings.environment));
+    drawMark(1);
     if (pbr) {
         const float yaw = glm::radians(settings.environmentRotation);
         const glm::mat3 spin(glm::vec3(std::cos(yaw), 0.0f, -std::sin(yaw)), glm::vec3(0.0f, 1.0f, 0.0f),
@@ -2698,15 +3296,23 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
         gl::DrawArrays(GL_TRIANGLES, 0, 3);
     }
 
+    const float viewAspect = float(fbWidth) / float(std::max(fbHeight, 1));
+    if (!references_.empty()) drawReferences(true, view, proj, camera.ortho, viewAspect); // (Behind the model)
+
     frameView_ = view;
     frameProj_ = proj;
     frameViewport_ = inset ? glm::vec4(float(viewport.x), float(viewport.y), float(viewport.w), float(viewport.h))
                            : glm::vec4(0.0f, 0.0f, float(targetWidth), float(targetHeight));
     frameCull_ = CullView::from(view, proj);
     lastDrawn_ = 0;
+    lastCoarseClusters_ = 0;
+    previewOnly_ = stillWanted_ = false;
     gl::Enable(GL_DEPTH_TEST);
     gl::DepthFunc(GL_LEQUAL);
+    floorGridDrawn_ = false;
+    if (settings.floorGrid) drawFloorGrid(camera, view, proj, settings); // (under everything: the Parts paint over it)
     if (drawList_.empty() || !settings.showMesh) {
+        if (!references_.empty()) drawReferences(false, view, proj, camera.ortho, viewAspect);
         if (settings.showSplats) drawSplats(view, proj, fbWidth, fbHeight, settings.splatOpacity);
         gl::UseProgram(0);
         return;
@@ -2719,56 +3325,118 @@ void Renderer::draw(const Camera& camera, int targetWidth, int targetHeight, con
     };
 
     gl::ActiveTexture(kTexture2);
-    gl::BindTexture(GL_TEXTURE_2D, matcapTexture(settings.matcap));
+    gl::BindTexture(GL_TEXTURE_2D, litsphereTexture(settings.litsphere));
     gl::ActiveTexture(GL_TEXTURE0);
     gl::Enable(GL_POLYGON_OFFSET_FILL);
     gl::PolygonOffset(1.0f, 1.0f);
+    // X-Ray (#80, #91): the other Parts are see-through, or the active one when it is the only one shown.
+    const bool xray = settings.xray && !thumbnailPass_;
+    bool others = false;
     for (const DrawItem& item : drawList_)
-        if (const MeshSlot* s = findSlot(item.id); s && s->drawnTriangles > 0) drawSlot(*s, item.active, item.flat, settings);
+        if (const MeshSlot* s = findSlot(item.id); s && s->drawnTriangles > 0 && !item.active) others = true;
+    auto seeThrough = [&](const DrawItem& item) { return xray && (others ? !item.active : true); };
+    drawAlpha_ = 1.0f;
+    for (const DrawItem& item : drawList_)
+        if (const MeshSlot* s = findSlot(item.id); s && s->drawnTriangles > 0 && !seeThrough(item))
+            drawItem(*s, item, settings);
+    drawMark(2);
+    if (!references_.empty()) { // In the scene: behind or in front of the opaque Parts, under the see-through ones
+        gl::Disable(GL_POLYGON_OFFSET_FILL);
+        drawReferences(false, view, proj, camera.ortho, viewAspect);
+        gl::Enable(GL_POLYGON_OFFSET_FILL);
+    }
+    if (xray) {
+        gl::Enable(GL_BLEND);
+        gl::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        const float opacity = std::clamp(settings.xrayOpacity, 0.05f, 1.0f);
+        if (others) {
+            // Only each see-through Part's nearest surface: its depth first, then its colour where that depth is
+            // (no inside folds or back faces piling up), over the opaque active Part.
+            gl::ColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+            for (const DrawItem& item : drawList_)
+                if (const MeshSlot* s = findSlot(item.id); s && s->drawnTriangles > 0 && seeThrough(item))
+                    drawItem(*s, item, settings);
+            gl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            gl::DepthMask(GL_FALSE);
+            drawAlpha_ = opacity;
+            for (const DrawItem& item : drawList_)
+                if (const MeshSlot* s = findSlot(item.id); s && s->drawnTriangles > 0 && seeThrough(item))
+                    drawItem(*s, item, settings);
+        } else {
+            // The lone active Part: its back faces first, then its front faces over them, so its far side and
+            // insides show through in order (exact for a convex Part, close for the rest).
+            gl::DepthMask(GL_FALSE);
+            keepBackfaces_ = true;
+            drawAlpha_ = opacity;
+            for (GLenum cull : {GL_FRONT, GL_BACK}) {
+                xrayCull_ = cull;
+                for (const DrawItem& item : drawList_)
+                    if (const MeshSlot* s = findSlot(item.id); s && s->drawnTriangles > 0)
+                        drawItem(*s, item, settings);
+            }
+            xrayCull_ = 0;
+            keepBackfaces_ = false;
+        }
+        drawAlpha_ = 1.0f;
+        gl::DepthMask(GL_TRUE);
+        gl::Disable(GL_BLEND);
+    }
     proxyUsed_ = settings.motionProxy;
     gl::Disable(GL_POLYGON_OFFSET_FILL);
     for (GLenum unit : {kTexture7, kTexture6, GL_TEXTURE3, GL_TEXTURE1}) {
         gl::ActiveTexture(unit);
         gl::BindTexture(GL_TEXTURE_BUFFER, 0);
     }
-    for (GLenum unit : {kTexture11, kTexture10, kTexture9, kTexture8, kTexture5, GL_TEXTURE4, kTexture2}) {
+    for (GLenum unit : {kTexture11, kTexture10, kTexture9, kTexture8, kTexture5, GL_TEXTURE4, GL_TEXTURE3, kTexture2}) {
         gl::ActiveTexture(unit);
         gl::BindTexture(GL_TEXTURE_2D, 0);
     }
     gl::ActiveTexture(GL_TEXTURE0);
 
-    if (settings.wireframe) { // the active SubTool only
-        gl::UseProgram(wireProgram_);
-        gl::UniformMatrix4fv(gl::GetUniformLocation(wireProgram_, "uView"), 1, GL_FALSE, glm::value_ptr(view));
-        gl::UniformMatrix4fv(gl::GetUniformLocation(wireProgram_, "uProj"), 1, GL_FALSE, glm::value_ptr(proj));
+    if (settings.wireframe) { // the active Part only
+        // Two programs: edge lists fade their sub-pixel edges (kWireLineGS); triangle outlines draw as before.
+        glm::mat4 wireView = view; // the item's (view * model for a moved linked copy)
+        auto use = [&](GLuint prog, const MeshSlot& slot) {
+            gl::UseProgram(prog);
+            gl::UniformMatrix4fv(gl::GetUniformLocation(prog, "uView"), 1, GL_FALSE, glm::value_ptr(wireView));
+            gl::UniformMatrix4fv(gl::GetUniformLocation(prog, "uProj"), 1, GL_FALSE, glm::value_ptr(proj));
+            gl::Uniform3fv(gl::GetUniformLocation(prog, "uGridOrigin"), 1, glm::value_ptr(slot.grid.origin));
+            gl::Uniform1f(gl::GetUniformLocation(prog, "uGridStep"), slot.grid.step);
+            if (prog == wireLineProgram_)
+                gl::Uniform2f(gl::GetUniformLocation(prog, "uViewportPx"), float(fbWidth), float(fbHeight));
+            return prog;
+        };
         gl::Enable(GL_BLEND);
         gl::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         gl::DepthMask(GL_FALSE);
         for (const DrawItem& item : drawList_) {
             const MeshSlot* s = item.active ? findSlot(item.id) : nullptr;
-            if (!s || s->drawnTriangles == 0 || s->micro) continue; // (micro levels: no wireframe)
-            gl::Uniform3fv(gl::GetUniformLocation(wireProgram_, "uGridOrigin"), 1, glm::value_ptr(s->grid.origin));
-            gl::Uniform1f(gl::GetUniformLocation(wireProgram_, "uGridStep"), s->grid.step);
+            if (!s || s->drawnTriangles == 0 || s->micro) continue; // (micro levels: drawMicro draws theirs)
+            wireView = item.moved ? view * item.model : view; // (a linked copy, #94)
+            const CullView frameCull = frameCull_;
+            if (item.moved) frameCull_ = CullView::from(wireView, proj);
             cull(*s, frameCull_);
             if (!s->patches.empty() && s->patchVao) { // dynamic topology's patches
                 const bool lines = s->patchLinesOn;
-                gl::Uniform1f(gl::GetUniformLocation(wireProgram_, "uAlpha"), lines ? 0.5775f : 0.35f);
+                const GLuint prog = use(lines ? wireLineProgram_ : wireProgram_, *s);
+                gl::Uniform1f(gl::GetUniformLocation(prog, "uAlpha"), lines ? 0.5775f : 0.35f);
                 if (!lines) gl::PolygonMode(GL_FRONT_AND_BACK, GL_LINE);
                 gl::BindVertexArray(lines ? s->patchLineVao : s->patchVao);
-                drawPatches(*s, lines ? GL_LINES : GL_TRIANGLES, lines ? Part::Lines : Part::Triangles, -1);
+                drawPatches(*s, lines ? GL_LINES : GL_TRIANGLES, lines ? DrawPart::Lines : DrawPart::Triangles, -1);
                 if (!lines) gl::PolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             }
             if (s->linesValid) {
-                gl::Uniform1f(gl::GetUniformLocation(wireProgram_, "uAlpha"), 0.5775f); // 1 - (1 - 0.35)^2
+                gl::Uniform1f(gl::GetUniformLocation(use(wireLineProgram_, *s), "uAlpha"), 0.5775f); // 1 - (1 - 0.35)^2
                 gl::BindVertexArray(s->lineVao);
-                drawClusters(*s, drawClusters_, GL_LINES, Part::Lines, -1);
+                drawClusters(*s, drawClusters_, GL_LINES, DrawPart::Lines, -1);
             } else { // edges not built (a mesh not synced for the wireframe): outline the triangles
-                gl::Uniform1f(gl::GetUniformLocation(wireProgram_, "uAlpha"), 0.35f);
+                gl::Uniform1f(gl::GetUniformLocation(use(wireProgram_, *s), "uAlpha"), 0.35f);
                 gl::PolygonMode(GL_FRONT_AND_BACK, GL_LINE);
                 gl::BindVertexArray(s->vao);
-                drawClusters(*s, drawClusters_, GL_TRIANGLES, Part::Triangles, -1);
+                drawClusters(*s, drawClusters_, GL_TRIANGLES, DrawPart::Triangles, -1);
                 gl::PolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             }
+            frameCull_ = frameCull;
         }
         gl::DepthMask(GL_TRUE);
         gl::Disable(GL_BLEND);
@@ -2803,7 +3471,7 @@ void Renderer::cull(const MeshSlot& s, const CullView& frame, bool proxy) {
         }
         return;
     }
-    v.backfaces = !v.ortho && s.closed && s.volume > 0.0 && !s.anyHidden && s.box.valid() &&
+    v.backfaces = !keepBackfaces_ && !v.ortho && s.closed && s.volume > 0.0 && !s.anyHidden && s.box.valid() &&
                   (e.x < s.box.min.x || e.y < s.box.min.y || e.z < s.box.min.z || e.x > s.box.max.x || e.y > s.box.max.y ||
                    e.z > s.box.max.z);
     auto reachesNear = [&](const ClusterBounds& b) {
@@ -2837,10 +3505,88 @@ void Renderer::cull(const MeshSlot& s, const CullView& frame, bool proxy) {
     }
 }
 
+// Clark 1976: the detail from what the screen can hold. Everything in full detail if it fits the budget; else every
+// visible cluster at one level, the finest that fits (the coarsest if none does): one level for all keeps the surface
+// closed (render/Clusters.h). Clusters an edit moved draw in full until updated (their seams may gap until then).
+void Renderer::cullCoarse(const MeshSlot& s, const CullView& frame, size_t budget) {
+    cull(s, frame, false); // (the visible clusters, in full)
+    coarseClusters_.clear();
+    coarseLevel_.clear();
+    size_t full = 0;
+    for (uint32_t c : drawClusters_) full += size_t(s.drawCount[c]) / 3;
+    if (full <= budget) return;
+    // (clusters facing away stay out: the coarse ones go to the GPU's culling as the full ones)
+    const CoarseLevels& L = *s.coarse;
+    int pick = int(L.levels.size()) - 1;
+    for (int level = 0; level < int(L.levels.size()); ++level) {
+        size_t total = 0;
+        for (uint32_t c : drawClusters_)
+            total += s.coarseDirty[c] || L.clusters[c].levels <= level ? size_t(s.drawCount[c]) / 3 : L.clusters[c].count[level] / 3;
+        if (total <= budget) {
+            pick = level;
+            break;
+        }
+    }
+    size_t kept = 0;
+    for (uint32_t c : drawClusters_) {
+        if (s.coarseDirty[c] || L.clusters[c].levels <= pick) {
+            drawClusters_[kept++] = c;
+        } else {
+            coarseClusters_.push_back(c);
+            coarseLevel_.push_back(uint8_t(pick));
+        }
+    }
+    drawClusters_.resize(kept);
+}
+
 // Draws `clusters` of `s` (the VAO for `part` bound): their triangles, the wireframe's edges, or their motion
 // proxies. One multi-draw, or with per-triangle data on a driver whose gl_VertexID lacks the base vertex, one
 // draw per cluster with its first drawn triangle in `primBaseLocation`.
-void Renderer::drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clusters, GLenum mode, Part part, GLint primBaseLocation) {
+// The floor grid (#115): drawn right after the background, before any Part, with no depth: every Part (and splat)
+// paints over it, so it never shows on the model, from above or below. Its cell is a power of ten of the zoom: 0.1
+// at the default view of a new model, 1 from ten times further out.
+void Renderer::drawFloorGrid(const Camera& camera, const glm::mat4& view, const glm::mat4& proj,
+                             const RenderSettings& settings) {
+    if (thumbnailPass_) return;
+    if (!floorProgram_) {
+        std::string error;
+        floorProgram_ = link(kFloorVS, kFloorFS, error);
+        if (!floorProgram_) {
+            SDL_Log("Floor grid: %s", error.c_str());
+            return;
+        }
+    }
+    const glm::vec3 eye = glm::vec3(glm::inverse(view)[3]);
+    const float zoom = std::log10(std::max(camera.distance, 1e-4f)) - 0.3f, level = std::floor(zoom);
+    const float fade = std::max(camera.distance * 6.0f, std::abs(eye.y - settings.floorHeight) * 2.0f);
+    // Lines a little lighter than a dark background, darker than a light one.
+    const glm::vec3 bg = settings.gradientBackground ? settings.gradientCentre : settings.backgroundColor;
+    const float luma = glm::dot(bg, glm::vec3(0.2126f, 0.7152f, 0.0722f));
+    const glm::vec3 line = luma > 0.5f ? glm::vec3(0.08f) : glm::vec3(0.86f);
+    gl::UseProgram(floorProgram_);
+    auto at = [&](const char* n) { return gl::GetUniformLocation(floorProgram_, n); };
+    gl::UniformMatrix4fv(at("uView"), 1, GL_FALSE, glm::value_ptr(view));
+    gl::UniformMatrix4fv(at("uProj"), 1, GL_FALSE, glm::value_ptr(proj));
+    gl::Uniform2f(at("uCentre"), eye.x, eye.z);
+    gl::Uniform1f(at("uHalf"), fade);
+    gl::Uniform1f(at("uFloor"), settings.floorHeight);
+    gl::Uniform3fv(at("uEye"), 1, glm::value_ptr(eye));
+    gl::Uniform1f(at("uStep"), std::pow(10.0f, level - 1.0f));
+    gl::Uniform1f(at("uBlend"), zoom - level);
+    gl::Uniform1f(at("uFade"), fade);
+    gl::Uniform3fv(at("uLine"), 1, glm::value_ptr(line));
+    gl::BindVertexArray(emptyVao_);
+    gl::Disable(GL_DEPTH_TEST);
+    gl::Enable(GL_BLEND);
+    gl::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    gl::Disable(GL_CULL_FACE);
+    gl::DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    gl::Disable(GL_BLEND);
+    gl::Enable(GL_DEPTH_TEST);
+    floorGridDrawn_ = true;
+}
+
+void Renderer::drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clusters, GLenum mode, DrawPart part, GLint primBaseLocation) {
     drawCounts_.clear();
     drawOffsets_.clear();
     drawBases_.clear();
@@ -2850,15 +3596,15 @@ void Renderer::drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clus
         GLsizei count = 0;
         size_t first = 0;
         switch (part) {
-        case Part::Triangles:
+        case DrawPart::Triangles:
             count = s.drawCount[c];
             first = size_t(s.order.firstTriangle(c)) * 3;
             break;
-        case Part::Lines:
+        case DrawPart::Lines:
             count = GLsizei(s.lineCount[c]);
             first = s.lineFirst[c];
             break;
-        case Part::Proxy:
+        case DrawPart::Proxy:
             count = GLsizei(s.proxyCount[c]);
             first = size_t(s.order.firstTriangle(c) / 4) * 3;
             break;
@@ -2869,7 +3615,7 @@ void Renderer::drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clus
         indices += size_t(count);
     }
     if (drawCounts_.empty()) return;
-    if (part != Part::Lines) lastDrawn_ += indices / 3;
+    if (part != DrawPart::Lines) lastDrawn_ += indices / 3;
     if (primBaseLocation >= 0 && !vertexIdHasBase_) {
         for (size_t i = 0; i < clusters.size(); ++i) {
             if (drawCounts_[i] == 0) continue;
@@ -2883,9 +3629,180 @@ void Renderer::drawClusters(const MeshSlot& s, const std::vector<uint32_t>& clus
                                     drawBases_.data());
 }
 
-// One mesh. Mask and polygroup colours are for the SubTool being edited; polypaint shows on all of them.
+// One mesh. Mask and face group colours are for the Part being edited; vertex paint shows on all of them.
+// The material tint a mesh gets (RenderSettings::colorTintsMaterial), less 1: Lit Sphere shading, no vertex paint.
+static glm::vec3 materialTintShift(const RenderSettings& settings, bool hasColors) {
+    if (!settings.colorTintsMaterial || settings.pbr() || hasColors) return glm::vec3(0.0f);
+    return settings.materialTint - glm::vec3(1.0f);
+}
+
+// The triangles a frame may draw: the tier's budget, lowered by the governed one (core/HardwareProfile.h: the frame
+// governor, SF_HW_SIMULATE=floor); half of it while the view moves (Fast Navigation), so orbiting stays smooth.
+size_t Renderer::triangleBudget(const RenderSettings& settings) const {
+    size_t full = settings.renderTriangleBudget ? settings.renderTriangleBudget : size_t(currentTierConfig().activeTriangleBudget);
+    if (const char* forced = std::getenv("SF_TRIANGLE_BUDGET"); forced && std::atoll(forced) > 0) full = size_t(std::atoll(forced)); // (tests)
+    if (const uint64_t governed = renderTriangleBudget(); governed > 0) full = std::min(full, size_t(governed));
+    return settings.motionProxy ? full / 2 : full;
+}
+
+// The coarse levels (render/Clusters.h): built at once, timed; their own vertices and 32-bit indices.
+void Renderer::buildCoarse(MeshSlot& s, const Mesh& mesh) {
+    s.coarseTried = true;
+    const auto start = std::chrono::steady_clock::now();
+    auto levels = std::make_unique<CoarseLevels>(buildCoarseLevels(mesh, s.order));
+    const double buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    if (levels->clusters.size() != s.order.clusters().size() || levels->indices.empty()) return;
+    if (!s.coarseVao) {
+        gl::GenVertexArrays(1, &s.coarseVao);
+        gl::GenBuffers(1, &s.coarseVertices);
+        gl::GenBuffers(1, &s.coarseIndices);
+        gl::GenBuffers(1, &s.coarseColors);
+        gl::GenBuffers(1, &s.coarseMask);
+    }
+    s.coarse = std::move(levels);
+    s.coarseDirty.assign(s.coarse->clusters.size(), 0);
+    s.coarsePending.clear();
+    gl::BindVertexArray(s.coarseVao);
+    uploadCoarsePoints(s);
+    uploadCoarseAttributes(s);
+    gl::EnableVertexAttribArray(0);
+    gl::VertexAttribIPointer(0, 2, GL_UNSIGNED_INT, sizeof(PackedVertex), nullptr);
+    gl::EnableVertexAttribArray(1);
+    gl::VertexAttribIPointer(1, 1, GL_UNSIGNED_INT, sizeof(PackedVertex), reinterpret_cast<const void*>(2 * sizeof(uint32_t)));
+    gl::BindBuffer(GL_ELEMENT_ARRAY_BUFFER, s.coarseIndices);
+    gl::BufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(s.coarse->indices.size() * sizeof(uint32_t)), s.coarse->indices.data(), GL_STATIC_DRAW);
+    const size_t indexCount = s.coarse->indices.size();
+    std::vector<uint32_t>().swap(s.coarse->indices); // (on the GPU; an edit moves points, never triangles)
+    gl::BindVertexArray(0);
+    gl::BindBuffer(GL_ARRAY_BUFFER, 0);
+    if (std::getenv("SF_COARSE_LOG")) {
+        size_t first = 0, coarsest = 0, withLevels = 0;
+        for (const CoarseLevels::Lod& l : s.coarse->clusters)
+            if (l.levels > 0) first += l.count[0] / 3, coarsest += l.count[l.levels - 1] / 3, ++withLevels;
+        std::fprintf(stderr, "coarse lod: %zu of %zu clusters, built in %.0f ms; %zu cells, %zu indices (%.0f MB); level 0 %zu, coarsest %zu of %zu triangles\n",
+                     withLevels, s.coarse->clusters.size(), buildMs, s.coarse->positions.size(), indexCount,
+                     double(s.coarse->positions.size() * sizeof(PackedVertex) + indexCount * 4) / 1048576.0, first, coarsest,
+                     s.order.triangleCount());
+    }
+}
+
+// The cells' points, packed on the mesh's position grid (whole: a few MB).
+void Renderer::uploadCoarsePoints(MeshSlot& s) {
+    const CoarseLevels& L = *s.coarse;
+    std::vector<PackedVertex> packed(L.positions.size());
+    poolFor(packed.size(), [&](size_t i0, size_t i1) {
+        for (size_t i = i0; i < i1; ++i) packVertex(s.grid, L.positions[i], L.normals[i], 0.0f, packed[i]);
+    });
+    gl::BindBuffer(GL_ARRAY_BUFFER, s.coarseVertices);
+    gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(packed.size() * sizeof(PackedVertex)), packed.data(), GL_STATIC_DRAW);
+}
+
+// The cells' colours and mask as the full mesh's go up (whole: a few MB), or the arrays off where it has none.
+void Renderer::uploadCoarseAttributes(MeshSlot& s) {
+    const CoarseLevels& L = *s.coarse;
+    if (!L.colors.empty()) {
+        std::vector<uint32_t> packed(L.colors.size());
+        poolFor(packed.size(), [&](size_t i0, size_t i1) {
+            for (size_t i = i0; i < i1; ++i) packed[i] = packColor(L.colors[i]);
+        });
+        gl::BindBuffer(GL_ARRAY_BUFFER, s.coarseColors);
+        gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(packed.size() * sizeof(uint32_t)), packed.data(), GL_STATIC_DRAW);
+        gl::VertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, 4, nullptr);
+        gl::EnableVertexAttribArray(2);
+    } else {
+        gl::DisableVertexAttribArray(2);
+    }
+    if (!L.mask.empty()) {
+        std::vector<uint8_t> packed(L.mask.size());
+        for (size_t i = 0; i < packed.size(); ++i) packed[i] = packMask(L.mask[i]);
+        gl::BindBuffer(GL_ARRAY_BUFFER, s.coarseMask);
+        gl::BufferData(GL_ARRAY_BUFFER, GLsizeiptr(packed.size()), packed.data(), GL_STATIC_DRAW);
+        gl::VertexAttribPointer(3, 1, GL_UNSIGNED_BYTE, GL_TRUE, 1, nullptr);
+        gl::EnableVertexAttribArray(3);
+    } else {
+        gl::DisableVertexAttribArray(3);
+    }
+    gl::BindBuffer(GL_ARRAY_BUFFER, s.coarseVertices); // (the points' attributes are set up against it)
+}
+
+void Renderer::noteGpuFrame(double gpuMs, uint64_t drawnTriangles, double cpuBeforeDrawMs) {
+    gpuMsPerTriangle_ = nextGpuMsPerTriangle(gpuMsPerTriangle_, gpuMs, cpuBeforeDrawMs, drawnTriangles);
+}
+
+size_t Renderer::coarsePendingClusters() const {
+    size_t n = 0;
+    for (const MeshSlot& s : slots_) n += s.coarsePending.size();
+    return n;
+}
+
+size_t Renderer::patchErrors(uint32_t id, const Mesh& mesh) {
+    size_t errors = 0;
+    const uint32_t nt = uint32_t(mesh.triangleCount());
+    const bool hidden = mesh.hidden.size() == nt && nt > 0;
+    std::vector<uint16_t> got;
+    std::vector<uint32_t> want;
+    for (MeshSlot& s : slots_) {
+        if (s.id != id) continue;
+        for (const MeshSlot::Patch& p : s.patches) {
+            if (p.stale || !p.uploaded) continue;
+            // The mesh vertices of the patch's triangles now, as preparePatches lists them.
+            want.clear();
+            auto add = [&](uint32_t t) {
+                if (t >= nt || (hidden && mesh.hidden[t])) return;
+                for (int c = 0; c < 3; ++c) want.push_back(mesh.triangles[t][c]);
+            };
+            if (p.key < kTailPatch) {
+                for (uint32_t i = 0; i < s.order.clusterTriangles(p.key); ++i) add(s.order.triangle(p.key, i));
+            } else {
+                const uint32_t first = s.layoutTriangles + (p.key - kTailPatch) * kPatchTriangles;
+                for (uint32_t t = first; t < first + kPatchTriangles && t < nt; ++t) add(t);
+            }
+            got.assign(p.indices, 0);
+            if (!got.empty()) {
+                gl::BindVertexArray(s.patchVao);
+                gl::GetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(size_t(p.part) * kPatchTriangles * 3 * sizeof(uint16_t)),
+                                     GLsizeiptr(got.size() * sizeof(uint16_t)), got.data());
+                gl::BindVertexArray(0);
+            }
+            if (got.size() != want.size()) {
+                errors += std::max(got.size(), want.size()) / 3;
+                continue;
+            }
+            for (size_t i = 0; i < got.size(); i += 3) {
+                bool same = true;
+                for (size_t c = i; c < i + 3; ++c) same = same && got[c] < p.verts.size() && p.verts[got[c]] == want[c];
+                errors += same ? 0 : 1;
+            }
+        }
+    }
+    return errors;
+}
+
+void Renderer::markCoarseDirty(MeshSlot& s, uint32_t c) {
+    if (!s.coarse || c >= s.coarseDirty.size()) return;
+    s.coarseEdited = true;
+    if (!s.coarseDirty[c]) s.coarseDirty[c] = 1, s.coarsePending.push_back(c);
+}
+
+// After a stroke: the points of the cells the edited clusters' vertices are in, and up the levels
+// (updateCoarseLevels), sent up whole (a few MB).
+void Renderer::updateCoarse(MeshSlot& s, const Mesh& mesh) {
+    const auto start = std::chrono::steady_clock::now();
+    const std::vector<uint32_t> changed = updateCoarseLevels(*s.coarse, mesh, s.order, s.coarsePending);
+    gl::BindVertexArray(s.coarseVao);
+    if (!changed.empty()) uploadCoarsePoints(s), uploadCoarseAttributes(s);
+    gl::BindVertexArray(0);
+    gl::BindBuffer(GL_ARRAY_BUFFER, 0);
+    for (uint32_t c : s.coarsePending) s.coarseDirty[c] = 0;
+    if (std::getenv("SF_COARSE_LOG"))
+        std::fprintf(stderr, "coarse lod: %zu clusters, %zu points updated in %.1f ms\n", s.coarsePending.size(), changed.size(),
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    s.coarsePending.clear();
+}
+
 void Renderer::drawMicro(const MeshSlot& s, bool active, bool flat, const RenderSettings& settings) {
-    const MeshProgram* p = meshProgram(kMicro | (flat ? kFlat : 0) | (settings.pbr() && envTexture_ ? kPbr : 0));
+    const MeshProgram* p = meshProgram(kMicro | (flat ? kFlat : 0) | (settings.pbr() && envTexture_ ? kPbr : 0) |
+                                       (s.micro && s.micro->focus() ? kFocus : 0));
     if (!p) return;
     gl::UseProgram(p->id);
     setPbrUniforms(*p, settings, false, s);
@@ -2896,22 +3813,44 @@ void Renderer::drawMicro(const MeshSlot& s, bool active, bool flat, const Render
     gl::Uniform2f(p->projScale, orthographic ? 1e20f : frameProj_[0][0], orthographic ? 1e20f : frameProj_[1][1]);
     gl::Uniform3fv(p->baseColor, 1, glm::value_ptr(settings.baseColor));
     gl::Uniform1i(p->silhouette, settings.silhouette ? 1 : 0);
-    gl::Uniform1i(p->matcap, matcapTexture(settings.matcap) ? 1 : 0);
-    const MatcapCavity cavity = matcapCavity(settings.matcap);
-    gl::Uniform2f(p->matcapCavity, cavity.crease, cavity.ridge);
+    gl::Uniform3fv(p->tintShift, 1, glm::value_ptr(materialTintShift(settings, s.hasColors)));
+    gl::Uniform1i(p->litsphere, litsphereTexture(settings.litsphere) ? 1 : 0);
+    gl::Uniform1i(p->unlit, settings.unlit ? 1 : 0);
+    const LitSphereCavity cavity = litsphereCavity(settings.litsphere);
+    gl::Uniform2f(p->litsphereCavity, cavity.crease, cavity.ridge);
     gl::Uniform1i(p->paint, 0);
     gl::Uniform1i(p->showMask, active && settings.showMask ? 1 : 0);
-    gl::Uniform1i(p->groups, active && settings.showPolygroups ? 2 : 0);
+    gl::Uniform1f(p->maskDarkness, std::clamp(settings.maskDarkness, 0.0f, 1.0f));
+    gl::Uniform4fv(p->maskColor, 1, glm::value_ptr(glm::vec4(settings.maskColor, settings.maskColorCustom ? 1.0f : 0.0f)));
+    gl::Uniform1i(p->groups, active && settings.showFaceGroups ? 2 : 0);
     gl::Uniform1i(p->dim, !active && settings.dimInactive ? 1 : 0);
+    gl::Uniform1i(p->microWire, active && settings.wireframe ? 1 : 0); // (#128: the wireframe pass skips micro levels)
+    setLightUniforms(*p, settings);
     gl::Uniform1i(p->twoSided, 1);
     // Moving (Fast Navigation): a coarser target and half the budget, so orbiting stays smooth.
     const bool moving = settings.motionProxy;
-    const size_t full = settings.renderTriangleBudget ? settings.renderTriangleBudget : size_t(currentTierConfig().activeTriangleBudget);
-    const size_t budget = moving ? full / 2 : full;
+    const size_t budget = triangleBudget(settings);
     const float target = settings.microTargetPx * (moving ? 2.0f : 1.0f);
-    // (the budget is shared by the micro SubTools on screen: each gets it whole; one is the usual case)
+    // (the budget is shared by the micro Parts on screen: each gets it whole; one is the usual case)
     const_cast<MeshSlot&>(s).microDrawn = s.micro->draw(p->id, frameCull_, frameProj_, frameViewport_, budget, target);
     lastDrawn_ += s.microDrawn;
+}
+
+glm::mat3 lightRotation(float yawDegrees, float pitchDegrees) {
+    const float y = glm::radians(yawDegrees), p = glm::radians(pitchDegrees);
+    // Yaw about the view's up axis (+: the light moves right), then pitch about its side axis (+: up).
+    const glm::mat3 yaw(glm::vec3(std::cos(y), 0.0f, -std::sin(y)), glm::vec3(0.0f, 1.0f, 0.0f),
+                        glm::vec3(std::sin(y), 0.0f, std::cos(y)));
+    const glm::mat3 pitch(glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, std::cos(p), -std::sin(p)),
+                          glm::vec3(0.0f, std::sin(p), std::cos(p)));
+    return yaw * pitch;
+}
+
+void Renderer::setLightUniforms(const MeshProgram& p, const RenderSettings& settings) const {
+    const glm::mat3 r = lightRotation(settings.lightYaw, settings.lightPitch);
+    gl::UniformMatrix3fv(p.lightRot, 1, GL_FALSE, glm::value_ptr(r));
+    gl::Uniform2f(p.lightLevels, std::max(settings.lightIntensity, 0.0f), std::max(settings.lightAmbient, 0.0f));
+    gl::Uniform1f(p.alpha, drawAlpha_);
 }
 
 void Renderer::drawSlot(const MeshSlot& s, bool active, bool flat, const RenderSettings& settings) {
@@ -2921,15 +3860,15 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, bool flat, const RenderS
     }
     // The UV Editor's checker on the model.
     const bool checker = active && s.hasUvs && s.overlay && s.overlay->checker;
-    // A painted texture shows through the textured program (polypaint still multiplies it).
-    const bool textured = !settings.silhouette && s.hasUvs && ((s.paintTexture && settings.showPolypaint && settings.showTexture) || checker);
+    // A painted texture shows through the textured program (vertex paint still multiplies it).
+    const bool textured = !settings.silhouette && s.hasUvs && ((s.paintTexture && settings.showVertexPaint && settings.showTexture) || checker);
     const bool pbr = settings.pbr() && envTexture_;
     // A baked normal map preview bends the shading normal (core/Bake.h), and in the PBR view the texture's
     // Normal / Height channels do (syncTexture's material normal, with tangents from syncNormalMap).
     const GLuint normalTex = s.normalTexture ? s.normalTexture : (pbr && textured ? s.matNormalTexture : 0);
     const bool normalMapped = !settings.silhouette && s.hasUvs && normalTex && s.hasTangents;
     const int groups = active && s.overlayColors                 ? 3
-                       : active && settings.showPolygroups && !s.overlayColors ? (s.hasGroups ? 1 : 2)
+                       : active && settings.showFaceGroups && !s.overlayColors ? (s.hasGroups ? 1 : 2)
                                                                                : 0;
     // (Not through the textured program's geometry shader: those meshes are sculpted without the preview.)
     const bool ghost = active && s.id == ghostId_ && !ghost_.empty() && !settings.motionProxy && !textured && !normalMapped;
@@ -2946,14 +3885,16 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, bool flat, const RenderS
     gl::Uniform4fv(p->viewport, 1, glm::value_ptr(frameViewport_));
     // The shader turns a pixel into its view ray as (-ndc / scale, 1): right for perspective. An orthographic
     // view (Numpad 5) looks straight along the axis at every pixel, which an unbounded scale gives (its own
-    // scale tilted the ray at the edges until the matcap and the lights came from the other side, #24).
+    // scale tilted the ray at the edges until the lit sphere and the lights came from the other side, #24).
     const bool orthographic = frameProj_[3][3] == 1.0f;
     gl::Uniform2f(p->projScale, orthographic ? 1e20f : frameProj_[0][0], orthographic ? 1e20f : frameProj_[1][1]);
     gl::Uniform3fv(p->baseColor, 1, glm::value_ptr(settings.baseColor));
     gl::Uniform1i(p->silhouette, settings.silhouette ? 1 : 0);
-    gl::Uniform1i(p->matcap, matcapTexture(settings.matcap) ? 1 : 0);
-    const MatcapCavity cavity = matcapCavity(settings.matcap);
-    gl::Uniform2f(p->matcapCavity, cavity.crease, cavity.ridge);
+    gl::Uniform3fv(p->tintShift, 1, glm::value_ptr(materialTintShift(settings, s.hasColors)));
+    gl::Uniform1i(p->litsphere, litsphereTexture(settings.litsphere) ? 1 : 0);
+    gl::Uniform1i(p->unlit, settings.unlit ? 1 : 0);
+    const LitSphereCavity cavity = litsphereCavity(settings.litsphere);
+    gl::Uniform2f(p->litsphereCavity, cavity.crease, cavity.ridge);
     if (textured || normalMapped) {
         gl::ActiveTexture(GL_TEXTURE3);
         gl::BindTexture(GL_TEXTURE_BUFFER, s.uvTexture);
@@ -2974,10 +3915,13 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, bool flat, const RenderS
     gl::ActiveTexture(GL_TEXTURE1);
     gl::BindTexture(GL_TEXTURE_BUFFER, s.hasGroups ? s.groupTexture : 0);
     gl::ActiveTexture(GL_TEXTURE0);
-    gl::Uniform1i(p->paint, settings.showPolypaint && s.hasColors ? 1 : 0);
+    gl::Uniform1i(p->paint, settings.showVertexPaint && s.hasColors ? 1 : 0);
     gl::Uniform1i(p->showMask, active && settings.showMask && s.hasMask ? 1 : 0);
+    gl::Uniform1f(p->maskDarkness, std::clamp(settings.maskDarkness, 0.0f, 1.0f));
+    gl::Uniform4fv(p->maskColor, 1, glm::value_ptr(glm::vec4(settings.maskColor, settings.maskColorCustom ? 1.0f : 0.0f)));
     gl::Uniform1i(p->groups, groups);
     gl::Uniform1i(p->dim, !active && settings.dimInactive ? 1 : 0);
+    setLightUniforms(*p, settings);
     gl::Uniform1i(p->twoSided, 1);
     gl::Uniform1i(p->checker, checker ? 1 : 0);
     gl::Uniform1f(p->checkerScale, checker ? s.overlay->checkerScale : 8.0f);
@@ -2990,9 +3934,77 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, bool flat, const RenderS
     // While the view moves, the motion proxy where it is built: not with per-triangle data, which follows the
     // full triangles, nor under the wireframe, whose edges would sink into it.
     const bool perTriangle = features & (kPrim | kTextured | kNormalMap); // (not kFlat: no per-triangle data)
-    cull(s, frameCull_, settings.motionProxy && !perTriangle && !(active && settings.wireframe));
+    const bool coarseAllowed = !perTriangle && !(active && settings.wireframe);
+    const size_t budget = coarseLod_ ? triangleBudget(settings) : 0;
+    // (While a stroke's edits wait for their levels, all of it in full: edited clusters in full beside coarse ones
+    // would leave seams, and squeeze the rest to the coarsest level.)
+    bool coarse = coarseLod_ && coarseAllowed && s.coarse && s.coarse->clusters.size() == s.drawCount.size() &&
+                  s.coarsePending.empty() && !settings.fullDetail && (settings.motionProxy || s.drawnTriangles > budget);
+    // At rest the real detail, if one full frame fits the still-frame budget (a single slow frame is fine).
+    if (static const bool log = std::getenv("SF_COARSE_LOG") != nullptr; log && coarse)
+        std::fprintf(stderr, "coarse lod: still %.2f s, moving %d, stroking %d, pending %zu, per triangle %.3g ms\n", settings.stillSeconds,
+                     int(settings.motionProxy), int(settings.stroking), s.coarsePending.size(), gpuMsPerTriangle_);
+    if (coarse && !settings.motionProxy && !settings.stroking && s.coarsePending.empty()) {
+        constexpr double kStillDelay = 0.15;
+        double stillMs = 100.0;
+        if (const char* e = std::getenv("SF_STILL_FRAME_MS"); e && std::atof(e) > 0.0) stillMs = std::atof(e); // (tests)
+        // (no frame measured yet: the calibrated rate, else the budget as half a 60 Hz frame's worth of triangles)
+        const double perTriangle = gpuMsPerTriangle_ > 0.0 ? gpuMsPerTriangle_
+                                   : triangleRateM_ > 0.0 ? 1e-3 / triangleRateM_
+                                                          : (1000.0 / 60.0 * 0.5) / double(std::max<size_t>(budget, 1));
+        if (double(s.drawnTriangles) * perTriangle > stillMs) previewOnly_ = true;
+        else if (settings.stillSeconds >= kStillDelay) coarse = false;
+        else stillWanted_ = true;
+    }
+    if (static const bool log = std::getenv("SF_COARSE_LOG") != nullptr; log && s.coarse && !coarse)
+        std::fprintf(stderr, "coarse lod: not drawn (per-triangle %d, wireframe %d, drawn %zu, budget %zu)\n", int(perTriangle),
+                     int(active && settings.wireframe), s.drawnTriangles, budget);
+    if (coarse) {
+        cullCoarse(s, frameCull_, budget);
+    } else {
+        coarseClusters_.clear();
+        cull(s, frameCull_, settings.motionProxy && coarseAllowed);
+    }
+    lastCoarseClusters_ += coarseClusters_.size();
     // The back faces left in clusters along the silhouette: the GPU skips them too when they can't show.
-    if (cullBackfaces_) gl::Enable(GL_CULL_FACE);
+    if (cullBackfaces_ || xrayCull_) gl::Enable(GL_CULL_FACE);
+    if (xrayCull_) gl::CullFace(xrayCull_);
+    // The first stroke's own GL work, done a frame after the Part first shows instead (the open's first frame stays as
+    // it was): its programs below (GHOST, draft FLAT) compile on first use, and drivers that compile only at the first
+    // draw (NVIDIA on Windows) stalled the first stroke of every session 1-1.8 s. Each draws one cluster here, under
+    // the main draw (same depth: it paints over it), and that cluster's vertices go up once as a stroke upload does.
+    // SF_NO_STROKE_WARM=1 leaves it out (to compare); SF_FRAME_LOG says what it cost.
+    static const bool noWarm = std::getenv("SF_NO_STROKE_WARM") != nullptr;
+    if (active && !noWarm && !thumbnailPass_ && !settings.fullDetail && !textured && !normalMapped && drawAlpha_ >= 1.0f && !xrayCull_ && !drawClusters_.empty() &&
+        s.strokeWarmed != features && s.strokeWarmFrames++ >= 1) {
+        s.strokeWarmed = features;
+        const auto warmStart = std::chrono::steady_clock::now();
+        const std::vector<uint32_t> one{drawClusters_.front()};
+        const auto range = s.order.clusters()[one[0]];
+        std::vector<PackedVertex> verts(range.vertexCount);
+        if (!verts.empty()) { // (BufferSubData of what is there: the stroke uploads' path, nothing changes)
+            const GLintptr at = GLintptr(size_t(range.firstVertex) * sizeof(PackedVertex));
+            const GLsizeiptr bytes = GLsizeiptr(verts.size() * sizeof(PackedVertex));
+            gl::BindBuffer(GL_ARRAY_BUFFER, s.vertexBuffer);
+            gl::GetBufferSubData(GL_ARRAY_BUFFER, at, bytes, verts.data());
+            gl::BufferSubData(GL_ARRAY_BUFFER, at, bytes, verts.data());
+            gl::BindBuffer(GL_ARRAY_BUFFER, 0);
+        }
+        const size_t drawn = lastDrawn_;
+        for (int k = 1; k < 4; ++k) {
+            if ((k & 2) && perTriangle) continue; // (draft strokes draw per-triangle data in full)
+            if (const MeshProgram* pg = meshProgram(features | ((k & 1) ? kGhost : 0) | ((k & 2) ? kFlat : 0))) {
+                bind(pg);
+                if (k & 1) gl::Uniform1i(pg->ghostGroups, 0); // (no dabs: the surface as it is)
+                drawClusters(s, one, GL_TRIANGLES, DrawPart::Triangles, -1);
+            }
+        }
+        bind(p);
+        lastDrawn_ = drawn;
+        if (static const bool log = std::getenv("SF_FRAME_LOG") != nullptr; log)
+            SDL_Log("stroke programs warmed in %.1f ms (features 0x%x)",
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - warmStart).count(), unsigned(features));
+    }
     // The predictive preview (render/Ghost.h): the clusters a ghost dab reaches draw with the GHOST program, the
     // rest as usual (most of the mesh, which then doesn't pay for the preview).
     // A draft stroke (Sculptor::draftStrokes) left the normals of the clusters it moved as they were: those draw
@@ -3015,13 +4027,13 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, bool flat, const RenderS
         }
         drawClusters_.resize(kept);
     }
-    drawClusters(s, drawClusters_, GL_TRIANGLES, Part::Triangles, perTriangle ? p->primBase : -1);
+    drawClusters(s, drawClusters_, GL_TRIANGLES, DrawPart::Triangles, perTriangle ? p->primBase : -1);
     for (int k = 1; k < 4; ++k) {
         if (extraClusters_[k].empty()) continue;
         if (const MeshProgram* pg = meshProgram(features | ((k & 1) ? kGhost : 0) | ((k & 2) ? kFlat : 0))) {
             bind(pg);
             if (k & 1) setGhostUniforms(*pg);
-            drawClusters(s, extraClusters_[k], GL_TRIANGLES, Part::Triangles, -1);
+            drawClusters(s, extraClusters_[k], GL_TRIANGLES, DrawPart::Triangles, -1);
             bind(p);
         }
     }
@@ -3034,7 +4046,27 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, bool flat, const RenderS
             gl::BindTexture(GL_TEXTURE_BUFFER, s.hasGroups ? s.patchGroupTexture : 0);
             gl::ActiveTexture(GL_TEXTURE0);
         }
-        drawPatches(s, GL_TRIANGLES, Part::Triangles, perTriangle ? p->primBase : -1);
+        drawPatches(s, GL_TRIANGLES, DrawPart::Triangles, perTriangle ? p->primBase : -1);
+        gl::BindVertexArray(s.vao);
+    }
+    if (coarse && !coarseClusters_.empty()) { // the spike's coarse levels: one multi-draw, 32-bit indices
+        gl::BindVertexArray(s.coarseVao);
+        if (s.coarse->colors.empty()) gl::VertexAttrib4f(2, 1.0f, 1.0f, 1.0f, 1.0f);
+        if (s.coarse->mask.empty()) gl::VertexAttrib1f(3, 0.0f);
+        gl::Uniform1i(p->twoSided, 0);
+        drawCounts_.clear();
+        drawOffsets_.clear();
+        size_t indices = 0;
+        for (size_t i = 0; i < coarseClusters_.size(); ++i) {
+            const CoarseLevels::Lod& l = s.coarse->clusters[coarseClusters_[i]];
+            drawCounts_.push_back(GLsizei(l.count[coarseLevel_[i]]));
+            drawOffsets_.push_back(reinterpret_cast<const void*>(size_t(l.first[coarseLevel_[i]]) * sizeof(uint32_t)));
+            indices += l.count[coarseLevel_[i]];
+        }
+        lastDrawn_ += indices / 3;
+        drawBases_.assign(drawCounts_.size(), 0);
+        gl::MultiDrawElementsBaseVertex(GL_TRIANGLES, drawCounts_.data(), GL_UNSIGNED_INT, drawOffsets_.data(), GLsizei(drawCounts_.size()),
+                                        drawBases_.data());
         gl::BindVertexArray(s.vao);
     }
     if (!proxyClusters_.empty()) {
@@ -3042,9 +4074,10 @@ void Renderer::drawSlot(const MeshSlot& s, bool active, bool flat, const RenderS
         if (!s.hasColors) gl::VertexAttrib4f(2, 1.0f, 1.0f, 1.0f, 1.0f);
         if (!s.hasMask) gl::VertexAttrib1f(3, 0.0f);
         gl::Uniform1i(p->twoSided, 0);
-        drawClusters(s, proxyClusters_, GL_TRIANGLES, Part::Proxy, -1);
+        drawClusters(s, proxyClusters_, GL_TRIANGLES, DrawPart::Proxy, -1);
     }
     gl::Disable(GL_CULL_FACE);
+    if (xrayCull_) gl::CullFace(GL_BACK);
 }
 
 // ---------------------------------------------------------------------------
@@ -3061,7 +4094,7 @@ void Renderer::setGhost(uint32_t id, const GhostStroke& ghost) {
 }
 
 void Renderer::setGhostUniforms(const MeshProgram& p) {
-    glm::vec4 a[GhostStroke::kMaxDabs], b[GhostStroke::kMaxDabs], c[GhostStroke::kMaxDabs];
+    glm::vec4 a[GhostStroke::kMaxDabs], b[GhostStroke::kMaxDabs], c[GhostStroke::kMaxDabs], u[GhostStroke::kMaxDabs];
     glm::vec4 bound[GhostStroke::kMaxMirrors];
     GLint range[GhostStroke::kMaxMirrors * 2];
     int groups = 0;
@@ -3071,6 +4104,7 @@ void Renderer::setGhostUniforms(const MeshProgram& p) {
         a[i] = glm::vec4(d.center, d.radius);
         b[i] = glm::vec4(d.normal, d.strength);
         c[i] = glm::vec4(d.areaCenter, d.weight);
+        u[i] = glm::vec4(d.up, 0.0f);
         const bool next = i == 0 || d.mirror != ghost_.dabs[i - 1].mirror;
         if (next) {
             if (groups == int(GhostStroke::kMaxMirrors)) break;
@@ -3094,6 +4128,7 @@ void Renderer::setGhostUniforms(const MeshProgram& p) {
     gl::Uniform4fv(p.ghostA, GLsizei(n), glm::value_ptr(a[0]));
     gl::Uniform4fv(p.ghostB, GLsizei(n), glm::value_ptr(b[0]));
     gl::Uniform4fv(p.ghostC, GLsizei(n), glm::value_ptr(c[0]));
+    gl::Uniform4fv(p.ghostD, GLsizei(n), glm::value_ptr(u[0]));
     gl::Uniform2i(p.ghostKind, GLint(ghost_.kind), ghost_.invert ? 1 : 0);
     gl::Uniform1f(p.ghostFocal, ghost_.focal);
     gl::Uniform1f(p.ghostEdge, ghost_.edge);
@@ -3103,6 +4138,8 @@ bool Renderer::prepareStrokeUpload(uint32_t id, Mesh& mesh, StrokeUpload& out, c
     out.id = id;
     out.ready = false;
     out.data.clear();
+    out.packed = 0;
+    out.staged = false;
     out.ranges.clear();
     out.movedClusters.clear();
     out.bounds.clear();
@@ -3150,7 +4187,9 @@ bool Renderer::prepareStrokeUpload(uint32_t id, Mesh& mesh, StrokeUpload& out, c
                 pieces.push_back({c, ce, total});
                 total += ce - c;
             }
-        out.data.resize(total);
+        out.staged = out.stagingPtr && total <= out.stagingCap;
+        out.packed = total;
+        out.data.resize(out.staged ? 0 : total);
     };
     cut();
     std::atomic<bool> outside{false};
@@ -3159,11 +4198,13 @@ bool Renderer::prepareStrokeUpload(uint32_t id, Mesh& mesh, StrokeUpload& out, c
     s.blockBox.resize(nb);
     PositionGrid grid = s.grid;
     bool everything = false;
+    // The cavity bits each vertex last went up with: kKeepCurvature (a scale-adaptive dab) sends them again.
+    uint16_t* sent = s.sentCurvature.size() == nv ? s.sentCurvature.data() : nullptr;
     const auto pack = [&] {
     poolFor(pieces.size(), [&](size_t i0, size_t i1) {
         for (size_t pi = i0; pi < i1; ++pi) {
             const Piece& pc = pieces[pi];
-            PackedVertex* dst = out.data.data() + pc.offset;
+            PackedVertex* dst = out.dst() + pc.offset;
             bool inside = true;
             uint64_t hp = 0, hn = 0;
             AABB box;
@@ -3171,7 +4212,14 @@ bool Renderer::prepareStrokeUpload(uint32_t id, Mesh& mesh, StrokeUpload& out, c
                 const uint32_t v = order[i];
                 PackedVertex pv{};
                 if (v < nv) {
-                    inside &= packVertex(grid, mesh.positions[v], mesh.normals[v], curvature ? curvature[v] : curvatureAt(mesh, v), pv);
+                    float c = curvature ? curvature[v] : curvatureAt(mesh, v);
+                    const bool keep = std::isnan(c);
+                    if (keep && !sent) c = curvatureAt(mesh, v);
+                    inside &= packVertex(grid, mesh.positions[v], mesh.normals[v], keep && sent ? 0.0f : c, pv);
+                    if (sent) {
+                        if (keep) pv.normal = (pv.normal & 0x003FFFFFu) | uint32_t(sent[v]) << 22;
+                        else if (s.order.toGpu(v) == i) sent[v] = uint16_t(pv.normal >> 22); // (first slot only, as uploadVertices)
+                    }
                     box.expand(mesh.positions[v]);
                 }
                 dst[i - pc.begin] = pv;
@@ -3267,7 +4315,18 @@ void Renderer::commitStrokeUpload(StrokeUpload& up) {
     if (!found) return;
     MeshSlot& s = *found;
     if (up.regrid) s.grid = up.grid; // (with every vertex, packed on it)
-    if (!up.ranges.empty()) {
+    if (!up.ranges.empty() && up.staged && up.stagingIndex >= 0) { // (packed into a staging buffer: the GPU copies)
+        Staging& st = persist_[up.stagingIndex];
+        gl::BindBuffer(GL_COPY_READ_BUFFER, st.buffer);
+        gl::BindBuffer(GL_COPY_WRITE_BUFFER, s.vertexBuffer);
+        for (const StrokeUpload::Range& r : up.ranges)
+            gl::CopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, GLintptr(r.offset * sizeof(PackedVertex)),
+                                  GLintptr(size_t(r.begin) * sizeof(PackedVertex)),
+                                  GLsizeiptr(size_t(r.end - r.begin) * sizeof(PackedVertex)));
+        gl::BindBuffer(GL_COPY_READ_BUFFER, 0);
+        gl::BindBuffer(GL_COPY_WRITE_BUFFER, 0);
+        st.fence = gl::FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0); // (bindStrokeUpload waits before it's reused)
+    } else if (!up.ranges.empty()) {
         gl::BindBuffer(GL_ARRAY_BUFFER, s.vertexBuffer);
         for (const StrokeUpload::Range& r : up.ranges)
             gl::BufferSubData(GL_ARRAY_BUFFER, GLintptr(size_t(r.begin) * sizeof(PackedVertex)),
@@ -3279,7 +4338,7 @@ void Renderer::commitStrokeUpload(StrokeUpload& up) {
         s.proxyStale.resize(s.bounds.size(), 1);
         for (size_t i = 0; i < up.movedClusters.size(); ++i) {
             s.bounds[up.movedClusters[i]] = up.bounds[i];
-            s.proxyStale[up.movedClusters[i]] = 1;
+            s.proxyStale[up.movedClusters[i]] = 1, markCoarseDirty(s, up.movedClusters[i]);
         }
         s.looseClusters.insert(s.looseClusters.end(), up.movedClusters.begin(), up.movedClusters.end());
         s.looseMark.resize(s.bounds.size(), 0);
@@ -3307,10 +4366,51 @@ void Renderer::commitStrokeUpload(StrokeUpload& up) {
 
 void Renderer::setDraftNormals(uint32_t id) { draftId_ = id; }
 
+bool Renderer::persistentUpload() const {
+    static const int env = [] {
+        const char* v = std::getenv("SF_PERSISTENT_UPLOAD");
+        return v && *v ? (*v == '0' ? 0 : 1) : -1;
+    }();
+    static const bool floor = [] { // SF_HW_SIMULATE=floor (core/HardwareProfile.h): GL 3.3, no buffer storage
+        const char* v = std::getenv("SF_HW_SIMULATE");
+        return v && std::string(v) == "floor";
+    }();
+    return (env >= 0 ? env == 1 : persistentUpload_) && gl::BufferStorage != nullptr && !floor;
+}
+
 void Renderer::bindStrokeUpload(uint32_t id, StrokeUpload& up) {
     up.slot = nullptr;
     for (MeshSlot& s : slots_)
         if (s.id == id) up.slot = &s;
+    up.stagingPtr = nullptr;
+    up.stagingCap = 0;
+    up.stagingIndex = -1;
+    up.staged = false;
+    if (!persistentUpload()) return;
+    // Two buffers in turn: the one lent now was last copied from two commits ago (its fence has nearly always
+    // passed). 4M vertices (48 MB) each; a bigger batch packs into `data` as before.
+    constexpr size_t kCap = size_t(4) << 20;
+    const int k = stagingNext_;
+    stagingNext_ ^= 1;
+    Staging& st = persist_[k];
+    if (st.fence) {
+        gl::ClientWaitSync(st.fence, GL_SYNC_FLUSH_COMMANDS_BIT, 1'000'000'000ull);
+        gl::DeleteSync(st.fence);
+        st.fence = nullptr;
+    }
+    if (!st.buffer) {
+        gl::GenBuffers(1, &st.buffer);
+        gl::BindBuffer(GL_COPY_READ_BUFFER, st.buffer);
+        const GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+        gl::BufferStorage(GL_COPY_READ_BUFFER, GLsizeiptr(kCap * sizeof(PackedVertex)), nullptr, flags);
+        st.ptr = gl::MapBufferRange(GL_COPY_READ_BUFFER, 0, GLsizeiptr(kCap * sizeof(PackedVertex)), flags);
+        gl::BindBuffer(GL_COPY_READ_BUFFER, 0);
+        st.cap = st.ptr ? kCap : 0;
+    }
+    if (!st.ptr) return;
+    up.stagingPtr = static_cast<PackedVertex*>(st.ptr);
+    up.stagingCap = st.cap;
+    up.stagingIndex = k;
 }
 
 void Renderer::refineStrokeBoundsInto(uint32_t id, const Mesh& mesh, StrokeUpload& up) {
@@ -3368,7 +4468,7 @@ void Renderer::refineStrokeBounds(uint32_t id, const Mesh& mesh) {
 }
 
 // ---------------------------------------------------------------------------
-// Thumbnails (LightBox / pickers)
+// Thumbnails (Library / pickers)
 // ---------------------------------------------------------------------------
 
 GLuint Renderer::silhouetteTexture(const Camera& viewCamera, int size) {
@@ -3415,7 +4515,15 @@ GLuint Renderer::silhouetteTexture(const Camera& viewCamera, int size) {
     AABB bounds;
     for (const DrawItem& item : drawList_)
         for (const MeshSlot& s : slots_)
-            if (s.id == item.id && s.drawnTriangles > 0) bounds.expand(s.box);
+            if (s.id == item.id && s.drawnTriangles > 0) {
+                if (!item.moved) bounds.expand(s.box);
+                else for (int corner = 0; corner < 8; ++corner) {
+                    const glm::vec3 point((corner & 1) ? s.box.max.x : s.box.min.x,
+                                          (corner & 2) ? s.box.max.y : s.box.min.y,
+                                          (corner & 4) ? s.box.max.z : s.box.min.z);
+                    bounds.expand(glm::vec3(item.model * glm::vec4(point, 1.0f)));
+                }
+            }
     Camera camera = viewCamera;
     camera.aspect = 1;
     camera.frame(bounds); // slot bounds avoid scanning millions of CPU vertices
@@ -3424,7 +4532,7 @@ GLuint Renderer::silhouetteTexture(const Camera& viewCamera, int size) {
     silhouette.backgroundTop = silhouette.backgroundBottom = glm::vec3(.94f);
     silhouette.backgroundGradient = false;
     silhouette.showSplats = false;
-    silhouette.showPolypaint = false;
+    silhouette.showVertexPaint = false;
     silhouette.dimInactive = false;
     silhouette.motionProxy = true;
     const size_t oldDrawn = lastDrawn_;
@@ -3445,7 +4553,7 @@ bool Renderer::renderMeshThumbnail(Mesh& mesh, const Camera& camera, int size, c
     gl::GetIntegerv(kFramebufferBinding, &fbo);
     gl::GetIntegerv(kViewport, viewport);
 
-    // A scratch slot outside the SubTool id range; the scene's draw list is put back afterwards.
+    // A scratch slot outside the Part id range; the scene's draw list is put back afterwards.
     constexpr uint32_t kThumbnailSlot = 0xFFFFFFF0u;
     mesh.topologyDirty = true;
     sync(slot(kThumbnailSlot), mesh);
@@ -3468,7 +4576,7 @@ bool Renderer::renderMeshThumbnail(Mesh& mesh, const Camera& camera, int size, c
     return ok;
 }
 
-bool Renderer::renderSubtoolThumbnail(uint32_t id, float yaw, float pitch, int size, const RenderSettings& settings,
+bool Renderer::renderPartThumbnail(uint32_t id, float yaw, float pitch, int size, const RenderSettings& settings,
                                       std::vector<uint8_t>& rgba, std::string& error) {
     const MeshSlot* s = nullptr;
     for (const MeshSlot& slot : slots_)
@@ -3486,7 +4594,7 @@ bool Renderer::renderSubtoolThumbnail(uint32_t id, float yaw, float pitch, int s
     camera.frame(s->box);
     camera.distance *= 0.6f; // (frame leaves room around the model for the view; a thumbnail fills its tile)
     RenderSettings thumb = settings;
-    thumb.showMask = thumb.showPolygroups = thumb.wireframe = false;
+    thumb.showMask = thumb.showFaceGroups = thumb.wireframe = false;
     thumb.dimInactive = false;
     constexpr size_t kProxyTriangles = size_t(1) << 20; // a big mesh: its lighter proxy, where current, is plenty at this size
     thumb.motionProxy = s->drawnTriangles >= kProxyTriangles;
@@ -3509,4 +4617,5 @@ bool Renderer::renderSubtoolThumbnail(uint32_t id, float yaw, float pitch, int s
 }
 
 } // namespace sf
+
 

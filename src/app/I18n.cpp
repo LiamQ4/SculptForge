@@ -25,13 +25,24 @@ struct TransparentHash {
     size_t operator()(std::string_view s) const noexcept { return std::hash<std::string_view>{}(s); }
 };
 
-const std::unordered_map<std::string_view, const char*>& spanishMap() {
-    static const std::unordered_map<std::string_view, const char*> map = [] {
-        std::unordered_map<std::string_view, const char*> m;
-        for (const i18n::Entry& e : i18n::spanishTable()) m.emplace(e.english, e.translated);
-        return m;
-    }();
-    return map;
+using Table = std::unordered_map<std::string_view, const char*>;
+Table makeMap(std::span<const i18n::Entry> entries) {
+    Table m;
+    for (const i18n::Entry& e : entries) m.emplace(e.english, e.translated);
+    return m;
+}
+const Table* tableMap(Language language) {
+    static const Table spanish = makeMap(i18n::spanishTable());
+    static const Table traditional = makeMap(i18n::traditionalChineseTable());
+    static const Table simplified = makeMap(i18n::simplifiedChineseTable());
+    static const Table japanese = makeMap(i18n::japaneseTable());
+    switch (language) {
+    case Language::Spanish: return &spanish;
+    case Language::TraditionalChinese: return &traditional;
+    case Language::SimplifiedChinese: return &simplified;
+    case Language::Japanese: return &japanese;
+    default: return nullptr;
+    }
 }
 
 // Labels put together from a translation (or found to have none), per language, kept for the life of the program
@@ -53,7 +64,7 @@ Cache& cache() {
 constexpr size_t kCacheLimit = 1u << 16;
 
 // The translation of `text` appended to `out`: the exact entry, or one for the words before a trailing "...", ":"
-// or printf conversion ("Draw Size %.0f" from "Draw Size"). False when there is none.
+// or printf conversion ("Size %.0f" from "Size"). False when there is none.
 bool translateCore(Language lang, std::string_view text, std::string& out) {
     if (text.empty()) return false;
     if (const char* exact = i18n::lookup(lang, text)) {
@@ -101,22 +112,81 @@ void setLanguage(Language language) { g_language.store(int(language)); }
 
 Language language() { return Language(g_language.load()); }
 
-const char* languageCode(Language language) { return language == Language::Spanish ? "es" : "en"; }
+const char* languageCode(Language language) {
+    switch (language) {
+    case Language::Spanish: return "es";
+    case Language::TraditionalChinese: return "zh-TW";
+    case Language::SimplifiedChinese: return "zh-CN";
+    case Language::Japanese: return "ja";
+    default: return "en";
+    }
+}
 
 Language languageFromCode(std::string_view code) {
-    if (code == "es" || code.substr(0, 3) == "es-" || code.substr(0, 3) == "es_") return Language::Spanish;
+    auto is = [&](std::string_view c) { return code == c || (code.size() > c.size() && code.substr(0, c.size()) == c &&
+                                                             (code[c.size()] == '-' || code[c.size()] == '_')); };
+    if (is("es")) return Language::Spanish;
+    if (is("ja")) return Language::Japanese;
+    // Traditional script: zh-TW, zh-HK, zh-MO and zh-Hant-*. Simplified: zh-CN, zh-SG, zh-Hans-* and a bare zh.
+    if (is("zh-TW") || is("zh_TW") || is("zh-HK") || is("zh_HK") || is("zh-MO") || is("zh_MO") || is("zh-Hant") ||
+        is("zh_Hant"))
+        return Language::TraditionalChinese;
+    if (is("zh")) return Language::SimplifiedChinese;
     return Language::English;
 }
 
-const char* languageName(Language language) { return language == Language::Spanish ? "Español" : "English"; }
+Language languageFromOsLocale(std::string_view tag) {
+    // "es_MX.UTF-8@euro" -> "es-mx"; a LANGUAGE-style list ("es:en") -> its first entry.
+    std::string t;
+    for (const char c : tag) {
+        if (c == '.' || c == '@' || c == ':' || c == ',' || c == ';') break;
+        t += c == '_' ? '-' : char((c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c);
+    }
+    const size_t dash = t.find('-');
+    const std::string lang = t.substr(0, dash);
+    const std::string rest = dash == std::string::npos ? "" : t.substr(dash);
+    auto has = [&](const char* part) { return rest.find(part) != std::string::npos; };
+    if (lang == "es" || lang == "spa") return Language::Spanish;
+    if (lang == "ja" || lang == "jpn") return Language::Japanese;
+    if (lang == "zh" || lang == "zho" || lang == "chi") {
+        if (has("-hans")) return Language::SimplifiedChinese;
+        if (has("-hant") || has("-tw") || has("-hk") || has("-mo")) return Language::TraditionalChinese;
+        return Language::SimplifiedChinese;
+    }
+    return Language::English;
+}
+
+const char* languageName(Language language) {
+    switch (language) {
+    case Language::Spanish: return "Español";
+    case Language::TraditionalChinese: return "繁體中文";
+    case Language::SimplifiedChinese: return "简体中文";
+    case Language::Japanese: return "日本語";
+    default: return "English";
+    }
+}
+
+bool languageNeedsCjkFont(Language language) {
+    return language == Language::TraditionalChinese || language == Language::SimplifiedChinese || language == Language::Japanese;
+}
 
 namespace i18n {
 
+std::span<const Entry> table(Language language) {
+    switch (language) {
+    case Language::Spanish: return spanishTable();
+    case Language::TraditionalChinese: return traditionalChineseTable();
+    case Language::SimplifiedChinese: return simplifiedChineseTable();
+    case Language::Japanese: return japaneseTable();
+    default: return {};
+    }
+}
+
 const char* lookup(Language language, std::string_view english) {
-    if (language != Language::Spanish) return nullptr;
-    const auto& map = spanishMap();
-    const auto it = map.find(english);
-    return it == map.end() ? nullptr : it->second;
+    const Table* map = tableMap(language);
+    if (!map) return nullptr;
+    const auto it = map->find(english);
+    return it == map->end() ? nullptr : it->second;
 }
 
 } // namespace i18n
@@ -147,8 +217,19 @@ std::string tr(const std::string& english) {
     return tr(english.c_str());
 }
 
+// "brush.*" actions that are settings, not brushes: their labels are words like any other (tools/i18n/coverage.py
+// reads this list too).
+constexpr std::string_view kBrushSettingActions[] = {
+    "brush.pen_",          "brush.size_",          "brush.scale_size", "brush.share_size", "brush.world_size",
+    "brush.save_settings", "brush.reset_settings", "brush.paste",      "brush.recipe",     "brush.capture_view",
+    "brush.asset_activate"};
+
 const char* trAction(std::string_view actionId, const std::string& label) {
-    if (actionId.substr(0, 6) == "brush.") return label.c_str();
+    if (actionId.substr(0, 6) == "brush.") {
+        bool setting = false;
+        for (const std::string_view prefix : kBrushSettingActions) setting = setting || actionId.substr(0, prefix.size()) == prefix;
+        if (!setting) return label.c_str(); // a brush: brushes keep their names
+    }
     return tr(label.c_str());
 }
 
