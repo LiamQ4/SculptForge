@@ -1514,7 +1514,6 @@ void App::drawPaletteBar(const ShellGeometry& g) {
     for (int i = 0; i < count; ++i) {
         if (std::string_view(list[i].id) == "ckw") ckw = i; // CKW stays last in the left-aligned menu group.
         else if (std::string_view(list[i].id) == "help") help = i; // CKW: Help, CrokedWillo remain adjacent.
-        if (!uiPrefs_.alphabeticalPalettes && std::string_view(list[i].id) == "help") help = i; // last, as usual
         else if (std::string_view(list[i].id) == "mypanel" && layout_.myPanel.empty() && !paletteInShownTray("mypanel") &&
                  dropdown_ != "mypanel")
             continue; // (empty and not in use: off the bar, which is full on a tablet; Edit > My Panel opens it)

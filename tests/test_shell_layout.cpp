@@ -242,6 +242,7 @@ TEST(shell_right_shelf_view_toggles) {
                                            "sep", "view.vertexpaint", "view.flat_shading"};
     CHECK(back.rightShelf == want);
     // Without the neighbours (moved or taken out), nothing is added; a current layout stays as it is.
+    old.set("version", 5.0); // CRKW v5 has already received its Undo/Redo migration.
     old.set("rightShelf", shelfJson({"view.frame"}));
     CHECK(fromJson(old, back, err));
     CHECK(back.rightShelf.size() == 1);

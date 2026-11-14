@@ -119,4 +119,4 @@ The first Windows UI run exposed the previous settings-isolation bug and touched
 
 ## CRKW release update — 2026-11-14 (in progress)
 
-Source review: 2026-11-14. Integration of upstream v0.12.16 is in progress on `ckw/update-upstream-2026-11-14`. The installed application remains the previously validated 0.10.7 until validation and installation finish. CRKW tools are being adapted to upstream Parts/PartData, Lit Sphere naming and the new UI script parser; saved CRKW project keys and material indices are retained. Build and test results will be recorded after execution.
+Source review: 2026-11-14. Integration of upstream v0.12.16 is in progress on `ckw/update-upstream-2026-11-14`. The installed application remains the previously validated 0.10.7 until validation and installation finish. CRKW tools are being adapted to upstream Parts/PartData, Lit Sphere naming and the new UI script parser; saved CRKW project keys and material indices are retained. The Release build and isolated Blender 5.2.1 bridge check passed. Broader regression validation is in progress; final results will be recorded after execution.
