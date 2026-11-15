@@ -134,3 +134,5 @@ Both Blender bridge 1.0.0 ZIP variants passed packaging checks. A fully isolated
 Limitations: nightly heavy-mesh/fuzz benchmarks, native Blender 5.3+ splat exchange, live Maya/other sculpting application round trips and Unreal MetaHuman conform were not run. MetaHuman validation uses synthetic assets. Update-dependent stock UI tests are inapplicable to this manual-update build; the dedicated CRKW updater-disabled test covers its interface. User settings are isolated through `SF_USER_DATA_DIR` (legacy `SF_TEST_SETTINGS_DIR` remains supported).
 
 Test maintenance: feed-driven card scripts load an explicit local fixture through the UI-test harness, so they retain coverage while the real updater stays disabled. Brush resizing keeps upstream's move-then-click confirmation; the held-drag regression presses the knob at its opening position and still checks mouse/pen release behavior. These final harness/popup checks await the rebuilt executable.
+
+The native clipboard fixture waits for the opening palette's scroll animation before locating its hover target; this avoids moving the target away from the scripted pointer.

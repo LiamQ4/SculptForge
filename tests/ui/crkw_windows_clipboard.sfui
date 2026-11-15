@@ -4,6 +4,8 @@ input_style classic
 run new_sphere subdivisions=2 ; uv_auto resolution=1024
 wait 0.2
 click "Texture Image##tool.texture"
+# Let the palette's opening/scroll animation settle before locating its paste target.
+wait 0.5
 clipboard_png $SCRIPT_DIR/data/phone/photo.png
 hover "Texture Image/##texturepaste"
 key ctrl+v
