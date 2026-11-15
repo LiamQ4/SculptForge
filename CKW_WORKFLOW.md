@@ -56,37 +56,71 @@ systems. Preserve upstream license and attribution files.
 
 ## Local app and build
 
-### Upstream v0.12.16 integration — 2026-11-14 (in progress)
+### Upstream v0.12.16 integration — 2026-11-15
 
-This entry supersedes the earlier build/version status below. Started from `c3827b6` on
-`ckw/crookedtools`, baseline `e55d3e0` (0.10.7), and fetched the exact upstream release
-`v0.12.16` into update branch `ckw/update-upstream-2026-11-14`. The untracked root and
-Blender `AGENTS.md` files are preserved. No stock release binary is used.
+Source reviewed: 2026-11-15. Release-only adoption starts from CRKW `c3827b6`,
+upstream baseline `e55d3e0` (0.10.7). Fetched upstream tag `v0.12.16` at
+`11f6a536bdaae66e8b069643fb7f25a4d14ed197`, merged on
+`ckw/update-upstream-2026-11-14`. Production C++ source/proof revision is `a04991a6`; clipboard fixture commit is `49ca8f56`;
+subsequent documentation commits do not change the tested executable. The two
+untracked `AGENTS.md` instruction files remain outside commits. No stock binary is used.
 
-Build with the workspace CMake at `out/build-tools/cmake/data/bin/cmake.exe`, build tree
-`build-ckw`, Release, `SCULPTFORGE_UPDATE_CHECK=OFF`. Dependency downloads are pinned by
-upstream hashes; plugins and WebRTC remain enabled. On Visual Studio, `$env:CL='/MP8'`
-allows compiler workers in addition to CMake's `--parallel 8` project workers.
+The merge adapts every CRKW tool to Parts/PartData, Face Groups, Vertex Paint and
+Lit Sphere APIs. Thirteen custom materials keep their old indices; imported Gold
+becomes Gold 2. Layout version 6 migrates upstream view toggles from CRKW version 5,
+retains Camera/Masks and fits compact right shelves. Held resize, consent at 200%,
+clipboard image routing and native PNG/DIB/DIBV5 tests pass focused checks. Maya
+exchange tests check toolbar overlap instead of assuming updater controls occupy it.
+Project migration preserves artist-owned CRKW payload keys. Linked Parts retain
+MetaHuman identity through creation/reload; mask state survives undo and subdivision.
+Silhouettes frame transformed linked instances. Native dialogs are suppressed in UI
+tests. Fixture paths expand after parsing so workspace spaces remain safe.
 
-CRKW source is adapted to Parts/PartData, Face Groups, Vertex Paint and Lit Sphere APIs.
-All thirteen custom materials retain their old indices, including built-in Gold;
-importing a Gold image yields Gold 2. Layout version 6 migrates the new upstream view
-toggles even from the existing CRKW version-5 layout. UI script fixture paths expand
-after parsing, supporting this workspace's spaces. Clipboard image commands use the
-new table-driven parser. CRKW settings access honors upstream's `SF_USER_DATA_DIR`
-isolation; `SF_TEST_SETTINGS_DIR` remains supported for existing local test scripts.
-Project name migration leaves artist-owned CRKW mask/template payloads unchanged.
-Linked Parts retain MetaHuman identity through creation and project reload. The silhouette
-frames transformed linked instances in world space. Custom file dialogs use upstream
-NativeDialog suppression during tests. Windows clipboard-dependent UI scripts share a
-CTest resource lock. Material checks are in `tests/test_crkw_litspheres.cpp`.
+Build from the repository root with the local CMake (Visual Studio Release):
 
-User settings snapshot: `out/update-01216-preferences-snapshot`; before hashes:
-`out/update-01216-preferences-before.json`. Existing installation is still 0.10.7.
-Both bridge 1.0.0 ZIPs passed `build_addon.py --check`; Blender installation is unchanged.
-Build, runtime tests and application installation are pending. Logs use the prefix
-`out/crkw-01216-`. Installation will only use `out/crkw-app`, after backup and validation.
+```powershell
+$env:CL = '/MP8'
+& out/build-tools/cmake/data/bin/cmake.exe -S . -B build-ckw '-DSCULPTFORGE_UPDATE_CHECK=OFF' '-DSCULPTFORGE_DEV_BUILD=OFF' '-DSCULPTFORGE_STALE_BASE=v0.12.16'
+& out/build-tools/cmake/data/bin/cmake.exe --build build-ckw --config Release --parallel 8
+$env:SF_THREADS = '2'
+$env:SF_TIME_LIMIT_SCALE = '4'
+$env:SF_USER_DATA_DIR = Join-Path $PWD 'out/update-01216-ctest-user'
+& out/build-tools/cmake/data/bin/ctest.exe --test-dir build-ckw -C Release -LE nightly --output-on-failure -j4
+```
 
+Plugins/Wasmtime and WebRTC remain enabled with upstream pinned dependencies.
+Do not set `SF_AI=off` for the full suite: policy tests exercise consent state.
+`SF_USER_DATA_DIR` isolates all app settings; `SF_TEST_SETTINGS_DIR` remains a legacy
+override. Windows clipboard-dependent scripts share a CTest resource lock.
+`SF_TIME_LIMIT_SCALE=4` is upstream's parallel-run timing allowance; run affected
+strict timing checks separately with `SF_BENCH_LIMITS=1`. The stale-tree audit uses
+the adopted release tag; its default remains `origin/main` for upstream workflows.
+Automatic and manual stock updates are disabled. Six updater/member-installer UI
+cases are disabled for this configuration, alongside upstream's disabled stroke
+resize case. Nine nightly cases are outside the regular run. The dedicated
+`crkw_updates_disabled.sfui` verifies the manual-update interface.
+
+CRKW text has entries in all four upstream translations and uses `tr()` for labels.
+Coverage checks report 3,539 interface strings, 50 intentionally English, 3,489
+translated and zero raw labels. Regenerated CJK subsets use upstream's
+`tools/i18n/subset_cjk_font.py`, Noto CJK 2.004, and workspace-only FontTools 4.68.0.
+Font license/notices are unchanged. Native i18n passed 12 cases/204 checks; CRKW
+passed 19 cases/3,380 checks and CKW polish 3 cases/988 checks.
+
+Pre-replacement backup: `out/update-01216-pre-0107`, all 15 installation files
+verified against `out/update-01216-backup-manifest.json`. User preferences snapshot:
+`out/update-01216-preferences-snapshot`, hashes in
+`out/update-01216-preferences-before.json`. Desktop shortcut proof is in
+`out/update-01216-shortcut.json`; target is `out/crkw-app/bin/sculptforge.exe`.
+Installed version is now **CRKW 0.12.16** at the verified shortcut target. Both executable hashes match the tested Release (`out/update-01216-installed-artifacts.json`); GUI file/product versions are 0.12.16.
+Install the tested Release only with the local CMake `--install build-ckw --config
+Release --prefix out/crkw-app`; compare executable hashes and both version fields,
+then run installed UI smoke checks under isolated settings. Never stop an open
+application with unsaved work. `out/crkw-metahuman-app` remains a junction to this prefix.
+
+Logs: `out/crkw-01216-final-configure.log`, `out/crkw-01216-final-build.log`,
+`out/crkw-01216-production-tests.log`. Earlier failed/targeted logs remain historical
+under the same prefix and are not represented as clean full-suite results.
 
 Historical entries below retain their versions, counts and log paths; terminology was normalized on 2026-11-14 to match the current UI.
 
@@ -235,14 +269,14 @@ for authentication, complete Git Credential Manager's normal sign-in locally;
 do not put passwords or tokens in repository files or remote URLs.
 
 
-### Validation follow-up — 2026-11-15 (in progress)
+### Additional integration checks — 2026-11-15
 
 All eight core shards passed, 1,580 cases and 591,742 checks. Blender 5.2.1's isolated
 bridge test passed 192 checks; legacy 0.10.7 camera and MetaHuman/custom-mask projects
-passed load/save/reload UI checks. All 15 files of the existing installation match the
+passed load/save/reload UI checks. All 15 pre-update installation files were verified against the
 backup at `out/update-01216-pre-0107`. User preference hashes still match the pre-test snapshot.
 
-Current UI reconciliation covers the held resize gesture, native clipboard shortcut routing,
+Completed UI reconciliation covers the held resize gesture, native clipboard shortcut routing,
 right-shelf view folding, consent at 200% scale, custom Gold 2 expectations and translated
 CRKW labels. Configure production display with `SCULPTFORGE_DEV_BUILD=OFF`, update checks
 OFF, and `SCULPTFORGE_STALE_BASE=v0.12.16` (the default upstream audit base remains
@@ -256,3 +290,15 @@ Pillow wheel cleanup. The exact local wheel's DLL matched the original SHA-256 a
 120 wheel files were restored and verified. The successful repeat explicitly isolated
 `BLENDER_USER_RESOURCES`, CONFIG, SCRIPTS, EXTENSIONS and DATAFILES and verified its
 extension root before enabling the source bridge. It left the restored shared cache unchanged.
+
+Final focused production checks passed: 15 popup/pen/card/update-disabled UI cases,
+ten consecutive native Windows clipboard runs, and Auto UV's original strict timing
+limit (`SF_BENCH_LIMITS=1`, isolated). Source/proof revision `a04991a6` contains the C++
+changes; `49ca8f56` only stabilizes the clipboard fixture's palette-opening timing.
+The final complete Release suite passed **555/555 enabled non-nightly tests**, zero failures, in 777.31 seconds. Seven tests were disabled and nine nightly tests were excluded. The installation completed successfully after checking no installed app was running and re-verifying the full backup. No application was terminated. Installed smoke checks are recorded separately below.
+
+Tested GUI SHA-256: `7BDBD4494808CD5B3DDBBA0129474838020C9ABAFE2AC1E99953722087BBD539`. The CLI hash and source/proof revision are recorded in `out/update-01216-tested-build.json`. Final full-suite log: `out/crkw-01216-production-tests.log`; strict timing: `out/crkw-01216-strict-uv.log`; clipboard repetition: `out/crkw-01216-clipboard-repeat.log`. Earlier failure logs remain historical.
+
+Installed verification: **15/15 UI checks passed**, including every CRKW UI script, version/title and original 0.10.7 camera/MetaHuman-mask projects. Installed CLI Clay Polish and Mesh Sharpen passed. All **12 user preference files are unchanged**, shortcut target verified, and no app was terminated. Evidence: `out/update-01216-installed-smoke.json`, `out/crkw-01216-installed-cli.log`, `out/update-01216-final-verification.json`. The source and installed release versions are both 0.12.16; the installed Blender add-on was not replaced.
+
+Remaining limits: nine nightly heavy-mesh/fuzz/extended benchmark tests were excluded; native Blender 5.3+ splat exchange, live Maya/other sculpting application round trips and Unreal MetaHuman conform were not run. MetaHuman checks use synthetic fixtures. The background Blender check passed 192 assertions; both bridge 1.0.0 ZIP variants passed packaging checks.

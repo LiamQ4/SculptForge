@@ -93,6 +93,6 @@ CRKW installs to `out/crkw-app` only (see CKW_WORKFLOW.md); since 2026-10-26
 open the same latest build.
 
 
-## Source maintenance — 2026-11-14
+## Source maintenance — 2026-11-15
 
-Reviewed for upstream v0.12.16. CRKW uses the upstream Parts/PartData model; existing `crkw_metahuman` and `crkw_mask_manager` project payloads retain their format. CRKW material indices remain stable. Current build, installation and validation status is recorded in [the CRKW workflow](../CKW_WORKFLOW.md). Earlier validation counts above are historical.
+Source reviewed: 2026-11-15 for upstream v0.12.16. CRKW uses the upstream Parts/PartData model; existing `crkw_metahuman` and `crkw_mask_manager` project payloads retain their format. CRKW material indices remain stable. Current build, installation and validation status is recorded in [the CRKW workflow](../CKW_WORKFLOW.md). Earlier validation counts above are historical.
