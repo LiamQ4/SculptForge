@@ -139,3 +139,8 @@ translated languages. Update-dependent scripts are inapplicable with
 `SCULPTFORGE_UPDATE_CHECK=OFF`; a CRKW-specific test verifies the manual-update interface.
 Release installation will use `SCULPTFORGE_DEV_BUILD=OFF` and the exact reviewed tag as
 `SCULPTFORGE_STALE_BASE=v0.12.16`. Final rebuild, targeted retests and installation are pending.
+
+The CJK font subsets were regenerated from the existing licensed Noto CJK 2.004 source
+using upstream `tools/i18n/subset_cjk_font.py`, so the new CRKW translations have every
+required glyph. Targeted production checks passed: i18n 12 cases/204 checks; CRKW 19
+cases/3,380 checks; CKW polish 3 cases/988 checks. UI retesting is still pending.
