@@ -1103,10 +1103,10 @@ void App::drawUpdatesSection() {
 #else
     ImGui::TextWrapped("%s", tr("CRKW updates are installed manually."));
 #endif
+#if SF_UPDATE_CHECK
     ui::ActionButton(*this, "help.check_updates", ImVec2(-1, 0));
     if (updateJob_) ImGui::TextDisabled("%s", tr("Checking..."));
     else if (!updateStatus_.empty()) ImGui::TextWrapped("%s", updateStatus_.c_str());
-#if SF_UPDATE_CHECK
     drawMemberBuildsSection(); // (PanelUpdate.cpp)
 #endif
 }

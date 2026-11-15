@@ -144,3 +144,8 @@ The CJK font subsets were regenerated from the existing licensed Noto CJK 2.004 
 using upstream `tools/i18n/subset_cjk_font.py`, so the new CRKW translations have every
 required glyph. Targeted production checks passed: i18n 12 cases/204 checks; CRKW 19
 cases/3,380 checks; CKW polish 3 cases/988 checks. UI retesting is still pending.
+
+In the update-check-OFF CRKW build, the manual upstream update action is disabled too;
+the Updates pane only explains manual CRKW updates, preserving the custom executable.
+
+Compact-column follow-up: CRKW's two extra controls can shrink the right shelf to 40% in the shortest supported layout, keeping every action visible. Native Windows clipboard tests position the pointer after setting the clipboard; the manual-update build checks Maya toolbar fit rather than assuming the stock membership/update controls consume its space.

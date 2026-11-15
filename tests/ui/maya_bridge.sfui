@@ -56,7 +56,7 @@ click "Send to Maya##file.send_maya"
 expect_status "Sent 2 objects to Maya"
 
 # The Forge look's status bar has it too, at 1x and on a HiDPI display (150 %); a window
-# too narrow for it (200 %: 800 logical px) keeps the menus whole and File > Maya > Send to Maya.
+# narrow at 200 % (800 logical px) keeps the menus whole. The CRKW manual-update build can fit the send button here.
 run ui_look look=forge layout=sculptforge
 wait 0.3
 expect "Send to Maya##file.send_maya"
@@ -69,7 +69,7 @@ expect "Send to Maya##file.send_maya"
 shot forge_bar_hidpi
 display_scale 200
 wait 0.5
-expect_not "Send to Maya##file.send_maya"
+expect_value title_overlaps == 0
 shot forge_bar_narrow
 run ui_look look=classic layout=classic
 wait 0.3

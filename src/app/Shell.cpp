@@ -2747,7 +2747,7 @@ void App::drawShelf(int shelf, const CanvasRect& r) {
         float& fit = shelfFit_[shelf];
         if (scalable > 0.0f) {
             const float fixed = needed - scalable;
-            const float want = std::clamp(fit * (r.h - 1.0f * s - fixed) / scalable, shelf == kShelfRight ? 0.5f : 0.6f, 1.0f); // (the right shelf: icons alone)
+            const float want = std::clamp(fit * (r.h - 1.0f * s - fixed) / scalable, shelf == kShelfRight ? 0.4f : 0.6f, 1.0f); // (the right shelf: icons alone)
             // Shrinking follows the overflow; growing back waits for a clear margin and for a taller shelf than the one it last
             // shrank for, or the quantised button heights could make it grow and shrink every other frame.
             if (want < fit - 0.002f) {
