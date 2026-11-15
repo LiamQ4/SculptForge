@@ -302,3 +302,10 @@ Tested GUI SHA-256: `7BDBD4494808CD5B3DDBBA0129474838020C9ABAFE2AC1E99953722087B
 Installed verification: **15/15 UI checks passed**, including every CRKW UI script, version/title and original 0.10.7 camera/MetaHuman-mask projects. Installed CLI Clay Polish and Mesh Sharpen passed. All **12 user preference files are unchanged**, shortcut target verified, and no app was terminated. Evidence: `out/update-01216-installed-smoke.json`, `out/crkw-01216-installed-cli.log`, `out/update-01216-final-verification.json`. The source and installed release versions are both 0.12.16; the installed Blender add-on was not replaced.
 
 Remaining limits: nine nightly heavy-mesh/fuzz/extended benchmark tests were excluded; native Blender 5.3+ splat exchange, live Maya/other sculpting application round trips and Unreal MetaHuman conform were not run. MetaHuman checks use synthetic fixtures. The background Blender check passed 192 assertions; both bridge 1.0.0 ZIP variants passed packaging checks.
+
+Completion — 2026-11-15: the validated update was accepted by fast-forward into
+`ckw/crookedtools` and pushed to `origin`. The update branch is retained. Only the
+two original untracked instruction files (`AGENTS.md` and
+`addons/blender/AGENTS.md`) remain outside commits; both are preserved. Final
+preservation check confirms all 12 preference files and all 120 restored Blender
+Pillow files still match their recorded hashes (`out/update-01216-final-preservation.json`).
