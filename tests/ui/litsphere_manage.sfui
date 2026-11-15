@@ -68,6 +68,7 @@ copy data/Gold.png "$LIBRARY/Lit Spheres/Warm/Amber.png"
 key ,
 click "Library/Material"
 wait_idle 20
+type "##lbfilter" Old Gold
 expect "Library/Old Gold"
 shot library-groups
 type "##lbfilter" amb

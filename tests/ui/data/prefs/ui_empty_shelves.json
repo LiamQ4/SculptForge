@@ -1,9 +1,12 @@
 {
   "version": 1,
   "layout": {
-    "version": 4,
+    "version": 6,
     "leftShelf": [],
-    "rightShelf": ["view.wire", "sep"]
+    "rightShelf": [
+      "view.wire",
+      "sep"
+    ]
   },
   "shortcuts": {},
   "prefs": {}

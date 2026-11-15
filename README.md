@@ -120,3 +120,22 @@ The first Windows UI run exposed the previous settings-isolation bug and touched
 ## CRKW release update — 2026-11-14 (in progress)
 
 Source review: 2026-11-14. Integration of upstream v0.12.16 is in progress on `ckw/update-upstream-2026-11-14`. The installed application remains the previously validated 0.10.7 until validation and installation finish. CRKW tools are being adapted to upstream Parts/PartData, Lit Sphere naming and the new UI script parser; saved CRKW project keys and material indices are retained. The Release build and isolated Blender 5.2.1 bridge check passed. Broader regression validation is in progress; final results will be recorded after execution.
+
+
+### CRKW validation follow-up — 2026-11-15 (in progress)
+
+Source reviewed: 2026-11-15. All eight native shards passed (1,580 cases; 591,742 checks).
+The bridge passed 192 checks in a separate Blender 5.2.1 process, with a fully isolated
+extension directory on the repeat run. A first profile-isolation gap allowed Blender's
+wheel cleanup to remove its shared Pillow cache; the exact local 12.2.0 wheel was restored
+and all 120 files verified byte-for-byte. The repeat left that cache unchanged. Existing
+Blender sessions and installed add-on sources were not replaced.
+
+The full non-nightly run identified UI integration issues now being reconciled: held brush
+resize versus upstream's follow-to-confirm popup, native Windows image clipboard routing,
+CRKW controls alongside folded view toggles, high-scale image consent, and material-name
+collisions. CRKW labels now use upstream's translation layer, with entries for all four
+translated languages. Update-dependent scripts are inapplicable with
+`SCULPTFORGE_UPDATE_CHECK=OFF`; a CRKW-specific test verifies the manual-update interface.
+Release installation will use `SCULPTFORGE_DEV_BUILD=OFF` and the exact reviewed tag as
+`SCULPTFORGE_STALE_BASE=v0.12.16`. Final rebuild, targeted retests and installation are pending.

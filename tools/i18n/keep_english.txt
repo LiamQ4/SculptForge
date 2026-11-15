@@ -42,3 +42,13 @@ Tube
 CPU
 GPU
 Turbo
+
+# CRKW product and custom tool names
+CrokedWillo
+CRKW Clay Polish
+CRKW Mesh Sharpen
+CRKW Sculpt Helper
+MetaHuman Sculpt
+Auto Retopo + Project
+SculptForge CRKW
+SculptForge CRKW %s

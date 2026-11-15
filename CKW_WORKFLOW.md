@@ -233,3 +233,26 @@ use `crkw_clay_polish`. Public app, shelf and shortcut branding uses CRKW.
 GitHub browser sign-in does not authenticate command-line Git. If a push asks
 for authentication, complete Git Credential Manager's normal sign-in locally;
 do not put passwords or tokens in repository files or remote URLs.
+
+
+### Validation follow-up — 2026-11-15 (in progress)
+
+All eight core shards passed, 1,580 cases and 591,742 checks. Blender 5.2.1's isolated
+bridge test passed 192 checks; legacy 0.10.7 camera and MetaHuman/custom-mask projects
+passed load/save/reload UI checks. All 15 files of the existing installation match the
+backup at `out/update-01216-pre-0107`. User preference hashes still match the pre-test snapshot.
+
+Current UI reconciliation covers the held resize gesture, native clipboard shortcut routing,
+right-shelf view folding, consent at 200% scale, custom Gold 2 expectations and translated
+CRKW labels. Configure production display with `SCULPTFORGE_DEV_BUILD=OFF`, update checks
+OFF, and `SCULPTFORGE_STALE_BASE=v0.12.16` (the default upstream audit base remains
+`origin/main`). Updater/member-installer-dependent UI scripts are disabled only in the
+update-check-OFF configuration; `crkw_updates_disabled.sfui` verifies that interface.
+Run parallel timing checks with upstream's `SF_TIME_LIMIT_SCALE=4`; rerun strict affected
+performance checks alone with `SF_BENCH_LIMITS=1`.
+
+The initial background Blender test omitted `BLENDER_USER_EXTENSIONS`, triggering shared
+Pillow wheel cleanup. The exact local wheel's DLL matched the original SHA-256 and all
+120 wheel files were restored and verified. The successful repeat explicitly isolated
+`BLENDER_USER_RESOURCES`, CONFIG, SCRIPTS, EXTENSIONS and DATAFILES and verified its
+extension root before enabling the source bridge. It left the restored shared cache unchanged.

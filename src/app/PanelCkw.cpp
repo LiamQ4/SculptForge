@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "app/SettingsPath.h"
 #include "app/App.h"
+#include "app/I18n.h"
 #include "app/Ui.h"
 #include <IconsLucide.h>
 #include <algorithm>
@@ -173,71 +174,71 @@ void App::registerCkwActions() {
 }
 
 void App::drawPalette_Ckw() {
-    ImGui::TextUnformatted("CRKW Sculpt Helper");
+    ImGui::TextUnformatted(tr("CRKW Sculpt Helper"));
     ImGui::Separator();
     ui::ActionButton(*this, "ckw.clay_polish", ImVec2(-1, 30 * uiScale_));
     ImGui::PushItemWidth(-1);
     ui::SliderInside("##ckw.softness", &ckwSoftness_, 0, 1, "Softness %.2f");
-    ImGui::SliderInt("##ckw.softpasses", &ckwSoftPasses_, 0, 20, "Soft Passes %d");
+    ImGui::SliderInt("##ckw.softpasses", &ckwSoftPasses_, 0, 20, tr("Soft Passes %d"));
     ui::SliderInside("##ckw.sharpness", &ckwSharpness_, 0, 1, "Sharpness %.2f");
-    ImGui::SliderInt("##ckw.sharppasses", &ckwSharpPasses_, 0, 20, "Sharp Passes %d");
+    ImGui::SliderInt("##ckw.sharppasses", &ckwSharpPasses_, 0, 20, tr("Sharp Passes %d"));
     ui::SliderInside("##ckw.preserve", &ckwPreserve_, 0, 1, "Preserve Shape %.2f");
     ui::SliderInside("##ckw.edges", &ckwEdgeSmoothing_, 0, 1, "Edge Smoothing %.2f");
-    if (ImGui::Button("Reset Clay Polish##crkw.reset_polish", ImVec2(-1, 0))) {
+    if (ImGui::Button(tr("Reset Clay Polish##crkw.reset_polish"), ImVec2(-1, 0))) {
         ckwSoftness_ = .3f; ckwSharpness_ = .4f;
         ckwSoftPasses_ = ckwSharpPasses_ = 2;
         ckwPreserve_ = .7f; ckwEdgeSmoothing_ = .35f;
     }
-    ImGui::TextWrapped("Respects masks and hidden vertices. Ctrl+Z undoes both stages.");
-    if (doc_.sculptor.dyntopo.enabled) ImGui::TextWrapped("Disable Dynamic topology to use Clay Polish.");
+    ImGui::TextWrapped("%s", tr("Respects masks and hidden vertices. Ctrl+Z undoes both stages."));
+    if (doc_.sculptor.dyntopo.enabled) ImGui::TextWrapped("%s", tr("Disable Dynamic topology to use Clay Polish."));
     ImGui::Separator();
     ui::ActionButton(*this, "crkw.mesh_sharpen", ImVec2(-1, 30 * uiScale_));
-    ImGui::SliderInt("##crkw.ms_iterations", &crkwMsIterations_, 0, 64, "Iterations %d");
+    ImGui::SliderInt("##crkw.ms_iterations", &crkwMsIterations_, 0, 64, tr("Iterations %d"));
     ui::SliderInside("##crkw.ms_step", &crkwMsStep_, 0, 1, "Step %.2f");
     ui::SliderInside("##crkw.ms_blend", &crkwMsBlend_, 0, 1, "Blend %.2f");
     ui::SliderInside("##crkw.ms_exponent", &crkwMsExponent_, 0, 1, "Exponent %.2f");
     ImGui::Combo("##crkw.ms_type", &crkwMsType_, "Curvature: Mean\0Curvature: Curvedness\0");
-    ImGui::Checkbox("Pin Borders##crkw.ms_pin", &crkwMsPinBorders_);
-    if (ImGui::Button("Reset Mesh Sharpen##crkw.reset_mesh_sharpen", ImVec2(-1, 0))) {
+    ImGui::Checkbox(tr("Pin Borders##crkw.ms_pin"), &crkwMsPinBorders_);
+    if (ImGui::Button(tr("Reset Mesh Sharpen##crkw.reset_mesh_sharpen"), ImVec2(-1, 0))) {
         crkwMsIterations_ = 18; crkwMsType_ = 0;
         crkwMsStep_ = crkwMsBlend_ = crkwMsExponent_ = 1.0f;
         crkwMsPinBorders_ = true;
     }
-    ImGui::TextWrapped("Works on the current subdivision level. Respects masks and hidden vertices.");
+    ImGui::TextWrapped("%s", tr("Works on the current subdivision level. Respects masks and hidden vertices."));
     ImGui::Separator();
-    if (ImGui::Button("MetaHuman Sculpt##crkw.metahuman", ImVec2(-1, 0))) showCrkwMetaHuman_ = true;
-    if (ImGui::Button("MH Mask Manager##crkw.mh_masks", ImVec2(-1, 0))) showMhMaskManager_ = true;
-    if (ImGui::Button("Texture Manager##crkw.texture_manager", ImVec2(-1, 0))) showTextureManager_ = true;
+    if (ImGui::Button(tr("MetaHuman Sculpt##crkw.metahuman"), ImVec2(-1, 0))) showCrkwMetaHuman_ = true;
+    if (ImGui::Button(tr("MH Mask Manager##crkw.mh_masks"), ImVec2(-1, 0))) showMhMaskManager_ = true;
+    if (ImGui::Button(tr("Texture Manager##crkw.texture_manager"), ImVec2(-1, 0))) showTextureManager_ = true;
     ImGui::Separator();
-    ImGui::TextUnformatted("Background");
-    bool appearanceChanged = ImGui::Checkbox("Gradient##crkw.background_gradient", &renderSettings_.backgroundGradient);
-    appearanceChanged |= ImGui::ColorEdit3(renderSettings_.backgroundGradient ? "Top colour##crkw.background_top" : "Colour##crkw.background_top",
+    ImGui::TextUnformatted(tr("Background"));
+    bool appearanceChanged = ImGui::Checkbox(tr("Gradient##crkw.background_gradient"), &renderSettings_.backgroundGradient);
+    appearanceChanged |= ImGui::ColorEdit3(tr(renderSettings_.backgroundGradient ? "Top colour##crkw.background_top" : "Colour##crkw.background_top"),
         &renderSettings_.backgroundTop.x, ImGuiColorEditFlags_NoInputs);
     if (renderSettings_.backgroundGradient)
-        appearanceChanged |= ImGui::ColorEdit3("Bottom colour##crkw.background_bottom", &renderSettings_.backgroundBottom.x, ImGuiColorEditFlags_NoInputs);
-    if (ImGui::Button("Reset background##crkw.reset_background", ImVec2(-1, 0))) {
+        appearanceChanged |= ImGui::ColorEdit3(tr("Bottom colour##crkw.background_bottom"), &renderSettings_.backgroundBottom.x, ImGuiColorEditFlags_NoInputs);
+    if (ImGui::Button(tr("Reset background##crkw.reset_background"), ImVec2(-1, 0))) {
         renderSettings_.backgroundTop = {.20f, .21f, .24f};
         renderSettings_.backgroundBottom = {.08f, .08f, .09f};
         renderSettings_.backgroundGradient = true;
         appearanceChanged = true;
     }
     ImGui::Separator();
-    appearanceChanged |= ImGui::Checkbox("Silhouette preview##crkw.silhouette", &crkwSilhouette_);
+    appearanceChanged |= ImGui::Checkbox(tr("Silhouette preview##crkw.silhouette"), &crkwSilhouette_);
     if (crkwSilhouette_) {
-        appearanceChanged |= ImGui::SliderInt("##crkw.preview_size", &crkwSilhouetteSize_, 96, 224, "Preview size %d");
+        appearanceChanged |= ImGui::SliderInt("##crkw.preview_size", &crkwSilhouetteSize_, 96, 224, tr("Preview size %d"));
         appearanceChanged |= ImGui::Combo("##crkw.preview_corner", &crkwSilhouetteCorner_, "Top right\0Top left\0");
     }
     if (appearanceChanged) { crkwSilhouetteNext_ = 0; saveCkwWindow(); }
     ImGui::Separator();
-    if (ImGui::Button("Settings##crkw.settings", ImVec2(-1, 0))) ImGui::OpenPopup("##crkw.settings_menu");
+    if (ImGui::Button(tr("Settings##crkw.settings"), ImVec2(-1, 0))) ImGui::OpenPopup("##crkw.settings_menu");
     ImGui::SetNextWindowSize(ImVec2(320 * uiScale_, 0), ImGuiCond_Appearing);
     if (ImGui::BeginPopup("##crkw.settings_menu")) {
         ImGui::PushItemWidth(-1);
-        ImGui::TextUnformatted("CRKW Settings");
+        ImGui::TextUnformatted(tr("CRKW Settings"));
         ImGui::Separator();
-        if (ImGui::Checkbox("Windowed fullscreen (borderless)##ckw", &ckwBorderless_)) applyCkwWindow();
-        ImGui::TextDisabled("F11 toggles windowed fullscreen");
-        ImGui::TextUnformatted("Open on display");
+        if (ImGui::Checkbox(tr("Windowed fullscreen (borderless)##ckw"), &ckwBorderless_)) applyCkwWindow();
+        ImGui::TextDisabled("%s", tr("F11 toggles windowed fullscreen"));
+        ImGui::TextUnformatted(tr("Open on display"));
         if (ImGui::BeginCombo("##ckw.display", ckwDisplay_.c_str())) {
             int count = 0;
             SDL_DisplayID* displays = SDL_GetDisplays(&count);
@@ -251,16 +252,16 @@ void App::drawPalette_Ckw() {
             SDL_free(displays);
             ImGui::EndCombo();
         }
-        if (ImGui::Button("Move to saved display##ckw", ImVec2(-1, 0))) applyCkwWindow();
+        if (ImGui::Button(tr("Move to saved display##ckw"), ImVec2(-1, 0))) applyCkwWindow();
     #if defined(_WIN32)
-        if (ImGui::Checkbox("Start HuionTablet with CRKW##ckw", &ckwStartHuion_)) {
+        if (ImGui::Checkbox(tr("Start HuionTablet with CRKW##ckw"), &ckwStartHuion_)) {
             saveCkwWindow();
             if (ckwStartHuion_ && !uiConfigDeterministic_) startCkwHuion();
         }
-        if (ImGui::Button("Open HuionTablet##ckw", ImVec2(-1, 0)) && !uiConfigDeterministic_) startCkwHuion();
-        ImGui::TextWrapped("Huion may request administrator consent; approve its Windows prompt if shown.");
+        if (ImGui::Button(tr("Open HuionTablet##ckw"), ImVec2(-1, 0)) && !uiConfigDeterministic_) startCkwHuion();
+        ImGui::TextWrapped("%s", tr("Huion may request administrator consent; approve its Windows prompt if shown."));
     #endif
-        ImGui::TextWrapped("Display and window mode save automatically. If the display is disconnected, use the primary screen.");
+        ImGui::TextWrapped("%s", tr("Display and window mode save automatically. If the display is disconnected, use the primary screen."));
         ImGui::PopItemWidth();
         ImGui::EndPopup();
     }
@@ -281,9 +282,9 @@ void App::drawCrkwSilhouette() {
     const float x = crkwSilhouetteCorner_ == 0 ? canvas.x + canvas.w - width - 12 * uiScale_ : canvas.x + 12 * uiScale_;
     ImGui::SetNextWindowPos(ImVec2(x, canvas.y + 12 * uiScale_));
     ImGui::SetNextWindowSize(ImVec2(width, height));
-    if (ImGui::Begin("CRKW Silhouette##crkw.preview", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+    if (ImGui::Begin(tr("CRKW Silhouette##crkw.preview"), nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing)) {
-        ImGui::TextUnformatted("Silhouette");
+        ImGui::TextUnformatted(tr("Silhouette"));
         if (crkwSilhouetteTexture_)
             ImGui::Image(ImTextureID(uintptr_t(crkwSilhouetteTexture_)), ImVec2(size, size), ImVec2(0, 1), ImVec2(1, 0));
     }

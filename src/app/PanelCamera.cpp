@@ -1,6 +1,7 @@
 // CRKW shelf camera and canvas controls.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "app/App.h"
+#include "app/I18n.h"
 #include "app/NativeDialog.h"
 #include <IconsLucide.h>
 #include <algorithm>
@@ -86,44 +87,44 @@ void App::drawCameraController() {
     if (!showCameraController_) return;
     ImGui::SetNextWindowSize(ImVec2(310 * uiScale_, 0), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(shell_.rightShelf.x - 320 * uiScale_, shell_.canvas.y + 12 * uiScale_), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("CRKW Camera", &showCameraController_, ImGuiWindowFlags_AlwaysAutoResize)) {
-        if (ImGui::RadioButton("Persp##camera.persp", !camera_.ortho)) runCommand("crkw_camera", {{"perspective", true}});
+    if (ImGui::Begin(tr("CRKW Camera"), &showCameraController_, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (ImGui::RadioButton(tr("Persp##camera.persp"), !camera_.ortho)) runCommand("crkw_camera", {{"perspective", true}});
         ImGui::SameLine();
-        if (ImGui::RadioButton("Ortho##camera.ortho", camera_.ortho)) runCommand("crkw_camera", {{"perspective", false}});
+        if (ImGui::RadioButton(tr("Ortho##camera.ortho"), camera_.ortho)) runCommand("crkw_camera", {{"perspective", false}});
         ImGui::Separator();
         ImGui::BeginDisabled(camera_.ortho);
         float mm = camera_.focalLengthMm(), fov = glm::degrees(camera_.fovY);
         ImGui::SetNextItemWidth(130 * uiScale_);
-        if (ImGui::InputFloat("Lens mm##camera.mm", &mm, 0, 0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue))
+        if (ImGui::InputFloat(tr("Lens mm##camera.mm"), &mm, 0, 0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue))
             runCommand("crkw_camera", {{"mm", double(mm)}});
         ImGui::SetNextItemWidth(130 * uiScale_);
-        if (ImGui::InputFloat("FOV vertical##camera.fov", &fov, 0, 0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue))
+        if (ImGui::InputFloat(tr("FOV vertical##camera.fov"), &fov, 0, 0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue))
             runCommand("crkw_camera", {{"fov", double(fov)}});
-        ImGui::TextDisabled("Full frame: 24 mm sensor height");
+        ImGui::TextDisabled("%s", tr("Full frame: 24 mm sensor height"));
         ImGui::EndDisabled();
-        if (camera_.ortho) ImGui::TextDisabled("Lens retained for perspective mode");
-        if (ImGui::Button("Frame model##camera.frame", ImVec2(-1, 0))) camera_.frame(sceneBounds());
+        if (camera_.ortho) ImGui::TextDisabled("%s", tr("Lens retained for perspective mode"));
+        if (ImGui::Button(tr("Frame model##camera.frame"), ImVec2(-1, 0))) camera_.frame(sceneBounds());
         ImGui::Separator();
         bool fixed = crkwCanvasFixed_;
-        if (ImGui::Checkbox("Fixed canvas##camera.fixed", &fixed)) runCommand("crkw_camera", {{"fixed", fixed}});
-        ImGui::TextUnformatted("Canvas pixels (W / H)");
+        if (ImGui::Checkbox(tr("Fixed canvas##camera.fixed"), &fixed)) runCommand("crkw_camera", {{"fixed", fixed}});
+        ImGui::TextUnformatted(tr("Canvas pixels (W / H)"));
         ImGui::SetNextItemWidth(-1);
         ImGui::InputInt2("##camera.pixels", crkwCanvasDraft_);
-        if (ImGui::Button("Apply size##camera.apply", ImVec2(-1, 0)))
+        if (ImGui::Button(tr("Apply size##camera.apply"), ImVec2(-1, 0)))
             runCommand("crkw_camera", {{"width", double(crkwCanvasDraft_[0])}, {"height", double(crkwCanvasDraft_[1])}, {"fixed", true}});
-        if (ImGui::Button("1K square##camera.square")) runCommand("crkw_camera", {{"width", 1024.0}, {"height", 1024.0}, {"fixed", true}});
+        if (ImGui::Button(tr("1K square##camera.square"))) runCommand("crkw_camera", {{"width", 1024.0}, {"height", 1024.0}, {"fixed", true}});
         ImGui::SameLine();
         if (ImGui::Button("1080p##camera.hd")) runCommand("crkw_camera", {{"width", 1920.0}, {"height", 1080.0}, {"fixed", true}});
         ImGui::SameLine();
         if (ImGui::Button("4K##camera.4k")) runCommand("crkw_camera", {{"width", 3840.0}, {"height", 2160.0}, {"fixed", true}});
-        if (ImGui::Button("Swap W / H##camera.swap", ImVec2(-1, 0)))
+        if (ImGui::Button(tr("Swap W / H##camera.swap"), ImVec2(-1, 0)))
             runCommand("crkw_camera", {{"width", double(crkwCanvasHeight_)}, {"height", double(crkwCanvasWidth_)}, {"fixed", true}});
-        ImGui::TextDisabled("%dx%d pixels - %s", crkwCanvasWidth_, crkwCanvasHeight_, crkwCanvasFixed_ ? "fit preview" : "export size");
-        if (ImGui::Button("Export canvas PNG...##camera.export", ImVec2(-1, 0))) {
+        ImGui::TextDisabled(tr("%dx%d pixels - %s"), crkwCanvasWidth_, crkwCanvasHeight_, crkwCanvasFixed_ ? "fit preview" : "export size");
+        if (ImGui::Button(tr("Export canvas PNG...##camera.export"), ImVec2(-1, 0))) {
             static const SDL_DialogFileFilter png[] = {{"PNG image", "png"}};
             sf::dialogs::saveFile(cameraExportChosen, nullptr, window_, png, 1, nullptr);
         }
-        if (ImGui::Button("Reset camera settings##camera.reset", ImVec2(-1, 0)))
+        if (ImGui::Button(tr("Reset camera settings##camera.reset"), ImVec2(-1, 0)))
             runCommand("crkw_camera", {{"perspective", true}, {"fov", 35.0}, {"fixed", false}, {"width", 1920.0}, {"height", 1080.0}});
         ImGui::TextWrapped("%s", status_.c_str());
     }

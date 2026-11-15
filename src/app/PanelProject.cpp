@@ -1101,7 +1101,7 @@ void App::drawUpdatesSection() {
         saveProjectPrefs();
     }
 #else
-    ImGui::TextWrapped("%s", tr("This build gets its updates from your package manager."));
+    ImGui::TextWrapped("%s", tr("CRKW updates are installed manually."));
 #endif
     ui::ActionButton(*this, "help.check_updates", ImVec2(-1, 0));
     if (updateJob_) ImGui::TextDisabled("%s", tr("Checking..."));

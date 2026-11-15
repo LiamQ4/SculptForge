@@ -994,7 +994,8 @@ if(SCULPTFORGE_BUILD_TESTS)
     # scripts/merge-queue.sh refuses a merge or squash that throws away the other side's change (tools/ci/no_revert.py).
     add_test(NAME ci_no_revert COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/no_revert.py --self-test)
     # A branch made from an old tree (a squash with reset --soft onto a moved origin/main) put older main files back (0.11.11).
-    add_test(NAME stale_tree COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/no_revert.py --stale origin/main HEAD WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    set(SCULPTFORGE_STALE_BASE "origin/main" CACHE STRING "Reviewed source baseline for the stale-tree audit")
+    add_test(NAME stale_tree COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/no_revert.py --stale ${SCULPTFORGE_STALE_BASE} HEAD WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     # scripts/release.sh's beta (X.Y.Z-beta.N), its promotion to stable, and build once (--stage, then promote), in a
     # sandbox with stand-ins for gh and curl.
     if(UNIX AND NOT APPLE AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/.git)
@@ -1087,6 +1088,13 @@ if(SCULPTFORGE_BUILD_TESTS)
         add_test(NAME ui_${name} COMMAND sculptforge ${args})
       endif()
       set_tests_properties(ui_${name} PROPERTIES LABELS ui TIMEOUT 300)
+      # These scripts exercise controls intentionally absent when stock upstream updates are compiled out.
+      if(NOT SCULPTFORGE_UPDATE_CHECK AND script MATCHES "^(update_check|member_sign_in|self_update|studio_policy)$")
+        set_tests_properties(ui_${name} PROPERTIES DISABLED TRUE)
+      endif()
+      if(SCULPTFORGE_UPDATE_CHECK AND script STREQUAL "crkw_updates_disabled")
+        set_tests_properties(ui_${name} PROPERTIES DISABLED TRUE)
+      endif()
       # CRKW: settings are private per process, but the Windows clipboard is shared by every UI test.
       if(WIN32)
         file(READ "${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/${script}.sfui" sf_ui_script)

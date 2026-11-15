@@ -46,7 +46,7 @@ run set_material name=rose
 expect_status "Material: Rose"
 
 # A project using Gold keeps it through save and open.
-run set_material name=gold
+run set_material name="Gold 2"
 run save_project path=sf_ui_custom_litsphere.sfproj
 run set_material name=studio
 expect_value material_custom == 0

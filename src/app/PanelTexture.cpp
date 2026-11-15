@@ -8,6 +8,7 @@
 // texture with the UV layout over it. Everything but Auto UV and the file dialogs goes through commands,
 // so it is undoable and scriptable.
 #include "app/App.h"
+#include "app/I18n.h"
 #include "app/NativeDialog.h"
 #include "app/Demo.h"
 #include "app/Ui.h"
@@ -358,9 +359,9 @@ void App::drawTextureManager() {
     }
     ImGui::SetNextWindowSize(ImVec2(480 * uiScale_, 620 * uiScale_), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(340 * uiScale_, 300 * uiScale_), ImVec2(FLT_MAX, FLT_MAX));
-    if (!ImGui::Begin("CRKW Texture Manager", &showTextureManager_)) { ImGui::End(); return; }
-    ImGui::TextWrapped("Hover a square and press Ctrl+V, or use Paste / Swap image. Each card controls one Part.");
-    ImGui::TextDisabled("Replaces texture layers. Ctrl+Z undoes the selected Part.");
+    if (!ImGui::Begin(tr("CRKW Texture Manager"), &showTextureManager_)) { ImGui::End(); return; }
+    ImGui::TextWrapped("%s", tr("Hover a square and press Ctrl+V, or use Paste / Swap image. Each card controls one Part."));
+    ImGui::TextDisabled("%s", tr("Replaces texture layers. Ctrl+Z undoes the selected Part."));
     ImGui::Separator();
 
     // Separate small GPU previews work for inactive/hidden Parts and don't depend on scene uploads.
@@ -392,7 +393,7 @@ void App::drawTextureManager() {
             const bool hovered = ImGui::IsItemHovered();
             if (hovered) {
                 imagePasteHoverFrame_ = ImGui::GetFrameCount();
-                ImGui::SetTooltip("%s: Ctrl+V to paste, click to swap image", part.name.c_str());
+                ImGui::SetTooltip(tr("%s: Ctrl+V to paste, click to swap image"), part.name.c_str());
                 if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) paste = i;
             }
             if (clicked) browse = i;
@@ -465,7 +466,7 @@ void App::drawTextureMapContents() {
     const Mesh& m = doc_.mesh;
     const ImGuiStyle& style = ImGui::GetStyle();
     const float half = (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
-    if (ImGui::Button("Texture Manager##crkw.texture_manager", ImVec2(-1, 0))) showTextureManager_ = true;
+    if (ImGui::Button(tr("Texture Manager##crkw.texture_manager"), ImVec2(-1, 0))) showTextureManager_ = true;
 
     // Status line: UVs, texture size, where paint goes.
     if (autoUv_) {
@@ -504,13 +505,13 @@ void App::drawTextureMapContents() {
     }
     dl->AddRect(p, end, ImGui::GetColorU32(hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Border), 4 * uiScale_);
     if (hovered) {
-        ImGui::SetTooltip("Hover + Ctrl+V: paste texture. Click: import image. Replaces texture layers; Ctrl+Z undoes it.");
+        ImGui::SetTooltip("%s", tr("Hover + Ctrl+V: paste texture. Click: import image. Replaces texture layers; Ctrl+Z undoes it."));
         if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false)) pasteTextureImage();
     }
     if (clicked && m.hasUvs())
         sf::dialogs::openFile(onTextureFile, &g_dialogs[kImportTexture], window_, kImageFilters, 2, nullptr, false);
-    ImGui::TextDisabled("Hover + Ctrl+V, or click to import");
-    if (m.previewTexture) ImGui::TextDisabled("MetaHuman guide preview is on");
+    ImGui::TextDisabled("%s", tr("Hover + Ctrl+V, or click to import"));
+    if (m.previewTexture) ImGui::TextDisabled("%s", tr("MetaHuman guide preview is on"));
 
     ui::ActionButton(*this, "texture.auto_uv", ImVec2(half, 0));
     ImGui::SameLine();

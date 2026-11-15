@@ -1260,7 +1260,7 @@ void App::drawTitleStrip(const ShellGeometry& g) {
     ImGui::SameLine(0.0f, 6.0f * s);
     ImGui::SetCursorPosY(textY);
     if (fontBold_) ImGui::PushFont(fontBold_);
-    ImGui::TextUnformatted("SculptForge CRKW");
+    ImGui::TextUnformatted(tr("SculptForge CRKW"));
     if (fontBold_) ImGui::PopFont();
     barSpans_.push_back({brandX, ImGui::GetItemRectMax().x});
     const float nameEnd = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x; // (the cursor is on the next line)
@@ -1749,7 +1749,7 @@ void App::drawStatusBar(const ShellGeometry& g) {
         x += m + 6.0f * s;
     }
     const bool caps = style == Status::Terminal;
-    x = textAt(bold, x, theme::textBright, caps ? "SCULPTFORGE" : "SculptForge");
+    x = textAt(bold, x, theme::textBright, caps ? "SCULPTFORGE CRKW" : "SculptForge CRKW");
     // The version, small and dim beside the name (support screenshots); a beta's or a dev build's tag in the accent.
     const ShownVersion version = appShownVersion();
     const float versionW = 6.0f * s + textW(monoSmall, version.number) + (version.tag.empty() ? 0.0f : 4.0f * s + textW(monoSmall, version.tag));
@@ -2729,13 +2729,19 @@ void App::drawShelf(int shelf, const CanvasRect& r) {
         const float fitBefore = shelfFit_[shelf];
         if (shelf == kShelfRight && !layout_.customize) { // fold the view toggles when the shelf is too tall
             const int folds = int(std::count_if(list.begin(), list.end(), [](const std::string& id) { return foldsIntoView(id); }));
-            if (!rightShelfFolded_ && folds > 0 && needed > r.h + 0.5f) {
+            // CRKW camera/mask tools shrink with the column without making the upstream view controls fold earlier.
+            float crkwHeight = 0.0f;
+            for (size_t k = 0; k < rects.size(); ++k)
+                if (list[size_t(indices[k])] == "crkw.camera" || list[size_t(indices[k])] == "crkw.mask_manager")
+                    crkwHeight += rects[k].GetHeight();
+            const float stockFull = needed - scalable + (scalable - crkwHeight) / std::max(shelfFit_[shelf], 0.1f);
+            if (!rightShelfFolded_ && folds > 0 && stockFull > r.h + 0.5f) {
                 rightShelfFolded_ = true;
                 rightShelfFoldH_ = r.h;
             } else if (rightShelfFolded_ && r.h > rightShelfFoldH_ + 6.0f * s) { // (only for a taller shelf than the one that folded)
                 // Unfolded at full size: the buttons at fit 1, and the View button's place taken by all of them.
                 const float full = needed - scalable + scalable / std::max(shelfFit_[shelf], 0.1f) + float(folds - 1) * 44.0f * s;
-                if (full <= r.h - 4.0f * s) rightShelfFolded_ = false; // (a small margin: no flicker at the edge)
+                if (full - crkwHeight / std::max(shelfFit_[shelf], 0.1f) <= r.h - 4.0f * s) rightShelfFolded_ = false; // (a small margin: no flicker at the edge)
             }
         }
         float& fit = shelfFit_[shelf];

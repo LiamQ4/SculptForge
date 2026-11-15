@@ -2602,13 +2602,13 @@ void App::onKey(SDL_Keycode key, SDL_Keymod mod, bool repeat) {
         status_ = "Capture cancelled";
         return;
     }
+    // CRKW: Ctrl+V over Generate 3D's image box pastes an image there (drawImageTo3D does it), not a brush.
+    if (key == SDLK_V && (mod & SDL_KMOD_CTRL) && imagePasteHoverFrame_ >= ImGui::GetFrameCount() - 1) return;
     if (libraryKey(key, mod)) return;        // , Library, B / M pickers, S / I pop-ups (Library.cpp)
     if (key == SDLK_ESCAPE && gizmoActive() && drag_ != Drag::Gizmo) { // Esc leaves Move / Scale / Rotate / All
         setGizmoMode(GizmoMode::Off);
         return;
     }
-    // CRKW: Ctrl+V over Generate 3D's image box pastes an image there (drawImageTo3D does it), not a brush.
-    if (key == SDLK_V && (mod & SDL_KMOD_CTRL) && imagePasteHoverFrame_ >= ImGui::GetFrameCount() - 1) return;
     // Blender's Emulate Numpad: the number row works as the numpad, unless the key itself has an action.
     if (blenderStyle() && uiPrefs_.emulateNumpad && key >= SDLK_0 && key <= SDLK_9 &&
         !actions_.actionForChord(chordFromEvent(key, mod)))
@@ -4537,7 +4537,10 @@ void App::drawImageTo3D() {
     } else {
         // CRKW: the picture box -- hover it and press Ctrl+V to paste, click it to browse, or drop a file on the window.
         const float boxW = ImGui::GetContentRegionAvail().x;
-        const float boxH = refImage_.empty() ? 120.0f * scale : std::min(boxW / refImage_.aspect(), 180.0f * scale);
+        // Keep the send-consent buttons reachable at large UI scales, while retaining an image thumbnail.
+        const bool sendPending = sendNotice_ && sendNotice_->panel == SendPanel::Generate3D;
+        const float previewLimit = (sendPending ? 24.0f : 180.0f) * scale;
+        const float boxH = refImage_.empty() ? 120.0f * scale : std::min(boxW / refImage_.aspect(), previewLimit);
         const ImVec2 p0 = ImGui::GetCursorScreenPos(), p1(p0.x + boxW, p0.y + boxH);
         const bool clicked = ImGui::InvisibleButton("##imagebox", ImVec2(boxW, boxH));
         const bool hovered = ImGui::IsItemHovered();
@@ -4563,7 +4566,7 @@ void App::drawImageTo3D() {
         if (clicked)
             sf::dialogs::openFile(onFileChosen, &dialogRequests_[int(FileAction::OpenImage)], window_, kImageFilters, 2,
                                    nullptr, false);
-        if (hovered && !refImage_.empty()) ImGui::SetTooltip("Ctrl+V: paste another image  -  click: choose a file");
+        if (hovered && !refImage_.empty()) ImGui::SetTooltip("%s", tr("Ctrl+V: paste another image  -  click: choose a file"));
         if (refImage_.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             ImGui::TextWrapped("%s", tr("Or drop a sketch, concept, logo, photo or height map onto the window."));

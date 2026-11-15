@@ -1,0 +1,8 @@
+# Custom source builds retain CRKW and never offer the stock updater or member-build installer.
+run ui_look look=classic layout=classic
+click "Preferences##palette.preferences"
+click "Updates##preferences.updates"
+expect_text "CRKW updates are installed manually."
+expect_not "Check for updates"
+expect_not "Member builds"
+shot updates-disabled
