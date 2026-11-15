@@ -17,6 +17,8 @@
   <img alt="Platforms" src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-555">
 </p>
 
+This workspace contains **SculptForge CRKW**, the customized build based on upstream **v0.12.16**. Build it from `ckw/crookedtools` using [the CRKW workflow](CKW_WORKFLOW.md) and install only into `out/crkw-app`; the desktop shortcut points there. Upstream downloads below describe the stock project and do not contain the CRKW tools. Automatic and manual upstream binary updates are disabled in this build.
+
 **Sculpt with the brushes, symmetry and navigation you already know.** Free, open source, no subscription, no account.
 
 - **Fast and native:** starts instantly, works offline, on Linux, macOS and Windows.
@@ -117,35 +119,18 @@ The merge reconciles duplicate OpenGL declarations in `src/render/GL.h`. `src/ap
 The first Windows UI run exposed the previous settings-isolation bug and touched project preferences (recent files/update/support flags), window state and ImGui state. The saved `ui.json` layout and `crkw-workspace.json` were unchanged; a post-discovery snapshot is retained in `out/update-main-preferences-snapshot`. Original recent-file history cannot be reconstructed from that snapshot. Subsequent isolated UI checks left the real project/layout/workspace/window preference hashes unchanged. No live Blender, external sculpting app or Unreal round trip was run. Final UI/integration run: 121 passed, no failures; upstream-disabled `ui_stroke_resize` was not run. Together with the eight passing native core shards, all 129 enabled CTest targets passed. The desktop launcher uses `out/crkw-app/bin/sculptforge.exe`; the installed-copy smoke test passed (CRKW menu/camera/masks and the Version 0.10.7 guide), with screenshots in `out/update-main-installed-smoke`. The installed executable hash matches the verified build. Its source commit is `388364b`; the earlier executable is backed up in `out/update-main-pre-0107`. The existing desktop shortcut already targets this location.
 
 
-## CRKW release update — 2026-11-14 (in progress)
+## CRKW release update — 2026-11-15
 
-Source review: 2026-11-14. Integration of upstream v0.12.16 is in progress on `ckw/update-upstream-2026-11-14`. The installed application remains the previously validated 0.10.7 until validation and installation finish. CRKW tools are being adapted to upstream Parts/PartData, Lit Sphere naming and the new UI script parser; saved CRKW project keys and material indices are retained. The Release build and isolated Blender 5.2.1 bridge check passed. Broader regression validation is in progress; final results will be recorded after execution.
+Source reviewed: 2026-11-15. Upstream release `v0.12.16` (`11f6a536`) was merged from the previous CRKW baseline `e55d3e0` (0.10.7) on `ckw/update-upstream-2026-11-14`. Production source commit: `5ed58abc`. The source build preserves CRKW Clay Polish, Mesh Sharpen, Auto Retopo + Project, MetaHuman tools and masks, camera/canvas controls, silhouettes/backgrounds, materials and Texture Manager. No stock binary is used.
 
+CRKW integration follows upstream Parts/PartData, Lit Sphere, Face Group and Vertex Paint APIs. Project payloads `crkw_metahuman` and `crkw_mask_manager` retain artist-owned keys; linked Parts retain MetaHuman identity. Mask toggle state follows undo and subdivision changes. The thirteen custom material slots remain stable; importing another Gold image creates Gold 2. Layout version 6 migrates upstream view toggles from CRKW version 5. The right shelf shrinks and folds its controls to fit compact windows while retaining Camera and Masks. The held resize popup, high-scale AI image consent and native Windows PNG/DIB/DIBV5 clipboard paths are reconciled with upstream.
 
-### CRKW validation follow-up — 2026-11-15 (in progress)
+CRKW labels use the four upstream translations, with regenerated licensed Noto CJK 2.004 subsets. Source coverage is 100% for Spanish, Traditional Chinese, Simplified Chinese and Japanese, with no untranslated raw interface labels. The updater action and installer controls are disabled with `SCULPTFORGE_UPDATE_CHECK=OFF`; Preferences explains that CRKW updates are installed manually. `SCULPTFORGE_DEV_BUILD=OFF` displays the release version without a development suffix. See [CKW_WORKFLOW.md](CKW_WORKFLOW.md) for the exact build, test and installation handoff.
 
-Source reviewed: 2026-11-15. All eight native shards passed (1,580 cases; 591,742 checks).
-The bridge passed 192 checks in a separate Blender 5.2.1 process, with a fully isolated
-extension directory on the repeat run. A first profile-isolation gap allowed Blender's
-wheel cleanup to remove its shared Pillow cache; the exact local 12.2.0 wheel was restored
-and all 120 files verified byte-for-byte. The repeat left that cache unchanged. Existing
-Blender sessions and installed add-on sources were not replaced.
+Validation recorded so far: all eight native shards passed (1,580 cases; 591,742 checks). Targeted production checks passed: i18n 12 cases/204 checks, CRKW 19 cases/3,380 checks and CKW polish 3 cases/988 checks. Focused UI retests passed the previously failing consent, workspace, view toggles, materials, clipboard and Maya toolbar paths. The final complete non-nightly production run is in progress; installation remains 0.10.7 until it passes.
 
-The full non-nightly run identified UI integration issues now being reconciled: held brush
-resize versus upstream's follow-to-confirm popup, native Windows image clipboard routing,
-CRKW controls alongside folded view toggles, high-scale image consent, and material-name
-collisions. CRKW labels now use upstream's translation layer, with entries for all four
-translated languages. Update-dependent scripts are inapplicable with
-`SCULPTFORGE_UPDATE_CHECK=OFF`; a CRKW-specific test verifies the manual-update interface.
-Release installation will use `SCULPTFORGE_DEV_BUILD=OFF` and the exact reviewed tag as
-`SCULPTFORGE_STALE_BASE=v0.12.16`. Final rebuild, targeted retests and installation are pending.
+Both Blender bridge 1.0.0 ZIP variants passed packaging checks. A fully isolated Blender 5.2.1 LTS process passed 192 integration checks. Legacy 0.10.7 camera and synthetic MetaHuman/custom-mask projects passed load/save/reload UI checks. The initial Blender run omitted extension-path isolation and its wheel cleanup removed shared Pillow files; the exact cached 12.2.0 wheel was restored and all 120 files verified byte-for-byte. The fully isolated repeat left the shared cache unchanged. Installed Blender add-ons and open Blender documents were preserved.
 
-The CJK font subsets were regenerated from the existing licensed Noto CJK 2.004 source
-using upstream `tools/i18n/subset_cjk_font.py`, so the new CRKW translations have every
-required glyph. Targeted production checks passed: i18n 12 cases/204 checks; CRKW 19
-cases/3,380 checks; CKW polish 3 cases/988 checks. UI retesting is still pending.
+Limitations: nightly heavy-mesh/fuzz benchmarks, native Blender 5.3+ splat exchange, live Maya/other sculpting application round trips and Unreal MetaHuman conform were not run. MetaHuman validation uses synthetic assets. Update-dependent stock UI tests are inapplicable to this manual-update build; the dedicated CRKW updater-disabled test covers its interface. User settings are isolated through `SF_USER_DATA_DIR` (legacy `SF_TEST_SETTINGS_DIR` remains supported).
 
-In the update-check-OFF CRKW build, the manual upstream update action is disabled too;
-the Updates pane only explains manual CRKW updates, preserving the custom executable.
-
-Compact-column follow-up: CRKW's two extra controls can shrink the right shelf to 40% in the shortest supported layout, keeping every action visible. Native Windows clipboard tests position the pointer after setting the clipboard; the manual-update build checks Maya toolbar fit rather than assuming the stock membership/update controls consume its space.
+Test maintenance: feed-driven card scripts load an explicit local fixture through the UI-test harness, so they retain coverage while the real updater stays disabled. Brush resizing keeps upstream's move-then-click confirmation; the held-drag regression presses the knob at its opening position and still checks mouse/pen release behavior. These final harness/popup checks await the rebuilt executable.

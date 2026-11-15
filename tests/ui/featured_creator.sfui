@@ -12,8 +12,7 @@ expect_no_text "Featured creator"
 key escape
 
 env SF_UPDATE_FEED $SCRIPT_DIR/data/featured/latest.json
-click "Help##palette.help"
-click "Check for updates##help.check_updates"
+local_update_feed
 wait_idle 20
 expect_value featured_shown == 1
 key f3
@@ -38,12 +37,10 @@ click "Close##welcome"
 
 # An empty list shows nothing; so does a site that can't be reached (no featured.json beside latest.json).
 env SF_UPDATE_FEED $SCRIPT_DIR/data/featured_none/latest.json
-click "Help##palette.help"
-click "Check for updates##help.check_updates"
+local_update_feed
 wait_idle 20
 expect_value featured_shown == 0
 env SF_UPDATE_FEED $SCRIPT_DIR/data/featured_offline/latest.json
-click "Help##palette.help"
-click "Check for updates##help.check_updates"
+local_update_feed
 wait_idle 20
 expect_value featured_shown == 0

@@ -47,8 +47,7 @@ expect_value member_card_not_now == 2
 # The feed's "support" block: honest lines in turn instead of the Founding Members line (this is the 3rd card: the
 # third line).
 env SF_UPDATE_FEED $SCRIPT_DIR/data/update_support.json
-click "Help##palette.help"
-click "Check for updates##help.check_updates"
+local_update_feed
 wait_idle 20
 wait 0.2
 # The 100th save: a real save counts (Ctrl+S; UI tests count once member_card has run). The card waits for its week.

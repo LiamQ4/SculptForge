@@ -1461,8 +1461,7 @@ void drawPickers(App& app) {
             const float edgeX = std::clamp(app.mouseX_, canvas.x, canvas.x + canvas.w);
             const bool overControl = ImGui::IsAnyItemHovered() && !ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
             const bool leftClicked = following && !first && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-            const bool confirmClick = leftClicked && !overControl &&
-                                      !ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            const bool confirmClick = leftClicked && !overControl;
             if (following && !leftDown && !first) {
                 const float dx = edgeX - s.sliderAt.x;
                 const float delta = which == PickerUi::Slider::DrawSize ? dx : dx / app.uiScale_ * kFollowPerPx / d.shownScale;

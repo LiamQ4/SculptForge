@@ -12,7 +12,8 @@ key s
 expect "##cursorvalue"
 remember draw_size original_size
 shot size-open
-drag_item "##cursorvalue" 60 0 0.5 keep
+# Press the knob where S opened it. Moving to the slider's centre first enters upstream's follow-to-confirm mode.
+drag_path 0.5 0.5 0.6 0.5 keep
 expect "##cursorvalue"
 expect_value draw_size > $original_size
 shot size-held

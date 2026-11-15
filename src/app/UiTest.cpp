@@ -1852,7 +1852,7 @@ enum class StepVerb { None,
     Orbit, Camera, Zoom, CameraDistance, BrushSize, ResetSliders, Look, Drop, DropLibrary, ChooseFile, DialogAnswer,
     AnswerDialog, RadialImport, Copy, AiClient, PhoneUpload, UiScale, DisplayScale, PixelDensity, LogicalWidth,
     PalmGuard, ClassicKeys, QuickTourOffers, KeyNavSpeed, MouseOrbitSpeed, TwoKeyWindow, InputStyle, Restart,
-    GeneratorStub, Env, Run, RunFails, FirstRunLanguage, SupportCard, MemberCard, MemberSignIn, Wait, WaitReal,
+    GeneratorStub, Env, LocalUpdateFeed, Run, RunFails, FirstRunLanguage, SupportCard, MemberCard, MemberSignIn, Wait, WaitReal,
     WaitIdle, WaitFor, Expect, ExpectClear, ExpectText, RememberItems, ExpectTitle, ExpectStatus, ExpectHelp,
     ClipboardImage, Clipboard, ExpectClipboard, ExpectValue, WaitValue, ExpectGuide, DumpShortcuts, Snapshot, Print, Remember,
     PenStroke, PenDragItem, PenTap, PenButton, PenHover, PenEnter, PenDrag, PenPressure, SdlPenMouse, PenLost,
@@ -1927,6 +1927,7 @@ static const std::unordered_map<std::string_view, StepVerb>& stepVerbs() {
         {"restart", StepVerb::Restart},
         {"generator_stub", StepVerb::GeneratorStub},
         {"env", StepVerb::Env},
+        {"local_update_feed", StepVerb::LocalUpdateFeed},
         {"run", StepVerb::Run},
         {"run_fails", StepVerb::RunFails},
         {"first_run_language", StepVerb::FirstRunLanguage},
@@ -3460,6 +3461,20 @@ bool Demo::parseStep(int line, const std::vector<std::string>& w, std::string& e
                 r.ok = saveObj(r.outputPath, m, r.error);
                 return r;
             });
+        });
+        break;
+    }
+    case StepVerb::LocalUpdateFeed: {
+        // Exercise feed-driven cards without enabling the stock updater in CRKW.
+        // Only an explicitly supplied local fixture is accepted; never a URL/fallback.
+        run([this, line] {
+            const char* source = std::getenv("SF_UPDATE_FEED");
+            std::error_code ec;
+            if (!source || !*source || !std::filesystem::is_regular_file(source, ec)) {
+                fail(line, "local_update_feed needs SF_UPDATE_FEED pointing to a local fixture");
+                return;
+            }
+            app_.startUpdateCheck(true);
         });
         break;
     }

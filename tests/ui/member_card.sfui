@@ -76,8 +76,7 @@ click "Not now##member_card.not_now"
 # The monthly challenge's results, from the update feed (once per challenge).
 member_card none days=23
 env SF_UPDATE_FEED $SCRIPT_DIR/data/update_challenge.json
-click "Help##palette.help"
-click "Check for updates##help.check_updates"
+local_update_feed
 wait_idle 20
 wait 0.4
 expect_value member_card_open == 1
